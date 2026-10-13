@@ -39,7 +39,17 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 git push -u origin HEAD
-commit=$(git rev-parse HEAD)
+# Das oeffentliche Repo DerAntonia/coral-client hat eine EIGENE, frische Historie (ohne die alte
+# mit Vanilla-Zitaten). Derselbe Stand kommt dort als ein neuer Commit auf main, und darauf
+# zeigt der Tag -- den lokalen Commit gibt es dort nicht.
+git remote get-url coral >/dev/null 2>&1 || git remote add coral https://github.com/DerAntonia/coral-client.git
+git fetch -q coral
+if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'coral/main^{tree}')" ]; then
+    commit=$(git rev-parse coral/main)
+else
+    commit=$(git commit-tree 'HEAD^{tree}' -p coral/main -m "$tag")
+    git push coral "$commit:refs/heads/main"
+fi
 
 export PATH="$HOME/.local/zig/zig-linux-x86_64-0.13.0:$PATH"
 # zig bringt keine Importbibliothek fuer d3dcompiler mit (wgpu linkt dagegen); ein Stub aus

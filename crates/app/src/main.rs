@@ -14384,6 +14384,9 @@ enum AppMode {
 enum InputKind {
     // Fertiges Minecraft-Access-Token (manueller Login ohne Microsoft-Flow).
     Token,
+    // Microsoft-Refresh-Token: wird gegen frische Tokens getauscht wie beim gespeicherten Login
+    // und bleibt danach gespeichert -- die Anmeldung haelt also ueber Neustarts.
+    RefreshToken,
     // Eigene Azure-Application-(Client-)ID fuer den Microsoft-Device-Code-Login.
     ClientId,
     // Name einer Config (Configs-Seite der Einstellungen).
@@ -22159,6 +22162,44 @@ impl App {
         });
     }
 
+    // Login mit einem eingefuegten Microsoft-Refresh-Token: derselbe Tausch wie beim gespeicherten
+    // Login (try_refresh_login), nur mit dem eingegebenen Token. Microsoft nimmt ein Refresh-Token
+    // ausschliesslich zusammen mit der Client-ID an, fuer die es ausgestellt wurde -- stammt es
+    // von einer anderen App, muss deren ID vorher unter "Client-ID" stehen. Das neue
+    // Refresh-Token aus der Antwort wird gespeichert, die Anmeldung erneuert sich danach selbst.
+    fn submit_refresh_token_login(&mut self, token: String) {
+        let refresh_token = token.trim().to_string();
+        if refresh_token.is_empty() || self.login_busy {
+            return;
+        }
+        let client_id = self.settings.azure_client_id.trim().to_string();
+        if client_id.is_empty() {
+            self.push_log("Keine Client-ID gesetzt -- ein Refresh-Token braucht die ID der App, die es ausgestellt hat.");
+            return;
+        }
+        self.login_busy = true;
+        self.push_log("Refresh-Token wird eingelöst ...");
+        let tx = self.auth_tx.clone();
+        self.tokio_rt.spawn(async move {
+            let msa = match auth::refresh_msa(&client_id, &refresh_token).await {
+                Ok(m) => m,
+                Err(e) => {
+                    let _ = tx.send(AuthEvent::Failed(format!("{e} -- passt die Client-ID zum Token?")));
+                    return;
+                }
+            };
+            let _ = tx.send(AuthEvent::Status("Token gültig -- hole Minecraft-Profil ...".into()));
+            match auth::msa_to_minecraft(&msa.access_token).await {
+                Ok(creds) => {
+                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, refresh_token: Some(msa.refresh_token) });
+                }
+                Err(e) => {
+                    let _ = tx.send(AuthEvent::Failed(e.to_string()));
+                }
+            }
+        });
+    }
+
     // Beim Betreten des Connect-Screens: falls ein gespeichertes Refresh-Token vorliegt und
     // wir noch nicht angemeldet sind, im Hintergrund lautlos erneuern -- so bleibt man ueber
     // Neustarts eingeloggt, ohne erneut den Device-Code eingeben zu muessen.
@@ -22840,6 +22881,12 @@ impl App {
                 } else {
                     // Zeile 0: Microsoft-Login. Zeile 1: Token- + Client-ID-Feld oeffnen.
                     out.push(Self::nav_button(ButtonAction::MicrosoftLogin, account_row_rect(0), "Mit Microsoft anmelden", UI_SCALE_SMALL));
+                    out.push(Self::nav_button(
+                        ButtonAction::OpenInputField(InputKind::RefreshToken),
+                        account_row_rect_col2(0),
+                        "Refresh-Token",
+                        UI_SCALE_SMALL,
+                    ));
                     out.push(Self::nav_button(
                         ButtonAction::OpenInputField(InputKind::Token),
                         account_row_rect(1),
@@ -24485,7 +24532,7 @@ impl App {
                         // Client-ID-Feld mit dem aktuellen Wert vorbelegen (bequemes Editieren).
                         let prefill = match kind {
                             InputKind::ClientId => self.settings.azure_client_id.clone(),
-                            InputKind::Token => String::new(),
+                            InputKind::Token | InputKind::RefreshToken => String::new(),
                             InputKind::ConfigName(ConfigEdit::Rename) => active_config(),
                             InputKind::ConfigName(_) => String::new(),
                         };
@@ -25975,6 +26022,7 @@ impl App {
         let Some((kind, text)) = self.input_field.take() else { return };
         match kind {
             InputKind::Token => self.submit_token_login(text),
+            InputKind::RefreshToken => self.submit_refresh_token_login(text),
             InputKind::ClientId => {
                 self.settings.azure_client_id = text.trim().to_string();
                 self.persist_settings();
@@ -31212,8 +31260,10 @@ impl App {
         el.push(knopf(pad, y, ButtonAction::ImportLauncherAccounts, "Aus Prism importieren", AccKind::Button));
         el.push(knopf(pad + halb + 12.0, y, ButtonAction::OpenInputField(InputKind::ClientId), "Client-ID", AccKind::Button));
         y += 48.0;
-        // Offenes Eingabefeld (Token oder Client-ID) mit OK.
-        if matches!(self.input_field, Some((InputKind::Token | InputKind::ClientId, _))) {
+        el.push(knopf(pad, y, ButtonAction::OpenInputField(InputKind::RefreshToken), "Refresh-Token", AccKind::Button));
+        y += 48.0;
+        // Offenes Eingabefeld (Token, Refresh-Token oder Client-ID) mit OK.
+        if matches!(self.input_field, Some((InputKind::Token | InputKind::RefreshToken | InputKind::ClientId, _))) {
             y += gpu.text_height(TOPBAR_SUB_SCALE) + 8.0;
             el.push(AccElem { rect: Rect { x: pad, y, w: innen - 100.0, h: 40.0 }, action: None, label: String::new(), kind: AccKind::Field });
             el.push(AccElem { rect: Rect { x: pad + innen - 88.0, y, w: 88.0, h: 40.0 }, action: Some(ButtonAction::SubmitInputField), label: "OK".into(), kind: AccKind::Primary });
@@ -31281,7 +31331,11 @@ impl App {
                 AccKind::Hint => texts.push(UiText { text: e.label.clone(), x: e.rect.x, y: mitte_y(e.rect, UI_SCALE_SMALL), color: theme::text_3(), scale: UI_SCALE_SMALL }),
                 AccKind::Field => {
                     let Some((kind, wert)) = &self.input_field else { continue };
-                    let label = if *kind == InputKind::Token { "MINECRAFT-TOKEN (STRG+V)" } else { "AZURE-CLIENT-ID" };
+                    let label = match kind {
+                        InputKind::Token => "MINECRAFT-TOKEN (STRG+V)",
+                        InputKind::RefreshToken => "MICROSOFT-REFRESH-TOKEN (STRG+V)",
+                        _ => "AZURE-CLIENT-ID",
+                    };
                     texts.push(UiText { text: label.into(), x: e.rect.x, y: e.rect.y - gpu.text_height(TOPBAR_SUB_SCALE) - 8.0, color: theme::text_3(), scale: TOPBAR_SUB_SCALE });
                     rects.push(UiRect::framed(e.rect, g(Slot::SurfaceSunken), 6.0, 1.0, g(Slot::Accent)));
                     let gezeigt = token_display(gpu, wert, e.rect.w - 24.0);
@@ -41540,6 +41594,7 @@ impl App {
         if let Some((kind, value)) = &self.input_field {
             let label = match kind {
                 InputKind::Token => "Minecraft-Token einfügen (Strg+V), dann OK/Enter:",
+                InputKind::RefreshToken => "Microsoft-Refresh-Token einfügen (Strg+V), dann OK/Enter:",
                 InputKind::ClientId => "Azure-Client-ID einfügen, dann OK/Enter:",
                 // Gehoert zur Configs-Seite (s. build_settings_configs).
                 InputKind::ConfigName(_) => return,
