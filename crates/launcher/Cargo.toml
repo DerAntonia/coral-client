@@ -1,0 +1,28 @@
+[package]
+name = "launcher"
+edition.workspace = true
+version.workspace = true
+# Anders als der Rest des Projekts gemeinfrei (CC0), damit der Launcher frei weitergegeben
+# werden kann -- s. LICENSE in diesem Ordner und den Abschnitt Lizenz im README.
+license = "CC0-1.0"
+
+[[bin]]
+name = "coral-client-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# Installationen finden und die Auswahl speichern -- dieselbe Logik, die der Client beim
+# Start benutzt (s. assets/src/source.rs).
+assets = { path = "../assets" }
+# Kleines Fenster ohne eigene Render-Pipeline. glow (OpenGL) statt wgpu: eframe 0.31 will
+# wgpu 24, der Client benutzt 22 -- zweimal wgpu zu bauen kostet Minuten fuer nichts.
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+# GitHub-Releases abfragen und herunterladen; dieselbe reqwest-Version wie im auth-Crate.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pruefsumme der heruntergeladenen Dateien gegen die, die GitHub zum Release-Asset nennt.
+sha2 = "0.10"
+
+[lints]
+workspace = true

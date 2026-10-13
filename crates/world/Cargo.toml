@@ -1,0 +1,12 @@
+[package]
+name = "world"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+bytemuck = { version = "1", features = ["derive"] }
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

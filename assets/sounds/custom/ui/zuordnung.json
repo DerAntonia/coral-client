@@ -1,0 +1,83 @@
+{
+ "sampleRate": 48000,
+ "sliderRiseSemitones": 5.5,
+ "slots": {
+  "Hover": {
+   "file": "ui_hover.wav",
+   "spreadSemitones": 0.75,
+   "minGapMs": 30,
+   "lengthMs": 58,
+   "peakDb": -15.8
+  },
+  "Click": {
+   "file": "ui_click.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 0,
+   "lengthMs": 20,
+   "peakDb": -22.7
+  },
+  "ToggleOn": {
+   "file": "ui_toggle_on.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 0,
+   "lengthMs": 130,
+   "peakDb": -10
+  },
+  "ToggleOff": {
+   "file": "ui_toggle_off.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 0,
+   "lengthMs": 130,
+   "peakDb": -10
+  },
+  "Open": {
+   "file": "ui_open.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 0,
+   "lengthMs": 187,
+   "peakDb": -10.8
+  },
+  "Close": {
+   "file": "ui_close.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 0,
+   "lengthMs": 194,
+   "peakDb": -12.1
+  },
+  "Step": {
+   "file": "ui_step.wav",
+   "spreadSemitones": 0.75,
+   "minGapMs": 25,
+   "lengthMs": 58,
+   "peakDb": -16.3
+  },
+  "Type": {
+   "file": "ui_type.wav",
+   "spreadSemitones": 1.5,
+   "minGapMs": 15,
+   "lengthMs": 38,
+   "peakDb": -2.3
+  },
+  "Erase": {
+   "file": "ui_erase.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 15,
+   "lengthMs": 154,
+   "peakDb": -11.3
+  },
+  "Slider": {
+   "file": "ui_slider.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 35,
+   "lengthMs": 17,
+   "peakDb": -10
+  },
+  "Popup": {
+   "file": "ui_popup.wav",
+   "spreadSemitones": 0,
+   "minGapMs": 0,
+   "lengthMs": 37,
+   "peakDb": -30.4
+  }
+ }
+}

@@ -1,0 +1,14 @@
+[package]
+name = "audio"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+cpal = "0.15"
+# Reiner Rust-Vorbis-Dekoder. Vanillas Klaenge liegen als .ogg vor; ohne Dekoder muesste man
+# 4405 Dateien vorab nach WAV wandeln und mitschleppen. lewton ist ohne C-Abhaengigkeit --
+# der Client bleibt damit mit einem schlichten "cargo build" baubar.
+lewton = "0.10"
+
+[lints]
+workspace = true

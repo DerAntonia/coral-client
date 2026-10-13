@@ -1,0 +1,679 @@
+#	Uebersetzungen der Client-Oberflaeche: Deutsch (Quelltext, genau wie im Code) <TAB> Englisch <TAB> Latein.
+#	"{}" steht fuer einen eingesetzten Wert. Zeilen mit "#" am Anfang sind Kommentare.
+AN	ON	SĪC
+AUS	OFF	NŌN
+An	On	Sīc
+Aus	Off	Nōn
+← Zurück	← Back	← Redīre
+← Liste	← List	← Index
+Fertig	Done	Factum
+Abbrechen	Cancel	Abrogāre
+Speichern	Save	Servāre
+Laden	Load	Onerāre
+Löschen	Delete	Dēlēre
+Bearbeiten	Edit	Mūtāre
+Übernehmen	Apply	Adhibēre
+Zurücksetzen	Reset	Restituere
+Verbinden	Connect	Coniungere
+Los	Go	Age
+Einstellungen	Settings	Optiōnēs
+Render	Render	Pictūra
+Video	Video	Video
+Audio	Audio	Sonus
+Steuerung	Controls	Moderāmina
+Inventar	Inventory	Inventārium
+Chat	Chat	Colloquium
+Skin	Skin	Pellis
+Schrift	Font	Litterae
+Aussehen	Appearance	Speciēs
+Module	Modules	Modulī
+Sprache	Language	Lingua
+Modul	Enabled	Āctīvum
+Allgemein	General	Generāle
+Respawn	Respawn	Renāscī
+Resume	Resume	Pergere
+Disconnect	Disconnect	Sēiungere
+Du bist gestorben	You died	Mortuus es
+Respawn zum Wiederbeleben  |  Alt+F4 = Beenden	Respawn to revive  |  Alt+F4 = Quit	Renāscī ut revīvās  |  Alt+F4 = Exīre
+Esc = zurück  |  Alt+F4 = Beenden	Esc = back  |  Alt+F4 = Quit	Esc = redīre  |  Alt+F4 = Exīre
+Esc = zurück ins Spiel  |  Alt+F4 = Beenden	Esc = back to game  |  Alt+F4 = Quit	Esc = ad lūdum redīre  |  Alt+F4 = Exīre
+Alt+F4 = Beenden	Alt+F4 = Quit	Alt+F4 = Exīre
+Konto	Account	Ratiō
+Konto verwalten	Manage account	Ratiōnem administrāre
+Server verwalten	Manage servers	Servītōrēs administrāre
+Server bearbeiten	Edit server	Servītōrem mūtāre
+Gespeicherte Server	Saved servers	Servītōrēs servātī
+Server-Adresse	Server address	Īnscrīptiō servītōris
++ Neuer Server	+ New server	+ Novus servītor
+Name	Name	Nōmen
+Adresse (host oder host:port)	Address (host or host:port)	Īnscrīptiō (host vel host:port)
+Adresse eingeben, dann Los (oder Enter)  |  Server rechts anklicken = sofort verbinden  |  Esc = zurück	Enter an address, then Go (or Enter)  |  Click a server on the right = connect at once  |  Esc = back	Īnscrīptiōnem scrībe, deinde Age (vel Enter)  |  Servītōrem dextrā preme = statim coniungere  |  Esc = redīre
+Feld anklicken oder Tab zum Wechseln  |  Enter = speichern  |  Esc = abbrechen	Click a field or Tab to switch  |  Enter = save  |  Esc = cancel	Campum preme vel Tab ad mūtandum  |  Enter = servāre  |  Esc = abrogāre
+Tab = Feld wechseln  |  Enter = speichern  |  Esc = abbrechen	Tab = switch field  |  Enter = save  |  Esc = cancel	Tab = campum mūtāre  |  Enter = servāre  |  Esc = abrogāre
+Kachel anklicken = bearbeiten	Click a tile = edit	Tabulam preme = mūtāre
+Kachel anklicken = bearbeiten/löschen  |  Esc/Fertig = Bearbeiten-Modus verlassen	Click a tile = edit/delete  |  Esc/Done = leave edit mode	Tabulam preme = mūtāre/dēlēre  |  Esc/Factum = modum mūtandī relinquere
+Noch keine Server -- unten "+ Neuer Server".	No servers yet -- "+ New server" below.	Nōndum servītōrēs -- īnfrā "+ Novus servītor".
+Noch keine Server gespeichert. Unten auf "Bearbeiten".	No servers saved yet. Click "Edit" below.	Nōndum servītōrēs servātī. Īnfrā "Mūtāre" preme.
+Coral Client bereit.	Coral Client ready.	Coral Client parātus.
+verbinde ...	connecting ...	coniungō ...
+Verbinde mit {} ...	Connecting to {} ...	Coniungō cum {} ...
+Status	Status	Status
+Status: {}	Status: {}	Status: {}
+Mit Microsoft anmelden	Sign in with Microsoft	Per Microsoft inīre
+Abmelden	Sign out	Exīre
+Abgemeldet.	Signed out.	Exitum est.
+Angemeldet	Signed in	Initum
+Angemeldet als {}	Signed in as {}	Initum ut {}
+Angemeldet -- hole Minecraft-Profil ...	Signed in -- fetching Minecraft profile ...	Initum -- profilum Minecraft petō ...
+Anmeldung läuft ...	Signing in ...	Inīre cōnor ...
+Nicht angemeldet (Offline-Mode)	Not signed in (offline mode)	Nōn initum (modus sine rēte)
+Token eingeben	Enter token	Tesseram īnscrībe
+Token wird geprüft ...	Checking token ...	Tesseram probō ...
+Aus Prism importieren	Import from Prism	Ex Prism importāre
+Login fehlgeschlagen	Login failed	Introitus dēfēcit
+Login fehlgeschlagen: {}	Login failed: {}	Introitus dēfēcit: {}
+Zum Kontowechsel erst abmelden.	Sign out first to switch accounts.	Ad ratiōnem mūtandam prius exī.
+Microsoft-Anmeldung wird vorbereitet ...	Preparing Microsoft sign-in ...	Introitus Microsoft parātur ...
+Im Browser anmelden: {}	Sign in in your browser: {}	In nāvigātrō inīre: {}
+Code (schon kopiert): {}	Code (already copied): {}	Cōdex (iam exscrīptus): {}
+Azure-Client-ID einfügen, dann OK/Enter:	Paste the Azure client ID, then OK/Enter:	Azure-Client-ID īnsere, deinde OK/Enter:
+Azure-Client-ID gespeichert. Jetzt 'Mit Microsoft anmelden'.	Azure client ID saved. Now 'Sign in with Microsoft'.	Azure-Client-ID servātum. Nunc 'Per Microsoft inīre'.
+Minecraft-Token einfügen (Strg+V), dann OK/Enter:	Paste the Minecraft token (Ctrl+V), then OK/Enter:	Tesseram Minecraft īnsere (Strg+V), deinde OK/Enter:
+Kein Azure-Client-ID gesetzt -- Microsoft-Login nicht möglich (Token-Feld nutzen).	No Azure client ID set -- Microsoft login not possible (use the token field).	Nūllum Azure-Client-ID -- introitus Microsoft fierī nōn potest (campo tesserae ūtere).
+Kein Prism-Konto gefunden -- in Prism anmelden und importieren.	No Prism account found -- sign in in Prism and import.	Nūlla ratiō Prism inventa -- in Prism inī et importā.
+Keine Launcher-Konten gefunden (Prism/PolyMC). Ist ein Konto angemeldet?	No launcher accounts found (Prism/PolyMC). Is an account signed in?	Nūllae ratiōnēs launcher inventae (Prism/PolyMC). Estne ratiō inita?
+{} Konto(en) aus Prism gefunden -- anklicken zum Anmelden:	{} account(s) found in Prism -- click to sign in:	{} ratiō(nes) in Prism inventa(ē) -- preme ut inīrēs:
+{} Launcher-Konto(en) gefunden -- anklicken zum Anmelden.	{} launcher account(s) found -- click to sign in.	{} ratiō(nes) launcher inventa(ē) -- preme ut inīrēs.
+Application-ID	Application ID	Application-ID
+Client-ID	Client ID	Client-ID
+HUD-Editor	HUD editor	Ēditor HUD
+Element wählen oder direkt ziehen  |  Esc/Fertig = zurück	Pick an element or drag it directly  |  Esc/Done = back	Elementum ēlige vel dīrēctē trahe  |  Esc/Factum = redīre
+Nur Position (im Verschiebemodus ziehen)	Position only (drag in move mode)	Positiō tantum (in modō movendī trahe)
+Verschieben	Move	Movēre
+Skalierung	Scale	Magnitūdō
+Sichtbar	Visible	Vīsibile
+Unsichtbar	Invisible	Invīsibile
+Größe	Size	Magnitūdō
+Farbe	Color	Color
+Farbe {}	Color {}	Color {}
+Deckkraft	Opacity	Opācitās
+Breite	Width	Lātitūdō
+Hintergrund	Background	Fundus
+Rand	Border	Margō
+Kontur	Outline	Ambitus
+Schatten	Shadow	Umbra
+Textschatten	Text shadow	Umbra litterārum
+Je Element	Per element	Per elementum
+Vanilla	Vanilla	Vanilla
+Minimal	Minimal	Minimum
+Verringert	Decreased	Minūtum
+Alle	All	Omnēs
+Keiner	None	Nūllus
+Keins	None	Nūllum
+Immer	Always	Semper
+Nie	Never	Numquam
+Außer Blöcke	Except blocks	Praeter cubōs
+Halten	Hold	Tenēre
+Umschalten	Toggle	Commūtāre
+Normal	Normal	Normāle
+Panini	Panini	Panini
+Stereografisch	Stereographic	Stereographica
+Zylindrisch	Cylindrical	Cylindrica
+Mittig	Centered	Medium
+Links	Left	Sinistrā
+Rechts	Right	Dextrā
+Geglättet	Smoothed	Lēvigātum
+Roh (Server)	Raw (server)	Crūdum (servītor)
+Gepunktet	Dotted	Punctātum
+Kreis	Circle	Circulus
+Kasten	Box	Capsa
+Orb	Orb	Orbis
+Rot	Red	Ruber
+Gelb	Yellow	Flāvus
+Grün	Green	Viridis
+Hellblau	Light blue	Caeruleus
+Cyan	Cyan	Cyaneus
+Lila	Purple	Purpureus
+Pink	Pink	Roseus
+Orange	Orange	Aurantius
+Schwarz	Black	Niger
+Weiß	White	Albus
+Weiß+Kontur	White+outline	Albus+ambitus
+Weißer Pfeil	White arrow	Sagitta alba
+Komplementär	Complementary	Complēmentārius
+Glas hoch	Glass high	Vitrum altum
+Glas tief	Glass low	Vitrum humile
+Eigenes Bild	Own image	Imāgō propria
+Linux-Desktop	Linux desktop	Mēnsa Linux
+Hintergrundbild	Wallpaper	Imāgō fundī
+Bild wählen...	Choose image...	Imāginem ēlige...
+Dialog offen...	Dialog open...	Dialogus apertus...
+Bild gespeichert	Image saved	Imāgō servāta
+Noch kein Bild gewählt	No image chosen yet	Nūlla imāgō adhūc ēlēcta
+Kein Desktop-Hintergrund gefunden	No desktop wallpaper found	Nūlla imāgō mēnsae inventa
+Hintergrundbild nicht geladen	Wallpaper not loaded	Imāgō fundī nōn onerāta
+Bild nicht übernommen	Image not applied	Imāgō nōn adhibita
+Hintergrund des Startbildschirms. "Eigenes Bild": eine Bilddatei (PNG, JPEG, WebP, BMP), die beim Auswählen in den Einstellungsordner kopiert wird -- das Original darf danach weg. "Linux-Desktop": das Hintergrundbild des Desktops (Cinnamon, GNOME, MATE, KDE, Xfce), Änderungen dort kommen von selbst nach.	Background of the start screen. "Own image": an image file (PNG, JPEG, WebP, BMP) that is copied into the settings folder when chosen -- the original may be deleted afterwards. "Linux desktop": the desktop wallpaper (Cinnamon, GNOME, MATE, KDE, Xfce); changes there follow automatically.	Fundus pāginae initiālis. "Imāgō propria": plica imāginis (PNG, JPEG, WebP, BMP), quae ēligendō in plicam optiōnum exscrībitur -- archetypum posteā dēlērī potest. "Mēnsa Linux": imāgō fundī mēnsae (Cinnamon, GNOME, MATE, KDE, Xfce); mūtātiōnēs ibi sponte sequuntur.
+Kein Pack	No pack	Nūllus fasciculus
+Aktiv: {}	Active: {}	Āctīvum: {}
+Ordner öffnen	Open folder	Plicam aperīre
+Ordner: {}  (Unterordner mit eigenem 'assets/' = wählbares Pack)	Folder: {}  (subfolder with its own 'assets/' = selectable pack)	Plica: {}  (subplica cum 'assets/' propria = fasciculus ēligibilis)
+Mehrere Packs anklicken = stapeln. 1 liegt oben und gewinnt, die anderen füllen auf.	Click several packs = stack them. 1 is on top and wins, the others fill in.	Plūrēs fasciculōs preme = struere. 1 summus est et vincit, cēterī supplent.
+Ordner mit Resourcepacks (je ein Unterordner mit eigenem 'assets/'-Verzeichnis). Zeile anklicken markiert ein Pack, 'Laden' macht es aktiv -- auch während einer laufenden Verbindung.	Folder with resource packs (one subfolder each with its own 'assets/' directory). Clicking a row marks a pack, 'Load' activates it -- even while connected.	Plica fasciculōrum (singulae subplicae cum 'assets/' propria). Līneam premendō fasciculum notās, 'Onerāre' eum āctīvat -- etiam dum coniūnctus es.
+Skin wird geladen: {}	Loading skin: {}	Pellis onerātur: {}
+Skin geladen: {}	Skin loaded: {}	Pellis onerāta: {}
+Skin wird schon geladen	Skin is already loading	Pellis iam onerātur
+Bitte warten, bis der laufende Wechsel fertig ist.	Please wait until the current switch is finished.	Exspectā, quaesō, dum mūtātiō currēns fīniātur.
+Skin konnte nicht geladen werden	Skin could not be loaded	Pellis onerārī nōn potuit
+Skin konnte nicht geladen werden: {}	Skin could not be loaded: {}	Pellis onerārī nōn potuit: {}
+Vanilla-Texturen geladen	Vanilla textures loaded	Textūrae Vanilla onerātae
+Vanilla-Texturen werden geladen	Loading vanilla textures	Textūrae Vanilla onerantur
+Ladevorgang abgebrochen	Loading aborted	Onerātiō abrupta
+Partikel	Particles	Particulae
+Explosion AN	Explosion ON	Displōsiō SĪC
+Explosion AUS	Explosion OFF	Displōsiō NŌN
+Renderdistanz	Render distance	Spatium pictūrae
+Max-Renderdistanz	Max render distance	Spatium pictūrae maximum
+Max-Chunk-Anzahl	Max chunk count	Numerus frūstōrum maximus
+Mesh-Budget	Mesh budget	Cōpia rētium
+Chunk-Update-Threads	Chunk update threads	Fīla renovātiōnis frūstōrum
+Weiche Beleuchtung	Smooth lighting	Lūmen molle
+Block-Rotation	Block rotation	Rotātiō cubōrum
+Present-Modus	Present mode	Modus praesentandī
+FPS-Limit	FPS limit	Fīnis FPS
+Render-Ahead	Render ahead	Praepictūra
+Monitor-Refresh	Monitor refresh	Renovātiō monitōris
+Riss-Position	Tear position	Locus fissūrae
+Riss-Reserve	Tear reserve	Subsidium fissūrae
+Riss-Timing	Tear timing	Tempus fissūrae
+Tearing-Test	Tearing test	Probātiō fissūrae
+TearFree	TearFree	TearFree
+TearFree gibt es nur unter X11	TearFree only exists on X11	TearFree tantum sub X11 exstat
+Projektion	Projection	Prōiectiō
+Sichtfeld (Ego)	Field of view (first person)	Campus vīsus (prīma persōna)
+Sichtfeld (3. Person)	Field of view (3rd person)	Campus vīsus (tertia persōna)
+Sichtfeld (3. Person, vorn)	Field of view (3rd person, front)	Campus vīsus (tertia persōna, a fronte)
+Kameraabstand (hinten)	Camera distance (back)	Distantia camerae (a tergō)
+Kameraabstand (vorn)	Camera distance (front)	Distantia camerae (a fronte)
+Kamerahöhe (hinten)	Camera height (back)	Altitūdō camerae (a tergō)
+Kamerahöhe (vorn)	Camera height (front)	Altitūdō camerae (a fronte)
+Abstand	Distance	Distantia
+Ego	First person	Prīma persōna
+3. Person	3rd person	Tertia persōna
+3. Person (vorn)	3rd person (front)	Tertia persōna (a fronte)
+Helligkeit	Brightness	Clāritās
+Himmel	Sky	Caelum
+Feste Uhrzeit	Fixed time	Hōra fīxa
+Uhrzeit	Time	Hōra
+Einfarbig	Solid	Ūnicolor
+Verlauf	Gradient	Gradātiō
+Sonne	Sun	Sōl
+Mond	Moon	Lūna
+Wetter	Weather	Tempestās
+Umgebung	Environment	Ambitus
+Dynamisches Feuer	Dynamic fire	Ignis mōbilis
+Barrieren anzeigen	Show barriers	Obicēs mōnstrāre
+Barrieren, Lichtblöcke und Strukturleere sichtbar machen	Make barriers, light blocks and structure voids visible	Obicēs, cubōs lūminis et vacua strūctūrae vīsibilia facere
+Fester Himmel statt Tageszeit (im Shader-Pfad auch das Licht) -- aus: Tag/Nacht wie gehabt	Fixed sky instead of time of day (in the shader path the light too) -- off: day/night as usual	Caelum fīxum prō hōra diēī (in viā umbrārum etiam lūx) -- nōn: diēs/nox ut solet
+Mit Feuerresistenz blenden Feuerblöcke in einer Sekunde aus, danach wieder ein	With fire resistance, fire blocks fade out within a second and back in afterwards	Cum resistentia ignis cubī ignis intrā secundum ēvānēscunt, deinde redeunt
+Blockumriss	Block outline	Ambitus cubī
+Farbe, Deckkraft und Breite des Rahmens um den anvisierten Block	Color, opacity and width of the frame around the targeted block	Color, opācitās et lātitūdō marginis circā cubum petītum
+Fadenkreuz	Crosshair	Rēticulum
+Kreuz-Farbe	Crosshair color	Color rēticulī
+Crit-Farbe	Crit color	Color ictus criticī
+Aufhellung	Brightening	Illūstrātiō
+FPS-Anzeige	FPS display	Index FPS
+FPS/Frame- und Wartezeit oben rechts einblenden. Position und Farbe lassen sich im HUD-Editor anpassen.	Show FPS/frame and wait time at the top right. Position and color can be adjusted in the HUD editor.	FPS et tempus imāginis et exspectātiōnis suprā dextrā mōnstrāre. Positiō et color in ēditōre HUD mūtārī possunt.
+Performance-Anzeige	Performance display	Index efficāciae
+Debug	Debug	Debug
+Debug-Overlay (F3)	Debug overlay (F3)	Strātum debug (F3)
+Frame-Profiler	Frame profiler	Profiler imāginum
+Frame-Profiler an	Frame profiler on	Profiler imāginum sīc
+Frame-Profiler aus	Frame profiler off	Profiler imāginum nōn
+Sound-Debug	Sound debug	Debug sonī
+Zwei Balken: wie laut gerade der linke und der rechte Kanal ist	Two bars: how loud the left and right channel currently are	Duae virgae: quam sonōrus nunc canālis sinister et dexter sit
+Hitbox	Hitbox	Capsa ictus
+Hitbox-Anzeige	Hitbox display	Index capsārum ictus
+Trefferbox anderer Entities: geglättet und/oder roh	Hitbox of other entities: smoothed and/or raw	Capsa ictus aliōrum entium: lēvigāta et/vel crūda
+Ghostblock-Indikator	Ghost block indicator	Index cubōrum spectrōrum
+Unbestätigte Blöcke (gesetzt, abgebaut, Anker) werden nach der Toleranz halbdurchsichtig	Unconfirmed blocks (placed, broken, anchor) become half-transparent after the tolerance	Cubī nōn cōnfirmātī (positī, effossī, ancora) post tolerantiam sēmiperlūcidī fīunt
+Toleranz	Tolerance	Tolerantia
+Zoom	Zoom	Amplificātiō
+Zoom (Modul)	Zoom (module)	Amplificātiō (modulus)
+Zoomstärke	Zoom strength	Vīs amplificātiōnis
+Verengt das Sichtfeld, solange die Zoom-Taste (Steuerung) aktiv ist	Narrows the field of view while the zoom key (controls) is active	Campum vīsus angustat, dum clāvis amplificātiōnis (moderāmina) āctīva est
+HUD verstecken (F1)	Hide HUD (F1)	HUD cēlāre (F1)
+Perspektive (F5)	Perspective (F5)	Prōspectus (F5)
+Spielerliste	Player list	Index lūsōrum
+Spielerliste (Tab)	Player list (Tab)	Index lūsōrum (Tab)
+Effekte	Effects	Effectus
+Im HUD	In the HUD	In HUD
+Im Inventar	In the inventory	In inventāriō
+Scoreboard	Scoreboard	Tabula punctōrum
+Actionbar	Action bar	Virga āctiōnis
+Titel	Title	Titulus
+Untertitel	Subtitles	Subtitulī
+Hotbar	Hotbar	Virga īnstrūmentōrum
+Wackeln	Wobble	Vacillāre
+0 blinkt	0 blinks	0 micat
+Pfeile	Arrows	Sagittae
+Pfeil-Anzeige	Arrow display	Index sagittārum
+Pfeil-Zahl	Arrow count	Numerus sagittārum
+Munitionsanzeige bei Bogen/Armbrust und weiße Flugbahnen hinter Pfeilen	Ammo display for bow/crossbow and white trails behind arrows	Index tēlōrum arcūs/arcuballistae et vestīgia alba post sagittās
+Schilde	Shields	Scūta
+Schild-Cooldown	Shield cooldown	Mora scūtī
+Schild-Countdown	Shield countdown	Numerātiō scūtī
+Schild-Cooldown (eigener und fremder) und gehobene Schilde anderer Spieler	Shield cooldown (own and others') and raised shields of other players	Mora scūtī (propria et aliēna) et scūta sublāta aliōrum lūsōrum
+Cooldown: eigener	Cooldown: own	Mora: propria
+Cooldown: Spieler	Cooldown: players	Mora: lūsōrēs
+Hochhalten: Spieler	Raised: players	Sublātum: lūsōrēs
+Countdown	Countdown	Numerātiō
+Nur Zahl	Number only	Numerus tantum
+Zahl-Farbe	Number color	Color numerī
+Hitbox-Farbe	Hitbox color	Color capsae ictus
+Farbfilter	Color filter	Cōlum colōris
+Fade-Dauer	Fade duration	Dūrātiō ēvānēscendī
+Zeit bis Fade	Time until fade	Tempus ante ēvānēscentiam
+Lautstärke	Volume	Sonōritās
+Tonhöhe	Pitch	Altitūdō sonī
+Anzeige	Display	Index
+Dauer	Duration	Dūrātiō
+Dichte	Density	Dēnsitās
+Modell	Model	Exemplar
+Trail	Trail	Vestīgium
+Schadens-Färbung	Damage tint	Tīnctūra vulneris
+Nur Skin	Skin only	Pellis tantum
+Totem-Anzeige	Totem display	Index totem
+Totem-Vorschau	Totem preview	Praevīsiō totem
+Totem-Warnung	Totem warning	Monitiō totem
+Pop-Optik	Pop visuals	Speciēs ēruptiōnis
+Pop-Klänge	Pop sounds	Sonī ēruptiōnis
+Eigene Partikel aus	Own particles off	Particulae propriae nōn
+Fremde Partikel aus	Others' particles off	Particulae aliēnae nōn
+Eigenes Flug-Totem aus	Own flying totem off	Totem volāns proprium nōn
+Ein Totem extra	One extra totem	Ūnum totem additum
+Eigener Pop Hotbar	Own pop hotbar	Ēruptiō propria virgae
+Eigener Pop Zweithand	Own pop offhand	Ēruptiō propria manus alterius
+Fremder Pop	Others' pop	Ēruptiō aliēna
+Anker laden	Charge anchor	Ancoram onerāre
+Explosion	Explosion	Displōsiō
+Klick	Click	Ictus
+Signalton	Beep	Sonus signī
+Untergrund	Backdrop	Fundus
+Hotbar-X	Hotbar X	X virgae
+Zweithand-X	Offhand X	X manus alterius
+Hotbar = gold/rechts, Zweithand = blau/links	Hotbar = gold/right, offhand = blue/left	Virga = aurea/dextrā, manus altera = caerulea/sinistrā
+Zeigt schon vor dem Öffnen, wo im Inventar die Totems liegen	Shows where the totems are in the inventory before opening it	Ante aperiendum mōnstrat, ubi totem in inventāriō iaceant
+X am Fadenkreuz, wenn ein Totem nicht an seinem Platz liegt	X at the crosshair when a totem is not in its place	X ad rēticulum, sī totem nōn suō locō iacet
+Flug-Totem und Partikelwolken beim Pop abschalten	Turn off the flying totem and particle clouds on pop	Totem volāns et nūbēs particulārum in ēruptiōne exstinguere
+Klänge für Pops, Explosion und Anker -- ersetzt den Signalton	Sounds for pops, explosion and anchor -- replaces the beep	Sonī ēruptiōnum, displōsiōnis et ancorae -- sonum signī substituit
+Crystal PvP	Crystal PvP	Crystal PvP
+Crystal-Optimizer	Crystal optimizer	Optimizātor crystallōrum
+Crystal-Optimizer: vom Server abgeschaltet	Crystal optimizer: disabled by the server	Optimizātor crystallōrum: a servītōre exstīnctus
+Getroffene Kristalle sofort weg, ohne auf den Server zu warten	Hit crystals vanish at once, without waiting for the server	Crystallī ictī statim ēvānēscunt, servītōrem nōn exspectantēs
+No Tool Break	No Tool Break	Īnstrūmentum nōn frangitur
+Sperren ab Resthaltbarkeit	Lock at remaining durability	Claudere ab firmitāte reliqua
+Sperrt das Abbauen, bevor ein Diamant-/Netherit-Werkzeug mit Reparatur zerbricht	Locks mining before a diamond/netherite tool with Mending breaks	Fodere claudit, antequam īnstrūmentum adamantinum/netheriticum cum Reparātiōne frangātur
+Abbauen gesperrt	Mining locked	Fodere clausum
+Discord-Status	Discord status	Status Discord
+Zeigt in Discord, dass du Coral Client spielst -- mit Version, Server und Spielzeit	Shows in Discord that you are playing Coral Client -- with version, server and play time	In Discord mōnstrat tē Coral Client lūdere -- cum versiōne, servītōre et tempore lūdendī
+Discord nicht gefunden	Discord not found	Discord nōn inventum
+Keine Module	No modules	Nūllī modulī
+Modul-Menü	Module menu	Index modulōrum
+Hauptlautstärke	Master volume	Sonōritās prīncipālis
+Musik	Music	Mūsica
+Feindliche Kreaturen	Hostile creatures	Creātūrae īnfestae
+Blöcke	Blocks	Cubī
+Spieler	Players	Lūsōrēs
+Musikblöcke	Jukebox/Note blocks	Phonographum/Cubī mūsicī
+Freundliche Kreaturen	Friendly creatures	Creātūrae pācificae
+Atmosphäre/Umgebung	Ambient/Environment	Murmura locī
+Sprachausgabe/Stimme	Narrator/Voice	Vōx/Locūtiō
+UI-Sounds	UI sounds	Sonī interfaciēī
+Musik, die der Server abspielt.	Music played by the server.	Mūsica quam servītor ēdit.
+Plattenspieler und Notenblöcke.	Jukeboxes and note blocks.	Phonographa et cubī mūsicī.
+Regen und Donner.	Rain and thunder.	Pluvia et tonitrus.
+Abbauen, Setzen, Türen, Kisten, Explosionen und alles andere, was von Blöcken kommt.	Breaking, placing, doors, chests, explosions and everything else that comes from blocks.	Frangere, pōnere, iānuae, arcae, displōsiōnēs et cētera omnia quae ā cubīs veniunt.
+Zombies, Skelette, Creeper und andere Monster.	Zombies, skeletons, creepers and other monsters.	Zombī, sceleta, creeperēs et alia mōnstra.
+Tiere, Dorfbewohner und andere friedliche Kreaturen.	Animals, villagers and other peaceful creatures.	Animālia, vīcānī et aliae creātūrae pācificae.
+Schritte, Treffer, Essen, Totems und alles andere, was von Spielern kommt, auch von dir selbst.	Steps, hits, eating, totems and everything else that comes from players, including yourself.	Gradūs, ictūs, cibus, tōtēma et cētera omnia quae ā lūsōribus veniunt, etiam ā tē ipsō.
+Höhlengeräusche, Unterwasser-Rauschen und andere Umgebungsklänge.	Cave noises, underwater rumble and other ambient sounds.	Strepitūs cavernārum, murmur sub aquā et aliī sonī locī.
+Sprachausgabe, wenn der Server welche schickt. Der Sprachchat hat seine eigene Lautstärke.	Narration, if the server sends any. Voice chat has its own volume.	Vōx, sī servītor eam mittit. Colloquium vōcāle sonōritātem suam habet.
+Klänge der Oberfläche wie Klicks in Menüs. Hängt als einzige nicht an der Hauptlautstärke.	Interface sounds such as clicks in menus. The only one that does not depend on the master volume.	Sonī interfaciēī ut ictūs in indicibus. Sōla ā sonōritāte prīncipālī nōn pendet.
+Ausgabegerät	Output device	Īnstrūmentum sonī
+System-Standard	System default	Praefīnītum systēmatis
+Testton	Test tone	Sonus probātiōnis
+Testton abspielen	Play test tone	Sonum probātiōnis ēdere
+Raumklang-Test	Spatial sound test	Probātiō sonī spatiālis
+Tonhöhe (Aufnahmen)	Pitch (recordings)	Altitūdō sonī (īnscrīptiōnēs)
+Spielt einen kurzen Testton auf dem gewählten Ausgabegerät ab, um Gerät + Stream zu prüfen.	Plays a short test tone on the selected output device to check device + stream.	Sonum probātiōnis brevem in īnstrūmentō ēlēctō ēdit, ut īnstrūmentum et fluxum probēs.
+Wählt das Ausgabegerät für den Testton (und später echte Spielgeräusche). "System-Standard" folgt automatisch der Systemeinstellung.	Selects the output device for the test tone (and later real game sounds). "System default" follows the system setting automatically.	Īnstrūmentum sonī ēligit prō sonō probātiōnis (et posteā vērīs sonīs lūdī). "Praefīnītum systēmatis" optiōnem systēmatis sponte sequitur.
+Lautstärke aller Weltgeräusche (Schritte, Blöcke, Kreaturen, Explosionen), die der Server schickt. Wirkt bewusst NICHT auf die Klänge der Oberfläche -- die haben ihren eigenen, aufeinander abgestimmten Pegel.	Volume of all world sounds (steps, blocks, creatures, explosions) the server sends. Deliberately does NOT affect interface sounds -- they have their own matched level.	Sonōritās omnium sonōrum mundī (gradus, cubī, creātūrae, displōsiōnēs), quōs servītor mittit. Dē industriā sonōs interfaciēī NŌN afficit -- hī gradum suum proprium habent.
+Lässt einen Klick in drei Sekunden einmal um den Kopf wandern: vorne, rechts, hinten, links. Damit lässt sich prüfen, ob die Ortung ankommt -- der Klick erreicht das nahe Ohr bis zu 0,66 ms früher und das ferne leiser und dumpfer. Am deutlichsten mit KOPFHÖRERN; über Lautsprecher hört man vor allem die Lautstärke. Vorne und hinten klingen gleich, das ist so gewollt (dafür bräuchte es gemessene Ohrmuschel-Daten).	Moves a click once around your head in three seconds: front, right, back, left. This lets you check whether the positioning comes through -- the click reaches the near ear up to 0.66 ms earlier and the far one quieter and duller. Clearest with HEADPHONES; on speakers you mainly hear the volume. Front and back sound the same, that is intended (that would need measured outer-ear data).	Ictum tribus secundīs semel circā caput dūcit: ante, dextrā, post, sinistrā. Sīc probārī potest, an locātiō perveniat -- ictus aurem propinquam usque ad 0,66 ms citius attingit, remōtam submissius et obtūsius. Clārissimē cum AURICULĀRIĪS; per altoquentēs praecipuē sonōritās audītur. Ante et post idem sonant, id cōnsultō (ad hoc data auriculae mēnsa opus essent).
+Verschiebt die Tonhöhe der UI-Klänge, die aus Aufnahmen abgespielt werden (s. UiSound::sample). In Halbtönen, nach oben und unten offen; Tonhöhe und Länge hängen dabei zusammen, wie bei einer schneller/langsamer abgespielten Aufnahme -- genau wie in scripts/klaenge-anhoeren.sh. Wirkt NICHT auf Signaltöne wie den Totem-Pop.	Shifts the pitch of the UI sounds played from recordings (see UiSound::sample). In semitones, open upwards and downwards; pitch and length are linked, like a recording played faster/slower -- just like in scripts/klaenge-anhoeren.sh. Does NOT affect beeps like the totem pop.	Altitūdinem sonōrum interfaciēī ex īnscrīptiōnibus ēditōrum movet (v. UiSound::sample). In sēmitoniīs, sursum deorsumque apertum; altitūdō et longitūdō cohaerent, ut in īnscrīptiōne citius/tardius ēdita -- sīcut in scripts/klaenge-anhoeren.sh. Sonōs signī ut ēruptiōnem totem NŌN afficit.
+Tasten	Keys	Clāvēs
+Aktion	Action	Āctiō
+Modus	Mode	Modus
+Vorwärts	Forward	Prōrsum
+Rückwärts	Backward	Retrōrsum
+Springen	Jump	Salīre
+Schleichen	Sneak	Rēpere
+Sprinten	Sprint	Currere
+Schwimmen	Swim	Natāre
+Gehen	Walk	Ambulāre
+Angreifen/Abbauen	Attack/Destroy	Oppugnāre/Fodere
+Benutzen/Platzieren	Use/Place	Ūtī/Pōnere
+Item wegwerfen	Drop item	Rem abicere
+Mit Zweithand tauschen	Swap with offhand	Cum manū altera permūtāre
+Hotbar nach links	Hotbar left	Virga sinistrōrsum
+Hotbar nach rechts	Hotbar right	Virga dextrōrsum
+Hotbar 1	Hotbar 1	Virga 1
+Hotbar 2	Hotbar 2	Virga 2
+Hotbar 3	Hotbar 3	Virga 3
+Hotbar 4	Hotbar 4	Virga 4
+Hotbar 5	Hotbar 5	Virga 5
+Hotbar 6	Hotbar 6	Virga 6
+Hotbar 7	Hotbar 7	Virga 7
+Hotbar 8	Hotbar 8	Virga 8
+Hotbar 9	Hotbar 9	Virga 9
+Inventar: Stapel verschieben	Inventory: move stack	Inventārium: acervum movēre
+Inventar: wegwerfen	Inventory: drop	Inventārium: abicere
+Schleichen: aufstehen	Sneak: stand up	Rēpere: surgere
+Befehl	Command	Mandātum
+Lautstärke hoch (1 %)	Volume up (1 %)	Sonōritās sursum (1 %)
+Lautstärke runter (1 %)	Volume down (1 %)	Sonōritās deorsum (1 %)
+nicht belegt	unbound	nōn assignātum
+> Taste/Maus <	> key/mouse <	> clāvis/mūs <
+Maus links	Left mouse	Mūs sinister
+Maus rechts	Right mouse	Mūs dexter
+Maus mitte	Middle mouse	Mūs medius
+Maus zurück	Mouse back	Mūs retrō
+Maus vor	Mouse forward	Mūs porrō
+Mausrad hoch	Wheel up	Rota sursum
+Mausrad runter	Wheel down	Rota deorsum
+Rad hoch	Wheel up	Rota sursum
+Rad runter	Wheel down	Rota deorsum
+Linksklick = belegen  |  Rechtsklick = entfernen  |  + = zweite Belegung (max. {})	Left click = bind  |  Right click = remove  |  + = second binding (max. {})	Ictus sinister = assignāre  |  Ictus dexter = removēre  |  + = assignātiō altera (max. {})
+Klicke auf eine Taste, dann die gewünschte neue Taste drücken. Escape bricht	Click a key, then press the desired new key. Escape cancels.	Clāvem preme, deinde novam clāvem optātam preme. Escape abrogat.
+Tastenbelegung: abgebrochen	Key binding: cancelled	Assignātiō clāvium: abrogāta
+Tastenbelegung: diese Maustaste wird nicht unterstützt	Key binding: this mouse button is not supported	Assignātiō clāvium: hic globulus mūris nōn sustinētur
+Kamera-Empfindlichkeit	Camera sensitivity	Sēnsibilitās camerae
+Zeiger-Empfindlichkeit	Cursor sensitivity	Sēnsibilitās indicis
+Maus invertieren	Invert mouse	Mūrem invertere
+Vertikale Mausrichtung umkehren. Noch nicht implementiert.	Invert vertical mouse direction. Not implemented yet.	Dīrēctiōnem verticālem mūris invertere. Nōndum effectum.
+Sens-Koeffizient	Sens coefficient	Coefficiēns sēnsibilitātis
+Minecraft-Sens	Minecraft sens	Sēnsibilitās Minecraft
+= Coral-Client-Sens	= Coral Client sens	= sēnsibilitās Coral Client
+DPI der Maus	Mouse DPI	DPI mūris
+cm/360 mit der Minecraft-Sens	cm/360 with the Minecraft sens	cm/360 cum sēnsibilitāte Minecraft
+cm/360 mit Coral-Client-Sens {}	cm/360 with Coral Client sens {}	cm/360 cum sēnsibilitāte Coral Client {}
+außerhalb des Bereichs -- wird auf {} begrenzt	out of range -- limited to {}	extrā fīnēs -- ad {} coercētur
+Werte anklicken zum Eintippen. Gilt für die Maus ohne Beschleunigung (Rohdaten), wie in Minecraft.	Click values to type them. Applies to the mouse without acceleration (raw input), as in Minecraft.	Valōrēs preme ut īnscrībās. Valet prō mūre sine accelerātiōne (data crūda), ut in Minecraft.
+Auto-Sprung	Auto jump	Saltus automaticus
+Automatisches Überspringen niedriger Kanten. Bewusst nicht implementiert (s. physics.rs: Komfort, kein Anticheat-Risiko).	Automatically jumping over low edges. Deliberately not implemented (see physics.rs: comfort, no anticheat risk).	Marginēs humilēs sponte trānsilīre. Dē industriā nōn effectum (v. physics.rs: commoditās, nūllum perīculum anticheat).
+Sprinten an bei Spielstart	Sprint on at game start	Cursus initiō lūdī āctīvus
+Sprung-Abklingzeit	Jump cooldown	Mora saltus
+Sneak-Kantenschutz	Sneak edge protection	Tūtēla marginis repentis
+SnapTap (SOCD)	SnapTap (SOCD)	SnapTap (SOCD)
+Benutzen wiederholen	Repeat use	Ūsum repetere
+Raketen wiederholen	Repeat rockets	Missilia repetere
+Benutzen beim Abbauen	Use while mining	Ūtī dum foditur
+Nur Bewegung ist umbelegbar: andere Vanilla-Tasten (Inventar, Angriff, ...)	Only movement can be rebound: other vanilla keys (inventory, attack, ...)	Sōlus mōtus reassignārī potest: aliae clāvēs Vanilla (inventārium, oppugnātiō, ...)
+steuern hier noch keine Funktion, ein Rebind für sie wäre ohne Wirkung.	do not control anything here yet, rebinding them would have no effect.	hic nōndum quicquam regunt, reassignātiō eārum sine effectū esset.
+Allgemein-Tab setzt auch Tastenbelegung und Modus zurück (Vorwärts=W/A/S/D,	The General tab also resets key bindings and mode (Forward=W/A/S/D,	Tabula Generālis etiam assignātiōnēs clāvium et modum restituit (Prōrsum=W/A/S/D,
+Springen=Space, Schleichen=Shift, Sprinten=Strg, alle auf Halten).	Jump=Space, Sneak=Shift, Sprint=Ctrl, all on Hold).	Salīre=Space, Rēpere=Shift, Currere=Strg, omnēs in Tenēre).
+Umschalten (ein Druck schaltet den Zustand um). "Zurücksetzen" im	Toggle (one press switches the state). "Reset" in the	Commūtāre (ūnus pressus statum mūtat). "Restituere" in
+ab. "Halten"/"Umschalten" daneben wechselt zwischen Halten (wie bisher) und	"Hold"/"Toggle" next to it switches between Hold (as before) and	"Tenēre"/"Commūtāre" iūxtā inter Tenēre (ut anteā) et
+AN: Sprinten ist nach dem Start des Clients schon eingeschaltet, als hätte man die Sprint-Taste einmal gedrückt. Wirkt nur, wenn Sprinten links in der Tabelle auf "Umschalten" steht -- mit "Halten" gibt es keinen Zustand, der anbleiben könnte.	ON: sprinting is already on after the client starts, as if the sprint key had been pressed once. Only works if Sprint is set to "Toggle" in the table on the left -- with "Hold" there is no state that could stay on.	SĪC: cursus post initium clientis iam āctīvus est, quasi clāvis cursus semel pressa esset. Valet tantum, sī Currere in tabula sinistrā "Commūtāre" est -- cum "Tenēre" nūllus status est, quī maneat.
+AN (wie Vanilla): mit einer Feuerwerksrakete in der Hand zündet GEDRÜCKT HALTEN alle 4 Ticks die nächste -- beim Elytra-Flug verbraucht man so schnell mehrere Raketen. AUS: jede Rakete braucht einen eigenen Klick, egal was bei "Benutzen wiederholen" steht. Gilt für Raketen in der Haupt- wie in der Nebenhand.	ON (like vanilla): with a firework rocket in hand, HOLDING the key fires the next one every 4 ticks -- so during elytra flight you quickly use up several rockets. OFF: every rocket needs its own click, regardless of "Repeat use". Applies to rockets in the main hand and the offhand.	SĪC (ut Vanilla): missilī pyrotechnicō in manū, clāvem TENENDŌ singulīs 4 mōmentīs proximum accenditur -- in volātū elytrōrum sīc citō plūra missilia cōnsūmuntur. NŌN: quodque missile ictum proprium requīrit, quidquid in "Ūsum repetere" sit. Valet prō missilibus in manū prīma et altera.
+AUS (wie Vanilla): während man einen Block abbaut, wird jeder Rechtsklick verschluckt -- Vanillas doItemUse() steigt bei `isBreakingBlock()` sofort aus. Im Crystal-PvP kostet das Kristalle: ein verrutschter Linksklick sperrt das Setzen, bis man ihn loslässt. AN führt den Rechtsklick trotzdem aus und lässt den Abbau dabei WEITERLAUFEN -- dasselbe, was die entsprechende Fabric-Mod macht, und es geht dabei kein einziges zusätzliches Paket raus. Standard: an.	OFF (like vanilla): while you are mining a block, every right click is swallowed -- vanilla's doItemUse() bails out at `isBreakingBlock()`. In crystal PvP that costs crystals: a slipped left click blocks placing until you release it. ON performs the right click anyway and lets the mining CONTINUE -- the same as the corresponding Fabric mod, and not a single extra packet is sent. Default: on.	NŌN (ut Vanilla): dum cubum fodis, omnis ictus dexter dēvorātur -- doItemUse() Vanillae ad `isBreakingBlock()` statim dēsistit. In Crystal-PvP id crystallōs cōnstat: ictus sinister lāpsus pōnere impedit, dōnec eum dīmittās. SĪC ictum dextrum tamen exsequitur et fossiōnem PERGERE sinit -- idem quod modus Fabric respondēns facit, neque ūllus fasciculus additus ēmittitur. Praefīnītum: sīc.
+IMMER (wie Vanilla): wer die Benutzen-Taste GEDRÜCKT HÄLT, benutzt alle 4 Ticks erneut -- so zieht man eine Reihe Blöcke, statt für jeden einzeln zu klicken. AUSSER BLÖCKE: wiederholt wird weiter, nur nicht mit einem Block in der Hand -- Halten setzt genau einen Block, Kristalle, Perlen, Armbrust und Co. wiederholen trotzdem (wie die Mod no-hold-use). NIE: Halten ist immer nur ein einzelner Klick. Betrifft NICHT das Essen/Bogenspannen (das läuft ohnehin als eine durchgehende Benutzung) und nichts am Angriff.	ALWAYS (like vanilla): HOLDING the use key uses again every 4 ticks -- so you draw a row of blocks instead of clicking for each one. EXCEPT BLOCKS: repeating continues, just not with a block in hand -- holding places exactly one block, crystals, pearls, crossbow and co. still repeat (like the no-hold-use mod). NEVER: holding is always just a single click. Does NOT affect eating/drawing a bow (that runs as one continuous use anyway) and nothing about attacking.	SEMPER (ut Vanilla): quī clāvem ūsus TENET, singulīs 4 mōmentīs iterum ūtitur -- sīc seriem cubōrum dūcis, nōn singulōs premis. PRAETER CUBŌS: repetītiō pergit, sed nōn cum cubō in manū -- tenendō ūnus cubus pōnitur, crystallī, margarītae, arcuballista cēteraque tamen repetunt (ut modus no-hold-use). NUMQUAM: tenēre semper ūnus ictus est. Cibum/arcum tendere NŌN afficit (id ūsus continuus est) neque oppugnātiōnem.
+Bei zwei gegensätzlichen Bewegungstasten (z.B. A und D) gewinnt die ZULETZT gedrückte, statt dass sich beide aufheben; lässt man sie wieder los, wirkt sofort die noch gehaltene. Reine Eingabe-Behandlung im Client -- der Server sieht ganz normale Bewegungspakete, es wird nichts umgangen oder ausgenutzt. Vorsicht: viele kompetitive Server verbieten SnapTap/SOCD per REGELWERK (in CS2 ist es serverseitig gesperrt). Standard: aus.	With two opposite movement keys (e.g. A and D) the LAST pressed one wins instead of both cancelling out; releasing it immediately applies the one still held. Pure input handling in the client -- the server sees completely normal movement packets, nothing is bypassed or exploited. Caution: many competitive servers forbid SnapTap/SOCD by their RULES (in CS2 it is blocked server-side). Default: off.	Duābus clāvibus mōtus contrāriīs (e.g. A et D) clāvis POSTRĒMŌ pressa vincit, nōn ambae sē tollunt; ea dīmissa statim valet quae adhūc tenētur. Mēra tractātiō ingressus in cliente -- servītor fasciculōs mōtus omnīnō ūsitātōs videt, nihil circumvenītur. Cavē: multī servītōrēs certāminis SnapTap/SOCD LĒGIBUS vetant (in CS2 a servītōre clausum est). Praefīnītum: nōn.
+Vanilla erlaubt nach jedem echten Sprung (Land UND Wasser/Lava) erst nach 10 Ticks (0.5s) den nächsten -- an Land meist unsichtbar, im flachen Wasser deutlich spürbar. AUS entfernt diese Verzögerung komplett und weicht damit von Vanilla ab. Betrifft NICHT "Water Hopping": das Herausklettern an einer Kante (resetVerticalVelocityInFluid) hat gar keine Abklingzeit und läuft unabhängig von dieser Einstellung.	After every real jump (land AND water/lava) vanilla only allows the next one after 10 ticks (0.5s) -- mostly invisible on land, clearly noticeable in shallow water. OFF removes this delay completely and so deviates from vanilla. Does NOT affect "water hopping": climbing out at an edge (resetVerticalVelocityInFluid) has no cooldown at all and is independent of this setting.	Vanilla post quemque saltum vērum (terra ET aqua/lava) proximum dēmum post 10 mōmenta (0.5s) permittit -- in terra plērumque invīsibile, in aqua vadōsa manifestum. NŌN hanc moram omnīnō tollit et sīc a Vanilla discēdit. "Water Hopping" NŌN afficit: ē margine ēgredī (resetVerticalVelocityInFluid) nūllam moram habet et ab hāc optiōne nōn pendet.
+Wie Vanilla: beim Schleichen (Sneak) am Boden kann man nicht über eine Blockkante hinausgehen und herunterfallen -- die Bewegung wird an der Kante gestoppt. AUS erlaubt das Herunterfallen trotz Schleichen. Grim flaggt beide Zustände nicht.	Like vanilla: when sneaking on the ground you cannot walk over a block edge and fall down -- movement is stopped at the edge. OFF allows falling despite sneaking. Grim flags neither state.	Ut Vanilla: repēns in solō marginem cubī trānsīre et dēcidere nōn potes -- mōtus ad marginem sistitur. NŌN dēcidere quamvīs repentī permittit. Grim neutrum statum notat.
+Wie stark Mausbewegung die KAMERA dreht (Radiant pro Pixel Delta, angezeigt als Tausendfaches). Gilt nur im Spiel, nicht für den Mauszeiger in den Menüs -- dafür gibt es die Zeile darunter. Zahl anklicken für einen eigenen Wert, bis auf vier Nachkommastellen genau.	How strongly mouse movement turns the CAMERA (radians per pixel delta, shown times a thousand). Only applies in game, not to the mouse cursor in menus -- the row below is for that. Click the number for a custom value, accurate to four decimal places.	Quantum mōtus mūris CAMERAM vertat (radiantēs per punctum, mīliēs mōnstrātum). Valet tantum in lūdō, nōn prō indice mūris in indicibus -- ad hoc līnea īnfrā est. Numerum preme prō valōre propriō, ad quattuor decimālēs accūrātō.
+Wie schnell der MAUSZEIGER in Menüs und im Inventar läuft -- ein Faktor auf die gelieferte Mausbewegung. 1 = ein Bildschirmpixel je geliefertem Pixel, 0.5 = halb so schnell (feineres Zielen auf kleine Felder), 2 = doppelt so schnell (schneller quer über einen großen Bildschirm). Völlig unabhängig von der Kamera-Empfindlichkeit darüber.	How fast the MOUSE CURSOR moves in menus and the inventory -- a factor on the reported mouse movement. 1 = one screen pixel per reported pixel, 0.5 = half as fast (finer aiming at small fields), 2 = twice as fast (quicker across a large screen). Completely independent of the camera sensitivity above.	Quam celeriter INDEX MŪRIS in indicibus et inventāriō currat -- factor in mōtum mūris nūntiātum. 1 = ūnum punctum scrīniī per punctum nūntiātum, 0.5 = dīmidiō tardius (subtīlius in parvōs campos), 2 = duplō celerius (citius trāns scrīnium magnum). Omnīnō a sēnsibilitāte camerae suprā independēns.
+Inventar	Inventory	Inventārium
+Zeiger in Slotmitte	Cursor to slot center	Index in medium loculī
+Legt man ein Item in einen Slot, springt der Mauszeiger in die Mitte dieses Slots. Nicht beim Stapel-Verschieben (Shift). Kein Vanilla-Verhalten.	When you put an item into a slot, the mouse cursor jumps to the center of that slot. Not when moving stacks (Shift). Not vanilla behavior.	Rē in loculum posita, index mūris in medium eius loculī salit. Nōn in acervīs movendīs (Shift). Mōs nōn Vanilla.
+Hintergrund-Opakheit	Background opacity	Opācitās fundī
+Wie durchsichtig der abgedunkelte Hintergrund hinter dem offenen Inventar ist. 0 % = deckend schwarz, 100 % = die Welt bleibt unverändert sichtbar. Zahl anklicken für einen eigenen Wert.	How transparent the darkened background behind the open inventory is. 0 % = opaque black, 100 % = the world stays visible unchanged. Click the number for a custom value.	Quam perlūcidus fundus obscūrātus post inventārium apertum sit. 0 % = niger opācus, 100 % = mundus immūtātus vīsibilis manet. Numerum preme prō valōre propriō.
+Zeigergröße	Cursor size	Magnitūdō indicis
+Zeigerbreite	Cursor width	Lātitūdō indicis
+Zeiger-Kreis	Cursor circle	Circulus indicis
+Größe des Mauszeigers in Menüs, im Inventar und im offenen Chat, in Prozent (100 % = bisherige Größe). Die Spitze bleibt dabei genau dort, wo geklickt wird.	Size of the mouse cursor in menus, the inventory and the open chat, in percent (100 % = previous size). The tip stays exactly where you click.	Magnitūdō indicis mūris in indicibus, inventāriō et colloquiō apertō, in centēsimīs (100 % = magnitūdō prior). Cuspis ibi manet, ubi premitur.
+Breite des Mauszeiger-Pfeils in Prozent (100 % = bisherige Form). Die Spitze und die Länge bleiben gleich, nur die beiden Flügel rücken zusammen oder auseinander.	Width of the mouse cursor arrow in percent (100 % = previous shape). The tip and length stay the same, only the two wings move closer together or apart.	Lātitūdō sagittae indicis in centēsimīs (100 % = forma prior). Cuspis et longitūdō eaedem manent, sōlae duae ālae coeunt vel discēdunt.
+Kleiner Kreis unter der Pfeilspitze des Mauszeigers. AUS = nur der Pfeil.	Small circle under the tip of the mouse cursor. OFF = arrow only.	Parvus circulus sub cuspide indicis mūris. NŌN = sagitta tantum.
+Glint-Geschwindigkeit	Glint speed	Celeritās fulgōris
+Glint-Stärke	Glint strength	Vīs fulgōris
+Wie schnell der Verzauberungs-Schimmer über Items und Rüstung wandert (Vanilla: Glint Speed, Standard 50 %). 0 % = steht still. Zahl anklicken für einen eigenen Wert.	How fast the enchantment glint moves across items and armor (vanilla: Glint Speed, default 50 %). 0 % = stands still. Click the number for a custom value.	Quam celeriter fulgor incantātiōnis trāns rēs et armātūram migret (Vanilla: Glint Speed, praefīnītum 50 %). 0 % = stat. Numerum preme prō valōre propriō.
+Wie stark der Verzauberungs-Schimmer leuchtet (Vanilla: Glint Strength, Standard 75 %). 0 % = kein Schimmer. Zahl anklicken für einen eigenen Wert.	How strongly the enchantment glint shines (vanilla: Glint Strength, default 75 %). 0 % = no glint. Click the number for a custom value.	Quam valdē fulgor incantātiōnis lūceat (Vanilla: Glint Strength, praefīnītum 75 %). 0 % = nūllus fulgor. Numerum preme prō valōre propriō.
+Chat-Farben	Chat colors	Colōrēs colloquiī
+Chat-Verzögerung	Chat delay	Mora colloquiī
+Alle Nachrichten	All messages	Omnēs nūntiī
+Textgröße	Text size	Magnitūdō litterārum
+Zeilen (im Spiel)	Lines (in game)	Līneae (in lūdō)
+Zeilen (beim Tippen)	Lines (while typing)	Līneae (dum scrībis)
+Ausblenden nach	Hide after	Cēlāre post
+Abdunkeln beim Tippen	Darken while typing	Obscūrāre dum scrībis
+Formatierungscodes (§) im Chattext. Farben werden immer angezeigt, abschalten geht noch nicht.	Formatting codes (§) in chat text. Colors are always shown, turning them off is not possible yet.	Cōdicēs formae (§) in textū colloquiī. Colōrēs semper mōnstrantur, exstinguī nōndum possunt.
+Mindestabstand zwischen eigenen Nachrichten. Betrifft eine Funktion, die es noch nicht gibt.	Minimum interval between your own messages. Concerns a feature that does not exist yet.	Intervāllum minimum inter nūntiōs propriōs. Ad fūnctiōnem pertinet, quae nōndum exstat.
+Welche Nachrichten angezeigt werden. Noch nicht einstellbar -- es kommt alles an.	Which messages are shown. Not adjustable yet -- everything arrives.	Quī nūntiī mōnstrentur. Nōndum mūtārī potest -- omnia perveniunt.
+Breite des Chats, solange er geschlossen ist (in Schriftpixeln, wächst mit der Textgröße). Geöffnet (T) nimmt er die ganze Bildschirmbreite.	Width of the chat while it is closed (in font pixels, grows with the text size). When open (T) it takes the full screen width.	Lātitūdō colloquiī, dum clausum est (in punctīs litterārum, cum magnitūdine litterārum crēscit). Apertum (T) tōtam lātitūdinem scrīniī capit.
+Textgröße des Chats in Prozent. 100 % ist die bisherige Größe. Mit DM Sans in Viertelschritten gestochen scharf, dazwischen wird gerundet; die Minecraft-Schrift ist Pixelkunst und nur bei 50/100/150/... % pixelgenau.	Text size of the chat in percent. 100 % is the previous size. With DM Sans razor-sharp in quarter steps, rounded in between; the Minecraft font is pixel art and only pixel-perfect at 50/100/150/... %.	Magnitūdō litterārum colloquiī in centēsimīs. 100 % est magnitūdō prior. Cum DM Sans per quārtās acūtissima, intermedia rotundantur; litterae Minecraft ars punctōrum sunt et tantum ad 50/100/150/... % accūrātae.
+Wie viele Zeilen der Chat im Spiel zeigt.	How many lines the chat shows in game.	Quot līneās colloquium in lūdō mōnstret.
+Wie viele Zeilen der Chat zeigt, während man tippt (T). Er rückt dann direkt über die Eingabezeile; mit dem Mausrad lässt sich durch den ganzen Verlauf blättern.	How many lines the chat shows while typing (T). It then moves directly above the input line; the mouse wheel scrolls through the whole history.	Quot līneās colloquium mōnstret, dum scrībis (T). Tum dīrēctē suprā līneam ingressus movētur; rota mūris per tōtam historiam volvere licet.
+Wie lange eine Nachricht im Spiel sichtbar bleibt, danach blendet sie schnell aus. Beim Tippen (T) ist der ganze Verlauf wieder da. Nie = Nachrichten bleiben stehen. Vanilla: 10 s.	How long a message stays visible in game, after which it fades out quickly. While typing (T) the whole history is back. Never = messages stay. Vanilla: 10 s.	Quamdiū nūntius in lūdō vīsibilis maneat, deinde citō ēvānēscit. Dum scrībis (T) tōta historia redit. Numquam = nūntiī manent. Vanilla: 10 s.
+Wie stark bei offenem Chat (T) alles bis einschließlich der Eingabezeile abgedunkelt wird. 0 % = gar nicht.	How much everything up to and including the input line is darkened with the chat open (T). 0 % = not at all.	Quantum colloquiō apertō (T) omnia usque ad līneam ingressus obscūrentur. 0 % = minimē.
+Wie stark der Hintergrund hinter dem Chattext abgedunkelt wird. 0 % = kein Hintergrund. Gilt auch für die Eingabezeile und die Verlaufsliste.	How much the background behind the chat text is darkened. 0 % = no background. Also applies to the input line and the history list.	Quantum fundus post textum colloquiī obscūrētur. 0 % = nūllus fundus. Valet etiam prō līnea ingressus et indice historiae.
+Wie stark das Spielbild hinter dem Pausemenü und den Einstellungen abgedunkelt wird, solange man verbunden ist. 0 % = Welt unverändert, 100 % = schwarz. Standard 55 %.	How much the game image behind the pause menu and the settings is darkened while connected. 0 % = world unchanged, 100 % = black. Default 55 %.	Quantum imāgō lūdī post indicem pausae et optiōnēs obscūrētur, dum coniūnctus es. 0 % = mundus immūtātus, 100 % = niger. Praefīnītum 55 %.
+Rand um allen Text. Kontur: eine dünne schwarze Linie rundherum. Vanilla: Minecrafts Schatten -- dieselbe Zeile einen Schriftpixel nach rechts unten versetzt, in einem Viertel der Helligkeit. Aus: kein Rand. Anklicken schaltet weiter.	Border around all text. Outline: a thin black line all around. Vanilla: Minecraft's shadow -- the same line offset one font pixel to the bottom right, at a quarter of the brightness. Off: no border. Clicking cycles.	Margō circā omnem textum. Ambitus: līnea nigra tenuis circumcircā. Vanilla: umbra Minecraft -- eādem līnea ūnō punctō deorsum dextrōrsum mōta, quārta parte clāritātis. Nōn: nūlla margō. Premendō prōgreditur.
+Schrift für allen Text im Client: Menüs, HUD, Chat, Namensschilder. Einzelne Elemente können darunter eine eigene Schrift bekommen. "Minecraft" ist die Pixelschrift des Spiels (aus dem installierten Resourcepack), DM Sans, Outfit, Lexend, Lexend Exa und Noto Sans sind glatte Vektorschriften. Kapitälchen (ᴀʙᴄ...) kommen notfalls aus Noto Sans, andere Zeichen, die eine Schrift nicht kennt (z.B. Server-Symbole), aus der Minecraft-Schrift. Das Layout bleibt gleich -- alle Schriften haben dieselbe Versal- und Zeilenhöhe.	Font for all text in the client: menus, HUD, chat, name tags. Individual elements can get their own font below. "Minecraft" is the game's pixel font (from the installed resource pack), DM Sans, Outfit, Lexend, Lexend Exa and Noto Sans are smooth vector fonts. Small caps (ᴀʙᴄ...) come from Noto Sans if needed, other characters a font does not know (e.g. server symbols) from the Minecraft font. The layout stays the same -- all fonts have the same cap and line height.	Litterae omnis textus in cliente: indicēs, HUD, colloquium, tabellae nōminum. Singula elementa īnfrā litterās propriās accipere possunt. "Minecraft" litterae punctōrum lūdī sunt (ex fasciculō īnstallātō), DM Sans, Outfit, Lexend, Lexend Exa et Noto Sans litterae vectōriae lēvēs sunt. Litterae capitālēs parvae (ᴀʙᴄ...) sī opus est ex Noto Sans veniunt, alia signa quae litterae ignōrant (e.g. signa servītōrum) ex litterīs Minecraft. Dispositiō eādem manet -- omnēs litterae eandem altitūdinem capitālium et līneārum habent.
+Eigener Textrand (linker Knopf) und eigene Schrift (rechter Knopf) für dieses Element. "Allgemein" folgt den Einstellungen "Schrift" und "Textschatten" darüber. Schild-Countdown und Pfeil-Zahl haben keinen Rand -- ihre Farbe stellt man im Modul ein. Anklicken schaltet weiter.	Own text border (left button) and own font (right button) for this element. "General" follows the "Font" and "Text shadow" settings above. Shield countdown and arrow count have no border -- their color is set in the module. Clicking cycles.	Margō textus propria (globulus sinister) et litterae propriae (globulus dexter) prō hoc elementō. "Generāle" optiōnēs "Litterae" et "Umbra litterārum" suprā sequitur. Numerātiō scūtī et numerus sagittārum marginem nōn habent -- color eōrum in modulō statuitur. Premendō prōgreditur.
+Normal ist die übliche geradlinige Perspektive. Panini/Stereografisch/Zylindrisch krümmen das Bild (Weitwinkel). Hinweis: Die Krümmung wirkt an den Eckpunkten -- große zusammengefasste Flächen krümmen sich nicht mit.	Normal is the usual rectilinear perspective. Panini/Stereographic/Cylindrical curve the image (wide angle). Note: the curvature acts on the vertices -- large merged faces do not curve along.	Normāle est prōspectus rēctilīneus ūsitātus. Panini/Stereographica/Cylindrica imāginem curvant (angulus lātus). Nota: curvātūra in verticibus agit -- magnae superficiēs coniūnctae nōn simul curvantur.
+Vertikales Sichtfeld in Grad (Vanilla-Standard 70). Kleiner = herangezoomt, größer = weitwinkliger. Zahl anklicken für einen eigenen Wert -- die Pfeile gehen in 5er-Schritten.	Vertical field of view in degrees (vanilla default 70). Smaller = zoomed in, larger = wider angle. Click the number for a custom value -- the arrows go in steps of 5.	Campus vīsus verticālis in gradibus (Vanilla praefīnītum 70). Minor = propius, māior = lātius. Numerum preme prō valōre propriō -- sagittae per quīnōs gradus eunt.
+Sichtfeld der Verfolgeransicht (F5, erste Stufe) -- eigener Wert, damit ein weiter Blick hier den Ego-Modus nicht mitzieht. Die Kamera sitzt 4 Blöcke hinter dem Auge und rückt an Wänden automatisch näher heran.	Field of view of the follow view (F5, first stage) -- its own value so a wide view here does not affect first person. The camera sits 4 blocks behind the eye and automatically moves closer at walls.	Campus vīsus prōspectus sequentis (F5, gradus prīmus) -- valor proprius, nē lātus prōspectus hic prīmam persōnam afficiat. Camera 4 cubōs post oculum sedet et ad parietēs sponte propius accēdit.
+Sichtfeld der Frontansicht (F5, zweite Stufe -- Kamera vor dem Spieler, blickt ihn an). Die an den Server gesendete Blickrichtung bleibt dabei die des Spielers, nur die Kamera dreht sich.	Field of view of the front view (F5, second stage -- camera in front of the player, looking at them). The reported view direction stays the player's, only the camera turns.	Campus vīsus prōspectus frontālis (F5, gradus secundus -- camera ante lūsōrem, eum aspicit). Dīrēctiō vīsus nūntiāta lūsōris manet, sōla camera vertitur.
+Wie weit die Kamera hinter (bzw. bei der Frontansicht vor) dem Spieler sitzt, in Blöcken. Vanillas Wert ist 4; erlaubt sind 0 bis 32. Der Wert ist eine OBERGRENZE -- an einer Wand rückt die Kamera automatisch näher heran, damit man nicht in die Wand schaut. Zahl anklicken für einen eigenen Wert.	How far the camera sits behind (or, in front view, in front of) the player, in blocks. Vanilla's value is 4; 0 to 32 are allowed. The value is an UPPER LIMIT -- at a wall the camera automatically moves closer so you do not look into the wall. Click the number for a custom value.	Quam procul camera post lūsōrem (vel in prōspectū frontālī ante eum) sedeat, in cubīs. Valor Vanillae est 4; licent 0 usque ad 32. Valor FĪNIS SUPERIOR est -- ad parietem camera sponte propius accēdit, nē in parietem spectēs. Numerum preme prō valōre propriō.
+Verschiebt die Kamera senkrecht gegenüber der Augenhöhe -- positiv nach oben (Blick über die Schulter von schräg oben), negativ nach unten. Wirkt in Weltkoordinaten, bleibt beim Hoch-/Runterschauen also auf derselben Höhe. 0 = wie Vanilla. Zahl anklicken für einen eigenen Wert, Minus erlaubt.	Shifts the camera vertically relative to eye height -- positive upwards (view over the shoulder from above), negative downwards. Works in world coordinates, so it stays at the same height when looking up/down. 0 = like vanilla. Click the number for a custom value, minus allowed.	Cameram ad altitūdinem oculōrum perpendiculāriter movet -- positīvum sursum (prōspectus super umerum dēsuper), negātīvum deorsum. In coordinātīs mundī agit, ergō sursum/deorsum spectandō eādem altitūdine manet. 0 = ut Vanilla. Numerum preme prō valōre propriō, minus licet.
+Vanillas "Partikel": Alle, Verringert (jeder dritte fällt weg) oder Minimal (nur noch, was immer erscheint -- Explosionen, Schwung, Schadensherzen). Blockstaub beim Abbauen und Zerbrechen ist wie in Vanilla von der Stufe unabhängig; die Explosions-Trümmer gibt es nur bei "Alle". "Explosion AUS" (kein Vanilla) lässt Explosionswolke und Trümmer ganz weg, z.B. die weißen Punkte beim Crystallen.	Vanilla's "Particles": All, Decreased (every third is dropped) or Minimal (only what always appears -- explosions, sweeps, damage hearts). Block dust when mining and breaking is independent of the level, as in vanilla; explosion debris only exists with "All". "Explosion OFF" (not vanilla) leaves out the explosion cloud and debris entirely, e.g. the white dots when crystalling.	"Particulae" Vanillae: Omnēs, Minūtum (quaeque tertia omittitur) vel Minimum (tantum quae semper appārent -- displōsiōnēs, ictus lātī, corda vulneris). Pulvis cubōrum fodiendō et frangendō ut in Vanilla a gradū nōn pendet; rūdera displōsiōnis tantum cum "Omnēs" exstant. "Displōsiō NŌN" (nōn Vanilla) nūbem et rūdera displōsiōnis omnīnō omittit, e.g. puncta alba in crystallandō.
+Vanillas "Weiche Beleuchtung": Kanten, Ecken und Nischen werden dort dunkler, wo Blöcke aneinanderstoßen -- das gibt der Welt Tiefe. Nur die Eckabdunklung, keine Lichtwerte (dieser Client rendert bewusst immer fullbright). Die Prozentzahl ist die Stärke der Schatten: 100 % wie Vanilla, 0 % aus. Änderung baut alle geladenen Chunks neu.	Vanilla's "Smooth lighting": edges, corners and niches get darker where blocks meet -- this gives the world depth. Only the corner darkening, no light levels (this client deliberately always renders fullbright). The percentage is the strength of the shadows: 100 % like vanilla, 0 % off. Changing it rebuilds all loaded chunks.	"Lūmen molle" Vanillae: marginēs, angulī et recessus obscūriōrēs fīunt, ubi cubī concurrunt -- hoc mundō altitūdinem dat. Sōla obscūrātiō angulōrum, nūllī gradus lūminis (hic cliēns dē industriā semper plēnē illūstrat). Centēsimae vīs umbrārum sunt: 100 % ut Vanilla, 0 % nōn. Mūtātiō omnia frūsta onerāta reaedificat.
+Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.	Vanilla rotates/mirrors the texture of some full cubes (dirt, sand, stone, grass block, ...) pseudo-randomly by world position so the pattern does not visibly repeat. OFF instead always shows the same orientation for every block. Changing it rebuilds all loaded chunks.	Vanilla textūram quōrundam cubōrum plēnōrum (terra, harēna, saxum, cubus graminis, ...) quasi fortuītō prō locō in mundō vertit/reflectit, nē exemplar manifestē repetātur. NŌN prō quoque cubō semper eandem dīrēctiōnem mōnstrat. Mūtātiō omnia frūsta onerāta reaedificat.
+Radius in Chunks um den Spieler, außerhalb dessen geladene Spalten NICHT mehr gemesht/gezeichnet werden (Blockdaten bleiben trotzdem geladen, kein Loch beim Zurückkommen). Unabhängig von der Server-Sichtweite (die bleibt bei 24) -- wirkt sofort, ohne neu zu verbinden. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.	Radius in chunks around the player outside of which loaded columns are NO longer meshed/drawn (block data stays loaded, no hole when coming back). Independent of the server view distance (that stays at 24) -- takes effect immediately, without reconnecting. Click the number for a custom value, -1 = unlimited.	Radius in frūstīs circā lūsōrem, extrā quem columnae onerātae NŌN iam texuntur/pinguntur (data cubōrum tamen onerāta manent, nūllum forāmen redeuntī). A spatiō vīsus servītōris independēns (id ad 24 manet) -- statim agit, sine nova coniūnctiōne. Numerum preme prō valōre propriō, -1 = īnfīnītum.
+Zusätzliche Obergrenze für die GESAMTZAHL gerade gezeichneter Spalten, unabhängig vom Radius -- wirkt gleichzeitig mit der Renderdistanz, die nächstgelegenen Spalten gewinnen das Budget zuerst. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.	Additional upper limit for the TOTAL number of columns currently drawn, independent of the radius -- works together with the render distance, the nearest columns win the budget first. Click the number for a custom value, -1 = unlimited.	Fīnis superior additus NUMERŌ TŌTŌ columnārum nunc pictārum, a radiō independēns -- simul cum spatiō pictūrae agit, columnae proximae cōpiam prīmae obtinent. Numerum preme prō valōre propriō, -1 = īnfīnītum.
+Chunk-Spalten, die pro Frame als Mesh-Job an den Worker-Pool geschickt werden. Meshen selbst kostet keine Frame-Zeit mehr -- das begrenzt nur, wie viele Jobs auf einmal losgeschickt werden. Zahl anklicken für einen eigenen Wert.	Chunk columns sent to the worker pool as mesh jobs per frame. Meshing itself no longer costs frame time -- this only limits how many jobs are sent at once. Click the number for a custom value.	Columnae frūstōrum per imāginem ut opera texendī ad cōpiam operāriōrum missae. Texere ipsum tempus imāginis nōn iam cōnsūmit -- hoc sōlum fīnit, quot opera simul mittantur. Numerum preme prō valōre propriō.
+Größe des dedizierten Worker-Pools fürs Chunk-Meshing (nicht das Netzwerk, das läuft getrennt). Mehr Threads bauen Chunks parallel schneller auf, konkurrieren dabei aber mit allem anderen auf der CPU (Physik, Netzwerk-Decoding, Spiel selbst).	Size of the dedicated worker pool for chunk meshing (not the network, that runs separately). More threads build chunks faster in parallel, but compete with everything else on the CPU (physics, network decoding, the game itself).	Magnitūdō cōpiae operāriōrum propriae ad frūsta texenda (nōn rēte, id sēorsum currit). Plūra fīla frūsta celerius simul aedificant, sed cum omnibus aliīs in CPU certant (physica, dēcodātiō rētis, lūdus ipse).
+Wie viele Chunks angefragt werden (s. protocol::REQUESTED_VIEW_DISTANCE). Aktuell fest im Code, noch nicht im Client einstellbar.	How many chunks are requested (see protocol::REQUESTED_VIEW_DISTANCE). Currently fixed in the code, not yet adjustable in the client.	Quot frūsta petantur (v. protocol::REQUESTED_VIEW_DISTANCE). Nunc in cōdice fīxum, nōndum in cliente mūtābile.
+Begrenzt die Bildrate über einen Timer. Bei selbsttaktenden Present-Modi (Fifo/FifoRelaxed) wirkungslos -- die Zeile blendet dann ab. Zahl anklicken für einen eigenen Wert; 0 = Monitor-Refresh, -1 = unbegrenzt.	Limits the frame rate with a timer. No effect with self-pacing present modes (Fifo/FifoRelaxed) -- the row is then dimmed. Click the number for a custom value; 0 = monitor refresh, -1 = unlimited.	Celeritātem imāginum per hōrologium fīnit. In modīs praesentandī sē ipsōs moderantibus (Fifo/FifoRelaxed) sine effectū -- līnea tum hebetātur. Numerum preme prō valōre propriō; 0 = renovātiō monitōris, -1 = īnfīnītum.
+Immediate zeigt sofort (Tearing möglich, minimale Latenz), Fifo wartet auf den VBlank (kein Tearing, bis zu ein Bild Verzögerung). Reißt es trotzdem, hilft der TearFree-Schalter unten (sofern der Treiber ihn hat).	Immediate shows at once (tearing possible, minimal latency), Fifo waits for the VBlank (no tearing, up to one frame of delay). If it still tears, the TearFree switch below helps (if the driver has it).	Immediate statim mōnstrat (fissūra possibilis, mora minima), Fifo VBlank exspectat (nūlla fissūra, usque ad ūnam imāginem morae). Sī tamen finditur, commūtātor TearFree īnfrā adiuvat (sī rēctor eum habet).
+Wie viele Frames die CPU maximal vorproduzieren darf, bevor sie auf die GPU/Anzeige wartet. Wirkt UNABHÄNGIG vom Present-Modus, auch bei Immediate. 0 ist Sodiums 'CPU Render-Ahead Limit: 0' nachgebaut -- eine echte Wartezeit auf das GPU-Ende des vorherigen Frames vor jedem neuen (kostet spürbar FPS/Glätte, minimiert aber die Latenz). 1-4 überlassen die Drosselung stattdessen der Swapchain -- höher kann Ruckler unter Last glätten, kostet aber zusätzliche Eingabelatenz.	How many frames the CPU may produce ahead at most before waiting for the GPU/display. Works INDEPENDENTLY of the present mode, also with Immediate. 0 recreates Sodium's 'CPU Render-Ahead Limit: 0' -- a real wait for the GPU to finish the previous frame before each new one (noticeably costs FPS/smoothness, but minimizes latency). 1-4 leave the throttling to the swapchain instead -- higher can smooth stutters under load, but adds input latency.	Quot imāginēs CPU summum praeparāre possit, antequam GPU/monitōrem exspectet. A modō praesentandī INDEPENDĒNS agit, etiam cum Immediate. 0 imitātur 'CPU Render-Ahead Limit: 0' Sodii -- vēra exspectātiō fīnis GPU imāginis priōris ante quamque novam (FPS/lēvitātem sēnsibiliter cōnstat, sed moram minuit). 1-4 moderātiōnem catēnae permūtātiōnis relinquunt -- altius haesitātiōnēs sub onere levāre potest, sed moram ingressus addit.
+Legt bei Immediate (mit FPS-Limit) jeden Bildwechsel knapp vor die Austastlücke des Monitors -- dort ist er unsichtbar, es gibt keinen Riss mehr im Bild. Misst dafür die VBlanks des Monitors (Linux, /dev/dri) und präsentiert jeden Frame auf die Mikrosekunde zu einem daraus berechneten Zeitpunkt; die Bildrate folgt dann exakt dem Monitor (bzw. jedem n-ten Bild bei niedrigerem FPS-Limit). Kostet etwas Latenz (der Frame wird mit Vorlauf fertig gebaut). Bei Fifo wirkungslos -- dort gibt es keinen Riss. Im Frame-Profiler (F6) sieht man, wo er landet.	With Immediate (with an FPS limit) places every frame swap just before the monitor's blanking interval -- there it is invisible, there is no more tear in the image. For this it measures the monitor's VBlanks (Linux, /dev/dri) and presents every frame to the microsecond at a time computed from them; the frame rate then follows the monitor exactly (or every n-th frame with a lower FPS limit). Costs some latency (the frame is finished ahead of time). No effect with Fifo -- there is no tear there. The frame profiler (F6) shows where it lands.	Cum Immediate (cum fīne FPS) quamque mūtātiōnem imāginis paulō ante intervāllum vacuum monitōris pōnit -- ibi invīsibilis est, nūlla fissūra iam in imāgine. Ad hoc VBlank monitōris mētītur (Linux, /dev/dri) et quamque imāginem ad microsecundum tempore inde computātō praesentat; celeritās imāginum tum monitōrem exāctē sequitur (vel quamque n-tam imāginem cum fīne FPS minōre). Aliquid morae cōnstat (imāgō cum praecursū perficitur). Cum Fifo sine effectū -- ibi nūlla fissūra. In profilere imāginum (F6) vidētur, ubi cadat.
+Verschiebt den Bildwechsel bei "Unsichtbar": Minus = früher, der Riss wandert nach oben; Plus = später, er wandert nach unten. Ohne Hardware-Flip setzt der X-Server den Wechsel erst eine Weile nach dem Present um, dann sitzt der Riss bei 0 oben im Bild -- so weit ins Minus drehen, bis er unten auftaucht, und dann ein Stück zurück: dann liegt er am Anfang der Austastlücke, und ein verspäteter Frame rutscht nur tiefer in die Lücke.	Shifts the buffer swap for "Invisible": minus = earlier, the tear moves up; plus = later, it moves down. Without a hardware flip the X server applies the swap a while after the present, so at 0 the tear sits near the top of the image -- turn it into the minus until it appears at the bottom, then back a little: it then sits at the start of the blanking interval, and a late frame only slips deeper into the gap.	Mūtātiōnem imāginis prō "Invīsibile" movet: minus = citius, fissūra sursum it; plus = sērius, deorsum it. Sine mūtātiōne māchinālī servus X mūtātiōnem paulō post praesentātiōnem facit, itaque ad 0 fissūra summā in imāgine sedet -- in minus verte, dum īmā appāreat, deinde paulum retrō: tum in initiō intervallī caecī iacet, et imāgō sēra tantum altius in intervallum lābitur.
+Wie viel Zeit ein Frame bei "Unsichtbar" vor seinem Termin fertig sein soll. Genau diese Zeit kommt als Verzögerung dazu. Weniger = etwas direkter, aber ein Frame, der wegen eines Rucklers zu spät fertig wird, verpasst seinen Termin -- für diesen einen Frame ist der Riss dann kurz im Bild. Mehr = nie ein Riss, etwas mehr Verzögerung. Nach einem Ruckler erhöht sich der Vorlauf von selbst und geht danach langsam wieder zurück.	How long before its deadline a frame should be finished with "Invisible". Exactly this time is added as delay. Less = somewhat more direct, but a frame finished too late because of a stutter misses its deadline -- for that one frame the tear is briefly visible. More = never a tear, a bit more delay. After a stutter the lead increases by itself and slowly goes back down afterwards.	Quantō ante terminum imāgō cum "Invīsibile" perficī dēbeat. Hoc ipsum tempus ut mora additur. Minus = paulō dīrēctius, sed imāgō ob haesitātiōnem sērō perfecta terminum āmittit -- prō hāc ūna imāgine fissūra breviter appāret. Plūs = numquam fissūra, paulō plūs morae. Post haesitātiōnem praecursus sponte crēscit et posteā lentē dēcrēscit.
+Globale Anzeigeeinstellung des Grafiktreibers (xrandr) gegen Tearing bei fehlendem Hardware-Flip -- nur bedienbar, wenn der Treiber sie hat (amdgpu, radeon, neuere modesetting; nicht Nvidia).  Gilt nur, während Coral Client im Vordergrund läuft -- danach automatisch zurück auf den Wert von vor dem Start.	Global display setting of the graphics driver (xrandr) against tearing when hardware flip is missing -- only usable if the driver has it (amdgpu, radeon, newer modesetting; not Nvidia).  Only applies while Coral Client runs in the foreground -- afterwards automatically back to the value from before the start.	Optiō monitōris ūniversālis rēctōris graphicī (xrandr) contrā fissūram, sī flexiō māchinālis dēest -- tantum ūtilis, sī rēctor eam habet (amdgpu, radeon, modesetting recentior; nōn Nvidia).  Valet tantum, dum Coral Client in prīma aciē currit -- posteā sponte ad valōrem ante initium redit.
+Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um Present-Modus/TearFree zu testen. Läuft im Menü und im Spiel.	Colored bars moving across the screen -- makes tearing (torn image lines) visible to test the present mode/TearFree. Runs in the menu and in game.	Virgae colōrātae trāns scrīnium migrantēs -- fissūram (līneās imāginis scissas) vīsibilem facit ad modum praesentandī/TearFree probandum. In indice et in lūdō currit.
+Gamma-Korrektur der Bildausgabe. Es gibt noch keinen Post-Processing-Pass dafür.	Gamma correction of the image output. There is no post-processing pass for it yet.	Corrēctiō gamma imāginis ēmissae. Nōndum trānsitus postprocessiōnis exstat.
+CMAA2 (Conservative Morphological Anti-Aliasing 2, inspiriert von Intels Referenz-Implementierung). Erkennt Kanten über einen lokal kontrastadaptiven Schwellwert (dieselbe Formel wie im Original) und glättet sie durch Mischen mit den Nachbarpixeln -- flache Flächen bleiben unangetastet. Noch keine Z-Form-/Simple-Shape-Erkennung wie im Original (kommt in einer späteren Stufe), daher etwas weicher als das Original an manchen Diagonalen.	CMAA2 (Conservative Morphological Anti-Aliasing 2, inspired by Intel's reference implementation). Detects edges with a locally contrast-adaptive threshold (the same formula as the original) and smooths them by blending with neighboring pixels -- flat areas stay untouched. No Z-shape/simple-shape detection like the original yet (comes in a later stage), so somewhat softer than the original on some diagonals.	CMAA2 (Conservative Morphological Anti-Aliasing 2, ab exemplārī Intel īnspīrātum). Marginēs per līmen contrastī locālī accommodātum agnōscit (eādem formula ac archetypum) et miscendō cum punctīs vīcīnīs lēvigat -- superficiēs plānae intāctae manent. Nōndum agnitiō formae Z/simplicis ut in archetypō (gradū posteriōre veniet), ideō in quibusdam diagōnālibus paulō mollius quam archetypum.
+Reine Information (Treiber/Vendor), kein Bedienelement.	Pure information (driver/vendor), not a control.	Mēra nōtitia (rēctor/venditor), nōn īnstrūmentum moderandī.
+Beim Betreten wie Vanilla erst die Welt laden, dann loslaufen (langsamer)	On joining, load the world first like vanilla, then start moving (slower)	Ingrediēns ut Vanilla prius mundum onerā, deinde incēde (tardius)
+Botcheck-Pass	Bot check pass	Trānsitus probātiōnis automatōrum
+Beim Abbauen ausblenden	Hide while mining	Cēlāre dum foditur
+Haupthand leer	Main hand empty	Manus prīma vacua
+Benötigt Erfahrungsstufe {}	Requires experience level {}	Gradum experientiae {} requīrit
+Erfahrungskosten: {}	Experience cost: {}	Pretium experientiae: {}
+Zu teuer!	Too expensive!	Nimis cārum!
+1 Erfahrungsstufe	1 experience level	1 gradus experientiae
+1 Lapislazuli	1 lapis lazuli	1 lapis lazuli
+Schild bearbeiten	Edit sign	Titulum mūtāre
+Hängeschild bearbeiten	Edit hanging sign	Titulum pendentem mūtāre
+In die Zwischenablage kopiert	Copied to clipboard	In tabulam trānscrīptōriam exscrīptum
+Zwischenablage konnte nicht geöffnet werden	Clipboard could not be opened	Tabula trānscrīptōria aperīrī nōn potuit
+Speichern fehlgeschlagen: {}	Saving failed: {}	Servātiō dēfēcit: {}
+Gespeichert: {}	Saved: {}	Servātum: {}
+Rahmen zu groß	Frame too large	Margō nimis magna
+Untergrund	Backdrop	Fundus
+Ton	Sound	Sonus
+Tonhöhe	Pitch	Altitūdō sonī
+Pos	Pos	Pos
+Props	Props	Props
+Utility	Utility	Ūtilitās
+Turbo	Turbo	Turbo
+Entity	Entity	Ēns
+Player	Player	Lūsor
+Du	You	Tū
+Runde starten	Start round	Circuitum incipere
+laeuft ...	running ...	currit ...
+^ nach oben	^ up	^ sursum
+v nach unten	v down	v deorsum
+Nord (-Z)	North (-Z)	Septentriō (-Z)
+Süd (+Z)	South (+Z)	Merīdiēs (+Z)
+Ost (+X)	East (+X)	Oriēns (+X)
+West (-X)	West (-X)	Occidēns (-X)
+im Menü	in the menu	in indice
+durch VBlank	by VBlank	per VBlank
+Auto (x{})	Auto (x{})	Automaticum (x{})
+Link geöffnet: {}	Link opened: {}	Nexus apertus: {}
+Totem gepoppt: {}	Totem popped: {}	Totem ēruptum: {}
+{} hat gepoppt ({}x)	{} popped ({}x)	{} ērūpit ({}x)
+{} hat nur noch {} Haltbarkeit -- erst mit Erfahrung reparieren.	{} only has {} durability left -- repair it with experience first.	{} tantum {} firmitātis habet -- prius experientiā reparā.
+Item {} nach {} geschrieben	Item {} written to {}	Rēs {} in {} scrīpta
+{} Erfahrungsstufen	{} experience levels	{} gradus experientiae
+{} Lapislazuli	{} lapis lazuli	{} lapidēs lazuli
+{} Zeichen	{} characters	{} signa
+{} Zeichen kopiert	{} characters copied	{} signa exscrīpta
+Pakete	Packets	Fasciculī
+Schleife sonst	Loop other	Ansa cētera
+Mesh-Upload	Mesh upload	Rētia sursum mittere
+Eingabe	Input	Ingressus
+Ticks (Schleife)	Ticks (loop)	Mōmenta (ansa)
+Acquire/Warten	Acquire/wait	Acquīrere/exspectāre
+Ticks (Frame)	Ticks (frame)	Mōmenta (imāgō)
+Animationen	Animations	Animātiōnēs
+Textur-Upload	Texture upload	Textūrās sursum mittere
+Texturen/Skins	Textures/skins	Textūrae/pellēs
+Hitboxen	Hitboxes	Capsae ictus
+Hand	Hand	Manus
+Geister/Partikel	Ghosts/particles	Spectra/particulae
+Inventarfigur	Inventory figure	Figūra inventāriī
+Menü-UI	Menu UI	Interfaciēs indicis
+Sortieren/Offsets	Sorting/offsets	Ōrdināre/trānslātiōnēs
+# Sprach-Tab
+Alles	Everything	Omnia
+Menüs und Oberfläche	Menus and interface	Indicēs et interfaciēs
+Item-Namen und Tooltips	Item names and tooltips	Nōmina rērum et notae
+Chat und Server-Texte	Chat and server texts	Colloquium et textus servītōris
+Deutsch	Deutsch	Deutsch
+Welche Sprache wo gilt. "Alles" stellt alle Bereiche auf einmal um. Chat und Server-Texte: gilt für neue Nachrichten; dem Server wird die Sprache beim nächsten Verbinden mitgeteilt.	Which language applies where. "Everything" switches all areas at once. Chat and server texts: applies to new messages; the language is reported to the server on the next connect.	Quae lingua ubi valeat. "Omnia" omnēs regiōnēs simul mūtat. Colloquium et textus servītōris: valet prō novīs nūntiīs; lingua servītōrī proxima coniūnctiōne nūntiātur.
+Sprache der Menüs, Einstellungen, Hinweise und Meldungen dieses Clients.	Language of this client's menus, settings, hints and notifications.	Lingua indicum, optiōnum, monitiōnum et nūntiōrum hūius clientis.
+Namen von Items und Blöcken, Verzauberungen und Tränke im Tooltip.	Names of items and blocks, enchantments and potions in the tooltip.	Nōmina rērum et cubōrum, incantātiōnēs et pōtiōnēs in nota.
+Namen der Effekte im HUD und im Inventar.	Effect names in the HUD and the inventory.	Nōmina effectuum in HUD et inventāriō.
+Übersetzte Texte vom Server: Todesnachrichten, Befehlsantworten, Titel, Scoreboard ...	Translated texts from the server: death messages, command replies, titles, scoreboard ...	Textus a servītōre trānslātī: nūntiī mortis, respōnsa mandātōrum, titulī, tabula punctōrum ...
+Längezeichen (Latein)	Macrons (Latin)	Notae longitūdinis (Latīna)
+Lehnwörter auf Englisch	English loanwords	Verba Anglica
+Nur für die deutsche Oberfläche: Spielbegriffe stehen auf Englisch, so wie man sie beim Spielen sagt – Crosshair statt Fadenkreuz, Offhand statt Zweithand, FOV statt Sichtfeld, Cooldown statt Abklingzeit. Chat und Itemnamen bleiben, wie sie sind.	Only for the German interface: game terms are shown in English, the way players say them -- Crosshair instead of Fadenkreuz, Offhand instead of Zweithand, FOV instead of Sichtfeld, Cooldown instead of Abklingzeit. Chat and item names stay as they are.	Tantum interfaciēī Germānicae: verba lūdī Anglicē scrībuntur, ut lūsōrēs ea dīcunt -- Crosshair prō Fadenkreuz, Offhand prō Zweithand, FOV prō Sichtfeld, Cooldown prō Abklingzeit. Colloquium et nōmina rērum manent.
+Latein mit Längezeichen (ā ē ī ō ū) – in Menüs und in Item-, Block-, Effekt- und Verzauberungsnamen. AUS zeigt dieselben Wörter ohne Striche, wie Mojangs eigene Lateindatei.	Latin with macrons (ā ē ī ō ū) – in menus and in item, block, effect and enchantment names. OFF shows the same words without the marks, like Mojang's own Latin file.	Latīna cum notīs longitūdinis (ā ē ī ō ū) – in indicibus et in nōminibus rērum, cubōrum, effectuum, incantātiōnum. NŌN eadem verba sine lineolīs mōnstrat, ut ipsa plica Latīna Mojang.
+Sättigung des ganzen Bildes -- 0 % ist schwarzweiß	Saturation of the whole image -- 0 % is black and white	Saturātiō tōtīus imāginis -- 0 % est nigrum et album
+Sättigung	Saturation	Saturātiō
+Consumable-Optimizer	Consumable optimizer	Optimizātor cibōrum
+Essen und Trinken enden im richtigen Tick, ohne auf den Server zu warten	Eating and drinking finish on the right tick, without waiting for the server	Edere et bibere tempore rēctō fīniuntur, servītōrem nōn exspectantia
+Timer	Timer	Hōrologium
+Kreis am Fadenkreuz: füllt sich beim Essen bis fertig, leert sich beim Spannen bis zum kritischen Pfeil	Crosshair circle: fills while eating until done, empties while drawing until the arrow is critical	Circulus ad crucem: dum editur implētur, dum arcus tenditur ēvacuātur dōnec sagitta gravis est
+Dieser Server hat den Consumable-Optimizer abgeschaltet.	This server has disabled the consumable optimizer.	Hic servītor optimizātōrem cibōrum exstīnxit.
+Eigene Form	Custom shape	Fōrma propria
+Pixel bearbeiten	Edit pixels	Pūncta ēdere
+Standardkreuz	Default crosshair	Crux solita
+Leeren	Clear	Vacuāre
+Symmetrie: Aus	Symmetry: off	Symmetria: nūlla
+Symmetrie: Spiegeln	Symmetry: mirror	Symmetria: speculum
+Symmetrie: 4-fach	Symmetry: 4-way	Symmetria: quadruplex
+Links: Füllung   Rechts: Kontur   Auf gleichem Pixel: löschen   Esc: fertig	Left: fill   Right: outline   Same pixel again: erase   Esc: done	Sinistra: implēre   Dextra: margō   Idem pūnctum: dēlēre   Esc: factum
+Entity-Renderdistanz	Entity render distance	Spatium pictūrae entium
+Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.	Up to which distance entities are drawn (players, mobs, items, displays, name tags, hitboxes), in blocks. Farther ones stay loaded and targetable, they are just not drawn. Click the number for a custom value, -1 = unlimited.	Usque ad quam distantiam entia pinguntur (lūsōrēs, creātūrae, rēs, ostentāmina, titulī nōminum, capsae ictūs), in cubīs. Remōtiōra onerāta et petibilia manent, tantum nōn pinguntur. Numerum preme prō valōre propriō, -1 = īnfīnītum.
+Spielmodus-Rad	Game mode wheel	Rota modī lūdī
+Überleben	Survival	Superstes
+Kreativ	Creative	Creātor
+Abenteuer	Adventure	Cāsus
+Zuschauer	Spectator	Spectātor
+Zuschauer: langsamer	Spectator: slower	Spectātor: tardius
+Zuschauer: schneller	Spectator: faster	Spectātor: celerius
+# Leiste oben und Einstellungen als Vollbild
+läuft seit {}	running for {}	currit iam {}
+Nicht angemeldet	Not signed in	Nōn initum
+EINSTELLUNGEN	SETTINGS	OPTIŌNĒS
+Benachrichtigungen	Notifications	Nūntiī
+Noch keine.	None yet.	Nūllī adhūc.
+Setup	Setup	Īnstitūtiō
+Willkommen. Hier richtest du den Client in wenigen Schritten ein.	Welcome. Set up the client here in a few steps.	Salvē. Hīc clientem paucīs gradibus īnstituis.
+Der Assistent für die Tastenbelegung kommt hierhin.	The key binding assistant will live here.	Adiūtor clāvium hūc veniet.
+Bis dahin findest du alle Einstellungen links in der Leiste.	Until then, all settings are in the bar on the left.	Intereā omnēs optiōnēs in tabulā sinistrā inveniēs.
+SERVER-ADRESSE	SERVER ADDRESS	ĪNSCRĪPTIŌ SERVĪTŌRIS
+{} gespeichert	{} saved	{} servātī
+Karte anklicken = bearbeiten	Click a card = edit	Chartam preme = mūtāre
+max {}	max {}	max {}
+# Theme und Farbfenster
+Theme	Theme	Thema
+Preset	Preset	Exemplar
+Farbfeld anklicken, um eine Farbe zu ändern.	Click a swatch to change a color.	Tabellam colōris preme ut colōrem mūtēs.
+Eigene Farben. Ein Preset setzt alle Farben zurück.	Custom colors. A preset resets all colors.	Colōrēs proprī. Exemplar omnēs colōrēs restituit.
+Fertige Farbsätze für alle Menüs. Danach lässt sich jede Farbe einzeln ändern: Farbfeld anklicken.	Ready-made color sets for all menus. Afterwards every color can be changed on its own: click its swatch.	Colōrum seriēs parātae prō omnibus indicibus. Deinde quisque colōr per sē mūtārī potest: tabellam preme.
+Farbton	Hue	Color
+Hitbox geglättet	Hitbox smoothed	Capsa ictūs lēvigāta
+Hitbox roh	Hitbox raw	Capsa ictūs crūda
+Schild gehalten	Shield held	Scūtum tentum
+Himmelsfarbe	Sky color	Colōr caelī
+Panel	Panel	Tabula
+Eingabefeld	Input field	Campus īnscrīptiōnis
+Fläche 1	Surface 1	Superficiēs I
+Fläche 2 (Knopf)	Surface 2 (button)	Superficiēs II (bulla)
+Fläche 3 (Hover)	Surface 3 (hover)	Superficiēs III (super)
+Gedrückt	Pressed	Pressum
+Rahmen	Border	Margō
+Rahmen Bedienelement	Control border	Margō imperiī
+Rahmen Hover	Hover border	Margō super
+Text	Text	Textus
+Text sekundär	Secondary text	Textus secundus
+Hinweistext	Hint text	Textus monitōrius
+Text deaktiviert	Disabled text	Textus inertis
+Text auf Akzent	Text on accent	Textus in īnsignī
+Akzent	Accent	Īnsigne
+Akzent Hover	Accent hover	Īnsigne super
+Akzent-Text	Accent text	Textus īnsignis
+Ausgewählt	Selected	Ēlēctum
+Ausgewählt Hover	Selected hover	Ēlēctum super
+Erfolg	Success	Successus
+Warnung	Warning	Monitum
+Gefahr	Danger	Perīculum
+Gefahr-Fläche	Danger surface	Superficiēs perīculī
+Unten	Below	Īnfrā
+Quick Connect	Quick Connect	Coniūnctiō celeris
+Acc-Manager	Account manager	Ratiōnum cūrātor
+angemeldet	signed in	initum
+offline	offline	absēns
+Speichern fehlgeschlagen	Saving failed	Servāre nōn potuit
+KONTEN	ACCOUNTS	RATIŌNĒS
+anmelden →	sign in →	inīre →
+Noch kein Konto. Mit Microsoft anmelden oder aus Prism importieren.	No account yet. Sign in with Microsoft or import from Prism.	Nūlla ratiō adhūc. Per Microsoft inī aut ex Prism importā.
+MINECRAFT-TOKEN (STRG+V)	MINECRAFT TOKEN (CTRL+V)	TESSERA MINECRAFT (CTRL+V)
+AZURE-CLIENT-ID	AZURE CLIENT ID	AZURE CLIENT ID
+Schließen	Close	Claudere
+Schadensfarbe	Damage color	Color vulneris
+Nur Skin färben	Tint skin only	Pellem tantum tingere
+Färbedauer	Tint duration	Dūrātiō tīncturae
+Eigene Crit-Farbe	Custom crit color	Color ictūs proprius
+Feststelltaste sperren	Block Caps Lock	Clāvem māiusculārum claudere
+Rezeptbuch	Recipe Book	Liber formulārum
+Craftbares zuerst	Craftable first	Facienda prīma
+Alle Rezepte	All recipes	Omnēs formulae
+Zutaten fehlen	Missing ingredients	Materia deest
+Trank-Buchstabe S (verstärkt)	Potion letter S (strong)	Littera pōtiōnis S (fortis)
+Trank-Buchstabe L (verlängert)	Potion letter L (long)	Littera pōtiōnis L (longa)
+Trank-Buchstabe W (schwach)	Potion letter W (weak)	Littera pōtiōnis W (dēbilis)
+Kleines S neben dem Flaschenhals verstärkter Tränke (Stufe II), z. B. Stärke II oder Schnelligkeit II. Gilt im Inventar, nicht in der Hotbar.	Small S next to the bottle neck of strong potions (level II), e.g. Strength II or Speed II. Applies in the inventory, not in the hotbar.	Parvum S iuxtā collum ampullae pōtiōnum fortium (gradus II), ut Rōbur II aut Celeritās II. Valet in inventāriō, nōn in hotbare.
+Kleines L neben dem Flaschenhals verlängerter Tränke (mit Redstone gebraut). Gilt im Inventar, nicht in der Hotbar.	Small L next to the bottle neck of long potions (brewed with redstone). Applies in the inventory, not in the hotbar.	Parvum L iuxtā collum ampullae pōtiōnum longārum (cum redstone coctārum). Valet in inventāriō, nōn in hotbare.
+Kleines W auf Heil- und Schadenstränken der schwachen Stufe I. Stufe II bekommt keinen Buchstaben, weil sie im PvP der Normalfall ist. Gilt im Inventar, nicht in der Hotbar.	Small W on healing and harming potions of the weak level I. Level II gets no letter because it is the normal case in PvP. Applies in the inventory, not in the hotbar.	Parvum W in pōtiōnibus sānātiōnis et nocendī gradūs dēbilis I. Gradus II nūllam litteram accipit, quia in PvP rēs ūsitāta est. Valet in inventāriō, nōn in hotbare.
+Partikelart	Particle type	Genus particulae
+Zeigen	Show	Ostendere
+Tempo	Speed	Celeritās
+Menge / Intervall	Amount / Interval	Cōpia / Intervallum
+Auf einmal	At once	Simul
+Dynamisch	Dynamic	Mūtābilis

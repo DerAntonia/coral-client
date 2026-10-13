@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Startsymbol des Clients: ein isometrischer Block in den Farben des Mauszeigers
+     (violetter Akzent, s. COLOR_CURSOR_ACCENT in crates/app/src/main.rs) plus die
+     Zeigerform selbst als Erkennungsmerkmal. Als SVG, damit es in jeder Groesse
+     (Dock, Uebersicht, Schreibtisch) scharf bleibt. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2b38"/>
+      <stop offset="1" stop-color="#14141c"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="51.5" fill="none" stroke="#7c3aed" stroke-opacity="0.55" stroke-width="3"/>
+
+  <!-- Wuerfel: Deckflaeche, linke und rechte Seite -->
+  <g transform="translate(128 132)">
+    <polygon points="0,-62 68,-24 0,14 -68,-24" fill="#8b5cf6"/>
+    <polygon points="-68,-24 0,14 0,86 -68,48" fill="#4c2a94"/>
+    <polygon points="68,-24 0,14 0,86 68,48" fill="#6532c4"/>
+  </g>
+
+  <!-- Mauszeiger (dieselbe Kite-Form wie im Client), leicht gedreht -->
+  <g transform="translate(150 148) rotate(-25) scale(0.62)">
+    <path d="M50 4 L90 90 L50 70 L10 90 Z" fill="#f2f2f5" stroke="#0f0f12" stroke-width="9" stroke-linejoin="round"/>
+    <rect x="44" y="84" width="12" height="16" fill="#f2f2f5" stroke="#0f0f12" stroke-width="9" stroke-linejoin="round"/>
+  </g>
+</svg>

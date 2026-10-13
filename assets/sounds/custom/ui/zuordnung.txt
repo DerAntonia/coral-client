@@ -1,0 +1,45 @@
+Coral Client · Zuordnung der UI-Klänge (Sound-Baukasten)
+
+Hover     kenney-interface/click_002.wav · Tonhöhe −13 HT · Tempo 100 % · Versatz −3 ms
+          + Synthese „osu-Nachbau 3 Ebenen B · 3“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 9 %
+          Streuung ± 0,75 HT · Klangformung: Höhen weg 8.721 Hz, Ohrenbereich (3,2 kHz) -24 dB, weicher Anschlag 0 ms · Limiter: Decke -12 dB, Release 1 ms
+          Parameter „osu-Nachbau 3 Ebenen B · 3“ {"wave":"sine","freq":896,"drop":12,"dropMs":60,"attackMs":0.103,"decayMs":22.6,"bodyLevel":1,"partRatio":0.5,"partLevel":1,"partDecay":2.08,"fmRatio":0.737,"fmDepth":0.694,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2.17,"echoMix":0.199,"hpHz":413,"lpHz":11800}
+Click     kenney-interface/click_003.wav · Tonhöhe −3,5 HT · Tempo 100 % · Lautstärke 85 % · Versatz +1 ms
+          + kenney-interface/click_003.wav · Tonhöhe +1 HT · Tempo 100 % · Lautstärke 85 %
+          + kenney-interface/click_003.wav · Tonhöhe +7,5 HT · Tempo 78 % · Lautstärke 85 % · Versatz +1 ms
+          Klangformung: Höhen weg 2.328 Hz, Ohrenbereich (3,2 kHz) -9 dB, weicher Anschlag 5,1 ms · Limiter: Decke -10 dB, Release 1 ms
+ToggleOn  kenney-interface/bong_001.wav · Tonhöhe 0 HT · Tempo 100 %
+          Klangformung: Höhen weg 3.025 Hz, Ohrenbereich (3,2 kHz) -4 dB, weicher Anschlag 3,1 ms · Limiter: Decke -10 dB, Release 1 ms
+ToggleOff kenney-interface/bong_001.wav · Tonhöhe −3 HT · Tempo 100 %
+          Klangformung: Höhen weg 3.025 Hz, Ohrenbereich (3,2 kHz) -4 dB, weicher Anschlag 3,1 ms · Limiter: Decke -10 dB, Release 1 ms
+Open      Synthese „Fenster auf (osu-Nachbau)“ · Tonhöhe +10 HT · Tempo 187 % · Lautstärke 32 %
+          + Synthese „osu-Nachbau 3 Ebenen B · 2“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 1 %
+          + Synthese „osu-Nachbau 3 Ebenen B · 3“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 9 %
+          Parameter „Fenster auf (osu-Nachbau)“ {"wave":"sine","freq":1000,"drop":0,"dropMs":10,"attackMs":0.5,"decayMs":80,"bodyLevel":0,"partRatio":2,"partLevel":0,"partDecay":0.55,"fmRatio":2,"fmDepth":0,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":59.9,"echoMix":0.0919,"hpHz":1500,"lpHz":11800,"windLevel":1,"windMs":147,"windRise":0.194,"windFrom":483,"windTo":170,"windQ":4.86,"windVoices":3,"windSpread":3.78}
+          Parameter „osu-Nachbau 3 Ebenen B · 2“ {"wave":"sine","freq":147,"drop":0.586,"dropMs":60,"attackMs":0.481,"decayMs":244,"bodyLevel":1,"partRatio":3.07,"partLevel":0.842,"partDecay":0.597,"fmRatio":5.83,"fmDepth":0.439,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2,"echoMix":0.156,"hpHz":951,"lpHz":1130,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+          Parameter „osu-Nachbau 3 Ebenen B · 3“ {"wave":"sine","freq":896,"drop":12,"dropMs":60,"attackMs":0.103,"decayMs":22.6,"bodyLevel":1,"partRatio":0.5,"partLevel":1,"partDecay":2.08,"fmRatio":0.737,"fmDepth":0.694,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2.17,"echoMix":0.199,"hpHz":413,"lpHz":11800,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+Close     Synthese „Zurück“ · Tonhöhe −20,5 HT · Tempo 187 % · Lautstärke 32 %
+          + Synthese „osu-Nachbau 3 Ebenen B · 2“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 1 %
+          + Synthese „osu-Nachbau 3 Ebenen B · 3“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 9 %
+          Parameter „Zurück“ {"wave":"sine","freq":587,"drop":7,"dropMs":40,"attackMs":1,"decayMs":150,"bodyLevel":1,"partRatio":2,"partLevel":0.2,"partDecay":0.55,"fmRatio":2,"fmDepth":0,"noiseMs":3,"noiseHz":3000,"noiseQ":1,"noiseLevel":0.15,"echoMs":60,"echoMix":0.1,"hpHz":150,"lpHz":16000,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+          Parameter „osu-Nachbau 3 Ebenen B · 2“ {"wave":"sine","freq":147,"drop":0.586,"dropMs":60,"attackMs":0.481,"decayMs":244,"bodyLevel":1,"partRatio":3.07,"partLevel":0.842,"partDecay":0.597,"fmRatio":5.83,"fmDepth":0.439,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2,"echoMix":0.156,"hpHz":951,"lpHz":1130,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+          Parameter „osu-Nachbau 3 Ebenen B · 3“ {"wave":"sine","freq":896,"drop":12,"dropMs":60,"attackMs":0.103,"decayMs":22.6,"bodyLevel":1,"partRatio":0.5,"partLevel":1,"partDecay":2.08,"fmRatio":0.737,"fmDepth":0.694,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2.17,"echoMix":0.199,"hpHz":413,"lpHz":11800,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+Step      kenney-interface/click_002.wav · Tonhöhe −1 HT · Tempo 66 % · Lautstärke 150 % · Versatz +1 ms
+          + Synthese „osu-Nachbau 3 Ebenen B · 3“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 9 %
+          Streuung ± 0,75 HT · Klangformung: Höhen weg 4.815 Hz, Ohrenbereich (3,2 kHz) -24 dB, weicher Anschlag 0 ms · Limiter: Decke -12 dB, Release 1 ms
+          Parameter „osu-Nachbau 3 Ebenen B · 3“ {"wave":"sine","freq":896,"drop":12,"dropMs":60,"attackMs":0.103,"decayMs":22.6,"bodyLevel":1,"partRatio":0.5,"partLevel":1,"partDecay":2.08,"fmRatio":0.737,"fmDepth":0.694,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2.17,"echoMix":0.199,"hpHz":413,"lpHz":11800}
+Denied    leer
+Type      kenney-ui/click3.wav · Tonhöhe +13,5 HT · Tempo folgt Tonhöhe
+          Streuung ± 1,5 HT
+Erase     Synthese „osu-artig: Button-Hover“ · Tonhöhe +2,5 HT · Tempo 188 % · Lautstärke 32 %
+          + Synthese „osu-Nachbau 3 Ebenen B · 2“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 1 %
+          + Synthese „osu-Nachbau 3 Ebenen B · 3“ · Tonhöhe 0 HT · Tempo 100 % · Lautstärke 9 %
+          Parameter „osu-artig: Button-Hover“ {"wave":"sine","freq":140,"drop":11,"dropMs":25,"attackMs":12,"decayMs":140,"bodyLevel":1,"partRatio":2.36,"partLevel":0.12,"partDecay":1,"fmRatio":2,"fmDepth":0,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":0,"echoMix":0,"hpHz":60,"lpHz":1500,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+          Parameter „osu-Nachbau 3 Ebenen B · 2“ {"wave":"sine","freq":147,"drop":0.586,"dropMs":60,"attackMs":0.481,"decayMs":244,"bodyLevel":1,"partRatio":3.07,"partLevel":0.842,"partDecay":0.597,"fmRatio":5.83,"fmDepth":0.439,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2,"echoMix":0.156,"hpHz":951,"lpHz":1130,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+          Parameter „osu-Nachbau 3 Ebenen B · 3“ {"wave":"sine","freq":896,"drop":12,"dropMs":60,"attackMs":0.103,"decayMs":22.6,"bodyLevel":1,"partRatio":0.5,"partLevel":1,"partDecay":2.08,"fmRatio":0.737,"fmDepth":0.694,"noiseMs":0,"noiseHz":4000,"noiseQ":1,"noiseLevel":0,"echoMs":2.17,"echoMix":0.199,"hpHz":413,"lpHz":11800,"windLevel":0,"windMs":300,"windRise":0.45,"windFrom":500,"windTo":2500,"windQ":1.2,"windVoices":1,"windSpread":0}
+Slider    kenney-interface/click_003.wav · Tonhöhe −15,5 HT · Tempo 75 % · Lautstärke 89 % · Versatz −3 ms
+          Klangformung: Höhen weg 3.025 Hz, Ohrenbereich (3,2 kHz) -4 dB, weicher Anschlag 3,1 ms · Limiter: Decke -10 dB, Release 1 ms
+Popup     custom/scroll_003_klick.wav · Tonhöhe +14 HT · Tempo 55 % · Lautstärke 150 %
+          Klangformung: Höhen weg 4.217 Hz, Ohrenbereich (3,2 kHz) -10 dB, weicher Anschlag 0 ms
+
+Slider-Anstieg +5,5 HT über die ganze Bahn

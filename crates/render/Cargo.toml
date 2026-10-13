@@ -1,0 +1,21 @@
+[package]
+name = "render"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+world = { path = "../world" }
+chunk_saver = { path = "../chunk_saver" }
+wgpu.workspace = true
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.29"
+rustc-hash.workspace = true
+# Vanillas Core-Shader aus Resourcepacks (s. vanilla_shader.rs): GLSL lesen, als naga-Modul an wgpu.
+naga = { version = "22", features = ["glsl-in"] }
+pollster = "0.3"
+
+[dev-dependencies]
+assets = { path = "../assets" }
+
+[lints]
+workspace = true

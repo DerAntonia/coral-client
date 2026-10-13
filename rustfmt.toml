@@ -1,0 +1,9 @@
+# Der Rest des Projekts schreibt bis ~140 Zeichen pro Zeile und haelt Struct-Literale,
+# Aufrufe und kurze Arrays bewusst einzeilig (s. crates/world, crates/net).
+#
+# Ohne diese Datei formatiert `cargo fmt` mit den Defaults (max_width 100, dazu
+# struct_lit_width 18 und fn_call_width 60) und bricht praktisch jedes Struct-Literal und
+# jeden laengeren Aufruf um -- ein riesiger, ungewollter Diff quer durch die Datei.
+# "Max" hebt genau diese Unter-Grenzen auf max_width an.
+max_width = 140
+use_small_heuristics = "Max"

@@ -1,0 +1,50 @@
+[package]
+name = "app"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "coral-client"
+path = "src/main.rs"
+
+[dependencies]
+protocol = { path = "../protocol" }
+net = { path = "../net" }
+auth = { path = "../auth" }
+render = { path = "../render" }
+world = { path = "../world" }
+chunk_saver = { path = "../chunk_saver" }
+assets = { path = "../assets" }
+audio = { path = "../audio" }
+voice = { path = "../voice" }
+winit.workspace = true
+tokio.workspace = true
+wgpu.workspace = true
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+arboard = "3"
+glam = "0.29"
+# TTF-Rasterung fuer die DM-Sans-Schrift (s. font_atlas.rs).
+ab_glyph = "0.2"
+rustc-hash.workspace = true
+# Hintergrundbild des Startbildschirms (s. wallpaper.rs): Fotos sind meist JPEG oder WebP.
+# Datum/Uhrzeit fuer den Chat-Log (s. chat_log.rs).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+# Die Kreativ-Tabs nennen Server-Registry-Verweise als JSON (s. creative.rs).
+serde_json = "1"
+# Server-Icons im Status-Ping kommen als Base64-PNG (s. server_status.rs).
+base64 = "0.22"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xkb"] }
+libc = "0.2"
+evdev = "0.12"
+
+[dev-dependencies]
+# Nur zum Pruefen der WGSL-Dateien im Test (s. tests/shaders.rs) -- dieselbe Version, die
+# wgpu ohnehin zieht, also kein zusaetzlicher Download.
+naga = { version = "22", features = ["wgsl-in"] }
+
+[lints]
+workspace = true

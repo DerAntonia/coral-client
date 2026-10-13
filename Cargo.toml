@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/auth",
+    "crates/net",
+    "crates/render",
+    "crates/world",
+    "crates/assets",
+    "crates/audio",
+    "crates/app",
+    "crates/pktproxy",
+    "crates/launcher",
+    "crates/voice",
+    "crates/chunk_saver",
+]
+# Das Spiel ist das Standardziel des Arbeitsbereichs. Ohne diese Zeile ist ein schlichtes
+# `cargo run --release` mehrdeutig, seit pktproxy (das Byte-MITM-Werkzeug fuer die
+# Grim-Diagnose) als zweite Binary dazugekommen ist -- cargo bricht dann mit "could not
+# determine which binary to run" ab, statt das Naheliegende zu tun.
+default-members = ["crates/app"]
+
+[workspace.package]
+edition = "2021"
+version = "0.3.1-beta.18"
+
+# Clippy fuer alle Crates (je Crate "[lints] workspace = true"). Ausgeschaltet nur, was gegen den
+# Stil des Codes laeuft statt Fehler zu finden: GPU-/Mesh-Funktionen nehmen viele Parameter und
+# geben Tupel zurueck, und Rechnungen ueber Matrizen, Flaechen und Slots lesen sich mit Index
+# klarer als mit Iteratoren.
+[workspace.lints.clippy]
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+
+# Profiling-Info im Release-Build. Ohne das zeigt `perf` fuer die heissen Schleifen
+# (Meshing, Frame-Aufbau) nur Adressen bzw. gemangelte Symbole ohne Zeilenbezug, und
+# inlinete Helfer verschwinden ganz -- man sieht dann zwar, DASS Zeit verbrannt wird,
+# aber nicht wo. Beides kostet zur Laufzeit nichts ausser einer groesseren Binary bzw.
+# (bei den Frame-Pointern) einem Register; dafuer sind die Aufruf-Stacks in perf ohne
+# DWARF-Unwinding korrekt, was bei tief verschachteltem wgpu-/tokio-Code der Unterschied
+# zwischen brauchbarem und unlesbarem Profil ist.
+[profile.release]
+debug = "line-tables-only"
+force-frame-pointers = true
+
+[workspace.dependencies]
+# Schneller, nicht-kryptografischer Hash (derselbe, den rustc selbst benutzt). Die Standard-
+# HashMap nutzt SipHash: DoS-resistent, aber fuer die heissen Karten hier Verschwendung --
+# Chunk-Schluessel (i32, i32) werden pro Frame mehrere tausend Mal nachgeschlagen. Die
+# Schluessel sind durch die Sichtweite begrenzt und nicht frei vom Server waehlbar, DoS-
+# Resistenz kauft hier also nichts.
+rustc-hash = "2"
+tokio = { version = "1", features = ["full"] }
+wgpu = { version = "22", features = ["naga-ir"] }
+winit = "0.30"

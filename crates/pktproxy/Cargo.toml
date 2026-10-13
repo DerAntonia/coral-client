@@ -1,0 +1,15 @@
+[package]
+name = "pktproxy"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+net = { path = "../net" }
+world = { path = "../world" }
+auth = { path = "../auth" }
+tokio.workspace = true
+flate2 = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "assets"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+png = "0.18"
+
+# Nur fuer die Installations-Tests (ui_atlas_smoke): die Block-/Item-Registry liegt im
+# world-Crate. Die Bibliothek selbst haengt bewusst NICHT davon ab.
+[dev-dependencies]
+world = { path = "../world" }
+# Nur fuer sounds_smoke: dort wird eine echte Vanilla-.ogg auch wirklich dekodiert, statt sich
+# damit zu begnuegen, dass die Datei existiert. Die Bibliothek selbst haengt bewusst NICHT
+# davon ab -- sie nennt nur Pfade, gelesen wird woanders.
+audio = { path = "../audio" }
+# Nur fuer particle_atlas_smoke: die Liste der Partikeltypen steht im Protokoll-Crate.
+protocol = { path = "../protocol" }
+
+[lints]
+workspace = true

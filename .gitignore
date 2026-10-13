@@ -1,0 +1,13 @@
+/target
+
+# Dekompilierte/extrahierte Minecraft-Klassen (Mojang-Code, nicht einchecken)
+/net/
+
+# Logs & Profiling
+*.log
+perf.data
+perf.data.old
+perf-report.txt
+
+# Python
+__pycache__/

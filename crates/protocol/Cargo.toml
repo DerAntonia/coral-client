@@ -1,0 +1,13 @@
+[package]
+name = "protocol"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+rand = "0.8"
+# Nur fuer die Login-State-Ablehnung: die kommt als JSON-Text-Component, nicht als NBT
+# (s. nbt::json_text_to_spans). Der Rest des Protokolls ist NBT.
+serde_json = "1"
+
+[lints]
+workspace = true

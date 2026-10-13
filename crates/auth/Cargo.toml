@@ -1,0 +1,20 @@
+[package]
+name = "auth"
+edition.workspace = true
+version.workspace = true
+
+# Self-contained Microsoft-Device-Code-Login (MSA -> Xbox Live -> XSTS -> Minecraft-Token)
+# plus Mojang-Session-Join. Kennt weder net noch app -- liefert nur die Credentials und den
+# Session-Hash-Handshake, die beide gebraucht werden, damit man Online-Mode-Servern beitreten
+# kann. reqwest mit rustls (kein System-OpenSSL noetig).
+[dependencies]
+tokio.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Der Profilschluessel kommt als PEM/Base64 (s. fetch_profile_key).
+base64 = "0.22"
+sha1 = "0.10"
+
+[lints]
+workspace = true

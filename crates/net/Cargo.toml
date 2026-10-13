@@ -1,0 +1,28 @@
+[package]
+name = "net"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+auth = { path = "../auth" }
+tokio.workspace = true
+flate2 = "1"
+# Online-Mode-Verschluesselungs-Handshake: RSA (Server-Public-Key), AES-128-CFB8
+# (Stream-Chiffre nach dem Handshake), SHA-1 + BigInt (Mojang-Server-Hash), RNG (Shared Secret).
+# rsa liefert per Feature auch die Digest-/Signatur-Traits mit (s. chat_signing).
+rsa = { version = "0.9", features = ["sha2"] }
+aes = "0.8"
+sha1 = "0.10"
+num-bigint = "0.4"
+rand = "0.8"
+hickory-resolver = "0.26.1"
+
+# Nur fuer den Loopback-Integrationstest: der misst am echten Server, wie viel
+# Geometrie die empfangenen Chunks ergeben -- auf der CPU, ohne GPU-Speicher zu belegen.
+[dev-dependencies]
+world = { path = "../world" }
+voice = { path = "../voice" }
+
+[lints]
+workspace = true

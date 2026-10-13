@@ -1,0 +1,13 @@
+[package]
+name = "chunk_saver"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+world = { path = "../world" }
+flate2 = "1"
+crc32fast = "1"
+rustc-hash.workspace = true
+
+[lints]
+workspace = true
