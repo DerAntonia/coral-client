@@ -2,8 +2,6 @@
 
 **English** · [Deutsch](README.de.md)
 
-> **NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.**
-
 A Minecraft Java client of its own, written from scratch in Rust. It is built for PvP: as little
 delay as possible between mouse, picture and sound.
 
