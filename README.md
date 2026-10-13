@@ -2,6 +2,8 @@
 
 **English** · [Deutsch](README.de.md)
 
+> **NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.**
+
 A Minecraft Java client of its own, written from scratch in Rust. It is built for PvP: as little
 delay as possible between mouse, picture and sound.
 
@@ -105,7 +107,7 @@ in the game.
 - Several settings configs, selectable in the launcher.
 - A game mode wheel and freely bindable keys, including double bindings.
 
-## Status and plans
+## Status
 
 The client is in **beta**. A lot works like Vanilla; some things are still missing or look
 different. It is built and tested against 1.21.11. Other versions are not supported.
@@ -121,20 +123,6 @@ different. It is built and tested against 1.21.11. Other versions are not suppor
   attribute lines
 - Core shaders from packs so far only work for items in the world and the world border. They
   are still missing for terrain, entities, text, and items in the hand and in the inventory.
-
-**Planned:**
-- A recipe book modeled on Bedrock, shown as a chest next to the inventory so resource packs
-  style it too:
-  - A toggle at the top: off lists all items in a fixed order, on puts everything you can
-    craft right now at the top.
-  - Left-click crafts one, straight into the inventory.
-  - Left-click with the stack modifier crafts as many as fit in one stack (usually 64).
-  - Right-click only fills the crafting grid with as much as possible, without crafting.
-- All item components working as in Vanilla.
-- Core shaders from packs for all render types.
-
-**Frozen:** the shader path with lighting and shadows exists in the code but is not being
-developed for now. New features only go into the PvP path.
 
 ### Building it yourself
 
@@ -197,6 +185,8 @@ These files are not covered by the above and keep their own licenses:
 
 - This is **not an official Minecraft product**. It is not approved by or associated with
   Mojang or Microsoft. "Minecraft" is a trademark of Mojang AB.
+- Coral Client is made and published by DerAntonia, who alone is responsible for it. Mojang
+  and Microsoft are not.
 - The project contains no textures, sounds, models or code from Mojang. All game assets come
   from your own installation at runtime. It does contain tables of game data read out of the
   game (block states, collision shapes, mining values), as projects like PrismarineJS do too.

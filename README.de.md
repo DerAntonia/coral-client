@@ -2,6 +2,8 @@
 
 [English](README.md) · **Deutsch**
 
+> **KEIN OFFIZIELLES MINECRAFT-PRODUKT. NICHT VON MOJANG ODER MICROSOFT GENEHMIGT UND NICHT MIT IHNEN VERBUNDEN.**
+
 Ein eigener Minecraft-Java-Client, von Grund auf in Rust geschrieben. Er ist für PvP gebaut:
 Zwischen Maus, Bild und Ton soll so wenig Verzögerung wie möglich liegen.
 
@@ -106,7 +108,7 @@ im Spiel.
 - Mehrere Einstellungs-Configs, im Launcher wählbar.
 - Ein Spielmodus-Rad und frei belegbare Tasten, auch doppelt belegt.
 
-## Stand und Pläne
+## Stand
 
 Der Client ist in der **Beta**. Vieles funktioniert wie in Vanilla, manches fehlt noch oder sieht
 anders aus. Gebaut und getestet wird er gegen 1.21.11. Andere Versionen werden nicht unterstützt.
@@ -122,21 +124,6 @@ anders aus. Gebaut und getestet wird er gegen 1.21.11. Andere Versionen werden n
   und Attributzeilen
 - Core-Shader aus Packs funktionieren bisher nur für Items in der Welt und die Weltgrenze. Für
   Gelände, Entities, Text sowie Items in der Hand und im Inventar fehlen sie noch.
-
-**Geplant:**
-- Ein Rezeptbuch nach dem Vorbild von Bedrock. Es steht als Truhe neben dem Inventar, damit
-  Resourcepacks es mitgestalten:
-  - Ein Schalter oben: aus zeigt alle Items in fester Reihenfolge, an stellt alles, was du
-    gerade craften kannst, nach oben.
-  - Linksklick craftet eins, direkt ins Inventar.
-  - Linksklick mit dem Stapel-Modifikator craftet so viele, wie in einen Stapel passen
-    (meist 64).
-  - Rechtsklick legt nur so viel wie möglich ins Craftingraster, ohne zu craften.
-- Alle Item-Komponenten so wie in Vanilla.
-- Core-Shader aus Packs für alle Rendertypen.
-
-**Eingefroren:** Den Shader-Pfad mit Licht und Schatten gibt es im Code. Er wird aber vorerst
-nicht weiterentwickelt. Neue Funktionen kommen nur in den PvP-Pfad.
 
 ### Selbst bauen
 
@@ -199,6 +186,8 @@ Diese Dateien fallen nicht unter das oben Gesagte und behalten ihre eigene Lizen
 
 - Das ist **kein offizielles Minecraft-Produkt**. Es ist nicht von Mojang oder Microsoft
   genehmigt und steht in keiner Verbindung zu ihnen. „Minecraft“ ist eine Marke von Mojang AB.
+- Coral Client wird von DerAntonia entwickelt und veröffentlicht, die Verantwortung liegt allein
+  dort, nicht bei Mojang oder Microsoft.
 - Das Projekt enthält keine Texturen, Klänge, Modelle oder Code von Mojang. Alles
   Spielmaterial kommt zur Laufzeit aus deiner eigenen Installation. Enthalten sind aber
   Tabellen mit Spieldaten, die aus dem Spiel ausgelesen sind (Block-Zustände, Kollisionsformen,
