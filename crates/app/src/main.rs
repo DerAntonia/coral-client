@@ -22303,6 +22303,13 @@ impl App {
     // Connect-Phase, bis der erste Chunk da ist. screen=Main, damit Esc danach das normale
     // Pausemenue oeffnet (und der Connected-Event nicht mehr umschalten muss).
     fn go_connect(&mut self) {
+        // Ohne Konto nur der eigene Rechner (s. net::is_local_address). Hier abfangen, damit
+        // man im Menue bleibt und gleich sieht, was fehlt; net::join prueft es noch einmal.
+        if self.credentials.is_none() && !net::is_local_address(&self.server_address) {
+            self.push_log("Ohne Anmeldung geht nur ein Server auf diesem Rechner (localhost).");
+            self.notify(notifications::Notification::error("Nicht angemeldet", "Bitte zuerst mit Microsoft anmelden."));
+            return;
+        }
         self.start_connect();
         self.mode = AppMode::World;
         self.screen = MenuScreen::Main;

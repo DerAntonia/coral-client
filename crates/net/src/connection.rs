@@ -545,6 +545,15 @@ async fn resolve_srv(host: &str, port: u16) -> Option<(String, u16)> {
 }
 
 // Adresse zerlegen und, wo Vanilla es auch tut, per SRV weiterleiten.
+// Ohne Konto (Offline-Mode) darf nur ein Server auf diesem Rechner angesprochen werden --
+// zum Testen mit einem eigenen online-mode=false-Server. Alles andere braucht eine echte
+// Anmeldung, sonst waere der Client ein Weg, ohne gekauftes Spiel zu spielen.
+pub fn is_local_address(address: &str) -> bool {
+    let (host, _) = parse_address(address.trim());
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 async fn resolve_address(address: &str) -> (String, u16) {
     let (host, port) = parse_address(address);
     match resolve_srv(&host, port).await {
@@ -2149,6 +2158,11 @@ async fn join_inner(
     // Jeder Durchlauf ist eine Verbindung. Ein Transfer beendet sie mit Ok(Ziel), dann geht
     // es mit einer neuen weiter; alles andere beendet die Sitzung.
     loop {
+        // Auch hinter SRV-Eintrag und Transfer pruefen: sonst koennte ein lokaler Server
+        // einen Offline-Client einfach an einen fremden weiterreichen.
+        if credentials.is_none() && !is_local_address(&host) {
+            return Err(NetError::Protocol(format!("{host} ist kein Server auf diesem Rechner -- ohne Anmeldung nicht erlaubt")));
+        }
         log(events, format!("Verbinde zu {host}:{port} ..."));
         let mut conn = Connection::connect(&host, port).await?;
         conn.cookies = std::mem::take(&mut cookies);
@@ -2272,6 +2286,16 @@ mod tests {
         assert_eq!(parse_address("derantonia.de:25566"), ("derantonia.de".to_string(), 25566));
         // Kein gueltiger Port hinter dem Doppelpunkt -> alles ist der Host (so wie bisher).
         assert_eq!(parse_address("beispiel:abc"), ("beispiel:abc".to_string(), 25565));
+    }
+
+    #[test]
+    fn ohne_anmeldung_nur_server_auf_diesem_rechner() {
+        for lokal in ["localhost", "LocalHost:25566", "127.0.0.1", "127.0.0.1:25565", "127.1.2.3", "[::1]:25565"] {
+            assert!(is_local_address(lokal), "{lokal}");
+        }
+        for fremd in ["derantonia.de", "192.168.0.10", "10.0.0.1:25565", "0.0.0.0", "localhost.example.com", "hypixel.net"] {
+            assert!(!is_local_address(fremd), "{fremd}");
+        }
     }
 
     // Baut einen komprimierten Frame so, wie ein Server ihn schickt: VarInt mit der
