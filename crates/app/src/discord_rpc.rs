@@ -86,8 +86,7 @@ pub fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-// Die Discord-Anwendung des Projekts (Entwicklerportal, Konto derantonia; dort noch unter dem
-// alten Namen "mc-client"). Nicht geheim: die
+// Die Discord-Anwendung "coral-client" (Entwicklerportal, Konto derantonia). Nicht geheim: die
 // ID steht in jedem Status, den Discord anzeigt. Fuer Rich Presence braucht die Anwendung
 // keine Verifizierung -- die gilt nur fuer Bots auf mehr als 100 Servern.
 pub const DEFAULT_CLIENT_ID: &str = "1555687664508997734";

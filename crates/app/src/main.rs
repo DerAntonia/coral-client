@@ -11517,7 +11517,7 @@ struct Settings {
     account_uuid: String,
 }
 
-// Azure-Application-(Client-)ID der eigenen App dieses Clients (App-Registrierung, noch unter dem alten Namen "mc-client",
+// Azure-Application-(Client-)ID der eigenen App dieses Clients (App-Registrierung "coral-client",
 // nur persoenliche Microsoft-Konten, oeffentliche Clientflows fuer den Device-Code-Flow). Die
 // Minecraft-Anmeldung (login_with_xbox) nimmt eine ID erst an, wenn Mojang sie freigegeben hat;
 // vorher scheitert sie mit "Invalid app registration". In settings.conf laesst sich eine andere

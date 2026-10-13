@@ -883,6 +883,23 @@ struct LauncherConf {
     flags: Vec<String>,
 }
 
+/// Ein gespeicherter Schaltername, wie er heute heisst -- oder None, wenn es den Schalter nicht
+/// (mehr) gibt. Bis zur Umbenennung in Coral Client hiessen die Variablen MC_CLIENT_*, MC_PKTLOG
+/// und MC_SOUNDLOG; ohne Uebersetzung zaehlte die Ueberschrift sie als "an", obwohl kein
+/// Haekchen dazu passte.
+fn known_flag(name: &str) -> Option<String> {
+    let name = name.trim();
+    let neu = match name.strip_prefix("MC_CLIENT_") {
+        Some(rest) => format!("CORAL_{rest}"),
+        None => match name {
+            "MC_PKTLOG" => "CORAL_PKTLOG".to_string(),
+            "MC_SOUNDLOG" => "CORAL_SOUNDLOG".to_string(),
+            _ => name.to_string(),
+        },
+    };
+    DEBUG_FLAGS.iter().any(|(flag, _, _)| *flag == neu).then_some(neu)
+}
+
 /// Die Diagnose-Schalter des Clients: Umgebungsvariable, Anzeigename, Erklaerung. Alle
 /// schreiben in das Client-Log (s. log_path) -- bis auf den Paket-Mitschnitt und den Klang-Mitschnitt,
 /// die je eine eigene Datei daneben bekommen (pktlog.txt, soundlog.txt).
@@ -912,7 +929,7 @@ impl LauncherConf {
             // Vorgabe an: so war es seit v0.2.0.
             self_update: value("self_update").is_none_or(|v| v != "false"),
             beta: value("beta").is_some_and(|v| v == "true"),
-            flags: value("flags").map(|v| v.split(',').map(str::trim).filter(|f| !f.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
+            flags: value("flags").map(|v| v.split(',').filter_map(known_flag).collect()).unwrap_or_default(),
         }
     }
 
@@ -926,5 +943,20 @@ impl LauncherConf {
                 format!("installed={}\nself_update={}\nbeta={}\nflags={}\n", self.installed, self.self_update, self.beta, self.flags.join(",")),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::known_flag;
+
+    #[test]
+    fn alte_schalternamen_werden_uebersetzt_unbekannte_verworfen() {
+        assert_eq!(known_flag("MC_SOUNDLOG").as_deref(), Some("CORAL_SOUNDLOG"));
+        assert_eq!(known_flag("MC_PKTLOG").as_deref(), Some("CORAL_PKTLOG"));
+        assert_eq!(known_flag(" MC_CLIENT_SWIM_DEBUG ").as_deref(), Some("CORAL_SWIM_DEBUG"));
+        assert_eq!(known_flag("CORAL_SWIM_DEBUG").as_deref(), Some("CORAL_SWIM_DEBUG"));
+        assert_eq!(known_flag("GIBT_ES_NICHT"), None);
+        assert_eq!(known_flag(""), None);
     }
 }
