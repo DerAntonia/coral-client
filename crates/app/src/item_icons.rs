@@ -36,6 +36,8 @@ pub enum SpriteAtlas {
     ServerIcons,
     // Pack-Bilder im Skin-Tab (eigener Atlas, s. GpuState::upload_pack_icon).
     PackIcons,
+    // GitHub- und Discord-Logo der Kategorienleiste (eigener Atlas, s. GpuState::upload_logos).
+    Logos,
 }
 
 impl SpriteAtlas {

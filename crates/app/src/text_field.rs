@@ -14,21 +14,39 @@ pub struct TextField {
     cursor: usize,
     // Anfang der Markierung; markiert ist von hier bis zum Cursor.
     anchor: Option<usize>,
+    // Wo der Cursor stand, bevor markiert wurde: dort bleibt der gezeichnete Cursor, solange
+    // eine Markierung besteht (s. caret) -- wie im Chat, wo Markieren ihn nicht bewegt.
+    rest: usize,
     max_chars: usize,
 }
 
 impl TextField {
     pub fn new(text: &str, max_chars: usize) -> Self {
         let text: String = text.chars().take(max_chars).collect();
-        Self { cursor: text.len(), text, anchor: None, max_chars }
+        Self { cursor: text.len(), rest: text.len(), text, anchor: None, max_chars }
     }
 
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    // Gezeichnet wird caret(); der Cursor selbst nur in den Tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    // Wo der Cursor gezeichnet wird: ohne Markierung am Cursor, mit Markierung dort, wo er vor
+    // dem Markieren stand.
+    pub fn caret(&self) -> usize {
+        if self.selection().is_some() { self.rest } else { self.cursor }
+    }
+
+    // Vor allem, was eine Markierung anfangen kann: die Cursorstelle davor festhalten.
+    fn hold_caret(&mut self) {
+        if self.selection().is_none() {
+            self.rest = self.cursor;
+        }
     }
 
     // Markierter Bereich als Byte-Bereich, None = keiner.
@@ -41,7 +59,16 @@ impl TextField {
         self.selection().map_or("", |r| &self.text[r])
     }
 
+    // Markierung aufheben (Strg+D): der Cursor bleibt, wo er gezeichnet war (s. caret).
+    pub fn deselect(&mut self) {
+        if self.selection().is_some() {
+            self.cursor = self.rest;
+        }
+        self.anchor = None;
+    }
+
     pub fn select_all(&mut self) {
+        self.hold_caret();
         self.anchor = Some(0);
         self.cursor = self.text.len();
     }
@@ -49,6 +76,7 @@ impl TextField {
     // Cursor bewegen; `extend` (Shift) zieht die Markierung auf, sonst endet sie. Ohne Shift
     // springt ein Pfeil bei bestehender Markierung an deren Rand, wie in jedem Textfeld.
     pub fn move_cursor(&mut self, m: Move, extend: bool) {
+        self.hold_caret();
         if !extend {
             if let Some(r) = self.selection().filter(|_| matches!(m, Move::Left | Move::Right)) {
                 self.cursor = if m == Move::Left { r.start } else { r.end };
@@ -132,6 +160,7 @@ impl TextField {
     // Maus gedrueckt bei Byte-Offset `i`: Cursor dorthin, von hier aus markiert ein Ziehen.
     // Mit Shift wird die bestehende Markierung bis hierher erweitert.
     pub fn press(&mut self, i: usize, extend: bool) {
+        self.hold_caret();
         if extend {
             self.anchor.get_or_insert(self.cursor);
         } else {
@@ -142,11 +171,13 @@ impl TextField {
 
     // Maus gezogen: der Cursor folgt, der Anker bleibt.
     pub fn drag_to(&mut self, i: usize) {
+        self.hold_caret();
         self.cursor = i;
     }
 
     // Doppelklick: das Wort um `i` (ohne Leerzeichen).
     pub fn select_word_at(&mut self, i: usize) {
+        self.hold_caret();
         let t = &self.text;
         let mut a = i;
         while a > 0 && !t[..a].ends_with(' ') {
@@ -233,6 +264,27 @@ mod tests {
         assert_eq!(index_at("abcd", 24.0, |s| s.chars().count() as f32 * 10.0), 2);
         assert_eq!(index_at("abcd", 99.0, |s| s.chars().count() as f32 * 10.0), 4);
         assert_eq!(index_at("abcd", -5.0, |s| s.chars().count() as f32 * 10.0), 0);
+    }
+
+    #[test]
+    fn cursor_bleibt_beim_markieren_stehen() {
+        let mut f = TextField::new("mein server", 64);
+        f.press(2, false);
+        assert_eq!(f.caret(), 2);
+        f.drag_to(8);
+        assert_eq!((f.cursor(), f.caret()), (8, 2));
+        f.drag_to(0);
+        assert_eq!(f.caret(), 2);
+        f.move_cursor(Move::End, false);
+        assert_eq!(f.caret(), 11);
+        f.select_all();
+        assert_eq!(f.caret(), 11, "Strg+A laesst ihn stehen");
+        f.move_cursor(Move::Right, false);
+        f.press(7, false);
+        f.select_word_at(7);
+        assert_eq!((f.selected_text(), f.caret()), ("server", 7), "Doppelklick: dort, wo geklickt wurde");
+        f.insert("x");
+        assert_eq!(f.caret(), f.cursor());
     }
 
     #[test]

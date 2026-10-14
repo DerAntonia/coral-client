@@ -101,6 +101,11 @@ impl ChatInput {
         (a != self.cursor).then(|| a.min(self.cursor)..a.max(self.cursor))
     }
 
+    // Markierung aufheben (Strg+D).
+    pub fn deselect(&mut self) {
+        self.anchor = None;
+    }
+
     // Alles markieren (Strg+A): Anker am Anfang, Cursor am Ende.
     pub fn select_all(&mut self) {
         self.anchor = Some(0);

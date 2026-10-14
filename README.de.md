@@ -105,6 +105,9 @@ im Spiel.
 - Die Oberfläche gibt es auf Deutsch, Englisch und Latein.
 - Mehrere Einstellungs-Configs, im Launcher wählbar.
 - Ein Spielmodus-Rad und frei belegbare Tasten, auch doppelt belegt.
+- Die Menüs sind von [osu!lazer](https://github.com/ppy/osu) inspiriert: Knöpfe leuchten beim
+  Hovern auf, Markierungen leuchten beim Aufziehen, der Cursor gleitet, und UI-Klänge begleiten
+  die Eingaben. osu! war die Vorlage für Zeiten und Verhalten. Code daraus enthält Coral nicht.
 
 Version 1.0 ist das erste stabile Release. Vieles funktioniert wie in Vanilla, manches fehlt
 noch oder sieht anders aus. Gebaut und getestet wird der Client gegen 1.21.11. Andere Versionen

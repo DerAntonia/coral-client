@@ -1,7 +1,12 @@
 // Microsoft-/Minecraft-Authentifizierung, modular und ohne Abhaengigkeit auf net/app.
 //
-// Zwei Wege zum fertigen `Credentials` (Access-Token + Profil-UUID + Name), mit dem man
+// Wege zum fertigen `Credentials` (Access-Token + Profil-UUID + Name), mit dem man
 // Online-Mode-Servern beitreten kann:
+//   0. Browser-Login (`start_browser_login` -> Nutzer waehlt im Browser sein Konto ->
+//      `finish_browser_login` -> `msa_to_minecraft`): Authorization-Code mit PKCE, Microsoft
+//      leitet auf einen lokalen Empfaenger (http://localhost:<port>) zurueck. Zeigt jedes Mal
+//      die Kontoauswahl -- der Device-Code-Flow nimmt dagegen stumm das Konto, mit dem der
+//      Browser gerade angemeldet ist.
 //   1. Device-Code-Flow (`request_device_code` -> Nutzer meldet sich im Browser an ->
 //      `poll_for_msa` -> `msa_to_minecraft`), inkl. Refresh-Token zum Eingeloggt-Bleiben
 //      (`refresh_msa`).
@@ -20,6 +25,7 @@ use std::time::Duration;
 
 // OAuth2-Endpunkte (consumers-Tenant = private Microsoft-Konten).
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+const AUTHORIZE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const SCOPE: &str = "XboxLive.signin offline_access";
 
@@ -116,6 +122,232 @@ pub async fn request_device_code(client_id: &str) -> Result<DeviceCode, AuthErro
         interval: r.interval.max(1),
         expires_in: r.expires_in,
     })
+}
+
+// --- Browser-Login: Authorization-Code mit PKCE und lokalem Empfaenger ------------------
+//
+// In der App-Registrierung muss dafuer unter "Mobilgeraet- und Desktopanwendungen" die
+// Umleitungs-URI http://localhost stehen; den Port darf der Client frei waehlen.
+
+// Ein begonnener Browser-Login: `url` im Browser oeffnen, dann `finish_browser_login`.
+pub struct BrowserLogin {
+    pub url: String,
+    listeners: Vec<tokio::net::TcpListener>,
+    redirect_uri: String,
+    verifier: String,
+    state: String,
+    client_id: String,
+}
+
+// Zufallstext aus den in PKCE erlaubten Zeichen (RFC 7636: A-Z a-z 0-9 - . _ ~).
+fn random_token(len: usize) -> String {
+    use rand::Rng;
+    const ZEICHEN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    let mut rng = rand::rngs::OsRng;
+    (0..len).map(|_| ZEICHEN[rng.gen_range(0..ZEICHEN.len())] as char).collect()
+}
+
+// code_challenge zur Methode S256: base64url(SHA-256(verifier)) ohne Auffuellzeichen.
+fn pkce_challenge(verifier: &str) -> String {
+    use base64::Engine;
+    use sha2::Digest;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))
+}
+
+// Empfaenger auf einem freien Port oeffnen und die Anmelde-Adresse bauen. Ein Fehler hier
+// (kein Port frei) heisst: auf den Device-Code-Flow ausweichen.
+pub async fn start_browser_login(client_id: &str) -> Result<BrowserLogin, AuthError> {
+    let v4 = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| err(format!("Kein lokaler Port fuer die Anmeldung: {e}")))?;
+    let port = v4.local_addr().map_err(|e| err(e.to_string()))?.port();
+    let mut listeners = vec![v4];
+    // "localhost" loest der Browser oft zuerst zu ::1 auf -- derselbe Port dort auch, wenn
+    // es IPv6 gibt (sonst reicht IPv4, die Browser weichen darauf aus).
+    if let Ok(v6) = tokio::net::TcpListener::bind(("::1", port)).await {
+        listeners.push(v6);
+    }
+    let redirect_uri = format!("http://localhost:{port}");
+    let verifier = random_token(64);
+    let state = random_token(32);
+    let url = reqwest::Url::parse_with_params(
+        AUTHORIZE_URL,
+        &[
+            ("client_id", client_id),
+            ("response_type", "code"),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("response_mode", "query"),
+            ("scope", SCOPE),
+            ("state", state.as_str()),
+            ("code_challenge", pkce_challenge(&verifier).as_str()),
+            ("code_challenge_method", "S256"),
+            // Immer die Kontoauswahl zeigen, auch wenn der Browser schon angemeldet ist.
+            ("prompt", "select_account"),
+        ],
+    )
+    .map_err(|e| err(e.to_string()))?
+    .to_string();
+    Ok(BrowserLogin { url, listeners, redirect_uri, verifier, state, client_id: client_id.to_string() })
+}
+
+// Seite, die der Browser nach der Rueckleitung zeigt.
+fn browser_page(deutsch: bool, titel: &str, text: &str) -> String {
+    let lang = if deutsch { "de" } else { "en" };
+    format!(
+        "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\"><title>Coral Client</title>\
+         <style>body{{font-family:system-ui,sans-serif;background:#16181d;color:#e8e8ea;display:flex;\
+         align-items:center;justify-content:center;height:100vh;margin:0}}div{{text-align:center}}\
+         h1{{font-size:22px;margin:0 0 8px}}p{{margin:0;opacity:.8}}</style></head>\
+         <body><div><h1>{titel}</h1><p>{text}</p></div></body></html>"
+    )
+}
+
+// Die Seite spricht die Sprache des Browsers: Deutsch, wenn er Deutsch an erster Stelle
+// nennt (Accept-Language), sonst Englisch.
+fn prefers_german(request: &str) -> bool {
+    request
+        .lines()
+        .find_map(|z| z.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("accept-language")).map(|(_, v)| v))
+        .and_then(|v| v.split(',').next())
+        .is_some_and(|erste| erste.trim().to_ascii_lowercase().starts_with("de"))
+}
+
+// Warum die Rueckleitung keinen Code brachte.
+#[derive(Debug, PartialEq)]
+enum RedirectError {
+    // Im Browser abgebrochen (access_denied).
+    Cancelled,
+    // state passt nicht: fremde Rueckleitung (anderer Login, untergeschobener Code).
+    ForeignState,
+    // Sonstiger Fehler, Microsofts Beschreibung (die kommt schon in der Sprache des Browsers).
+    Microsoft(String),
+}
+
+impl RedirectError {
+    fn text(&self, deutsch: bool) -> String {
+        match (self, deutsch) {
+            (RedirectError::Cancelled, true) => "Anmeldung im Browser abgebrochen".into(),
+            (RedirectError::Cancelled, false) => "Sign-in was cancelled in the browser".into(),
+            (RedirectError::ForeignState, true) => "Antwort gehoert nicht zu dieser Anmeldung".into(),
+            (RedirectError::ForeignState, false) => "This response does not belong to this sign-in".into(),
+            (RedirectError::Microsoft(m), _) => m.clone(),
+        }
+    }
+}
+
+// Was die Rueckleitung mitbringt: Ok(code) oder der Fehler.
+// None = keine Rueckleitung (z. B. /favicon.ico), weiter warten.
+fn parse_redirect(request_line: &str, state: &str) -> Option<Result<String, RedirectError>> {
+    let pfad = request_line.strip_prefix("GET ")?.split(' ').next()?;
+    let url = reqwest::Url::parse(&format!("http://localhost{pfad}")).ok()?;
+    let mut code = None;
+    let (mut fehler, mut beschreibung, mut zurueck) = (None, None, None);
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "error" => fehler = Some(v.into_owned()),
+            "error_description" => beschreibung = Some(v.into_owned()),
+            "state" => zurueck = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    if code.is_none() && fehler.is_none() {
+        return None;
+    }
+    // Fremde Rueckleitung (anderer Login, untergeschobener Code): nicht annehmen.
+    if zurueck.as_deref() != Some(state) {
+        return Some(Err(RedirectError::ForeignState));
+    }
+    match (code, fehler) {
+        (Some(c), None) => Some(Ok(c)),
+        (_, Some(f)) => Some(Err(match f.as_str() {
+            "access_denied" => RedirectError::Cancelled,
+            _ => RedirectError::Microsoft(beschreibung.unwrap_or(f)),
+        })),
+        (None, None) => None,
+    }
+}
+
+// Auf die Rueckleitung warten (hoechstens 10 Minuten), dem Browser eine Seite zeigen und den
+// Code gegen Tokens tauschen.
+pub async fn finish_browser_login(login: BrowserLogin) -> Result<MsaTokens, AuthError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let warten = async {
+        loop {
+            let Ok(mut sock) = accept_any(&login.listeners).await else { continue };
+            // Anfragezeile lesen (mehr braucht es nicht; die Rueckleitung ist ein GET).
+            let mut buf = Vec::new();
+            let mut stueck = [0u8; 2048];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") && buf.len() < 16 * 1024 {
+                match tokio::time::timeout(Duration::from_secs(5), sock.read(&mut stueck)).await {
+                    Ok(Ok(n)) if n > 0 => buf.extend_from_slice(&stueck[..n]),
+                    _ => break,
+                }
+            }
+            let text = String::from_utf8_lossy(&buf);
+            let zeile = text.lines().next().unwrap_or("");
+            let ergebnis = parse_redirect(zeile, &login.state);
+            let de = prefers_german(&text);
+            let (status, seite) = match &ergebnis {
+                None => ("404 Not Found", String::new()),
+                Some(Ok(_)) if de => ("200 OK", browser_page(de, "Angemeldet", "Du kannst dieses Fenster schlie&szlig;en und zu Coral Client zur&uuml;ckkehren.")),
+                Some(Ok(_)) => ("200 OK", browser_page(de, "Signed in", "You can close this window and return to Coral Client.")),
+                Some(Err(e)) => {
+                    let titel = if de { "Anmeldung fehlgeschlagen" } else { "Sign-in failed" };
+                    ("200 OK", browser_page(de, titel, &e.text(de).replace('&', "&amp;").replace('<', "&lt;")))
+                }
+            };
+            let antwort = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{seite}",
+                seite.len()
+            );
+            let _ = sock.write_all(antwort.as_bytes()).await;
+            let _ = sock.shutdown().await;
+            // Im Log des Clients deutsch wie die uebrigen Auth-Fehler.
+            if let Some(e) = ergebnis {
+                return e.map_err(|e| e.text(true));
+            }
+        }
+    };
+    let code = match tokio::time::timeout(Duration::from_secs(600), warten).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return Err(err(e)),
+        Err(_) => return Err(err("Anmeldung abgelaufen -- bitte neu starten")),
+    };
+    #[derive(Deserialize)]
+    struct Resp {
+        access_token: String,
+        refresh_token: String,
+    }
+    let resp = client()?
+        .post(TOKEN_URL)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", login.client_id.as_str()),
+            ("code", code.as_str()),
+            ("redirect_uri", login.redirect_uri.as_str()),
+            ("code_verifier", login.verifier.as_str()),
+            ("scope", SCOPE),
+        ])
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(err(format!("Code-Tausch abgelehnt: {body}")));
+    }
+    let r: Resp = resp.json().await.map_err(|e| err(format!("Token-Antwort ungueltig: {e}")))?;
+    Ok(MsaTokens { access_token: r.access_token, refresh_token: r.refresh_token })
+}
+
+// Die naechste Verbindung auf einem der Empfaenger (IPv4 oder IPv6).
+async fn accept_any(listeners: &[tokio::net::TcpListener]) -> std::io::Result<tokio::net::TcpStream> {
+    std::future::poll_fn(|cx| {
+        for l in listeners {
+            if let std::task::Poll::Ready(r) = l.poll_accept(cx) {
+                return std::task::Poll::Ready(r.map(|(sock, _)| sock));
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
 }
 
 // --- Schritt 2: auf die Browser-Anmeldung pollen ---------------------------------------
@@ -514,6 +746,66 @@ pub async fn mojang_join(access_token: &str, profile_id: &str, server_hash: &str
         let code = resp.status();
         let text = resp.text().await.unwrap_or_default();
         Err(err(format!("Session-Join abgelehnt ({code}): {text}")))
+    }
+}
+
+#[cfg(test)]
+mod browser_login_tests {
+    use super::*;
+
+    #[test]
+    fn pkce_challenge_ist_base64url_von_sha256() {
+        // Gegenprobe mit Pythons hashlib + base64.urlsafe_b64encode (ohne "=").
+        assert_eq!(pkce_challenge("dBjftJeZ4CVP-mJ0kgUEWIq5r8NXZZ3_wwxCqpnh-cO_"), "UjpKb9BMS33vFUyZ7EMdufX64yJLrsmw4oC7FPwRVNc");
+        let v = random_token(64);
+        assert_eq!(v.len(), 64);
+        assert!(v.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b)));
+    }
+
+    #[test]
+    fn rueckleitung_wird_gelesen() {
+        assert_eq!(parse_redirect("GET /?code=abc&state=xyz HTTP/1.1", "xyz"), Some(Ok("abc".into())));
+        assert_eq!(parse_redirect("GET /favicon.ico HTTP/1.1", "xyz"), None);
+        assert_eq!(parse_redirect("GET /?code=abc&state=falsch HTTP/1.1", "xyz"), Some(Err(RedirectError::ForeignState)));
+        assert_eq!(parse_redirect("GET /?error=access_denied&error_description=x&state=xyz HTTP/1.1", "xyz"), Some(Err(RedirectError::Cancelled)));
+    }
+
+    #[test]
+    fn seite_spricht_die_sprache_des_browsers() {
+        assert!(prefers_german("GET / HTTP/1.1\r\nAccept-Language: de-DE,de;q=0.9,en;q=0.8\r\n"));
+        assert!(!prefers_german("GET / HTTP/1.1\r\naccept-language: en-US,de;q=0.5\r\n"));
+        assert!(!prefers_german("GET / HTTP/1.1\r\nHost: localhost\r\n"));
+    }
+
+    // Der Empfaenger ueber echtes TCP, wie ein Browser: erst /favicon.ico (wird ignoriert),
+    // dann die Rueckleitung mit Abbruch -- ueber "localhost", also IPv6 oder IPv4.
+    #[tokio::test]
+    async fn empfaenger_beantwortet_den_browser() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let login = start_browser_login("id-123").await.expect("Port");
+        let port = login.redirect_uri.rsplit(':').next().unwrap().to_string();
+        let state = login.state.clone();
+        let warten = tokio::spawn(finish_browser_login(login));
+        for pfad in ["/favicon.ico".to_string(), format!("/?error=access_denied&state={state}")] {
+            let mut sock = tokio::net::TcpStream::connect(format!("localhost:{port}")).await.expect("verbinden");
+            sock.write_all(format!("GET {pfad} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes()).await.unwrap();
+            let mut antwort = String::new();
+            sock.read_to_string(&mut antwort).await.unwrap();
+            assert!(antwort.starts_with("HTTP/1.1 "), "{antwort}");
+        }
+        let e = warten.await.unwrap().err().expect("Abbruch");
+        assert!(e.0.contains("abgebrochen"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn anmelde_adresse_zeigt_die_kontoauswahl() {
+        let login = start_browser_login("id-123").await.expect("Port");
+        let url = reqwest::Url::parse(&login.url).unwrap();
+        let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(q["prompt"], "select_account");
+        assert_eq!(q["code_challenge"], pkce_challenge(&login.verifier));
+        assert_eq!(q["redirect_uri"], login.redirect_uri);
+        assert!(login.redirect_uri.starts_with("http://localhost:"));
     }
 }
 

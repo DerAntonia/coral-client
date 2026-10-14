@@ -15,6 +15,9 @@ serde_json = "1"
 # Der Profilschluessel kommt als PEM/Base64 (s. fetch_profile_key).
 base64 = "0.22"
 sha1 = "0.10"
+# Browser-Login mit PKCE (s. start_browser_login).
+sha2 = "0.10"
+rand = "0.8"
 
 [lints]
 workspace = true

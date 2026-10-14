@@ -204,8 +204,14 @@ impl UiSound {
     ///
     /// Der Pegel steckt schon in der Datei: der Baukasten exportiert jeden Platz so laut, wie
     /// er dort klingt.
+    ///
+    /// Das Aufploppen ist lauter gewuenscht (2026-10-15: 250 %), seit es auch beim Markieren
+    /// jedes Zeichens kommt; die Datei hat Spitzen um 0,03, das bleibt weit unter der Grenze.
     pub fn sample_gain(self) -> f32 {
-        1.0
+        match self {
+            UiSound::Popup => 2.5,
+            _ => 1.0,
+        }
     }
 
     // Wie stark Tonhöhe und Lautstärke gestreut werden. Nur beim Hover nennenswert: er kommt

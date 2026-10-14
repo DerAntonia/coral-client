@@ -54,6 +54,7 @@ mod server_status;
 mod theme;
 mod toteming;
 mod sysstats;
+mod system_info;
 mod ui_sound;
 mod vblank;
 mod vehicle;
@@ -1466,7 +1467,6 @@ type SelectionContext = (AppMode, MenuScreen, bool, bool);
 
 // Mindestweg (Pixel), ab dem aus einem Klick eine Auswahl wird.
 const SELECTION_DRAG_MIN: f32 = 4.0;
-const COLOR_SELECTION: [f32; 4] = [0.25, 0.5, 1.0, 0.45];
 
 // Toleranz, ab der zwei Zeilen als verschiedene Zeilen gelten (Pixel).
 const SELECTION_LINE_EPS: f32 = 2.0;
@@ -1989,7 +1989,7 @@ const STEPPER_VALUE_W: f32 = 200.0;
 // Die fruehere lange Hinweiszeile darunter ist weg -- Erklaerungen stecken jetzt als
 // Hover-Tooltip an der jeweiligen Zeile (s. SETTINGS_TOOLTIPS/hovered_tooltip), nicht mehr
 // staendig sichtbar.
-const SETTINGS_ROW_COUNT: usize = 12;
+const SETTINGS_ROW_COUNT: usize = 16;
 
 // Steuerung-Screen (MenuScreen::SettingsControls): zwei Spalten. Links die Tastenbelegung
 // als scrollbare Tabelle (Aktion/Taste/Halten-Umschalten), rechts die uebrigen
@@ -2068,6 +2068,16 @@ const TOPBAR_ICON: f32 = 40.0;
 const SIDEBAR_W: f32 = 240.0;
 const SIDEBAR_ITEM_H: f32 = 36.0;
 const SIDEBAR_PAD: f32 = 8.0;
+// Links ueber "Setup" in der Kategorienleiste: Name, Adresse, Logo. Die Logos sind weisse
+// Masken (getoent wie die anderen Symbole), gerastert aus den Pfaden von Simple Icons.
+const SIDEBAR_LINKS: [(&str, &str, &[u8]); 2] = [
+    ("GitHub", "https://github.com/DerAntonia/coral-client", include_bytes!("../../../assets/ui/github.png")),
+    ("Discord", "https://discord.gg/498TEghpCE", include_bytes!("../../../assets/ui/discord.png")),
+];
+const LOGO_PX: u32 = 48;
+const LOGO_GRID: u32 = 2;
+// Groesse des Logos auf dem Schirm, in einem Feld von SIDEBAR_ITEM_H zum Quadrat.
+const LOGO_DRAW: f32 = 22.0;
 // Um so viel ist der Inhalt einer Einstellungsseite verschoben: seine Rechtecke stehen in
 // den alten Koordinaten (Beschriftung bei SETTINGS_LABEL_X), gezeichnet und getroffen wird
 // er rechts der Kategorienleiste und unter der Leiste oben (s. App::content_offset).
@@ -2496,10 +2506,14 @@ const SETTINGS_LABELS: [&str; SETTINGS_ROW_COUNT] = [
     "Höhlen-Culling",
     "Tearing-Test",
     "TearFree",
-    "Riss-Position",
+    "Scanout-Timing",
     "Riss-Timing",
     "Riss-Reserve",
+    "CPU",
     "GPU",
+    "RAM",
+    "Swap",
+    "Compositing",
 ];
 const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Begrenzt die Bildrate über einen Timer. Bei selbsttaktenden Present-Modi (Fifo/FifoRelaxed) wirkungslos -- die Zeile blendet dann ab. Zahl anklicken für einen eigenen Wert; 0 = Monitor (Bildrate des Monitors), -1 = unbegrenzt.",
@@ -2511,9 +2525,13 @@ const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um TearFree und die Riss-Steuerung zu testen. Läuft im Menü und im Spiel.",
     "Globale Anzeigeeinstellung des Grafiktreibers (xrandr) gegen Tearing bei fehlendem Hardware-Flip -- nur bedienbar, wenn der Treiber sie hat (amdgpu, radeon, neuere modesetting; nicht Nvidia).  Gilt nur, während Coral Client im Vordergrund läuft -- danach automatisch zurück auf den Wert von vor dem Start.",
     "Legt bei Immediate (mit FPS-Limit) jeden Bildwechsel knapp vor die Austastlücke des Monitors -- dort ist er unsichtbar, es gibt keinen Riss mehr im Bild. Misst dafür die VBlanks des Monitors (Linux, /dev/dri) und präsentiert jeden Frame auf die Mikrosekunde zu einem daraus berechneten Zeitpunkt; die Bildrate folgt dann exakt dem Monitor (bzw. jedem n-ten Bild bei niedrigerem FPS-Limit). Kostet etwas Latenz (der Frame wird mit Vorlauf fertig gebaut). Bei Fifo wirkungslos -- dort gibt es keinen Riss. Im Frame-Profiler (F6) sieht man, wo er landet.",
-    "Verschiebt den Bildwechsel bei \"Unsichtbar\": Minus = früher, der Riss wandert nach oben; Plus = später, er wandert nach unten. Ohne Hardware-Flip setzt der X-Server den Wechsel erst eine Weile nach dem Present um, dann sitzt der Riss bei 0 oben im Bild -- so weit ins Minus drehen, bis er unten auftaucht, und dann ein Stück zurück: dann liegt er am Anfang der Austastlücke, und ein verspäteter Frame rutscht nur tiefer in die Lücke.",
-    "Wie viel Zeit ein Frame bei \"Unsichtbar\" vor seinem Termin fertig sein soll. Genau diese Zeit kommt als Verzögerung dazu. Weniger = etwas direkter, aber ein Frame, der wegen eines Rucklers zu spät fertig wird, verpasst seinen Termin -- für diesen einen Frame ist der Riss dann kurz im Bild. Mehr = nie ein Riss, etwas mehr Verzögerung. Nach einem Ruckler erhöht sich der Vorlauf von selbst und geht danach langsam wieder zurück.",
+    "Verschiebt den Bildwechsel bei \"Scanout-Timing\": Minus = früher, der Riss wandert nach oben; Plus = später, er wandert nach unten. Ohne Hardware-Flip setzt der X-Server den Wechsel erst eine Weile nach dem Present um, dann sitzt der Riss bei 0 oben im Bild -- so weit ins Minus drehen, bis er unten auftaucht, und dann ein Stück zurück: dann liegt er am Anfang der Austastlücke, und ein verspäteter Frame rutscht nur tiefer in die Lücke.",
+    "Wie viel Zeit ein Frame bei \"Scanout-Timing\" vor seinem Termin fertig sein soll. Genau diese Zeit kommt als Verzögerung dazu. Weniger = etwas direkter, aber ein Frame, der wegen eines Rucklers zu spät fertig wird, verpasst seinen Termin -- für diesen einen Frame ist der Riss dann kurz im Bild. Mehr = nie ein Riss, etwas mehr Verzögerung. Nach einem Ruckler erhöht sich der Vorlauf von selbst und geht danach langsam wieder zurück.",
+    "Prozessor dieses Rechners und wie viele Threads er gleichzeitig ausführt. Reine Information.",
     "Reine Information (Treiber/Vendor), kein Bedienelement.",
+    "Belegter und gesamter Arbeitsspeicher des ganzen Rechners (nicht nur des Clients). Belegt zählt ohne den Cache, den das System jederzeit freigeben kann.",
+    "Auslagerung auf die Festplatte. Wird hier viel belegt, reicht der Arbeitsspeicher nicht und es kann ruckeln.",
+    "Wie das Coral-Fenster gerade auf den Schirm kommt. \"Zusammengesetzt von\": ein Compositor setzt es zusammen und entscheidet, wann ein Bild erscheint -- dann wirken Scanout-Timing und Riss-Timing nicht (Cinnamon: Einstellungen, Allgemein, \"Komposit für Vollbildfenster deaktivieren\" an). Sonst kommt es ohne Compositor per Hardware-Flip oder als Kopie des X-Servers, und dahinter steht, wo der Riss der letzten Bilder lag (gemessen an den Meldungen des X-Servers). Bleibt er bei jeder Einstellung an derselben Stelle, auch wenn man Scanout-Timing und Riss-Timing verstellt, hält der X-Server die Bilder fest -- dann hilft ein Neustart (oder Ab- und wieder Anmelden).",
 ];
 // Zeilen des Render-Tabs (Reihenfolge wie SETTINGS_LABELS), in Abschnitten: Bildrate,
 // Chunks, Tearing, System. Sichtweiten, Entity-Weite und Block-Rotation stehen im Video-Tab.
@@ -2526,7 +2544,12 @@ const CHUNK_THREADS_ROW: usize = 4;
 const CAVE_CULLING_ROW: usize = 5;
 const TEARING_TEST_ROW: usize = 6;
 const TEARFREE_ROW: usize = 7;
-const GPU_ROW: usize = 11;
+// Abschnitt System: reine Anzeige (s. system_info).
+const CPU_ROW: usize = 11;
+const GPU_ROW: usize = 12;
+const RAM_ROW: usize = 13;
+const SWAP_ROW: usize = 14;
+const COMPOSITING_ROW: usize = 15;
 const BLOCK_ROTATION_TOOLTIP: &str = "Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.";
 const ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 // Renderpfad: vorerst aus den Einstellungen genommen (der Shader-Pfad ruht), Zeile samt Knopf
@@ -2594,14 +2617,14 @@ const TEAR_TIMING_MAX_US: i32 = 8000;
 const TEAR_TIMING_STEP_US: i32 = 50;
 const TEAR_TIMING_DEFAULT_US: i32 = 0;
 const TEAR_TIMING_ROW: usize = 9;
-// Werte der Riss-Position, Index = Settings::tear_position (s. App::tear_target_phase).
+// Scanout-Timing (Settings::tear_position, s. App::tear_target_phase): 0 = aus, 1 = jeden
+// Bildwechsel knapp vor die Austastluecke legen.
 //
 // Frueher auch "Oben" und "Austastluecke". Gemessen: unsere Present-Aufrufe kamen in allen Modi
 // auf +-5 us puenktlich, aber X-Server/Treiber setzen einen Bildwechsel, der in der
 // Austastluecke oder kurz danach verlangt wird, erst irgendwo im oberen Viertel um -- und bei
 // weiterem Verschieben unregelmaessig (der Riss sprang wild). Zuverlaessig ist nur der Wechsel
 // knapp VOR der Luecke: er landet unsichtbar darin.
-const TEAR_POSITION_NAMES: [&str; 2] = ["Aus", "Unsichtbar"];
 const TEAR_POSITION_ROW: usize = 8;
 // Maus-Empfindlichkeit ist echte Steuerung, keine Performance-Einstellung -- eigene Zeile
 // (Zeile 0) auf dem Steuerung-Screen, s. build_settings_controls_tab.
@@ -2702,7 +2725,6 @@ const SHADOW_PREVIEW_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const WALLPAPER_DESKTOP_RECHECK: Duration = Duration::from_secs(5);
 // Abdunklung ueber dem Hintergrundbild, damit Titel und Knoepfe lesbar bleiben.
 const WALLPAPER_DIM: [f32; 4] = [0.0, 0.0, 0.0, 0.35];
-const WALLPAPER_TOOLTIP: &str = "Hintergrund des Startbildschirms. \"Eigenes Bild\": eine Bilddatei (PNG, JPEG, WebP, BMP), die beim Auswählen in den Einstellungsordner kopiert wird -- das Original darf danach weg. \"Linux-Desktop\": das Hintergrundbild des Desktops (Cinnamon, GNOME, MATE, KDE, Xfce), Änderungen dort kommen von selbst nach.";
 const FONT_TOOLTIP: &str = "Schrift für allen Text im Client: Menüs, HUD, Chat, Namensschilder. Einzelne Bereiche können unter Ausnahmen eine eigene Schrift bekommen. \"Minecraft\" ist die Pixelschrift des Spiels (aus dem installierten Resourcepack), DM Sans, Outfit, Lexend, Lexend Exa und Noto Sans sind glatte Vektorschriften. Kapitälchen (ᴀʙᴄ...) kommen notfalls aus Noto Sans, andere Zeichen, die eine Schrift nicht kennt (z.B. Server-Symbole), aus der Minecraft-Schrift. Das Layout bleibt gleich -- alle Schriften haben dieselbe Versal- und Zeilenhöhe.";
 // Kameraperspektive -- Vanillas F5-Umschaltung (client/option/Perspective.java: FIRST_PERSON,
 // THIRD_PERSON_BACK, THIRD_PERSON_FRONT, zyklisch per next()). Jede hat ihr EIGENES Sichtfeld
@@ -2843,9 +2865,6 @@ const PARTICLES_ROW: usize = BLOCK_ROTATION_ROW + 1;
 // Partikeln, die Platzhalter danach.
 const GLINT_SPEED_ROW: usize = PARTICLES_ROW + 1;
 const GLINT_STRENGTH_ROW: usize = GLINT_SPEED_ROW + 1;
-// Wie stark das Weltbild hinter den Menues abgedunkelt wird (Settings::menu_backdrop_opacity),
-// im Tab Aussehen (s. MENU_BACKDROP_ROW).
-const MENU_BACKDROP_TOOLTIP: &str = "Wie stark das Spielbild hinter dem Pausemenü und den Einstellungen abgedunkelt wird, solange man verbunden ist. 0 % = Welt unverändert, 100 % = schwarz. Standard 55 %.";
 // Entity-Renderdistanz (Settings::entity_render_distance), in Bloecken.
 const ENTITY_DISTANCE_MIN: u32 = 16;
 // Das Maximum heisst "unbegrenzt".
@@ -3872,6 +3891,7 @@ const CURSOR_PRESS_TINT: f32 = 0.55;
 
 // Blinkende Schreibmarke im Adressfeld -- eigener Name, damit sie nicht mit den neuen
 // COLOR_CURSOR_*-Konstanten fuer den Mauszeiger verwechselt wird (zwei verschiedene Dinge).
+// Markierter Text: Theme-Farbe "Markierung" (s. App::push_selection_span).
 const COLOR_CARET: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const CARET_WIDTH_PX: f32 = 3.0;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(1000);
@@ -3885,6 +3905,71 @@ const CARET_GLIDE: Duration = Duration::from_millis(60);
 fn ease_out(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t) * (1.0 - t)
+}
+
+// Easing.OutQuint von osu-framework: noch schneller los, sehr lang auslaufend.
+fn ease_out_quint(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(5)
+}
+
+// Markierung wie in osu! (OsuCaret.DisplayAt): sie waechst in CARET_GLIDE aus dem Cursor
+// heraus. An der wachsenden Kante leuchtet sie in der Cursorfarbe auf, als weicher Schein
+// ueber SELECTION_GLOW_W Pixel, der mit der Kante wandert; steht die Kante, klingt er in
+// SELECTION_FADE zur Theme-Farbe "Markierung" ab (s. App::push_selection_span).
+const SELECTION_FADE: Duration = Duration::from_millis(200);
+const SELECTION_FLASH_ALPHA: f32 = 0.7;
+const SELECTION_GLOW_W: f32 = 48.0;
+// Breite der Streifen, aus denen der Schein gezeichnet wird.
+const SELECTION_SLICE: f32 = 2.0;
+
+// Knopf-Hover wie in osu! (OsuButton.OnHover): die Hover-Farbe schiesst in HOVER_FLASH ueber
+// das Ziel hinaus (doppelt so weit) und klingt in HOVER_SETTLE auf die Hover-Farbe des Themes
+// ab; beim Verlassen geht sie in HOVER_SETTLE zurueck. Beides Easing.OutQuint.
+const HOVER_FLASH: Duration = Duration::from_millis(40);
+const HOVER_SETTLE: Duration = Duration::from_millis(800);
+const HOVER_PEAK: f32 = 2.0;
+
+// Stand der Hover-Animation eines Knopfs: seit wann (nicht) gehovert, mit welcher Staerke
+// der Wechsel begann, und wann er zuletzt gezeichnet wurde.
+#[derive(Clone, Copy)]
+struct HoverAnim {
+    hovered: bool,
+    since: Instant,
+    from: f32,
+    seen: Instant,
+}
+
+impl HoverAnim {
+    // 0 = ohne Hover, 1 = Hover-Farbe des Themes, darueber das Aufleuchten.
+    fn level(&self, jetzt: Instant) -> f32 {
+        let t = jetzt.duration_since(self.since);
+        if !self.hovered {
+            return self.from * (1.0 - ease_out_quint(t.as_secs_f32() / HOVER_SETTLE.as_secs_f32()));
+        }
+        if t < HOVER_FLASH {
+            return self.from + (HOVER_PEAK - self.from) * ease_out_quint(t.as_secs_f32() / HOVER_FLASH.as_secs_f32());
+        }
+        let t = (t - HOVER_FLASH).as_secs_f32() / HOVER_SETTLE.as_secs_f32();
+        HOVER_PEAK + (1.0 - HOVER_PEAK) * ease_out_quint(t)
+    }
+}
+
+// Zwischen zwei Farben; `k` darf ueber 1 gehen (Aufleuchten ueber die Hover-Farbe hinaus).
+fn mix_color(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
+    std::array::from_fn(|i| (a[i] + (b[i] - a[i]) * k).clamp(0.0, 1.0))
+}
+
+fn mix_rect(a: Rect, b: Rect, k: f32) -> Rect {
+    Rect { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, w: a.w + (b.w - a.w) * k, h: a.h + (b.h - a.h) * k }
+}
+
+// Wohin die Markierung eines Eingabefelds gleitet (s. App::push_field_selection).
+#[derive(Clone, Copy)]
+struct SelectionGlide {
+    from: Rect,
+    to: Rect,
+    start: Instant,
+    seen: Instant,
 }
 
 // Wo der Schreibcursor zuletzt stand und wohin er gleitet (s. CARET_GLIDE).
@@ -5746,6 +5831,8 @@ struct GpuState {
     server_icons: Option<(wgpu::Texture, wgpu::BindGroup)>,
     // Pack-Bilder des Skin-Tabs: skin_tab::ICON_GRID^2 Plaetze zu skin_tab::ICON_PX.
     pack_icons: Option<(wgpu::Texture, wgpu::BindGroup)>,
+    // GitHub- und Discord-Logo der Kategorienleiste (s. upload_logos).
+    logos: Option<(wgpu::Texture, wgpu::BindGroup)>,
     // Das zuletzt gezeichnete Weltbild (offscreen_view) als Sprite-Textur: Hintergrund der
     // Menues, solange man verbunden ist -- wie Vanillas Pausemenue ueber der Welt. None, bis
     // die Welt einmal gezeichnet wurde bzw. nach einem Resize (die Textur ist dann neu/leer).
@@ -6924,6 +7011,7 @@ impl GpuState {
             wallpaper: None,
             server_icons: None,
             pack_icons: None,
+            logos: None,
             world_backdrop: None,
             wallpaper_sampler,
             block_renderer,
@@ -7138,13 +7226,20 @@ impl GpuState {
         // Oberflaeche in der eingestellten Sprache (s. i18n): erst hier, nicht an den vielen
         // Stellen, die Beschriftungen bauen. measure_text uebersetzt genauso, Ausrichtung und
         // Zeichnen sehen also denselben Text.
+        // Getippter Text (s. push_typed_marker) bleibt, wie er ist: wer "An" tippt, meint
+        // nicht den Schalter "On".
         let uebersetzt: Vec<UiText>;
         let texts = if i18n::ui_language() == i18n::Language::German {
             texts
         } else {
+            let mut getippt = false;
             uebersetzt = texts
                 .iter()
-                .map(|t| UiText { text: i18n::tr(&t.text).into_owned(), x: t.x, y: t.y, color: t.color, scale: t.scale })
+                .map(|t| {
+                    let text = if getippt { t.text.clone() } else { i18n::tr(&t.text).into_owned() };
+                    getippt = is_typed_marker(t);
+                    UiText { text, x: t.x, y: t.y, color: t.color, scale: t.scale }
+                })
                 .collect();
             &uebersetzt
         };
@@ -7429,6 +7524,7 @@ impl GpuState {
         match atlas {
             SpriteAtlas::ServerIcons => self.server_icons.as_ref().map_or(&self.ui_atlas_bind_group, |(_, b)| b),
             SpriteAtlas::PackIcons => self.pack_icons.as_ref().map_or(&self.ui_atlas_bind_group, |(_, b)| b),
+            SpriteAtlas::Logos => self.logos.as_ref().map_or(&self.ui_atlas_bind_group, |(_, b)| b),
             SpriteAtlas::Ui | SpriteAtlas::GlintUi => &self.ui_atlas_bind_group,
             SpriteAtlas::Block | SpriteAtlas::GlintBlock => &self.block_atlas_sprite_bind_group,
             SpriteAtlas::Entity | SpriteAtlas::GlintEntity => &self.entity_atlas_sprite_bind_group,
@@ -7495,7 +7591,17 @@ impl GpuState {
         self.pack_icons = atlas;
     }
 
-    // Gemeinsam fuer beide Icon-Atlanten: `n` x `n` Plaetze zu `s` Pixeln, angelegt beim
+    // Die Logos aus SIDEBAR_LINKS in ihren Atlas, Platz = Index.
+    fn upload_logos(&mut self) {
+        for (slot, (_, _, png)) in SIDEBAR_LINKS.iter().enumerate() {
+            let Ok(bild) = image::load_from_memory_with_format(png, image::ImageFormat::Png) else { continue };
+            let mut atlas = self.logos.take();
+            self.upload_icon(&mut atlas, "logos", LOGO_GRID, LOGO_PX, slot, &bild.to_rgba8());
+            self.logos = atlas;
+        }
+    }
+
+    // Gemeinsam fuer alle Icon-Atlanten: `n` x `n` Plaetze zu `s` Pixeln, angelegt beim
     // ersten Bild.
     fn upload_icon(&self, atlas: &mut Option<(wgpu::Texture, wgpu::BindGroup)>, label: &str, n: u32, s: u32, slot: usize, rgba: &[u8]) {
         if atlas.is_none() {
@@ -9262,7 +9368,7 @@ impl MenuScreen {
         match self {
             MenuScreen::SettingsGeneral => Some(SettingsPage {
                 rows: SETTINGS_ROW_COUNT,
-                sections: &[("Bildrate", FPS_LIMIT_ROW), ("Chunks", MESH_BUDGET_ROW), ("Tearing", TEARING_TEST_ROW), ("System", GPU_ROW)],
+                sections: &[("Bildrate", FPS_LIMIT_ROW), ("Chunks", MESH_BUDGET_ROW), ("Tearing", TEARING_TEST_ROW), ("System", CPU_ROW)],
             }),
             MenuScreen::SettingsVideo => Some(SettingsPage {
                 rows: VIDEO_ROW_COUNT,
@@ -9271,7 +9377,7 @@ impl MenuScreen {
             MenuScreen::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
             // Zeilen 4..6 = Trank-Buchstaben.
             MenuScreen::SettingsInventory => Some(SettingsPage { rows: 7, sections: &[("Allgemein", 0), ("Tränke", 4)] }),
-            MenuScreen::SettingsDesign => Some(SettingsPage { rows: DESIGN_ROW_COUNT, sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
+            MenuScreen::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
             MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_PITCH_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
             MenuScreen::SettingsFont => Some(SettingsPage { rows: STABLE_NUMBERS_ROW + 1, sections: &[("Standard", 0), ("Ausnahmen", FONT_EXCEPTIONS_ROW), ("Zahlen", STABLE_NUMBERS_ROW)] }),
@@ -9463,6 +9569,12 @@ fn loading_dots(feld: Rect, t: f32, color: [f32; 4]) -> Vec<UiRect> {
 
 // UV-Rechteck von Platz `slot` im Server-Icon-Atlas.
 // UV-Rechteck von Platz `slot` im Pack-Atlas (s. GpuState::upload_pack_icon).
+fn logo_uv(slot: usize) -> [f32; 4] {
+    let n = LOGO_GRID as f32;
+    let (x, y) = ((slot as u32 % LOGO_GRID) as f32, (slot as u32 / LOGO_GRID) as f32);
+    [x / n, y / n, (x + 1.0) / n, (y + 1.0) / n]
+}
+
 fn pack_icon_uv(slot: usize) -> [f32; 4] {
     let n = skin_tab::ICON_GRID as f32;
     let (x, y) = ((slot as u32 % skin_tab::ICON_GRID) as f32, (slot as u32 / skin_tab::ICON_GRID) as f32);
@@ -9484,10 +9596,9 @@ const COLOR_POPUP_TRACK_H: f32 = 12.0;
 // Farbfeld in Einstellungszeilen: 54x36 mit schwarzem Rand.
 const SWATCH_W: f32 = 54.0;
 
-// Aussehen: Abschnitt Allgemein (Zeile 0 Hintergrundbild, Zeile 1 Bild/Pfad), danach Theme
-// mit Presets, Hinweis und den Farbplaetzen in zwei Spalten.
-const THEME_PRESET_TOOLTIP: &str = "Fertige Farbsätze für alle Menüs. Danach lässt sich jede Farbe einzeln ändern: Farbfeld anklicken.";
-const THEME_PRESET_W: f32 = 112.0;
+// Aussehen: Abschnitt Allgemein (Zeile 0 Spielbild abdunkeln, Zeile 1 Hintergrundbild), danach
+// Theme: links die Kacheln aller Themes, rechts hinter einer Trennlinie die Farben des
+// gewaehlten. Die Seite hat keinen Erklaerungsrand (s. side_strip_w), die Farben brauchen ihn.
 // Abschnitt Allgemein: wie stark das Spielbild hinter den Menues abgedunkelt wird, das
 // Hintergrundbild und darunter dessen Knopf "Bild waehlen" bzw. der Pfad.
 const MENU_BACKDROP_ROW: usize = 0;
@@ -9495,15 +9606,97 @@ const WALLPAPER_ROW: usize = 1;
 // Rechts neben der Wahl: "Bild wählen..." bzw. der Pfad des Desktop-Bildes.
 const WALLPAPER_PICK_X: f32 = SETTINGS_CTRL_X + 230.0;
 const DESIGN_THEME_ROW: usize = 2;
-const THEME_FIRST_ROW: usize = DESIGN_THEME_ROW + 1;
-const DESIGN_ROW_COUNT: usize = THEME_FIRST_ROW + theme::SLOT_COUNT.div_ceil(2);
-const THEME_RIGHT_LABEL_X: f32 = 520.0;
-const THEME_RIGHT_SWATCH_X: f32 = 790.0;
+// Trennlinie zwischen Kacheln und Farben.
+const THEME_DIVIDER_X: f32 = 856.0;
+const THEME_TILE_COLS: usize = 3;
+const THEME_TILE_GAP: f32 = 12.0;
+const THEME_TILE_W: f32 = ((THEME_DIVIDER_X - 16.0 - SETTINGS_LABEL_X - (THEME_TILE_COLS - 1) as f32 * THEME_TILE_GAP) / THEME_TILE_COLS as f32) as i32 as f32;
+// Rechts: erste Zeile Name des Themes, darunter die Farbplaetze in zwei Spalten.
+const THEME_COLORS_X: f32 = THEME_DIVIDER_X + 24.0;
+const THEME_COLOR_COL_W: f32 = 400.0;
+const THEME_COLOR_SWATCH_DX: f32 = 220.0;
+const THEME_COLOR_ROWS: usize = theme::SLOT_COUNT.div_ceil(2);
+const THEME_NAME_MAX: usize = 24;
+// Anzahl der Kacheln (Presets, eigene Themes, "+"), gesetzt von App::sync_settings_scroll --
+// davon haengt ab, wie viele Zeilen die Seite hat (s. design_row_count).
+static THEME_TILE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(theme::PRESETS.len() + 1);
 
-// (Zeile, x des Farbfelds) von Farbplatz `i`.
+fn design_row_count() -> usize {
+    let kacheln = THEME_TILE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    DESIGN_THEME_ROW + kacheln.div_ceil(THEME_TILE_COLS).max(1 + THEME_COLOR_ROWS)
+}
+
+// Kachel `i`: erst die Presets, dann die eigenen Themes, zuletzt "+".
+fn theme_tile_rect(i: usize) -> Rect {
+    let col = (i % THEME_TILE_COLS) as f32;
+    let y = settings_row_y(DESIGN_THEME_ROW + i / THEME_TILE_COLS);
+    Rect { x: SETTINGS_LABEL_X + col * (THEME_TILE_W + THEME_TILE_GAP), y: y - 3.0, w: THEME_TILE_W, h: SETTINGS_CTRL_H + 6.0 }
+}
+
+// (Zeile, x der Beschriftung) von Farbplatz `i`.
 fn theme_slot_cell(i: usize) -> (usize, f32) {
-    let je_spalte = theme::SLOT_COUNT.div_ceil(2);
-    if i < je_spalte { (THEME_FIRST_ROW + i, SETTINGS_CTRL_X) } else { (THEME_FIRST_ROW + i - je_spalte, THEME_RIGHT_SWATCH_X) }
+    (DESIGN_THEME_ROW + 1 + i % THEME_COLOR_ROWS, THEME_COLORS_X + (i / THEME_COLOR_ROWS) as f32 * THEME_COLOR_COL_W)
+}
+
+// Gewaehltes Theme: ein Preset (Farben fest) oder eines der eigenen (Index in
+// Settings::custom_themes, Farben aenderbar).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ThemeChoice {
+    Preset(usize),
+    Custom(usize),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CustomTheme {
+    name: String,
+    colors: theme::Colors,
+}
+
+// Gespeichert als `custom_theme=RRGGBB,RRGGBB,...|Name` -- der Name zuletzt, damit er jedes
+// Zeichen enthalten darf. Fehlende Farben (aeltere Dateien) kommen aus dem Standard, die
+// Markierung folgt dann dem Akzent.
+fn parse_custom_theme(value: &str) -> Option<CustomTheme> {
+    let (farben, name) = value.split_once('|')?;
+    let mut colors = theme::default_colors();
+    let werte: Vec<u32> = farben.split(',').map_while(theme::parse_hex).collect();
+    for (c, w) in colors.iter_mut().zip(&werte) {
+        *c = *w;
+    }
+    if werte.len() <= theme::Slot::Selection.index() {
+        colors[theme::Slot::Selection.index()] = colors[theme::Slot::Accent.index()];
+    }
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(THEME_NAME_MAX).collect();
+    (!name.is_empty()).then_some(CustomTheme { name, colors })
+}
+
+fn serialize_custom_theme(t: &CustomTheme) -> String {
+    let farben: Vec<String> = t.colors.iter().map(|c| format!("{c:06X}")).collect();
+    format!("{}|{}", farben.join(","), t.name)
+}
+
+// Fenster mit einem Namensfeld fuer ein neues Theme (wie Quick Connect).
+struct ThemeNameDialog {
+    field: text_field::TextField,
+    dragging: bool,
+    last_press: Option<(Instant, (f32, f32))>,
+}
+
+// Druck in ein einzeiliges Feld bei Zeichengrenze `i`: ein zweiter kurz danach an derselben
+// Stelle nimmt das Wort, sonst Cursor dorthin (mit Shift bis dorthin markieren), und Ziehen
+// markiert ab hier.
+// Gibt zurueck, ob es ein Doppelklick war (Wortauswahl, s. App::selection_sounds).
+fn field_press(field: &mut text_field::TextField, last_press: &mut Option<(Instant, (f32, f32))>, dragging: &mut bool, i: usize, shift: bool, at: (f32, f32)) -> bool {
+    let jetzt = Instant::now();
+    let doppelt = last_press.is_some_and(|(t, p)| jetzt.duration_since(t).as_millis() <= MULTI_CLICK_MS && (at.0 - p.0).abs() + (at.1 - p.1).abs() <= MULTI_CLICK_PX);
+    if doppelt {
+        field.select_word_at(i);
+        *last_press = None;
+    } else {
+        field.press(i, shift);
+        *dragging = true;
+        *last_press = Some((jetzt, at));
+    }
+    doppelt
 }
 
 // Ein Schieberegler ueber einem alten Pfeil-Stepper: die Pfeil-Aktionen bleiben, wie sie sind
@@ -11148,7 +11341,7 @@ struct Settings {
     // Projektionsmodus, Index in PROJECTION_NAMES: 0=Normal, 1=Panini, 2=Stereografisch,
     // 3=Zylindrisch. Nicht-Normal warpt die Geometrie im Vertex-Shader (s. block.wgsl).
     projection_mode: u8,
-    // Wohin der Riss gelegt wird, Index in TEAR_POSITION_NAMES (0 = nicht steuern).
+    // Wohin der Riss gelegt wird, 0 = nicht steuern, 1 = Scanout-Timing.
     tear_position: u8,
     // Verschiebung des Bildwechsels in Mikrosekunden (negativ = frueher), s. App::tear_target_phase.
     tear_timing_us: i32,
@@ -11533,8 +11726,11 @@ struct Settings {
     // Deutsche Oberflaeche mit englischen Lehnwoertern (Crosshair statt Fadenkreuz usw., s.
     // i18n::set_english_loanwords).
     english_loanwords: bool,
-    // Farben der Oberflaeche (s. theme.rs), je Platz ein sRGB-Wert.
+    // Farben der Oberflaeche (s. theme.rs), je Platz ein sRGB-Wert -- die des gewaehlten Themes.
     theme: theme::Colors,
+    theme_choice: ThemeChoice,
+    // Eigene Themes, in der Reihenfolge ihrer Kacheln.
+    custom_themes: Vec<CustomTheme>,
     // Zuletzt offene Kategorie der Einstellungen (MenuScreen::settings_key); leer = noch nie
     // drin, dann oeffnet die Einrichtung.
     settings_category: String,
@@ -12093,6 +12289,16 @@ fn apply_item_arm_poses(pose: &mut world::Pose, main_hand: bool, off_hand: bool)
     }
     if off_hand {
         world::entity_model::apply_item_arm_pose(pose, false);
+    }
+}
+
+// X11-Fensternummer unseres Fensters (unter Wayland und Windows None).
+fn x11_window_id(window: &winit::window::Window) -> Option<u32> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok(),
+        RawWindowHandle::Xcb(h) => Some(h.window.get()),
+        _ => None,
     }
 }
 
@@ -12692,12 +12898,30 @@ impl Settings {
     // Getrennt vom Dateizugriff, damit das Klemmen der Werte pruefbar ist (s. Tests
     // unten): eine von Hand editierte Datei darf den Client nicht in einen unmoeglichen
     // Zustand bringen, sondern muss auf gueltige Werte zurechtgebogen werden.
+    // Farben eines Themes; ein verschwundenes eigenes Theme faellt auf den Standard zurueck.
+    fn theme_colors(&self, wahl: ThemeChoice) -> theme::Colors {
+        match wahl {
+            ThemeChoice::Preset(i) => theme::PRESETS.get(i).map_or_else(theme::default_colors, |p| p.colors),
+            ThemeChoice::Custom(i) => self.custom_themes.get(i).map_or_else(theme::default_colors, |t| t.colors),
+        }
+    }
+
+    fn select_theme(&mut self, wahl: ThemeChoice) {
+        self.theme_choice = wahl;
+        self.theme = self.theme_colors(wahl);
+        theme::apply(&self.theme);
+    }
+
     fn parse(text: &str) -> Self {
         let mut settings = Self::default();
         // Fernsicht aus einer settings.conf von vor der LOD-Render-Distance: dort zeichnete sie
         // nur mit eingeschaltetem Modul und "Fernsicht zeichnen", in "chunk_saver_distance".
         let mut lod_neu = false;
         let (mut alt_zeichnen, mut alt_weite) = (true, lod::DISTANCE_LEGACY_DEFAULT);
+        // Dateien von vor der Theme-Farbe "Markierung": sie folgt dem Akzent wie in den Presets,
+        // sonst galte ein Preset mit anderem Akzent danach als eigene Aenderung.
+        let mut markierung_gelesen = false;
+        let mut theme_wahl: Option<String> = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -13649,10 +13873,13 @@ impl Settings {
                         settings.settings_scrolls.insert(k["scroll_".len()..].to_string(), v);
                     }
                 }
+                "theme_choice" => theme_wahl = Some(value.to_string()),
+                "custom_theme" => settings.custom_themes.extend(parse_custom_theme(value)),
                 k if k.starts_with("theme_") => {
                     let slot = theme::Slot::ALL.into_iter().find(|s| &k["theme_".len()..] == s.key());
                     if let (Some(slot), Some(c)) = (slot, theme::parse_hex(value)) {
                         settings.theme[slot.index()] = c;
+                        markierung_gelesen |= slot == theme::Slot::Selection;
                     }
                 }
                 "lang_ui" | "lang_items" | "lang_effects" | "lang_chat" => {
@@ -13715,6 +13942,27 @@ impl Settings {
         if !lod_neu && settings.module_chunk_saver && alt_zeichnen {
             settings.lod_render_distance = alt_weite;
         }
+        if !markierung_gelesen {
+            settings.theme[theme::Slot::Selection.index()] = settings.theme[theme::Slot::Accent.index()];
+        }
+        let wahl = match theme_wahl.as_deref().and_then(|v| v.split_once(':')) {
+            Some(("preset", name)) => theme::PRESETS.iter().position(|p| p.name == name).map(ThemeChoice::Preset),
+            Some(("custom", i)) => i.parse().ok().filter(|&i| i < settings.custom_themes.len()).map(ThemeChoice::Custom),
+            _ => None,
+        };
+        settings.theme_choice = match wahl {
+            Some(w) => w,
+            // Datei von vor den eigenen Themes: ein Preset, wenn die Farben genau eines sind,
+            // sonst werden die geaenderten Farben ein eigenes Theme.
+            None => match theme::preset_of(&settings.theme) {
+                Some(i) => ThemeChoice::Preset(i),
+                None => {
+                    settings.custom_themes.push(CustomTheme { name: "Eigenes Theme".to_string(), colors: settings.theme });
+                    ThemeChoice::Custom(settings.custom_themes.len() - 1)
+                }
+            },
+        };
+        settings.theme = settings.theme_colors(settings.theme_choice);
         // Ohne "X/Y getrennt" stehen beide Regler auf demselben Wert (s. ButtonAction::
         // SensitivityUp); aeltere Dateien hatten dort noch ein ungenutztes Y.
         if !settings.mouse_sens_split {
@@ -13920,6 +14168,13 @@ impl Settings {
         }
         for (k, v) in &self.settings_scrolls {
             body.push_str(&format!("scroll_{k}={v}\n"));
+        }
+        match self.theme_choice {
+            ThemeChoice::Preset(i) => body.push_str(&format!("theme_choice=preset:{}\n", theme::PRESETS.get(i).map_or("Standard", |p| p.name))),
+            ThemeChoice::Custom(i) => body.push_str(&format!("theme_choice=custom:{i}\n")),
+        }
+        for t in &self.custom_themes {
+            body.push_str(&format!("custom_theme={}\n", serialize_custom_theme(t)));
         }
         for slot in theme::Slot::ALL {
             body.push_str(&format!("theme_{}={:06X}\n", slot.key(), self.theme[slot.index()]));
@@ -14432,6 +14687,8 @@ impl Default for Settings {
             latin_macrons: true,
             english_loanwords: false,
             theme: theme::default_colors(),
+            theme_choice: ThemeChoice::Preset(0),
+            custom_themes: Vec::new(),
             settings_category: String::new(),
             settings_scrolls: std::collections::BTreeMap::new(),
             azure_client_id: DEFAULT_AZURE_CLIENT_ID.to_string(),
@@ -14655,6 +14912,8 @@ struct PlayerSkin {
 enum AuthEvent {
     // Anzuzeigender Code + URL, unter der sich der Nutzer im Browser anmeldet.
     DeviceCode { user_code: String, verification_uri: String },
+    // Browser-Login: diese Anmeldeseite (mit Kontoauswahl) oeffnen, s. auth::start_browser_login.
+    BrowserLogin { url: String },
     // Anmeldung fertig: fertige Credentials, bei Microsoft das (neue) Refresh-Token mit der
     // Client-ID, fuer die es gilt, sonst die Quelle des Tokens (fuer die Kontenliste).
     LoggedIn { credentials: auth::Credentials, msa: Option<(String, String)>, source: accounts::Source },
@@ -14879,12 +15138,17 @@ enum ButtonAction {
     ToggleSettings,
     // Farbfeld angeklickt: Farbfenster fuer diese Farbe auf (s. ColorPopup).
     OpenColorPicker(ColorTarget),
-    // Theme: Preset uebernehmen (Index in theme::PRESETS).
+    // Theme: Preset uebernehmen (Index in theme::PRESETS), eigenes waehlen (Index in
+    // custom_themes) oder ein neues anlegen ("+", oeffnet das Namensfenster).
     ApplyThemePreset(usize),
+    SelectCustomTheme(usize),
+    NewCustomTheme,
     // Reiter oben auf einer Einstellungsseite: zum Abschnitt springen (s. SettingsPage).
     SettingsSection(u8),
     // Uhr in der Leiste oben angeklickt: "laeuft seit" darunter an/aus.
     ToggleUptime,
+    // Logo in der Kategorienleiste: Index in SIDEBAR_LINKS, oeffnet die Seite im Browser.
+    OpenLink(usize),
     // Leiste unten der Server-Seite: Quick-Connect-Fenster oeffnen.
     OpenQuickConnect,
     // Konto in der Leiste oben: Kontenliste auf/zu (offen wird der Knopf zum Acc-Manager).
@@ -15755,21 +16019,34 @@ fn push_bell_icon(rects: &mut Vec<UiRect>, r: Rect, color: [f32; 4]) {
 // Wie ein Knopf aussieht (Design-System): runde Ecken, Rahmen, Hover eine Stufe heller.
 // Die Rolle steckt in button.color: Flaeche 2 = normal, Ausgewaehlt = an/aktiv, Gefahr-Flaeche
 // = Konflikt; jede andere Farbe ist eine echte Farbe (Farbfelder) und bleibt, wie sie ist.
-fn styled_button(button: &Button, hover: bool) -> (UiRect, [f32; 4]) {
+// `hover`: wie weit der Knopf gehovert ist (s. App::hover_level) -- 0 = gar nicht, 1 = die
+// Hover-Farben des Themes, darueber leuchtet die Flaeche kurz ueber sie hinaus auf.
+// Flaeche eines gehoverten Eintrags der Seitenleiste (s. App::hover_level): blendet aus dem
+// Leistengrund auf Surface1 ein und leuchtet beim Betreten kurz darueber hinaus zu Surface2.
+fn sidebar_hover_fill(hover: f32) -> [f32; 4] {
+    use theme::Slot;
+    let flaeche = theme::get(Slot::Surface1);
+    let grund = mix_color(theme::with_alpha(flaeche, 0.0), flaeche, hover.min(1.0));
+    mix_color(grund, theme::get(Slot::Surface2), (hover - 1.0).max(0.0))
+}
+
+fn styled_button(button: &Button, hover: f32) -> (UiRect, [f32; 4]) {
     use theme::Slot;
     const RADIUS: f32 = 6.0;
     let g = theme::get;
+    // Raender und Text gehen nur bis zur Hover-Farbe, die Flaeche leuchtet darueber hinaus.
+    let bis_hover = hover.min(1.0);
     // Reiter: kein Knopf, nur Text; der aktive mit Akzentlinie unten (Design-System, Tabs).
     if matches!(button.action, ButtonAction::SettingsSection(_)) {
         let aktiv = button.color == g(Slot::AccentSurface);
         let linie = Rect { y: button.rect.y + button.rect.h - 2.0, h: 2.0, ..button.rect };
-        let farbe = if aktiv { g(Slot::Accent) } else if hover { g(Slot::Border2) } else { [0.0; 4] };
-        let text = if aktiv || hover { theme::text() } else { theme::text_2() };
+        let farbe = if aktiv { g(Slot::Accent) } else { mix_color(theme::with_alpha(g(Slot::Border2), 0.0), g(Slot::Border2), bis_hover) };
+        let text = if aktiv { theme::text() } else { mix_color(theme::text_2(), theme::text(), bis_hover) };
         return (UiRect::rounded(linie, farbe, 1.0), text);
     }
     // Farbfeld: die Farbe selbst, schwarzer Rand, runde Ecken (Design-System).
     if matches!(button.action, ButtonAction::OpenColorPicker(_)) {
-        let rand = if hover { theme::text_2() } else { [0.0, 0.0, 0.0, 1.0] };
+        let rand = mix_color([0.0, 0.0, 0.0, 1.0], theme::text_2(), bis_hover);
         return (UiRect::framed(button.rect, button.color, RADIUS, 2.0, rand), theme::text());
     }
     // Unsichtbare Trefferflaeche (Karten, die sich selbst zeichnen).
@@ -15779,20 +16056,20 @@ fn styled_button(button: &Button, hover: bool) -> (UiRect, [f32; 4]) {
     if !button.enabled {
         return (UiRect::framed(button.rect, g(Slot::Surface1), RADIUS, 1.0, g(Slot::Border1)), theme::text_disabled());
     }
+    let rand = mix_color(g(Slot::Border2), g(Slot::BorderStrong), bis_hover);
     let (fill, border, text) = if button.color == g(Slot::Accent) {
         // Primaer: die eine Hauptaktion der Ansicht.
-        let fill = if hover { g(Slot::AccentHover) } else { g(Slot::Accent) };
+        let fill = mix_color(g(Slot::Accent), g(Slot::AccentHover), hover);
         (fill, fill, g(Slot::TextOnAccent))
     } else if button.color == g(Slot::AccentSurface) {
-        let fill = if hover { g(Slot::AccentSurfaceHover) } else { g(Slot::AccentSurface) };
+        let fill = mix_color(g(Slot::AccentSurface), g(Slot::AccentSurfaceHover), hover);
         (fill, g(Slot::Accent), g(Slot::AccentText))
     } else if button.color == g(Slot::DangerSurface) {
         (button.color, g(Slot::Danger), g(Slot::Danger))
     } else if button.color == g(Slot::Surface2) {
-        let fill = if hover { g(Slot::Surface3) } else { g(Slot::Surface2) };
-        (fill, if hover { g(Slot::BorderStrong) } else { g(Slot::Border2) }, theme::text())
+        (mix_color(g(Slot::Surface2), g(Slot::Surface3), hover), rand, theme::text())
     } else {
-        (button.color, if hover { g(Slot::BorderStrong) } else { g(Slot::Border2) }, theme::text())
+        (button.color, rand, theme::text())
     };
     (UiRect::framed(button.rect, fill, RADIUS, 1.0, border), text)
 }
@@ -16066,6 +16343,9 @@ struct App {
     // Laeuft gerade ein Login-Vorgang? Verhindert doppelte Device-Code-Anfragen bei
     // mehrfachem Klick.
     login_busy: bool,
+    // Der Microsoft-Login, der auf die Anmeldung im Browser wartet (Browser-Login bis zu 10 min,
+    // Device-Code bis zu ~15 min). Ein neuer Anmeldeversuch bricht ihn ab, s. cancel_device_login.
+    device_login: Option<tokio::task::JoinHandle<()>>,
     // Eingabefeld auf dem Account-Screen (Token ODER Azure-Client-ID): Some = Feld
     // sichtbar+fokussiert (dann gehen Tastatur/Einfuegen dorthin statt in die Adresse),
     // None = ausgeblendet. Immer nur eines gleichzeitig offen.
@@ -16082,9 +16362,17 @@ struct App {
     server_scroll: usize,
     server_scroll_anim: f32,
     ui_anim_at: Instant,
-    // Quick Connect: Fenster mit Adresse und "Los" (Leiste unten). Getippt wird in
-    // server_address.
+    // Quick Connect: Fenster mit Adresse und "Los" (Leiste unten). Das Feld ist beim Oeffnen
+    // leer; erst "Los" uebernimmt es in server_address. Ziehen markiert, Doppelklick nimmt das
+    // Wort (wie im Server-Fenster, s. ServerEdit).
     quick_connect_open: bool,
+    // Namensfenster fuer ein neues Theme ("+"-Kachel) und die Rueckfrage vor dem Loeschen eines
+    // eigenen (Index in custom_themes, per Rechtsklick).
+    theme_name_dialog: Option<ThemeNameDialog>,
+    theme_delete: Option<usize>,
+    quick_field: text_field::TextField,
+    quick_dragging: bool,
+    quick_last_press: Option<(Instant, (f32, f32))>,
     // Kontenliste unter dem Konto-Knopf der Leiste oben.
     account_menu_open: bool,
     // Acc-Manager: Fenster mit allen Konten, Anmelden und Abmelden.
@@ -16467,6 +16755,16 @@ struct App {
     erase_seed: u32,
     // Gleitender Schreibcursor (s. CARET_GLIDE) und gleitender Chat-Text (s. ChatSlide).
     caret_anim: std::cell::Cell<Option<CaretAnim>>,
+    // Wohin die Markierung je Zeile gleitet (s. glide_selection).
+    selection_glide: std::cell::RefCell<rustc_hash::FxHashMap<i32, SelectionGlide>>,
+    // Klaenge der Markierung (s. selection_sounds): wie viele Zeichen im letzten Bild markiert
+    // waren, welcher Klang die naechste Aenderung meldet (Doppel-/Dreifachklick) und ob seitdem
+    // links geklickt oder Strg+D gedrueckt wurde.
+    selection_sound_chars: usize,
+    selection_sound_hint: Option<ui_sound::UiSound>,
+    selection_sound_deselect: bool,
+    // Hover-Animation der Knoepfe, nach ihrer Flaeche (s. hover_level).
+    hover_anims: std::cell::RefCell<rustc_hash::FxHashMap<(i32, i32, i32, i32), HoverAnim>>,
     chat_slide: std::cell::RefCell<Option<ChatSlide>>,
     chat_recall: Option<ChatRecall>,
     // Fuer "laeuft seit" unter der Uhr.
@@ -16979,6 +17277,17 @@ struct App {
     tear_lead_ns: f64,
     // CPU/RAM/GPU-Verlauf fuer die drei Graphen im Debug-Overlay, s. sysstats.rs.
     sys_stats: sysstats::SystemStats,
+    // Abschnitt System im Render-Tab: Speicher (hoechstens einmal je Sekunde gelesen) und ob ein
+    // Compositor laeuft (alle paar Sekunden im Hintergrund abgefragt, s. system_rows).
+    memory_info: std::cell::Cell<Option<(Instant, Option<system_info::Memory>)>>,
+    compositing_info: std::sync::Arc<std::sync::Mutex<Option<system_info::Compositing>>>,
+    compositing_checked: std::cell::Cell<Option<Instant>>,
+    // Wie der X-Server unser Fenster gerade anzeigt (Compositor oder direkt, Flip oder Kopie),
+    // nur beobachtet, solange die Render-Seite offen ist (s. system_info::watch_window,
+    // update_system_watch). `window_path_tried`: dort schon versucht (kein X11 -> nicht jedes
+    // Bild neu).
+    window_path: Option<std::sync::Arc<std::sync::Mutex<system_info::WindowPath>>>,
+    window_path_tried: bool,
     // Verbindungs-Log + Status, gespeist aus dem Netzwerk-Hintergrund-Task per Channel.
     log_lines: Vec<String>,
     // Abstand des sichtbaren Ausschnitts vom unteren Ende des Logs, in Zeilen.
@@ -17720,6 +18029,7 @@ impl App {
             auth_tx,
             auth_rx,
             login_busy: false,
+            device_login: None,
             input_field: None,
             servers: load_servers(),
             server_context: None,
@@ -17728,6 +18038,11 @@ impl App {
             server_scroll_anim: 0.0,
             ui_anim_at: Instant::now(),
             quick_connect_open: false,
+            theme_name_dialog: None,
+            theme_delete: None,
+            quick_field: text_field::TextField::new("", MAX_ADDRESS_LEN),
+            quick_dragging: false,
+            quick_last_press: None,
             account_menu_open: false,
             account_manager_open: false,
             server_status: std::collections::HashMap::new(),
@@ -17890,6 +18205,11 @@ impl App {
             falling_glyphs: Vec::new(),
             erase_seed: 0,
             caret_anim: std::cell::Cell::new(None),
+            selection_glide: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
+            selection_sound_chars: 0,
+            selection_sound_hint: None,
+            selection_sound_deselect: false,
+            hover_anims: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             chat_slide: std::cell::RefCell::new(None),
             chat_recall: None,
             app_started: Instant::now(),
@@ -18073,6 +18393,11 @@ impl App {
             tear_present_at: None,
             tear_lead_ns: 3_000_000.0,
             sys_stats: sysstats::SystemStats::new(),
+            memory_info: std::cell::Cell::new(None),
+            compositing_info: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            compositing_checked: std::cell::Cell::new(None),
+            window_path: None,
+            window_path_tried: false,
             log_lines: Vec::new(),
             log_scroll: 0,
             conn_status: ConnStatus::Disconnected,
@@ -18804,6 +19129,10 @@ impl App {
     // Screen eine Ebene zurueck; auf Main entweder ins Spiel zurueck (verbunden) oder
     // nichts (Startbildschirm, es gibt kein "dahinter").
     fn on_escape(&mut self) {
+        if self.theme_delete.take().is_some() || self.theme_name_dialog.take().is_some() {
+            self.play_ui_sound(ui_sound::UiSound::Close);
+            return;
+        }
         if self.quick_connect_open {
             self.play_ui_sound(ui_sound::UiSound::Close);
             self.quick_connect_open = false;
@@ -20217,6 +20546,7 @@ impl App {
         match self.screen.settings_page().filter(|_| self.mode == AppMode::Menu) {
             Some(page) => {
                 let h = self.gpu.as_ref().map_or(1080.0, |g| g.size().1);
+                THEME_TILE_COUNT.store(theme::PRESETS.len() + self.settings.custom_themes.len() + 1, Relaxed);
                 SETTINGS_SCROLL_FIRST.store(self.page_scroll().min(self.page_max_scroll()), Relaxed);
                 SETTINGS_SCROLL_BOTTOM.store(settings_rows_bottom(h).to_bits(), Relaxed);
                 SETTINGS_SECTION_STARTS.store(page.section_starts(), Relaxed);
@@ -22198,7 +22528,12 @@ impl App {
     // Startet den Microsoft-Device-Code-Login als Hintergrund-Task. Der Ablauf schickt seine
     // Zwischenstaende (Code zum Anzeigen, fertige Anmeldung, Fehler) per auth_tx zurueck, die
     // drain_auth_events() im Hauptthread verarbeitet.
+    // Zuerst der Browser-Login (Kontoauswahl, Microsoft leitet auf einen lokalen Empfaenger
+    // zurueck); nur wenn dafuer kein lokaler Port frei ist, der Device-Code.
     fn start_microsoft_login(&mut self) {
+        // Ein erneuter Klick faengt neu an -- die alte Anmeldung wird im Browser oft gar nicht
+        // mehr abgeschlossen (Fenster zu, falsches Konto).
+        self.cancel_device_login();
         if self.login_busy {
             return;
         }
@@ -22210,16 +22545,24 @@ impl App {
         self.login_busy = true;
         self.push_log("Microsoft-Anmeldung wird vorbereitet ...");
         let tx = self.auth_tx.clone();
-        self.tokio_rt.spawn(async move {
-            let dc = match auth::request_device_code(&client_id).await {
-                Ok(dc) => dc,
+        self.device_login = Some(self.tokio_rt.spawn(async move {
+            let msa = match auth::start_browser_login(&client_id).await {
+                Ok(login) => {
+                    let _ = tx.send(AuthEvent::BrowserLogin { url: login.url.clone() });
+                    auth::finish_browser_login(login).await
+                }
                 Err(e) => {
-                    let _ = tx.send(AuthEvent::Failed(e.to_string()));
-                    return;
+                    let _ = tx.send(AuthEvent::Status(format!("{e} -- weiter mit der Code-Anmeldung")));
+                    match auth::request_device_code(&client_id).await {
+                        Ok(dc) => {
+                            let _ = tx.send(AuthEvent::DeviceCode { user_code: dc.user_code.clone(), verification_uri: dc.verification_uri.clone() });
+                            auth::poll_for_msa(&client_id, &dc).await
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
             };
-            let _ = tx.send(AuthEvent::DeviceCode { user_code: dc.user_code.clone(), verification_uri: dc.verification_uri.clone() });
-            let msa = match auth::poll_for_msa(&client_id, &dc).await {
+            let msa = match msa {
                 Ok(m) => m,
                 Err(e) => {
                     let _ = tx.send(AuthEvent::Failed(e.to_string()));
@@ -22235,7 +22578,19 @@ impl App {
                     let _ = tx.send(AuthEvent::Failed(e.to_string()));
                 }
             }
-        });
+        }));
+    }
+
+    // Einen noch wartenden Microsoft-Login abbrechen: sonst hielte login_busy jede andere
+    // Anmeldung bis zum Ablauf des Codes auf. Nur auf einen neuen Anmeldeversuch hin, nicht
+    // bei der lautlosen Erneuerung (try_refresh_login).
+    fn cancel_device_login(&mut self) {
+        let Some(task) = self.device_login.take() else { return };
+        if !task.is_finished() {
+            task.abort();
+            self.login_busy = false;
+            self.push_log("Vorherige Microsoft-Anmeldung abgebrochen.");
+        }
     }
 
     // Nutzt ein manuell eingegebenes Minecraft-Access-Token (Token-Feld) direkt -- holt nur
@@ -22245,6 +22600,7 @@ impl App {
         if token.is_empty() {
             return;
         }
+        self.cancel_device_login();
         self.login_busy = true;
         self.push_log("Token wird geprüft ...");
         let tx = self.auth_tx.clone();
@@ -22267,7 +22623,11 @@ impl App {
     // Refresh-Token aus der Antwort wird gespeichert, die Anmeldung erneuert sich danach selbst.
     fn submit_refresh_token_login(&mut self, token: String) {
         let refresh_token = token.trim().to_string();
-        if refresh_token.is_empty() || self.login_busy {
+        if refresh_token.is_empty() {
+            return;
+        }
+        self.cancel_device_login();
+        if self.login_busy {
             return;
         }
         let client_id = self.settings.azure_client_id.trim().to_string();
@@ -22436,7 +22796,11 @@ impl App {
     // genommen; sonst erst erneuern (Microsoft) bzw. pruefen.
     fn use_account(&mut self, i: usize) {
         let Some(a) = self.accounts.list.get(i).cloned() else { return };
-        if self.is_active_account(&a) || self.login_busy {
+        if self.is_active_account(&a) {
+            return;
+        }
+        self.cancel_device_login();
+        if self.login_busy {
             return;
         }
         let laeuft = accounts::expiry(&a.access_token).is_none_or(|exp| exp > accounts::now_unix() + 60);
@@ -22490,6 +22854,10 @@ impl App {
                     self.push_log(format!("Im Browser anmelden: {verification_uri}"));
                     self.push_log(format!("Code (schon kopiert): {user_code}"));
                 }
+                AuthEvent::BrowserLogin { url } => match open_external_command(&url).spawn() {
+                    Ok(_) => self.push_log("Im Browser das Konto auswählen ..."),
+                    Err(e) => self.push_log(format!("Browser ließ sich nicht öffnen ({e}). Diese Seite öffnen: {url}")),
+                },
                 AuthEvent::Status(msg) => self.push_log(msg),
                 AuthEvent::SkinLoaded { uuid, url, rgba, slim } => self.apply_loaded_skin(uuid, url, rgba, slim),
                 AuthEvent::HeadProfile { key, textures } => {
@@ -22958,11 +23326,22 @@ impl App {
         let (Some(gpu), Some(edit)) = (self.gpu.as_ref(), self.server_edit.as_ref()) else { return 0 };
         let (_, adresse, name, _, _) = server_dialog_layout();
         let feld = if f == ServerField::Address { adresse } else { name };
-        text_field::index_at(edit.field(f).text(), x - feld.x - 12.0, |t| gpu.measure_text(t, UI_SCALE_NORMAL))
+        text_field::index_at(edit.field(f).text(), x - feld.x - 12.0, |t| gpu.measure_raw(t, UI_SCALE_NORMAL))
     }
 
-    // Zeiger bewegt, waehrend im Feld gedrueckt ist: Markierung bis hierher.
+    // Zeiger bewegt, waehrend im Feld gedrueckt ist: Markierung bis hierher (Server-Fenster
+    // oder Quick Connect).
     fn server_field_drag(&mut self) {
+        if self.theme_name_dialog.as_ref().is_some_and(|d| d.dragging) {
+            let i = self.theme_name_index(self.cursor_pos.0);
+            if let Some(d) = self.theme_name_dialog.as_mut() {
+                d.field.drag_to(i);
+            }
+        }
+        if self.quick_dragging && self.quick_connect_open {
+            let i = self.quick_field_index(self.cursor_pos.0);
+            self.quick_field.drag_to(i);
+        }
         let Some(f) = self.server_edit.as_ref().filter(|e| e.dragging).map(|e| e.focus) else { return };
         let i = self.server_field_index(f, self.cursor_pos.0);
         if let Some(edit) = self.server_edit.as_mut() {
@@ -22988,6 +23367,7 @@ impl App {
             if doppelt {
                 edit.focused().select_word_at(i);
                 edit.last_press = None;
+                self.selection_sound_hint = Some(ui_sound::UiSound::Step);
             } else {
                 edit.focused().press(i, shift);
                 edit.dragging = true;
@@ -23070,10 +23450,10 @@ impl App {
         }
     }
 
-    // Text ins fokussierte Feld (Tippen, Einfuegen); ersetzt eine Markierung.
+    // Text ins aktive Feld (Tippen, Einfuegen); ersetzt eine Markierung.
     fn server_edit_insert(&mut self, text: &str) {
-        if let Some(edit) = self.server_edit.as_mut() {
-            edit.focused().insert(text);
+        if let Some(feld) = self.active_text_field() {
+            feld.insert(text);
         }
     }
 
@@ -23241,12 +23621,7 @@ impl App {
                 //     "Shadereinstellungen",
                 //     UI_SCALE_SMALL,
                 // ));
-                let riss = set.tear_position as usize;
-                out.extend(pick_buttons(
-                    settings_wide_rect(TEAR_POSITION_ROW),
-                    &[(TEAR_POSITION_NAMES[0], ButtonAction::CycleTearPosition, riss == 0), (TEAR_POSITION_NAMES[1], ButtonAction::CycleTearPosition, riss == 1)],
-                    true,
-                ));
+                out.push(Self::toggle(ButtonAction::CycleTearPosition, TEAR_POSITION_ROW, set.tear_position != 0));
                 out.push(Self::step_slider(ButtonAction::TearTimingDown, ButtonAction::TearTimingUp, stepper_value_rect(TEAR_TIMING_ROW), set.tear_timing_us as f64, TEAR_TIMING_MIN_US as f64, TEAR_TIMING_MAX_US as f64, true));
                 out.push(Self::step_slider(ButtonAction::TearReserveDown, ButtonAction::TearReserveUp, stepper_value_rect(TEAR_RESERVE_ROW), set.tear_reserve_us as f64, TEAR_RESERVE_MIN_US as f64, TEAR_RESERVE_MAX_US as f64, true));
                 // CMAA2-Umschalter deaktiviert, s. CMAA2_ROW-Kommentar.
@@ -23410,23 +23785,23 @@ impl App {
                 }
                 let abdunkeln = self.settings.menu_backdrop_opacity;
                 out.extend(Self::stepper(ButtonAction::MenuBackdropPrev, ButtonAction::MenuBackdropNext, MENU_BACKDROP_ROW, abdunkeln > 0, abdunkeln < 100));
-                // Presets nebeneinander; das aktive hervorgehoben.
-                let aktiv = theme::preset_of(&self.settings.theme);
-                for (i, p) in theme::PRESETS.iter().enumerate() {
-                    let mut b = Self::nav_button(
-                        ButtonAction::ApplyThemePreset(i),
-                        Rect { x: SETTINGS_CTRL_X + i as f32 * (THEME_PRESET_W + 8.0), y: settings_row_y(DESIGN_THEME_ROW), w: THEME_PRESET_W, h: SETTINGS_CTRL_H },
-                        p.name,
-                        UI_SCALE_SMALL,
-                    );
-                    if aktiv == Some(i) {
-                        b.color = theme::get(theme::Slot::AccentSurface);
-                    }
-                    out.push(b);
+                // Kacheln: zeichnen sich selbst (build_settings_design_tab), hier nur die
+                // Trefferflaechen.
+                let eigene = self.settings.custom_themes.len();
+                let aktionen = (0..theme::PRESETS.len())
+                    .map(ButtonAction::ApplyThemePreset)
+                    .chain((0..eigene).map(ButtonAction::SelectCustomTheme))
+                    .chain([ButtonAction::NewCustomTheme]);
+                for (i, action) in aktionen.enumerate() {
+                    out.push(Button { action, rect: theme_tile_rect(i), label: String::new(), enabled: true, color: SERVER_CARD_MARKER, scale: UI_SCALE_SMALL, slider: None });
                 }
-                for (i, slot) in theme::Slot::ALL.into_iter().enumerate() {
-                    let (row, x) = theme_slot_cell(i);
-                    out.push(Self::swatch(ColorTarget::Theme(slot), Rect { x, y: settings_row_y(row), w: SWATCH_W, h: SETTINGS_CTRL_H }, theme::get(slot)));
+                // Farbfelder nur bei eigenen Themes -- ein Preset ist fest (seine Farben zeichnet
+                // build_settings_design_tab ohne Knopf).
+                if matches!(self.settings.theme_choice, ThemeChoice::Custom(_)) {
+                    for (i, slot) in theme::Slot::ALL.into_iter().enumerate() {
+                        let (row, x) = theme_slot_cell(i);
+                        out.push(Self::swatch(ColorTarget::Theme(slot), Rect { x: x + THEME_COLOR_SWATCH_DX, y: settings_row_y(row), w: SWATCH_W, h: SETTINGS_CTRL_H }, theme::get(slot)));
+                    }
                 }
             }
             MenuScreen::SettingsFont => {
@@ -24575,6 +24950,7 @@ impl App {
         let changes_settings = !matches!(
             action,
             ButtonAction::OpenScreen(_)
+                | ButtonAction::OpenLink(_)
                 | ButtonAction::OpenQuickConnect
                 | ButtonAction::ToggleAccountMenu
                 | ButtonAction::SettingsSection(_)
@@ -24738,14 +25114,34 @@ impl App {
             // Abgefangen in handle_menu_click/handle_click (braucht das Rechteck des Knopfs).
             ButtonAction::OpenColorPicker(_) => {}
             ButtonAction::ApplyThemePreset(i) => {
-                if let Some(p) = theme::PRESETS.get(i) {
-                    set.theme = p.colors;
-                    theme::apply(&set.theme);
+                if i < theme::PRESETS.len() {
+                    set.select_theme(ThemeChoice::Preset(i));
                 }
+            }
+            ButtonAction::SelectCustomTheme(i) => {
+                if i < set.custom_themes.len() {
+                    set.select_theme(ThemeChoice::Custom(i));
+                }
+            }
+            ButtonAction::NewCustomTheme => {
+                self.theme_name_dialog = Some(ThemeNameDialog { field: text_field::TextField::new("", THEME_NAME_MAX), dragging: false, last_press: None });
             }
             ButtonAction::SettingsSection(i) => self.jump_to_section(i as usize),
             ButtonAction::ToggleUptime => self.settings.topbar_uptime = !self.settings.topbar_uptime,
-            ButtonAction::OpenQuickConnect => self.quick_connect_open = true,
+            ButtonAction::OpenLink(i) => {
+                if let Some((_, url, _)) = SIDEBAR_LINKS.get(i) {
+                    match open_external_command(url).spawn() {
+                        Ok(_) => self.push_log(format!("Link geöffnet: {url}")),
+                        Err(e) => self.push_log(format!("Link konnte nicht geöffnet werden ({e}): {url}")),
+                    }
+                }
+            }
+            ButtonAction::OpenQuickConnect => {
+                self.quick_connect_open = true;
+                self.quick_field = text_field::TextField::new("", MAX_ADDRESS_LEN);
+                self.quick_dragging = false;
+                self.quick_last_press = None;
+            }
             ButtonAction::ToggleAccountMenu => {
                 if self.account_menu_open {
                     // Offen ist der Knopf der Acc-Manager: er oeffnet das Konten-Fenster.
@@ -24907,7 +25303,7 @@ impl App {
             ButtonAction::CameraYOffsetDown(p) => set.set_camera_y_offset_of(p, set.camera_y_offset_of(p) - CAMERA_Y_OFFSET_STEP),
             ButtonAction::CameraYOffsetUp(p) => set.set_camera_y_offset_of(p, set.camera_y_offset_of(p) + CAMERA_Y_OFFSET_STEP),
             ButtonAction::CycleProjection => set.projection_mode = (set.projection_mode + 1) % PROJECTION_NAMES.len() as u8,
-            ButtonAction::CycleTearPosition => set.tear_position = (set.tear_position + 1) % TEAR_POSITION_NAMES.len() as u8,
+            ButtonAction::CycleTearPosition => set.tear_position = u8::from(set.tear_position == 0),
             ButtonAction::CycleRenderPath => set.render_path = (set.render_path + 1) % RENDER_PATH_NAMES.len() as u8,
             ButtonAction::TearTimingDown | ButtonAction::TearTimingUp => {
                 let delta = if action == ButtonAction::TearTimingDown { -TEAR_TIMING_STEP_US } else { TEAR_TIMING_STEP_US };
@@ -25823,7 +26219,7 @@ impl App {
         let (shown, color) = if buf.is_empty() { (bisher, theme::text_disabled()) } else { (buf.to_string(), theme::text()) };
         // Bei leerem Puffer sitzt der Caret VOR dem Platzhalter, sonst hinter dem Getippten --
         // in beiden Faellen dort, wo das naechste Zeichen landet.
-        let caret_x = if buf.is_empty() { x } else { x + gpu.measure_text(buf, UI_SCALE_SMALL) };
+        let caret_x = if buf.is_empty() { x } else { x + gpu.measure_raw(buf, UI_SCALE_SMALL) };
         let text_x = if buf.is_empty() { x + CARET_WIDTH_PX + 3.0 } else { x };
         push_typed_marker(texts);
         texts.push(UiText { text: shown, x: text_x, y, color, scale: UI_SCALE_SMALL });
@@ -25922,9 +26318,15 @@ impl App {
         let h = u(0) % 360;
         let set = &mut self.settings;
         match t {
+            // Nur eigene Themes: bei einem Preset gibt es gar keine Farbfelder zum Anklicken.
             ColorTarget::Theme(slot) => {
-                set.theme[slot.index()] = theme::from_hsv(c[0], c[1] / 100.0, c[2] / 100.0);
-                theme::apply(&set.theme);
+                if let ThemeChoice::Custom(i) = set.theme_choice {
+                    set.theme[slot.index()] = theme::from_hsv(c[0], c[1] / 100.0, c[2] / 100.0);
+                    if let Some(t) = set.custom_themes.get_mut(i) {
+                        t.colors = set.theme;
+                    }
+                    theme::apply(&set.theme);
+                }
             }
             ColorTarget::Hitbox(HitboxVariant::Smoothed) => {
                 (set.module_hitbox_smoothed_hue, set.module_hitbox_smoothed_saturation, set.module_hitbox_smoothed_value) = (h, u(1), u(2));
@@ -31244,6 +31646,12 @@ impl App {
         Rect { x: SIDEBAR_PAD, y: screen_h - SIDEBAR_PAD - SIDEBAR_ITEM_H, w: SIDEBAR_W - 2.0 * SIDEBAR_PAD, h: SIDEBAR_ITEM_H }
     }
 
+    // Logo `i` aus SIDEBAR_LINKS: quadratisch, nebeneinander ueber der Linie vor "Setup".
+    fn sidebar_link_rect(i: usize, screen_h: f32) -> Rect {
+        let setup = Self::sidebar_setup_rect(screen_h);
+        Rect { x: SIDEBAR_PAD + i as f32 * (SIDEBAR_ITEM_H + 4.0), y: setup.y - 18.0 - SIDEBAR_ITEM_H, w: SIDEBAR_ITEM_H, h: SIDEBAR_ITEM_H }
+    }
+
     // Rechte Haelfte der Leiste oben, von rechts nach links: Glocke, Uhr, Kopf, Name.
     fn topbar_layout(&self, gpu: &GpuState) -> TopbarLayout {
         let (sw, _) = gpu.size();
@@ -31283,6 +31691,9 @@ impl App {
                 out.push(knopf(ButtonAction::OpenScreen(kategorie), Self::sidebar_hit_rect(Self::sidebar_item_rect(i, sh))));
             }
             out.push(knopf(ButtonAction::OpenScreen(MenuScreen::SettingsSetup), Self::sidebar_hit_rect(Self::sidebar_setup_rect(sh))));
+            for i in 0..SIDEBAR_LINKS.len() {
+                out.push(knopf(ButtonAction::OpenLink(i), Self::sidebar_link_rect(i, sh)));
+            }
         }
         if self.screen == MenuScreen::SettingsSkin && self.skin_files.is_none() && self.skin_drag_active().is_none() {
             out.extend(self.skin_strip(gpu).0);
@@ -31393,14 +31804,14 @@ impl App {
     }
 
     // Kontenliste unter dem Konto-Knopf: zuerst das angemeldete Konto, dann die uebrigen,
-    // ungueltige zuletzt. Some = Index in accounts.list; None = "Nicht angemeldet" (bzw. ein
-    // angemeldetes Konto, das nicht in der Liste steht).
+    // ungueltige zuletzt. Some = Index in accounts.list; None = ein angemeldetes Konto, das nicht
+    // in der Liste steht. Ohne Anmeldung gibt es keine eigene Zeile, es ist nur keins markiert.
     fn account_menu_rows(&self, gpu: &GpuState) -> Vec<(Rect, Option<usize>)> {
         let l = self.topbar_layout(gpu);
         let w = l.konto.w.max(340.0);
         let x = l.konto.x + l.konto.w - w;
         let mut zeilen = Vec::new();
-        if self.credentials.as_ref().is_none_or(|c| self.accounts.find(&c.profile_id).is_none()) {
+        if self.credentials.as_ref().is_some_and(|c| self.accounts.find(&c.profile_id).is_none()) {
             zeilen.push(None);
         }
         zeilen.extend(self.account_order().into_iter().map(Some));
@@ -31441,7 +31852,7 @@ impl App {
             let konto = z.and_then(|i| self.accounts.list.get(i));
             let (name, aktiv, uuid) = match konto {
                 None => (
-                    self.credentials.as_ref().map_or("Nicht angemeldet".to_string(), |c| c.username.clone()),
+                    self.credentials.as_ref().map_or_else(String::new, |c| c.username.clone()),
                     true,
                     self.credentials.as_ref().and_then(|c| uuid_bytes_from_hex(&c.profile_id)),
                 ),
@@ -31624,7 +32035,7 @@ impl App {
                     rects.push(UiRect::framed(e.rect, g(Slot::SurfaceSunken), 6.0, 1.0, g(Slot::Accent)));
                     let gezeigt = token_display(gpu, wert, e.rect.w - 24.0);
                     let ty = mitte_y(e.rect, UI_SCALE_SMALL);
-                    let x = e.rect.x + 12.0 + gpu.measure_text(&gezeigt, UI_SCALE_SMALL);
+                    let x = e.rect.x + 12.0 + gpu.measure_raw(&gezeigt, UI_SCALE_SMALL);
                     self.push_caret(&mut rects, Rect { x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, theme::text());
                     push_typed_marker(&mut texts);
                     texts.push(UiText { text: gezeigt, x: e.rect.x + 12.0, y: ty, color: theme::text(), scale: UI_SCALE_SMALL });
@@ -31635,7 +32046,7 @@ impl App {
                         _ => g(Slot::Surface2),
                     };
                     let b = Button { slider: None, action: ButtonAction::Back, rect: e.rect, label: String::new(), enabled: true, color: farbe, scale: UI_SCALE_SMALL };
-                    let (flaeche, textfarbe) = styled_button(&b, hover);
+                    let (flaeche, textfarbe) = styled_button(&b, self.hover_level(b.rect, hover));
                     rects.push(flaeche);
                     texts.push(gpu.centered_text(e.rect, e.label.clone(), textfarbe, UI_SCALE_SMALL));
                 }
@@ -31768,34 +32179,11 @@ impl App {
         ];
         let titel = if edit.index.is_some() { "Eintrag bearbeiten" } else { "Neuer Eintrag" };
         let mut texts = vec![UiText { text: titel.to_string(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL }];
-        for (feld, field, label, platzhalter) in [
-            (adresse, ServerField::Address, "ADRESSE", "play.example.net"),
-            (name, ServerField::Name, "NAME (OPTIONAL)", "leer = MOTD"),
-        ] {
+        for (feld, field, label) in [(adresse, ServerField::Address, "ADRESSE"), (name, ServerField::Name, "NAME (OPTIONAL)")] {
             let fokus = edit.focus == field;
-            let tf = edit.field(field);
-            let wert = tf.text();
             rects.push(UiRect::framed(feld, g(Slot::SurfaceSunken), 6.0, 1.0, if fokus { g(Slot::Accent) } else { g(Slot::Border1) }));
             texts.push(UiText { text: label.to_string(), x: feld.x, y: feld.y - gpu.text_height(TOPBAR_SUB_SCALE) - 8.0, color: theme::text_3(), scale: TOPBAR_SUB_SCALE });
-            let ty = (feld.y + (feld.h - gpu.text_height(UI_SCALE_NORMAL)) / 2.0).round();
-            let leer = wert.is_empty();
-            let bis = |i: usize| feld.x + 12.0 + gpu.measure_text(&wert[..i], UI_SCALE_NORMAL);
-            if let Some(r) = tf.selection().filter(|_| fokus) {
-                let (x0, x1) = (bis(r.start), bis(r.end));
-                rects.push(UiRect { rect: Rect { x: x0, y: ty, w: x1 - x0, h: gpu.text_height(UI_SCALE_NORMAL) }, color: COLOR_SELECTION, ..UiRect::FLAT });
-            }
-            push_typed_marker(&mut texts);
-            texts.push(UiText {
-                text: if leer { platzhalter.to_string() } else { wert.to_string() },
-                x: feld.x + 12.0,
-                y: ty,
-                color: if leer { theme::text_disabled() } else { theme::text() },
-                scale: UI_SCALE_NORMAL,
-            });
-            if fokus {
-                let x = bis(tf.cursor());
-                self.push_caret(&mut rects, Rect { x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_NORMAL) }, theme::text());
-            }
+            self.push_text_field(gpu, edit.field(field), feld, fokus, &mut rects, &mut texts);
         }
         for (r, label, primaer) in [(abbrechen, "Abbrechen", false), (speichern, "Speichern", true)] {
             let b = Button {
@@ -31807,7 +32195,7 @@ impl App {
                 color: if primaer { g(Slot::Accent) } else { g(Slot::Surface2) },
                 scale: UI_SCALE_SMALL,
             };
-            let (flaeche, farbe) = styled_button(&b, r.contains(cx, cy));
+            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, r.contains(cx, cy)));
             rects.push(flaeche);
             texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
         }
@@ -31969,7 +32357,7 @@ impl App {
                 color: if primaer { g(Slot::Accent) } else { g(Slot::Surface2) },
                 scale: UI_SCALE_SMALL,
             };
-            let (flaeche, farbe) = styled_button(&b, r.contains(cx, cy));
+            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, r.contains(cx, cy)));
             rects.push(flaeche);
             texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
         }
@@ -32003,18 +32391,8 @@ impl App {
             UiText { text: "Quick Connect".to_string(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL },
             UiText { text: "SERVER-ADRESSE".to_string(), x: feld.x, y: feld.y - gpu.text_height(TOPBAR_SUB_SCALE) - 8.0, color: theme::text_3(), scale: TOPBAR_SUB_SCALE },
         ];
-        let ty = (feld.y + (feld.h - gpu.text_height(UI_SCALE_NORMAL)) / 2.0).round();
-        let leer = self.server_address.is_empty();
-        push_typed_marker(&mut texts);
-        texts.push(UiText {
-            text: if leer { "play.example.net".to_string() } else { self.server_address.clone() },
-            x: feld.x + 12.0,
-            y: ty,
-            color: if leer { theme::text_disabled() } else { theme::text() },
-            scale: UI_SCALE_NORMAL,
-        });
-        let x = feld.x + 12.0 + if leer { 0.0 } else { gpu.measure_text(&self.server_address, UI_SCALE_NORMAL) };
-        self.push_caret(&mut rects, Rect { x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_NORMAL) }, theme::text());
+        self.push_text_field(gpu, &self.quick_field, feld, true, &mut rects, &mut texts);
+        let leer = self.quick_field.text().trim().is_empty();
         for (r, label, primaer) in [(abbrechen, "Abbrechen", false), (los, "Los", true)] {
             let hover = r.contains(cx, cy);
             let b = Button {
@@ -32026,17 +32404,32 @@ impl App {
                 color: if primaer { g(Slot::Accent) } else { g(Slot::Surface2) },
                 scale: UI_SCALE_SMALL,
             };
-            let (flaeche, farbe) = styled_button(&b, hover);
+            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, hover));
             rects.push(flaeche);
             texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
         }
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
     }
 
+    // Zeichengrenze im Quick-Connect-Feld unter dem Zeiger.
+    fn quick_field_index(&self, x: f32) -> usize {
+        let Some(gpu) = self.gpu.as_ref() else { return 0 };
+        let (_, feld, _, _) = Self::quick_connect_layout();
+        text_field::index_at(self.quick_field.text(), x - feld.x - 12.0, |t| gpu.measure_raw(t, UI_SCALE_NORMAL))
+    }
+
     // Linke Maustaste, waehrend Quick Connect offen ist. Immer verbraucht.
     fn quick_connect_press(&mut self) {
-        let (p, _, los, abbrechen) = Self::quick_connect_layout();
+        let (p, feld, los, abbrechen) = Self::quick_connect_layout();
         let (cx, cy) = self.cursor_pos;
+        if feld.contains(cx, cy) {
+            let i = self.quick_field_index(cx);
+            let shift = self.modifiers.shift_key();
+            if field_press(&mut self.quick_field, &mut self.quick_last_press, &mut self.quick_dragging, i, shift, (cx, cy)) {
+                self.selection_sound_hint = Some(ui_sound::UiSound::Step);
+            }
+            return;
+        }
         if los.contains(cx, cy) {
             self.quick_connect_submit();
         } else if abbrechen.contains(cx, cy) || !p.contains(cx, cy) {
@@ -32046,13 +32439,33 @@ impl App {
     }
 
     fn quick_connect_submit(&mut self) {
-        if self.server_address.trim().is_empty() {
+        let adresse = self.quick_field.text().trim().to_string();
+        if adresse.is_empty() {
             self.play_ui_sound(ui_sound::UiSound::Denied);
             return;
         }
         self.play_ui_sound(ui_sound::UiSound::Click);
         self.quick_connect_open = false;
+        self.server_address = adresse;
         self.go_connect();
+    }
+
+    // Wird gerade ins Quick-Connect-Feld getippt?
+    fn quick_typing(&self) -> bool {
+        self.quick_connect_open && self.mode == AppMode::Menu && self.screen == MenuScreen::Connect
+    }
+
+    // Das einzeilige Feld, in das gerade getippt wird: das fokussierte des Server-Fensters (hat
+    // Vorrang), das Namensfeld eines neuen Themes, sonst das von Quick Connect.
+    fn active_text_field(&mut self) -> Option<&mut text_field::TextField> {
+        if self.server_edit.is_some() {
+            return self.server_edit.as_mut().map(ServerEdit::focused);
+        }
+        if self.theme_name_dialog.is_some() && self.mode == AppMode::Menu {
+            return self.theme_name_dialog.as_mut().map(|d| &mut d.field);
+        }
+        let quick = self.quick_typing();
+        quick.then_some(&mut self.quick_field)
     }
 
     // Leiste oben und (in den Einstellungen) die Kategorienleiste links.
@@ -32147,13 +32560,14 @@ impl App {
         let aktiv = self.screen.settings_category();
         let eintrag = |rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>, r: Rect, kategorie: MenuScreen, label: &str| {
             let an = aktiv == Some(kategorie);
+            let k = self.hover_level(r, !an && Self::sidebar_hit_rect(r).contains(cx, cy));
             if an {
                 rects.push(UiRect::rounded(r, g(Slot::AccentSurface), 6.0));
                 rects.push(UiRect::rounded(Rect { x: r.x, y: r.y + 8.0, w: 3.0, h: r.h - 16.0 }, g(Slot::Accent), 1.5));
-            } else if Self::sidebar_hit_rect(r).contains(cx, cy) {
-                rects.push(UiRect::rounded(r, g(Slot::Surface1), 6.0));
+            } else if k > 0.0 {
+                rects.push(UiRect::rounded(r, sidebar_hover_fill(k), 6.0));
             }
-            let farbe = if an { g(Slot::AccentText) } else if Self::sidebar_hit_rect(r).contains(cx, cy) { theme::text() } else { theme::text_2() };
+            let farbe = if an { g(Slot::AccentText) } else { mix_color(theme::text_2(), theme::text(), k.min(1.0)) };
             let ty = (r.y + (r.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: label.to_string(), x: r.x + 14.0, y: ty, color: farbe, scale: UI_SCALE_SMALL });
         };
@@ -32163,13 +32577,23 @@ impl App {
         let setup = Self::sidebar_setup_rect(sh);
         rects.push(UiRect { rect: Rect { x: SIDEBAR_PAD, y: setup.y - 9.0, w: SIDEBAR_W - 2.0 * SIDEBAR_PAD, h: 1.0 }, color: g(Slot::Border1), ..UiRect::FLAT });
         eintrag(rects, texts, setup, MenuScreen::SettingsSetup, "Setup");
+        for i in 0..SIDEBAR_LINKS.len() {
+            let r = Self::sidebar_link_rect(i, sh);
+            let k = self.hover_level(r, r.contains(cx, cy));
+            if k > 0.0 {
+                rects.push(UiRect::rounded(r, sidebar_hover_fill(k), 6.0));
+            }
+            let farbe = mix_color(theme::text_2(), theme::text(), k.min(1.0));
+            let (x, y) = ((r.x + (r.w - LOGO_DRAW) / 2.0).round(), (r.y + (r.h - LOGO_DRAW) / 2.0).round());
+            sprites.push(UiSprite::quad(x, y, LOGO_DRAW, LOGO_DRAW, logo_uv(i), farbe, SpriteAtlas::Logos));
+        }
         // Skin-Tab: Knoepfe im Rand rechts (s. skin_strip).
         if self.screen == MenuScreen::SettingsSkin {
             let (knoepfe, (lx, ly), _) = self.skin_strip(gpu);
             texts.push(UiText { text: "Zips automatisch entpacken".to_string(), x: lx, y: ly, color: theme::text(), scale: UI_SCALE_SMALL });
             for b in knoepfe {
                 let hover = self.skin_files.is_none() && b.hits(cx, cy);
-                let (flaeche, farbe) = styled_button(&b, hover);
+                let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, hover));
                 rects.push(flaeche);
                 texts.push(gpu.centered_text(b.rect, b.label, farbe, b.scale));
             }
@@ -33475,7 +33899,7 @@ impl App {
                 continue;
             }
             let (px, py) = self.pointer();
-            let (flaeche, color) = styled_button(&button, button.hits(px, py));
+            let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, button.hits(px, py)));
             rects.push(flaeche);
             let label = Self::fit_text(gpu, &button.label, button.rect.w - 12.0, button.scale);
             texts.push(gpu.centered_text(button.rect, label, color, button.scale));
@@ -38507,7 +38931,7 @@ impl App {
     // Die Zeilen des Eingabefeldes: der Text, umbrochen auf den Platz links vom Cursor.
     fn chat_input_lines<'a>(&self, gpu: &GpuState, text: &'a str) -> Vec<&'a str> {
         let platz = (self.chat_caret_x(gpu) - 6.0).max(20.0);
-        chat_input::wrap_input_lines(text, platz, |t| gpu.measure_text(t, UI_SCALE_NORMAL))
+        chat_input::wrap_input_lines(text, platz, |t| gpu.measure_raw(t, UI_SCALE_NORMAL))
     }
 
     // Wo die Chat-Eingabe sitzt: die ERSTE Zeile senkrecht zentriert auf der Fadenkreuz-
@@ -38661,7 +39085,7 @@ impl App {
         // wanderte die Trennstelle und mit ihr dieses Pixel: die Buchstaben wackelten.
         let (cursor_zeile, cursor_x) = self.chat_input_spot(gpu, feld.text(), feld.cursor(), false);
         let zeile_start = |z: &str| z.as_ptr() as usize - feld.text().as_ptr() as usize;
-        let versatz = zeilen.get(cursor_zeile).map_or(0.0, |z| self.chat_slide_offset(feld.text(), cursor_zeile, caret_x - gpu.measure_text(z, UI_SCALE_NORMAL)));
+        let versatz = zeilen.get(cursor_zeile).map_or(0.0, |z| self.chat_slide_offset(feld.text(), cursor_zeile, caret_x - gpu.measure_raw(z, UI_SCALE_NORMAL)));
         // Blaettern im Verlauf: k von 0 bis 1, der neue Text kommt aus `richtung` Zeilen Abstand.
         let recall = self.chat_recall.as_ref().and_then(|r| {
             let t = r.start.elapsed().as_secs_f32() / CHAT_RECALL.as_secs_f32();
@@ -38671,18 +39095,18 @@ impl App {
         if let Some((r, k, richtung)) = recall {
             for (i, zeile) in self.chat_input_lines(gpu, &r.alt).iter().enumerate() {
                 let y = rect.y + 3.0 + i as f32 * line_h + 1.0 - richtung * line_h * k;
-                let x0 = caret_x - gpu.measure_text(zeile, UI_SCALE_NORMAL);
+                let x0 = caret_x - gpu.measure_raw(zeile, UI_SCALE_NORMAL);
                 texts.push(UiText { text: zeile.to_string(), x: x0.round(), y: y.round(), color: [1.0, 1.0, 1.0, 1.0 - k], scale: UI_SCALE_NORMAL });
             }
         }
         for (i, zeile) in zeilen.iter().enumerate() {
             let y = (rect.y + 3.0 + i as f32 * line_h + 1.0 + neu_dy).round();
-            let x0 = caret_x - gpu.measure_text(zeile, UI_SCALE_NORMAL);
+            let x0 = caret_x - gpu.measure_raw(zeile, UI_SCALE_NORMAL);
             let teile: Vec<(&str, f32)> = if i == cursor_zeile && versatz.abs() >= 0.5 {
                 let k = feld.cursor().saturating_sub(zeile_start(zeile)).min(zeile.len());
                 let (links, rechts) = zeile.split_at(k);
                 // Der rechte Teil dort, wo er in der ganzen Zeile stuende (s. oben).
-                vec![(links, x0 + versatz), (rechts, x0 + gpu.measure_text(links, UI_SCALE_NORMAL))]
+                vec![(links, x0 + versatz), (rechts, x0 + gpu.measure_raw(links, UI_SCALE_NORMAL))]
             } else {
                 vec![(zeile, x0)]
             };
@@ -38779,6 +39203,161 @@ impl App {
             rects.push(UiRect { rect: Rect { y: spur.y + (h - daumen_h) * pos, h: daumen_h, ..spur }, color: [1.0, 1.0, 1.0, 0.55], ..UiRect::FLAT });
         }
         *self.chat_history_hits.borrow_mut() = hits;
+    }
+
+    // Einzeiliges Eingabefeld (Server-Fenster, Quick Connect) in `feld`: Markierung, Text und,
+    // wenn es den Fokus hat, der Cursor. Den Rahmen zeichnet der Aufrufer. Beim Markieren bleibt
+    // der Cursor stehen (s. TextField::caret), die Markierung waechst aus ihm heraus.
+    fn push_text_field(&self, gpu: &GpuState, tf: &text_field::TextField, feld: Rect, fokus: bool, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        let wert = tf.text();
+        let h = gpu.text_height(UI_SCALE_NORMAL);
+        let ty = (feld.y + (feld.h - h) / 2.0).round();
+        let bis = |i: usize| feld.x + 12.0 + gpu.measure_raw(&wert[..i], UI_SCALE_NORMAL);
+        let caret_x = bis(tf.caret());
+        if let Some(r) = tf.selection().filter(|_| fokus) {
+            let (x0, x1) = (bis(r.start), bis(r.end));
+            self.push_field_selection(rects, Rect { x: x0, y: ty, w: x1 - x0, h }, caret_x);
+        }
+        push_typed_marker(texts);
+        texts.push(UiText { text: wert.to_string(), x: feld.x + 12.0, y: ty, color: theme::text(), scale: UI_SCALE_NORMAL });
+        if fokus {
+            self.push_caret(rects, Rect { x: caret_x, y: ty, w: CARET_WIDTH_PX, h }, theme::text());
+        }
+    }
+
+    // Markierte Flaeche `f` in der Theme-Farbe "Markierung", an der linken und rechten Kante mit
+    // dem Schein (s. SELECTION_GLOW_W) in Staerke `glow` (links, rechts; 0..1): zur Kante hin
+    // linear heller. Nur der Schein ist in Streifen zerlegt, der Rest ist eine Flaeche.
+    fn push_selection_span(&self, rects: &mut Vec<UiRect>, f: Rect, glow: (f32, f32)) {
+        let nach = theme::with_alpha(theme::get(theme::Slot::Selection), theme::SELECTION_ALPHA);
+        let von = theme::with_alpha(theme::text(), SELECTION_FLASH_ALPHA);
+        let (x0, x1) = (f.x, f.x + f.w);
+        if x1 <= x0 {
+            return;
+        }
+        let (gl, gr) = glow;
+        let links_bis = if gl > 0.001 { (x0 + SELECTION_GLOW_W).min(x1) } else { x0 };
+        let rechts_ab = if gr > 0.001 { (x1 - SELECTION_GLOW_W).max(links_bis) } else { x1 };
+        if rechts_ab > links_bis {
+            rects.push(UiRect { rect: Rect { x: links_bis, w: rechts_ab - links_bis, ..f }, color: nach, ..UiRect::FLAT });
+        }
+        let schein = |rects: &mut Vec<UiRect>, von_x: f32, bis_x: f32| {
+            let mut a = von_x;
+            while a < bis_x {
+                let b = ((a / SELECTION_SLICE).floor() * SELECTION_SLICE + SELECTION_SLICE).min(bis_x);
+                let mitte = (a + b) / 2.0;
+                let l = (1.0 - (mitte - x0) / SELECTION_GLOW_W).max(0.0) * gl;
+                let r = (1.0 - (x1 - mitte) / SELECTION_GLOW_W).max(0.0) * gr;
+                rects.push(UiRect { rect: Rect { x: a, w: b - a, ..f }, color: mix_color(nach, von, l.max(r)), ..UiRect::FLAT });
+                a = b;
+            }
+        };
+        schein(rects, x0, links_bis);
+        schein(rects, rechts_ab, x1);
+    }
+
+    // Markierung eines Eingabefelds an `ziel`: gleitet in CARET_GLIDE dorthin -- die erste aus
+    // dem Zeiger heraus, wenn er ueber ihr steht (Ziehen, Doppelklick mitten ins Wort: dann
+    // waechst sie in beide Richtungen), sonst aus dem Cursor bei `caret_x` (Tastatur); jede
+    // weitere von dort, wo die vorige gerade stand.
+    fn push_field_selection(&self, rects: &mut Vec<UiRect>, ziel: Rect, caret_x: f32) {
+        let (px, py) = self.cursor_pos;
+        let unter_zeiger = py >= ziel.y && py < ziel.y + ziel.h && px >= ziel.x && px <= ziel.x + ziel.w;
+        let anfang = if unter_zeiger { Rect { x: px, w: 0.0, ..ziel } } else { Rect { x: caret_x, w: CARET_WIDTH_PX, ..ziel } };
+        let (f, glow) = self.glide_selection(ziel, anfang);
+        self.push_selection_span(rects, f, glow);
+    }
+
+    // UI-Klaenge der Markierung, einmal je Bild aus der Zahl markierter Zeichen: aendert sie
+    // sich, ploppt es (Popup) -- bei einem Doppelklick (Wort) stattdessen Step, bei einem
+    // Dreifachklick (Zeile) Click. Hebt ein Mausklick oder Strg+D sie auf, kommt Erase; durch
+    // Tippen oder Seitenwechsel bleibt es still.
+    fn selection_sounds(&mut self) {
+        let jetzt = self.selected_chars();
+        let vorher = std::mem::replace(&mut self.selection_sound_chars, jetzt);
+        let hinweis = self.selection_sound_hint.take();
+        let klick = std::mem::take(&mut self.selection_sound_deselect);
+        if jetzt > 0 && (jetzt != vorher || hinweis.is_some()) {
+            self.play_ui_sound(hinweis.unwrap_or(ui_sound::UiSound::Popup));
+        } else if jetzt == 0 && vorher > 0 && klick {
+            self.play_ui_sound(ui_sound::UiSound::Erase);
+        }
+    }
+
+    // Wie viele Zeichen gerade markiert sind: im Eingabefeld, im Chat (Tastatur oder Maus) und
+    // im Log.
+    fn selected_chars(&mut self) -> usize {
+        let feld = self.active_text_field().and_then(|f| f.selection().map(|r| f.text()[r].chars().count())).unwrap_or(0);
+        let chat = self.chat_input.as_ref().and_then(|c| c.keyboard_selection().map(|r| c.text()[r].chars().count())).unwrap_or(0);
+        let text = if self.text_selection.is_some() { self.selected_text().chars().count() } else { 0 };
+        feld + chat.max(text)
+    }
+
+    // Strg+D: jede Markierung aufheben (Eingabefeld, Chat, Log). Gibt zurueck, ob es eine gab --
+    // sonst laeuft die Taste normal weiter.
+    fn deselect_all(&mut self) -> bool {
+        if self.selected_chars() == 0 {
+            return false;
+        }
+        if let Some(feld) = self.active_text_field() {
+            feld.deselect();
+        }
+        if let Some(c) = self.chat_input.as_mut() {
+            c.deselect();
+        }
+        self.text_selection = None;
+        self.selection_sound_deselect = true;
+        true
+    }
+
+    // Wo die Markierung der Zeile von `ziel` in diesem Bild steht: sie gleitet in CARET_GLIDE
+    // nach `ziel`, von dort, wo sie gerade war -- oder, neu in dieser Zeile, von `anfang`. Dazu
+    // die Staerke des Scheins an ihrer linken und rechten Kante: an jeder, die sich mit der
+    // letzten Aenderung bewegt hat, voll, solange sie gleitet, danach klingt er in SELECTION_FADE
+    // ab.
+    fn glide_selection(&self, ziel: Rect, anfang: Rect) -> (Rect, (f32, f32)) {
+        let jetzt = Instant::now();
+        let gleich = |a: Rect, b: Rect| a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+        let jetzt_bei = |g: &SelectionGlide| mix_rect(g.from, g.to, ease_out(jetzt.duration_since(g.start).as_secs_f32() / CARET_GLIDE.as_secs_f32()));
+        let mut zeilen = self.selection_glide.borrow_mut();
+        if zeilen.len() > 64 {
+            zeilen.retain(|_, g| jetzt.duration_since(g.seen) < Duration::from_secs(1));
+        }
+        let glide = match zeilen.get(&(ziel.y.round() as i32)).copied() {
+            Some(g) if jetzt.duration_since(g.seen) < Duration::from_millis(100) && g.to.h == ziel.h => {
+                if gleich(g.to, ziel) { g } else { SelectionGlide { from: jetzt_bei(&g), to: ziel, start: jetzt, seen: jetzt } }
+            }
+            _ => SelectionGlide { from: anfang, to: ziel, start: jetzt, seen: jetzt },
+        };
+        zeilen.insert(ziel.y.round() as i32, SelectionGlide { seen: jetzt, ..glide });
+        let danach = jetzt.duration_since(glide.start).saturating_sub(CARET_GLIDE);
+        let glow = 1.0 - ease_out(danach.as_secs_f32() / SELECTION_FADE.as_secs_f32());
+        let links = (glide.from.x - glide.to.x).abs() > 0.5;
+        let rechts = (glide.from.x + glide.from.w - glide.to.x - glide.to.w).abs() > 0.5;
+        (jetzt_bei(&glide), (if links { glow } else { 0.0 }, if rechts { glow } else { 0.0 }))
+    }
+
+    // Wie weit der Knopf mit der Flaeche `r` gerade gehovert ist (s. HoverAnim, HOVER_FLASH):
+    // `hover` ist, ob der Zeiger jetzt darauf steht. Der Stand haengt an der Flaeche -- dieselbe
+    // Flaeche im naechsten Bild ist derselbe Knopf.
+    fn hover_level(&self, r: Rect, hover: bool) -> f32 {
+        let jetzt = Instant::now();
+        let key = (r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32);
+        let mut anims = self.hover_anims.borrow_mut();
+        // Laenger nicht gezeichnete Knoepfe vergessen (Seitenwechsel, Scrollen).
+        if anims.len() > 256 {
+            anims.retain(|_, a| jetzt.duration_since(a.seen) < Duration::from_secs(1));
+        }
+        let a = anims.entry(key).or_insert(HoverAnim { hovered: false, since: jetzt, from: 0.0, seen: jetzt });
+        // Lange nicht gezeichnet: kein Nachleuchten von damals.
+        if jetzt.duration_since(a.seen) > Duration::from_millis(100) {
+            *a = HoverAnim { hovered: false, since: jetzt, from: 0.0, seen: jetzt };
+        }
+        if a.hovered != hover {
+            *a = HoverAnim { hovered: hover, since: jetzt, from: a.level(jetzt), seen: jetzt };
+        }
+        a.seen = jetzt;
+        a.level(jetzt)
     }
 
     // Schreibcursor zeichnen: `ziel` ist, wo er jetzt hingehoert. Eine Stelle fuer alle
@@ -39231,6 +39810,27 @@ impl App {
         self.tear_lead_ns = self.tear_lead_ns.clamp(MIN_LEAD_NS, max.max(MIN_LEAD_NS));
     }
 
+    // Messungen nur, solange sie jemand braucht: die VBlanks fuer Scanout-Timing, Profiler und
+    // die Render-Seite (Zeile Compositing), die Beobachtung des Fensters nur fuer die
+    // Render-Seite. Danach enden ihre Threads (sie laufen nur, solange jemand den Stand haelt).
+    fn update_system_watch(&mut self) {
+        let render_seite = self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsGeneral;
+        if self.settings.tear_position != 0 || self.profiler.active() || render_seite {
+            self.ensure_vblank();
+        } else if self.vblank.is_some() {
+            self.vblank = None;
+            self.vblank_tried = false;
+            self.profiler.set_vblank(None);
+        }
+        if !render_seite {
+            self.window_path = None;
+            self.window_path_tried = false;
+        } else if !self.window_path_tried {
+            self.window_path_tried = true;
+            self.window_path = self.gpu.as_ref().and_then(|g| x11_window_id(&g.window)).and_then(system_info::watch_window);
+        }
+    }
+
     // VBlank-Messung einmal starten (Profiler oder Riss-Steuerung brauchen sie).
     fn ensure_vblank(&mut self) -> Option<std::sync::Arc<vblank::VblankMonitor>> {
         if !self.vblank_tried {
@@ -39418,7 +40018,7 @@ impl App {
                 Self::push_slider_visual(&mut rects, sl.track(), t, hover || aktiv, aktiv, button.enabled);
                 continue;
             }
-            let (flaeche, color) = styled_button(&button, hover);
+            let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, hover));
             let (dx, dy) = self.content_offset();
             // Zurueck in Inhaltskoordinaten, die Verschiebung folgt unten fuer alles zusammen.
             let rect = Rect { x: button.rect.x - dx, y: button.rect.y - dy, ..button.rect };
@@ -39663,15 +40263,8 @@ impl App {
                         })
                 }
             }
-            MenuScreen::SettingsDesign => {
-                if settings_row_hover_rect(DESIGN_THEME_ROW).contains(cx, cy) {
-                    Some(THEME_PRESET_TOOLTIP)
-                } else if settings_row_hover_rect(MENU_BACKDROP_ROW).contains(cx, cy) {
-                    Some(MENU_BACKDROP_TOOLTIP)
-                } else {
-                    settings_row_hover_rect(WALLPAPER_ROW).contains(cx, cy).then_some(WALLPAPER_TOOLTIP)
-                }
-            }
+            // Ohne Erklaerungsrand (s. side_strip_w).
+            MenuScreen::SettingsDesign => None,
             MenuScreen::SettingsLanguage => {
                 if settings_row_hover_rect(LATIN_MACRONS_ROW).contains(cx, cy) {
                     Some(LATIN_MACRONS_TOOLTIP)
@@ -40325,6 +40918,93 @@ impl App {
         texts.push(UiText { text: format!("Config: {}", active_config()), x, y: y.round(), color: theme::text_disabled(), scale: UI_SCALE_SMALL });
     }
 
+    // Werte des Abschnitts System (Zeile, Text). Speicher wird hoechstens einmal je Sekunde
+    // gelesen; der Compositor alle 3 s in einem eigenen Thread (X-Verbindung, gsettings), das
+    // Bild zeigt solange den letzten Stand.
+    fn system_rows(&self, gpu: &GpuState) -> [(usize, String); 5] {
+        static CPU: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let jetzt = Instant::now();
+        let unbekannt = || i18n::tr("unbekannt").into_owned();
+        let speicher = match self.memory_info.get() {
+            Some((t, m)) if jetzt.duration_since(t) < Duration::from_secs(1) => m,
+            _ => {
+                let m = system_info::memory();
+                self.memory_info.set(Some((jetzt, m)));
+                m
+            }
+        };
+        if self.compositing_checked.get().is_none_or(|t| jetzt.duration_since(t) >= Duration::from_secs(3)) {
+            self.compositing_checked.set(Some(jetzt));
+            let ziel = std::sync::Arc::clone(&self.compositing_info);
+            std::thread::spawn(move || {
+                let c = system_info::compositing();
+                if let Ok(mut g) = ziel.lock() {
+                    *g = c;
+                }
+            });
+        }
+        // Was mit unserem Fenster passiert: setzt der Compositor es zusammen, oder kommt es
+        // direkt auf den Schirm -- und dann per Hardware-Flip oder als Kopie des X-Servers.
+        let compositor = self.compositing_info.lock().ok().and_then(|g| g.clone());
+        let fenster = self.window_path.as_ref().and_then(|w| w.lock().ok().map(|g| *g));
+        let compositing = match (compositor, fenster) {
+            (Some(system_info::Compositing::Always), _) => i18n::tr("DWM, immer an").into_owned(),
+            (c, Some(system_info::WindowPath { composited: Some(true), .. })) => {
+                let name = match c {
+                    Some(system_info::Compositing::On { name: Some(n) }) => n,
+                    _ => "Compositor".to_string(),
+                };
+                format!("{} {name}", i18n::tr("zusammengesetzt von"))
+            }
+            (_, Some(f)) => {
+                let weg = i18n::tr(match f.last_present {
+                    Some(system_info::PresentPath::Flip) => "Hardware-Flip",
+                    Some(system_info::PresentPath::Copy) => "Kopie (X-Server)",
+                    Some(system_info::PresentPath::SuboptimalCopy) => "Kopie, Flip nicht möglich",
+                    Some(system_info::PresentPath::Skip) => "übersprungen",
+                    None => "direkt",
+                });
+                match self.tear_readout(&f) {
+                    Some(riss) => format!("{weg} · {riss}"),
+                    None => weg.into_owned(),
+                }
+            }
+            (Some(system_info::Compositing::Off), None) => i18n::tr("aus").into_owned(),
+            (Some(system_info::Compositing::On { name }), None) => name.unwrap_or_else(|| i18n::tr("an").into_owned()),
+            (None, None) => unbekannt(),
+        };
+        let ram = speicher.map_or_else(unbekannt, |m| system_info::format_used(m.ram_used, m.ram_total));
+        let swap = match speicher {
+            Some(m) if m.swap_total == 0 => i18n::tr("keiner").into_owned(),
+            Some(m) => system_info::format_used(m.swap_used, m.swap_total),
+            None => unbekannt(),
+        };
+        let cpu = CPU.get_or_init(system_info::cpu_name).clone().unwrap_or_else(unbekannt);
+        [(CPU_ROW, cpu), (GPU_ROW, gpu.gpu_label()), (RAM_ROW, ram), (SWAP_ROW, swap), (COMPOSITING_ROW, compositing)]
+    }
+
+    // Wo der Riss der letzten Bilder lag, aus den Meldungen des X-Servers und den VBlanks (s.
+    // system_info::tear_position). Steht er bei jeder Einstellung an derselben Stelle, haelt der
+    // X-Server die Bilder fest -- dann hilft nur ein Neustart von X.
+    fn tear_readout(&self, f: &system_info::WindowPath) -> Option<String> {
+        let (letzter, periode) = self.vblank.as_ref()?.latest()?;
+        let sichtbar = match self.vblank.as_ref().and_then(|v| v.lines) {
+            Some((sichtbar, gesamt)) => periode * sichtbar as f64 / gesamt as f64,
+            None => {
+                let h = self.gpu.as_ref()?.size().1 as f64;
+                periode * h / (h + 45.0)
+            }
+        };
+        let (mitte, streuung) = system_info::tear_position(f, letzter.ts_ns, periode, sichtbar)?;
+        Some(if streuung > 0.15 {
+            i18n::tr("Riss wandert").into_owned()
+        } else if mitte >= 1.0 {
+            i18n::tr("Riss in der Austastlücke").into_owned()
+        } else {
+            format!("{} {:.0} %", i18n::tr("Riss bei"), mitte * 100.0)
+        })
+    }
+
     fn build_settings_general_tab(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         let set = &self.settings;
         for (row, label) in SETTINGS_LABELS.iter().enumerate() {
@@ -40371,11 +41051,13 @@ impl App {
         rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
         texts.push(gpu.centered_text(rect, threads, theme::text(), UI_SCALE_SMALL));
 
-        // GPU-Zeile: reine Information, kein Bedienelement -- breiteres Feld als die
-        // Stepper-Werte, GPU-Namen sind laenger ("AMD: AMD Radeon Graphics (...)" ~425px).
-        let gpu_row = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(GPU_ROW), w: 500.0, h: SETTINGS_CTRL_H };
-        rects.push(UiRect { rect: gpu_row, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-        texts.push(gpu.centered_text(gpu_row, gpu.gpu_label(), theme::text(), UI_SCALE_SMALL));
+        // Abschnitt System: reine Information, kein Bedienelement -- breitere Felder als die
+        // Stepper-Werte, GPU- und CPU-Namen sind lang ("AMD: AMD Radeon Graphics (...)" ~425px).
+        for (row, wert) in self.system_rows(gpu) {
+            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(row), w: 500.0, h: SETTINGS_CTRL_H };
+            rects.push(UiRect { rect: feld, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+            texts.push(gpu.centered_text(feld, wert, theme::text(), UI_SCALE_SMALL));
+        }
         // Riss-Timing: Wert in Millisekunden, mit Vorzeichen.
         let rect = stepper_value_rect(TEAR_TIMING_ROW);
         rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
@@ -40616,19 +41298,7 @@ impl App {
     // Aussehen: Hintergrundbild, darunter das Theme. Die Knoepfe kommen aus buttons().
     fn build_settings_design_tab(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         let zeile_y = |row: usize| (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        texts.push(UiText { text: "Preset".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(DESIGN_THEME_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
-        for (i, slot) in theme::Slot::ALL.into_iter().enumerate() {
-            let (row, swatch_x) = theme_slot_cell(i);
-            let label_x = if swatch_x == SETTINGS_CTRL_X { SETTINGS_LABEL_X } else { THEME_RIGHT_LABEL_X };
-            texts.push(UiText { text: slot.label().to_string(), x: label_x, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
-            texts.push(UiText {
-                text: format!("#{:06X}", theme::srgb(slot)),
-                x: swatch_x + SWATCH_W + 12.0,
-                y: zeile_y(row),
-                color: theme::text_3(),
-                scale: UI_SCALE_SMALL,
-            });
-        }
+        self.build_theme_section(gpu, rects, texts);
         texts.push(UiText { text: "Spielbild abdunkeln".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(MENU_BACKDROP_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
         let abdunkeln = format!("{} %", self.settings.menu_backdrop_opacity);
         self.draw_editable_value(gpu, stepper_value_rect(MENU_BACKDROP_ROW), EditableValue::MenuBackdropOpacity, abdunkeln, rects, texts);
@@ -40651,6 +41321,256 @@ impl App {
                 texts.push(UiText { text, x: WALLPAPER_PICK_X, y: zeile_y(WALLPAPER_ROW), color: theme::text_disabled(), scale: UI_SCALE_SMALL });
             }
         }
+    }
+
+    // Theme-Abschnitt der Seite Aussehen: Kacheln links, Trennlinie, Farben rechts.
+    fn build_theme_section(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        use theme::Slot;
+        let g = theme::get;
+        let set = &self.settings;
+        let zeile_y = |row: usize| (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        let sichtbar = |y: f32| y > -1000.0;
+        // Hinter einem offenen Fenster leuchtet nichts auf.
+        let (qx, qy) = if self.theme_name_dialog.is_some() || self.theme_delete.is_some() { (-1.0, -1.0) } else { self.pointer() };
+        let presets = theme::PRESETS.len();
+        let anzahl = presets + set.custom_themes.len() + 1;
+        for i in 0..anzahl {
+            let r = theme_tile_rect(i);
+            if !sichtbar(r.y) {
+                continue;
+            }
+            let k = self.hover_level(r, r.contains(qx, qy)).min(1.0);
+            if i == anzahl - 1 {
+                // "+": ein neues eigenes Theme.
+                rects.push(UiRect::framed(r, mix_color(g(Slot::Surface1), g(Slot::Surface2), k), 8.0, 1.0, mix_color(g(Slot::Border2), g(Slot::BorderStrong), k)));
+                let farbe = mix_color(theme::text_2(), theme::text(), k);
+                let (mx, my) = ((r.x + r.w / 2.0).round(), (r.y + r.h / 2.0).round());
+                push_bar(rects, (mx - 10.0, my), (mx + 10.0, my), 3.0, farbe);
+                push_bar(rects, (mx, my - 10.0), (mx, my + 10.0), 3.0, farbe);
+                continue;
+            }
+            let (name, farben, wahl) = match i.checked_sub(presets) {
+                None => (theme::PRESETS[i].name.to_string(), theme::PRESETS[i].colors, ThemeChoice::Preset(i)),
+                Some(j) => (set.custom_themes[j].name.clone(), set.custom_themes[j].colors, ThemeChoice::Custom(j)),
+            };
+            // Die Kachel zeigt das Theme selbst: seine Flaeche, sein Akzent, seine Textfarbe.
+            let c = |slot: Slot| theme::rgba(farben[slot.index()]);
+            let gewaehlt = set.theme_choice == wahl;
+            let rand = if gewaehlt { g(Slot::Accent) } else { mix_color(g(Slot::Border1), g(Slot::BorderStrong), k) };
+            rects.push(UiRect::framed(r, c(Slot::BgPanel), 8.0, if gewaehlt { 2.0 } else { 1.0 }, rand));
+            rects.push(UiRect::rounded(Rect { x: r.x + 10.0, y: r.y + 9.0, w: 6.0, h: r.h - 18.0 }, c(Slot::Accent), 3.0));
+            for (n, slot) in [Slot::Surface2, Slot::AccentSurface, Slot::Text2].into_iter().enumerate() {
+                let d = Rect { x: r.x + r.w - 14.0 - (3 - n) as f32 * 16.0, y: r.y + r.h / 2.0 - 6.0, w: 12.0, h: 12.0 };
+                rects.push(UiRect::framed(d, c(slot), 6.0, 1.0, c(Slot::Border2)));
+            }
+            let ty = (r.y + (r.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+            // Eigene Namen werden nicht uebersetzt (s. push_typed_marker), Presets schon.
+            let name = if matches!(wahl, ThemeChoice::Custom(_)) {
+                push_typed_marker(texts);
+                name
+            } else {
+                Self::fit_text(gpu, &name, r.w - 26.0 - 64.0, UI_SCALE_SMALL)
+            };
+            texts.push(UiText { text: name, x: r.x + 26.0, y: ty, color: c(Slot::Text1), scale: UI_SCALE_SMALL });
+        }
+        // Trennlinie ueber alle sichtbaren Zeilen des Abschnitts.
+        let ys: Vec<f32> = (DESIGN_THEME_ROW..design_row_count()).map(settings_row_y).filter(|&y| sichtbar(y)).collect();
+        if let (Some(&oben), Some(&unten)) = (ys.first(), ys.last()) {
+            rects.push(UiRect { rect: Rect { x: THEME_DIVIDER_X, y: oben - 3.0, w: 1.0, h: unten + SETTINGS_CTRL_H + 3.0 - (oben - 3.0) }, color: g(Slot::Border1), ..UiRect::FLAT });
+        }
+        // Rechts: welches Theme, dann seine Farben -- bei einem Preset nur zum Ansehen.
+        let fest = matches!(set.theme_choice, ThemeChoice::Preset(_));
+        if sichtbar(settings_row_y(DESIGN_THEME_ROW)) {
+            let name = match set.theme_choice {
+                ThemeChoice::Preset(i) => theme::PRESETS.get(i).map_or("", |p| p.name).to_string(),
+                ThemeChoice::Custom(i) => set.custom_themes.get(i).map_or_else(String::new, |t| t.name.clone()),
+            };
+            let y = zeile_y(DESIGN_THEME_ROW);
+            let breite = if fest {
+                gpu.measure_text(&name, UI_SCALE_SMALL)
+            } else {
+                push_typed_marker(texts);
+                gpu.measure_raw(&name, UI_SCALE_SMALL)
+            };
+            texts.push(UiText { text: name, x: THEME_COLORS_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+            let hinweis = if fest { "Preset: Farben fest. Eigene Farben mit +" } else { "Farbfeld anklicken zum Ändern, Rechtsklick auf die Kachel löscht" };
+            texts.push(UiText { text: hinweis.to_string(), x: THEME_COLORS_X + breite + 16.0, y, color: theme::text_2(), scale: UI_SCALE_SMALL });
+        }
+        for (i, slot) in theme::Slot::ALL.into_iter().enumerate() {
+            let (row, x) = theme_slot_cell(i);
+            if !sichtbar(settings_row_y(row)) {
+                continue;
+            }
+            texts.push(UiText { text: slot.label().to_string(), x, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
+            // Bei einem Preset gibt es keine Farbfeld-Knoepfe (s. screen_buttons): die Farbe
+            // steht hier ohne Hover und ohne Klick.
+            if fest {
+                let feld = Rect { x: x + THEME_COLOR_SWATCH_DX, y: settings_row_y(row), w: SWATCH_W, h: SETTINGS_CTRL_H };
+                rects.push(UiRect::framed(feld, theme::get(slot), 6.0, 2.0, [0.0, 0.0, 0.0, 1.0]));
+            }
+        }
+    }
+
+    // Namensfenster fuer ein neues Theme (Geometrie wie Quick Connect).
+    fn build_theme_name_dialog(&self, overlay: &mut UiOverlay) {
+        let Some((gpu, d)) = self.gpu.as_ref().zip(self.theme_name_dialog.as_ref()).filter(|_| self.mode == AppMode::Menu) else { return };
+        use theme::Slot;
+        let g = theme::get;
+        let (sw, sh) = gpu.size();
+        let (p, feld, ok, abbrechen) = Self::quick_connect_layout();
+        let (cx, cy) = self.cursor_pos;
+        let mut rects = vec![
+            UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: dialog_dim(), ..UiRect::FLAT },
+            UiRect::shadow(p, 8.0, 12.0, 32.0, 0.6),
+            UiRect::framed(p, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
+            UiRect::framed(feld, g(Slot::SurfaceSunken), 6.0, 1.0, g(Slot::Accent)),
+        ];
+        let mut texts = vec![
+            UiText { text: "Neues Theme".to_string(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL },
+            UiText { text: "NAME".to_string(), x: feld.x, y: feld.y - gpu.text_height(TOPBAR_SUB_SCALE) - 8.0, color: theme::text_3(), scale: TOPBAR_SUB_SCALE },
+        ];
+        self.push_text_field(gpu, &d.field, feld, true, &mut rects, &mut texts);
+        let leer = d.field.text().trim().is_empty();
+        for (r, label, primaer) in [(abbrechen, "Abbrechen", false), (ok, "Erstellen", true)] {
+            let b = Button {
+                slider: None,
+                action: ButtonAction::NewCustomTheme,
+                rect: r,
+                label: String::new(),
+                enabled: !primaer || !leer,
+                color: if primaer { g(Slot::Accent) } else { g(Slot::Surface2) },
+                scale: UI_SCALE_SMALL,
+            };
+            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, r.contains(cx, cy)));
+            rects.push(flaeche);
+            texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
+        }
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
+    }
+
+    fn theme_name_index(&self, x: f32) -> usize {
+        let (Some(gpu), Some(d)) = (self.gpu.as_ref(), self.theme_name_dialog.as_ref()) else { return 0 };
+        let (_, feld, _, _) = Self::quick_connect_layout();
+        text_field::index_at(d.field.text(), x - feld.x - 12.0, |t| gpu.measure_raw(t, UI_SCALE_NORMAL))
+    }
+
+    // Linke Taste bei offenem Namensfenster. Immer verbraucht.
+    fn theme_name_press(&mut self) {
+        let (p, feld, ok, abbrechen) = Self::quick_connect_layout();
+        let (cx, cy) = self.cursor_pos;
+        if feld.contains(cx, cy) {
+            let i = self.theme_name_index(cx);
+            let shift = self.modifiers.shift_key();
+            if let Some(d) = self.theme_name_dialog.as_mut() {
+                if field_press(&mut d.field, &mut d.last_press, &mut d.dragging, i, shift, (cx, cy)) {
+                    self.selection_sound_hint = Some(ui_sound::UiSound::Step);
+                }
+            }
+        } else if ok.contains(cx, cy) {
+            self.create_custom_theme();
+        } else if abbrechen.contains(cx, cy) || !p.contains(cx, cy) {
+            self.play_ui_sound(ui_sound::UiSound::Close);
+            self.theme_name_dialog = None;
+        }
+    }
+
+    // Neues eigenes Theme mit dem Namen aus dem Fenster, anfangs mit den Farben des gerade
+    // gewaehlten -- und gleich gewaehlt, damit man rechts die Farben setzen kann.
+    fn create_custom_theme(&mut self) {
+        let name = self.theme_name_dialog.as_ref().map(|d| d.field.text().trim().to_string()).unwrap_or_default();
+        if name.is_empty() {
+            self.play_ui_sound(ui_sound::UiSound::Denied);
+            return;
+        }
+        self.play_ui_sound(ui_sound::UiSound::Click);
+        self.theme_name_dialog = None;
+        let colors = self.settings.theme;
+        self.settings.custom_themes.push(CustomTheme { name, colors });
+        let i = self.settings.custom_themes.len() - 1;
+        self.settings.select_theme(ThemeChoice::Custom(i));
+        self.persist_settings();
+    }
+
+    // Eigenes Theme unter dem Zeiger (Seite Aussehen), Index in custom_themes.
+    fn custom_theme_at_pointer(&self) -> Option<usize> {
+        if self.mode != AppMode::Menu || self.screen != MenuScreen::SettingsDesign {
+            return None;
+        }
+        let (qx, qy) = self.pointer();
+        (0..self.settings.custom_themes.len()).find(|&j| theme_tile_rect(theme::PRESETS.len() + j).contains(qx, qy))
+    }
+
+    // Rueckfrage vor dem Loeschen: (Fenster, Loeschen, Abbrechen).
+    fn theme_delete_layout() -> (Rect, Rect, Rect) {
+        let (sw, sh) = ui_screen();
+        let (w, h) = (440.0, 176.0);
+        let p = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
+        let loeschen = Rect { x: p.x + p.w - 24.0 - 140.0, y: p.y + p.h - 24.0 - 40.0, w: 140.0, h: 40.0 };
+        let abbrechen = Rect { x: loeschen.x - 12.0 - 140.0, ..loeschen };
+        (p, loeschen, abbrechen)
+    }
+
+    fn build_theme_delete(&self, overlay: &mut UiOverlay) {
+        let Some((gpu, i)) = self.gpu.as_ref().zip(self.theme_delete).filter(|_| self.mode == AppMode::Menu) else { return };
+        let Some(t) = self.settings.custom_themes.get(i) else { return };
+        use theme::Slot;
+        let g = theme::get;
+        let (sw, sh) = gpu.size();
+        let (p, loeschen, abbrechen) = Self::theme_delete_layout();
+        let (cx, cy) = self.cursor_pos;
+        let mut rects = vec![
+            UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: dialog_dim(), ..UiRect::FLAT },
+            UiRect::shadow(p, 8.0, 12.0, 32.0, 0.6),
+            UiRect::framed(p, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
+        ];
+        let mut texts = vec![UiText { text: "Löschen?".to_string(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL }];
+        push_typed_marker(&mut texts);
+        texts.push(UiText { text: t.name.clone(), x: p.x + 24.0, y: p.y + 24.0 + gpu.text_height(UI_SCALE_NORMAL) + 10.0, color: theme::text_2(), scale: UI_SCALE_SMALL });
+        for (r, label, gefahr) in [(abbrechen, "Abbrechen", false), (loeschen, "Löschen", true)] {
+            let b = Button {
+                slider: None,
+                action: ButtonAction::Nothing,
+                rect: r,
+                label: String::new(),
+                enabled: true,
+                color: if gefahr { g(Slot::DangerSurface) } else { g(Slot::Surface2) },
+                scale: UI_SCALE_SMALL,
+            };
+            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, r.contains(cx, cy)));
+            rects.push(flaeche);
+            texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
+        }
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
+    }
+
+    // Linke Taste bei offener Rueckfrage. Immer verbraucht.
+    fn theme_delete_press(&mut self) {
+        let (p, loeschen, abbrechen) = Self::theme_delete_layout();
+        let (cx, cy) = self.cursor_pos;
+        if loeschen.contains(cx, cy) {
+            if let Some(i) = self.theme_delete.take() {
+                self.play_ui_sound(ui_sound::UiSound::Close);
+                self.delete_custom_theme(i);
+            }
+        } else if abbrechen.contains(cx, cy) || !p.contains(cx, cy) {
+            self.play_ui_sound(ui_sound::UiSound::Close);
+            self.theme_delete = None;
+        }
+    }
+
+    // Eigenes Theme `i` entfernen; war es gewaehlt, gilt danach der Standard.
+    fn delete_custom_theme(&mut self, i: usize) {
+        let set = &mut self.settings;
+        if i >= set.custom_themes.len() {
+            return;
+        }
+        set.custom_themes.remove(i);
+        match set.theme_choice {
+            ThemeChoice::Custom(j) if j == i => set.select_theme(ThemeChoice::Preset(0)),
+            ThemeChoice::Custom(j) if j > i => set.theme_choice = ThemeChoice::Custom(j - 1),
+            _ => {}
+        }
+        self.persist_settings();
     }
 
     fn build_settings_language_tab(&self, gpu: &GpuState, texts: &mut Vec<UiText>) {
@@ -40860,8 +41780,9 @@ impl App {
         let w = tooltip_strip_w(screen_w);
         match self.screen {
             MenuScreen::SettingsFont => 2.0 * w,
-            // Die Partikel-Tabelle braucht die ganze Breite und hat keine Erklaerungen.
-            MenuScreen::SettingsParticles => 0.0,
+            // Die Partikel-Tabelle braucht die ganze Breite und hat keine Erklaerungen, ebenso
+            // Aussehen (Kacheln und Farben nebeneinander).
+            MenuScreen::SettingsParticles | MenuScreen::SettingsDesign => 0.0,
             _ => w,
         }
     }
@@ -41057,7 +41978,7 @@ impl App {
             let tx = feld.x + 10.0;
             push_typed_marker(texts);
             texts.push(UiText { text: wert.clone(), x: tx, y: zeile(1), color: theme::text(), scale: UI_SCALE_SMALL });
-            self.push_caret(rects, Rect { x: tx + gpu.measure_text(wert, UI_SCALE_SMALL), y: zeile(1), w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
+            self.push_caret(rects, Rect { x: tx + gpu.measure_raw(wert, UI_SCALE_SMALL), y: zeile(1), w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
         } else {
             texts.push(UiText {
                 text: "Klick auf eine Config wechselt sofort -- auch mitten im Spiel.".to_string(),
@@ -41091,7 +42012,7 @@ impl App {
         let text_x = if self.light_search.is_empty() { tx + CARET_WIDTH_PX + 3.0 } else { tx };
         push_typed_marker(texts);
         texts.push(UiText { text: shown, x: text_x, y: zeile(0), color: farbe, scale: UI_SCALE_SMALL });
-        let caret_x = tx + if self.light_search.is_empty() { 0.0 } else { gpu.measure_text(&self.light_search, UI_SCALE_SMALL) };
+        let caret_x = tx + if self.light_search.is_empty() { 0.0 } else { gpu.measure_raw(&self.light_search, UI_SCALE_SMALL) };
         self.push_caret(rects, Rect { x: caret_x, y: zeile(0), w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
         let treffer = self.light_search_hits();
         if treffer.is_empty() {
@@ -42050,7 +42971,7 @@ impl App {
             let shown = token_display(gpu, value, ACCOUNT_INPUT_FIELD.w - 20.0);
             push_typed_marker(texts);
             texts.push(UiText { text: shown.clone(), x: tx, y: ty, color: theme::text(), scale: UI_SCALE_SMALL });
-            let caret_x = tx + gpu.measure_text(&shown, UI_SCALE_SMALL);
+            let caret_x = tx + gpu.measure_raw(&shown, UI_SCALE_SMALL);
             self.push_caret(rects, Rect { x: caret_x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
         }
 
@@ -42067,26 +42988,6 @@ impl App {
             color: [0.6, 0.6, 0.6, 1.0],
             scale: UI_SCALE_SMALL,
         });
-    }
-
-    // Fuegt Text aus der System-Zwischenablage in die Adress-Eingabe ein (Strg+V).
-    fn paste_from_clipboard(&mut self) {
-        // Eingefuegt wird nur ins offene Quick-Connect-Feld.
-        if !self.quick_connect_open {
-            return;
-        }
-        let Ok(mut clipboard) = arboard::Clipboard::new() else {
-            self.push_log("Zwischenablage konnte nicht geöffnet werden");
-            return;
-        };
-        let Ok(text) = clipboard.get_text() else {
-            return;
-        };
-        for ch in text.chars() {
-            if !ch.is_control() && self.server_address.chars().count() < MAX_ADDRESS_LEN {
-                self.server_address.push(ch);
-            }
-        }
     }
 
     // Rohe Maus-Deltas: im Menu-Modus 2D-Cursor, im World-Modus Kamera-Blickrichtung.
@@ -42331,16 +43232,17 @@ impl App {
         let x = (VOLUME_DISPLAY_MARGIN - (1.0 - rein) * (w + VOLUME_DISPLAY_MARGIN)).round();
         let y = ((screen_h - h) / 2.0).round();
         let a = |c: [f32; 4]| [c[0], c[1], c[2], c[3] * alpha];
-        let akzent = notifications::Kind::Info.accent().map(world::sky::srgb_to_linear);
-        let akzent = [akzent[0], akzent[1], akzent[2], 1.0];
+        // Farben aus dem Theme: Flaeche und Rand wie ein Panel, Balken im Akzent.
+        use theme::Slot;
+        let tg = theme::get;
         let mut g = UiOverlayGroup { rects: Vec::new(), texts: Vec::new(), sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 };
-        g.rects.push(UiRect { rect: Rect { x, y, w, h }, color: a(COLOR_NOTIFICATION_BG), ..UiRect::FLAT });
-        g.texts.push(UiText { text: "Lautstärke".to_string(), x: x + pad, y: y + pad, color: a(COLOR_NOTIFICATION_BODY), scale: UI_SCALE_SMALL });
+        g.rects.push(UiRect::framed(Rect { x, y, w, h }, a(theme::with_alpha(tg(Slot::BgPanel), 0.94)), 6.0, 1.0, a(tg(Slot::Border1))));
+        g.texts.push(UiText { text: "Lautstärke".to_string(), x: x + pad, y: y + pad, color: a(tg(Slot::AccentText)), scale: UI_SCALE_SMALL });
         let wert = self.settings.master_volume;
-        g.texts.push(UiText { text: format!("{wert} %"), x: x + pad, y: y + pad + klein + 6.0, color: a(COLOR_WHITE), scale: UI_SCALE_NORMAL });
+        g.texts.push(UiText { text: format!("{wert} %"), x: x + pad, y: y + pad + klein + 6.0, color: a(theme::text()), scale: UI_SCALE_NORMAL });
         let balken = Rect { x: x + pad, y: y + h - pad - VOLUME_BAR_H, w: w - 2.0 * pad, h: VOLUME_BAR_H };
-        g.rects.push(UiRect { rect: balken, color: a(theme::get(theme::Slot::Surface1)), ..UiRect::FLAT });
-        g.rects.push(UiRect { rect: Rect { w: balken.w * wert as f32 / 100.0, ..balken }, color: a(akzent), ..UiRect::FLAT });
+        g.rects.push(UiRect { rect: balken, color: a(tg(Slot::SurfaceSunken)), ..UiRect::FLAT });
+        g.rects.push(UiRect { rect: Rect { w: balken.w * wert as f32 / 100.0, ..balken }, color: a(theme::accent()), ..UiRect::FLAT });
         overlay.groups.push(g);
     }
 
@@ -46357,10 +47259,31 @@ impl App {
     // Knoepfe, aber wie alle Flaechen unter dem Text.
     fn push_selection_rects(&self, gpu: &GpuState, rects: &mut Vec<UiRect>) {
         let runs = gpu.text_runs.borrow();
+        // Je Zeile EINE Flaeche: getippter Text besteht aus vielen kleinen Laeufen (ein Zeichen
+        // je Lauf), die sonst einzeln aufleuchten wuerden.
+        let mut zeilen: Vec<Rect> = Vec::new();
         for (i, r) in self.selected_ranges(&runs) {
             let run = &runs[i];
             let (x0, x1) = (run.glyphs[r.start].1, run.glyphs[r.end - 1].2);
-            rects.push(UiRect { rect: Rect { x: x0, y: run.top, w: x1 - x0, h: run.bottom - run.top }, color: COLOR_SELECTION, ..UiRect::FLAT });
+            match zeilen.iter_mut().find(|z| z.y == run.top && z.h == run.bottom - run.top) {
+                Some(z) => {
+                    let rechts = (z.x + z.w).max(x1);
+                    z.x = z.x.min(x0);
+                    z.w = rechts - z.x;
+                }
+                None => zeilen.push(Rect { x: x0, y: run.top, w: x1 - x0, h: run.bottom - run.top }),
+            }
+        }
+        for ziel in zeilen {
+            // Neu in einer Zeile waechst die Markierung vom Anker weg: in seiner Zeile von ihm aus
+            // (Doppelklick mitten ins Wort: in beide Richtungen), darunter von links, darueber
+            // von rechts.
+            let start_x = self.text_selection.as_ref().map_or(ziel.x, |s| {
+                let (ax, ay) = (s.anchor.0, s.anchor.1 + self.selection_shift(s));
+                if ay < ziel.y { ziel.x } else if ay >= ziel.y + ziel.h { ziel.x + ziel.w } else { ax.clamp(ziel.x, ziel.x + ziel.w) }
+            });
+            let (f, glow) = self.glide_selection(ziel, Rect { x: start_x, w: 0.0, ..ziel });
+            self.push_selection_span(rects, f, glow);
         }
     }
 
@@ -46380,7 +47303,7 @@ impl App {
         let rect = self.chat_input_rect(gpu);
         let line_h = Self::chat_input_line_h(gpu);
         let caret_x = self.chat_caret_x(gpu);
-        let mass = |t: &str| gpu.measure_text(t, UI_SCALE_NORMAL);
+        let mass = |t: &str| gpu.measure_raw(t, UI_SCALE_NORMAL);
         let mut bereich: Option<std::ops::Range<usize>> = None;
         for (i, zeile) in self.chat_input_lines(gpu, text).iter().enumerate() {
             let y = rect.y + 3.0 + i as f32 * line_h + 1.0;
@@ -46459,6 +47382,44 @@ impl App {
         }
     }
 
+    // Ein blosser Klick in die Chat-Eingabe: den Cursor an die naechste Zeichengrenze setzen.
+    fn chat_click_cursor(&mut self, pos: (f32, f32)) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let Some(feld) = self.chat_input.as_ref() else { return };
+        let rect = self.chat_input_rect(gpu);
+        if !rect.contains(pos.0, pos.1) {
+            return;
+        }
+        let _schrift = self.area_font_scope(gpu, ShadowArea::Chat);
+        let text = feld.text();
+        let zeilen = self.chat_input_lines(gpu, text);
+        let Some(letzte) = zeilen.len().checked_sub(1) else { return };
+        let line_h = Self::chat_input_line_h(gpu);
+        let i = (((pos.1 - rect.y - 3.0) / line_h).floor().max(0.0) as usize).min(letzte);
+        let zeile = zeilen[i];
+        let start = zeile.as_ptr() as usize - text.as_ptr() as usize;
+        let caret_x = self.chat_caret_x(gpu);
+        let ziel = zeile
+            .char_indices()
+            .map(|(k, _)| k)
+            .chain([zeile.len()])
+            .min_by(|&a, &b| {
+                let x = |k: usize| (caret_x - gpu.measure_raw(&zeile[k..], UI_SCALE_NORMAL) - pos.0).abs();
+                x(a).total_cmp(&x(b))
+            })
+            .map_or(start, |k| start + k);
+        drop(_schrift);
+        let Some(feld) = self.chat_input.as_mut() else { return };
+        let vorher = (feld.cursor(), feld.keyboard_selection().is_some());
+        feld.set_cursor(ziel);
+        if vorher != (ziel, false) {
+            if !vorher.1 {
+                self.play_ui_sound(ui_sound::UiSound::Step);
+            }
+            self.request_command_suggestions();
+        }
+    }
+
     // Wo die Stelle `b` (Byte in `text`) im Eingabefeld steht: (Zeile, x der Zeichengrenze).
     // `davor`: an einer Umbruchstelle das Ende der vorigen Zeile statt des Anfangs der
     // naechsten (fuer das Ende einer Markierung).
@@ -46477,7 +47438,7 @@ impl App {
             .unwrap_or(if b == 0 { 0 } else { zeilen.len() - 1 });
         let (s, e) = bereich(zeilen[i]);
         let rest = &zeilen[i][b.clamp(s, e) - s..];
-        (i, self.chat_caret_x(gpu) - gpu.measure_text(rest, UI_SCALE_NORMAL))
+        (i, self.chat_caret_x(gpu) - gpu.measure_raw(rest, UI_SCALE_NORMAL))
     }
 
     // Die Tastatur-Markierung (Shift+Pfeil, Strg+A) als gewoehnliche Textauswahl: dieselbe
@@ -46522,6 +47483,12 @@ impl App {
             _ => 1,
         };
         self.last_left_click = Some((jetzt, pos, clicks));
+        self.selection_sound_deselect = true;
+        self.selection_sound_hint = match clicks {
+            2 => Some(ui_sound::UiSound::Step),
+            3 => Some(ui_sound::UiSound::Click),
+            _ => None,
+        };
         // Im offenen Chatverlauf gedrueckt? Dann haengt die Auswahl am Text (s. chat_anchor).
         let im_verlauf = self.chat_input.is_some() && self.gpu.as_ref().is_some_and(|gpu| self.chat_open_rect(gpu).contains(pos.0, pos.1));
         self.text_selection = self.selection_start_allowed(pos).then(|| TextSelection {
@@ -46589,7 +47556,9 @@ impl App {
         let Some(sel) = self.text_selection.as_mut() else { return };
         sel.dragging = false;
         if !sel.moved && sel.clicks < 2 {
+            let klick = sel.anchor;
             self.text_selection = None;
+            self.chat_click_cursor(klick);
             return;
         }
         let text = self.selected_text();
@@ -46650,7 +47619,7 @@ impl App {
         if self.mode != AppMode::Menu {
             return false;
         }
-        if self.server_edit.is_some() {
+        if self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
             self.server_edit_insert(text);
             return true;
         }
@@ -46661,14 +47630,6 @@ impl App {
         if self.screen == MenuScreen::SettingsLightLevels {
             self.light_search.extend(text.chars().filter(|c| !c.is_control()));
             self.light_scroll = 0;
-            return true;
-        }
-        if self.screen == MenuScreen::Connect && self.quick_connect_open {
-            for ch in text.chars() {
-                if !ch.is_control() && self.server_address.chars().count() < MAX_ADDRESS_LEN {
-                    self.server_address.push(ch);
-                }
-            }
             return true;
         }
         false
@@ -47333,7 +48294,7 @@ impl ApplicationHandler for App {
         // was wiederum eine zusaetzliche Scanout-Pufferstufe (und damit Latenz) kostet.
         let window = Arc::new(window);
 
-        let gpu = GpuState::new(
+        let mut gpu = GpuState::new(
             window,
             &mut self.installation,
             &self.atlas_mips,
@@ -47347,6 +48308,7 @@ impl ApplicationHandler for App {
         );
         self.cursor_pos = (gpu.size().0 / 2.0, gpu.size().1 / 2.0);
         gpu.stable_numbers.borrow_mut().set_enabled(self.settings.stable_numbers);
+        gpu.upload_logos();
         self.gpu = Some(gpu);
         self.sync_text_shadow();
         self.apply_pack_shaders();
@@ -47419,6 +48381,9 @@ impl ApplicationHandler for App {
             return;
         }
 
+        if matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. }) {
+            self.selection_sound_deselect = true;
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Focused(focused) => {
@@ -47660,6 +48625,20 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Die Fenster der Seite Aussehen (neues Theme, Loeschen?) liegen ueber allem und
+                // schlucken jeden Druck.
+                if state == ElementState::Pressed && self.mode == AppMode::Menu && self.theme_delete.is_some() {
+                    if button == MouseButton::Left {
+                        self.theme_delete_press();
+                    }
+                    return;
+                }
+                if state == ElementState::Pressed && self.mode == AppMode::Menu && self.theme_name_dialog.is_some() {
+                    if button == MouseButton::Left {
+                        self.theme_name_press();
+                    }
+                    return;
+                }
                 // Quick Connect liegt ueber der ganzen Seite und schluckt jeden Klick.
                 if button == MouseButton::Left && state == ElementState::Pressed && self.quick_connect_open && self.mode == AppMode::Menu {
                     self.quick_connect_press();
@@ -47798,6 +48777,12 @@ impl ApplicationHandler for App {
                         self.server_context_open();
                         return;
                     }
+                    // Aussehen: Rechtsklick auf ein eigenes Theme fragt, ob es weg soll.
+                    if let Some(i) = self.custom_theme_at_pointer() {
+                        self.play_ui_sound(ui_sound::UiSound::Open);
+                        self.theme_delete = Some(i);
+                        return;
+                    }
                     // HUD-Editor: Rechtsklick auf ein Element oeffnet seine Einstellungen.
                     if self.screen == MenuScreen::HudEditor && self.crosshair_painter.is_none() {
                         if let Some(element) = self.hud_element_at_cursor() {
@@ -47833,6 +48818,10 @@ impl ApplicationHandler for App {
                     self.skin_drag_release();
                     if let Some(edit) = self.server_edit.as_mut() {
                         edit.dragging = false;
+                    }
+                    self.quick_dragging = false;
+                    if let Some(d) = self.theme_name_dialog.as_mut() {
+                        d.dragging = false;
                     }
                     self.book_edit_dragging = false;
                     if !self.slider_extended && self.slider_drag.take().is_some() {
@@ -47948,6 +48937,15 @@ impl ApplicationHandler for App {
                     && self.modifiers.control_key()
                     && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyC)
                     && self.copy_selection()
+                {
+                    return;
+                }
+                // Strg+D mit Markierung: aufheben.
+                if self.awaiting_keybind.is_none()
+                    && key_event.state == ElementState::Pressed
+                    && self.modifiers.control_key()
+                    && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyD)
+                    && self.deselect_all()
                 {
                     return;
                 }
@@ -48252,10 +49250,9 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Server-Formular (Connect-Screen, rechts) hat Vorrang vor dem Adressfeld
-                // links, solange es offen ist -- sonst tippt man beim Bearbeiten einer
-                // Kachel unbemerkt in die Adresse daneben.
-                if self.server_edit.is_some() {
+                // Server-Formular bzw. Quick Connect: dieselben Tasten fuer beide Felder (s.
+                // active_text_field), das Formular hat Vorrang.
+                if self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
                     if key_event.state != ElementState::Pressed {
                         return;
                     }
@@ -48263,9 +49260,9 @@ impl ApplicationHandler for App {
                     let shift = self.modifiers.shift_key();
                     let taste = |c: KeyCode| key_event.physical_key == PhysicalKey::Code(c);
                     if strg && (taste(KeyCode::KeyC) || taste(KeyCode::KeyX)) {
-                        let markiert = match self.server_edit.as_mut() {
-                            Some(edit) if taste(KeyCode::KeyX) => edit.focused().cut(),
-                            Some(edit) => edit.focused().selected_text().to_string(),
+                        let markiert = match self.active_text_field() {
+                            Some(feld) if taste(KeyCode::KeyX) => feld.cut(),
+                            Some(feld) => feld.selected_text().to_string(),
                             None => String::new(),
                         };
                         if !markiert.is_empty() {
@@ -48282,8 +49279,8 @@ impl ApplicationHandler for App {
                         return;
                     }
                     if strg && taste(KeyCode::KeyA) {
-                        if let Some(edit) = self.server_edit.as_mut() {
-                            edit.focused().select_all();
+                        if let Some(feld) = self.active_text_field() {
+                            feld.select_all();
                         }
                         return;
                     }
@@ -48295,20 +49292,20 @@ impl ApplicationHandler for App {
                         _ => None,
                     };
                     if let Some(m) = bewegung {
-                        if let Some(edit) = self.server_edit.as_mut() {
-                            edit.focused().move_cursor(m, shift);
+                        if let Some(feld) = self.active_text_field() {
+                            feld.move_cursor(m, shift);
                         }
                         return;
                     }
                     match &key_event.logical_key {
                         Key::Named(NamedKey::Backspace) => {
-                            if let Some(edit) = self.server_edit.as_mut() {
-                                edit.focused().backspace();
+                            if let Some(feld) = self.active_text_field() {
+                                feld.backspace();
                             }
                         }
                         Key::Named(NamedKey::Delete) => {
-                            if let Some(edit) = self.server_edit.as_mut() {
-                                edit.focused().delete_forward();
+                            if let Some(feld) = self.active_text_field() {
+                                feld.delete_forward();
                             }
                         }
                         Key::Named(NamedKey::Tab) => {
@@ -48321,7 +49318,9 @@ impl ApplicationHandler for App {
                         }
                         // Escape kommt hier nie an -- es wird weiter oben global abgefangen
                         // und landet in on_escape(), das das Fenster schliesst.
-                        Key::Named(NamedKey::Enter) => self.commit_server_edit(),
+                        Key::Named(NamedKey::Enter) if self.server_edit.is_some() => self.commit_server_edit(),
+                        Key::Named(NamedKey::Enter) if self.theme_name_dialog.is_some() => self.create_custom_theme(),
+                        Key::Named(NamedKey::Enter) => self.quick_connect_submit(),
                         _ => {
                             if !strg {
                                 if let Some(text) = key_event.text.clone() {
@@ -48375,12 +49374,6 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Strg+V: physische Taste (layout-unabhaengig), liest aus der Zwischenablage.
-                if self.modifiers.control_key() && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyV) {
-                    self.paste_from_clipboard();
-                    return;
-                }
-
                 // Lichtstaerken-Seite: Tippen geht ins Suchfeld.
                 if self.screen == MenuScreen::SettingsLightLevels {
                     match &key_event.logical_key {
@@ -48399,35 +49392,14 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Adress-Eingabe (nur im offenen Quick Connect): logische Taste/Text, damit die
-                // OS-Tastaturbelegung greift.
-                let tippen = self.quick_connect_open && self.screen == MenuScreen::Connect;
-                match &key_event.logical_key {
-                    Key::Named(NamedKey::Backspace) if tippen => {
-                        self.server_address.pop();
-                    }
-                    // Enter verbindet auf dem Connect-Screen (dort tippt man die Adresse) und
-                    // schliesst im HUD-Editor die offenen Element-Einstellungen (wie Escape).
-                    Key::Named(NamedKey::Enter) => {
-                        if tippen {
-                            self.quick_connect_submit();
-                        } else if self.screen == MenuScreen::HudEditor && self.crosshair_painter.is_none() && self.hud_selected.take().is_some() {
-                            self.persist_settings();
-                        }
-                    }
-                    _ => {
-                        // Waehrend Strg gehalten wird keine Texteingabe (sonst wuerden andere
-                        // Strg-Kombis versehentlich Zeichen einfuegen).
-                        if tippen && !self.modifiers.control_key() {
-                            if let Some(text) = &key_event.text {
-                                for ch in text.chars() {
-                                    if !ch.is_control() && self.server_address.chars().count() < MAX_ADDRESS_LEN {
-                                        self.server_address.push(ch);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // Enter schliesst im HUD-Editor die offenen Element-Einstellungen (wie Escape).
+                // Die Adresse von Quick Connect tippt sich weiter oben (s. active_text_field).
+                if key_event.logical_key == Key::Named(NamedKey::Enter)
+                    && self.screen == MenuScreen::HudEditor
+                    && self.crosshair_painter.is_none()
+                    && self.hud_selected.take().is_some()
+                {
+                    self.persist_settings();
                 }
             }
             WindowEvent::Resized(size) => {
@@ -48443,9 +49415,8 @@ impl ApplicationHandler for App {
                 // Zeitguthaben bis JETZT fort (samt faelliger Ticks) und setzt die Kamera auf
                 // diesen Zeitpunkt -- der Aufruf in about_to_wait lag vor dem Warten.
                 use profiler::Phase;
-                if self.settings.tear_position != 0 {
-                    self.ensure_vblank();
-                }
+                self.update_system_watch();
+                self.selection_sounds();
                 let messen = self.profiler.active() || self.tear_control_active();
                 let presented_at = if self.tear_control_active() { self.tear_present_at.take() } else { None };
                 let riss = self.tear_control_active();
@@ -48494,6 +49465,8 @@ impl ApplicationHandler for App {
                         self.build_keybind_advanced(&mut overlay);
                         self.build_color_popup(&mut overlay);
                         self.build_quick_connect(&mut overlay);
+                        self.build_theme_name_dialog(&mut overlay);
+                        self.build_theme_delete(&mut overlay);
                         self.build_server_dialog(&mut overlay);
                         self.build_server_context(&mut overlay);
                         self.build_server_drag(&mut overlay);
@@ -48575,7 +49548,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         // ebenso Kontenliste und Element-Fenster im HUD-Editor (Nutzerwunsch).
         ButtonAction::OpenQuickConnect | ButtonAction::NewServer | ButtonAction::OpenKeybindAdvanced(_) => UiSound::Open,
         ButtonAction::CloseModuleMenu | ButtonAction::CloseKeybindAdvanced => UiSound::Close,
-        ButtonAction::OpenScreen(_) | ButtonAction::OpenShaderSettings | ButtonAction::OpenLightLevels | ButtonAction::OpenParticleSettings | ButtonAction::Back => UiSound::Click,
+        ButtonAction::OpenScreen(_) | ButtonAction::OpenLink(_) | ButtonAction::OpenShaderSettings | ButtonAction::OpenLightLevels | ButtonAction::OpenParticleSettings | ButtonAction::Back => UiSound::Click,
         // Schrittweise Werte: Stepper, Listen, Auswahl.
         ButtonAction::FrameLatencyDown
         | ButtonAction::FrameLatencyUp
@@ -48933,6 +49906,76 @@ mod latin_macron_tests {
         for w in include_str!("la_macrons.txt").split_whitespace() {
             assert_ne!(strip_macrons(w), w, "{w} ohne Laenge");
         }
+    }
+}
+
+#[cfg(test)]
+mod theme_settings_tests {
+    use super::*;
+
+    #[test]
+    fn eigene_themes_ueberstehen_speichern_und_laden() {
+        let mut s = Settings::parse("show_hud=true\n");
+        assert_eq!(s.theme_choice, ThemeChoice::Preset(0));
+        let mut farben = theme::PRESETS[3].colors;
+        farben[theme::Slot::Accent.index()] = 0x123456;
+        s.custom_themes.push(CustomTheme { name: "Mein | Theme".to_string(), colors: farben });
+        s.select_theme(ThemeChoice::Custom(0));
+        let gelesen = Settings::parse(&s.serialize());
+        assert_eq!(gelesen.custom_themes, s.custom_themes);
+        assert_eq!(gelesen.theme_choice, ThemeChoice::Custom(0));
+        assert_eq!(gelesen.theme, farben);
+        s.select_theme(ThemeChoice::Preset(7));
+        let gelesen = Settings::parse(&s.serialize());
+        assert_eq!((gelesen.theme_choice, gelesen.theme), (ThemeChoice::Preset(7), theme::PRESETS[7].colors));
+    }
+
+    #[test]
+    fn alte_dateien_werden_preset_oder_eigenes_theme() {
+        // Ein Preset ohne den Eintrag theme_choice (und ohne Markierung): bleibt das Preset.
+        let rosa = &theme::PRESETS[4];
+        let zeilen: String = theme::Slot::ALL
+            .into_iter()
+            .filter(|&sl| sl != theme::Slot::Selection)
+            .map(|sl| format!("theme_{}={:06X}\n", sl.key(), rosa.colors[sl.index()]))
+            .collect();
+        assert_eq!(Settings::parse(&zeilen).theme_choice, ThemeChoice::Preset(4));
+        // Geaenderte Farben: werden ein eigenes Theme.
+        let geaendert = format!("{zeilen}theme_accent=ABCDEF\n");
+        let s = Settings::parse(&geaendert);
+        assert_eq!(s.theme_choice, ThemeChoice::Custom(0));
+        assert_eq!(s.theme[theme::Slot::Accent.index()], 0xABCDEF);
+        assert_eq!(s.custom_themes[0].colors, s.theme);
+    }
+
+    #[test]
+    fn kacheln_passen_vor_die_trennlinie() {
+        let letzte = theme_tile_rect(THEME_TILE_COLS - 1);
+        assert!(letzte.x + letzte.w < THEME_DIVIDER_X, "{} < {}", letzte.x + letzte.w, THEME_DIVIDER_X);
+        assert!(theme::PRESETS.len() >= 16);
+    }
+}
+
+#[cfg(test)]
+mod sidebar_link_tests {
+    use super::*;
+
+    #[test]
+    fn logos_passen_in_ihren_atlas() {
+        assert!(SIDEBAR_LINKS.len() as u32 <= LOGO_GRID * LOGO_GRID);
+        for (name, url, png) in SIDEBAR_LINKS {
+            let bild = image::load_from_memory_with_format(png, image::ImageFormat::Png).expect(name);
+            assert_eq!((bild.width(), bild.height()), (LOGO_PX, LOGO_PX), "{name}");
+            assert!(url.starts_with("https://"), "{name}");
+        }
+    }
+
+    #[test]
+    fn logos_liegen_ueber_setup() {
+        let setup = App::sidebar_setup_rect(800.0);
+        let letzte = App::sidebar_link_rect(SIDEBAR_LINKS.len() - 1, 800.0);
+        assert!(letzte.y + letzte.h < setup.y - 9.0, "über der Linie vor Setup");
+        assert!(letzte.x + letzte.w <= SIDEBAR_W - SIDEBAR_PAD, "in der Leiste");
     }
 }
 
@@ -51366,7 +52409,7 @@ mod tests {
         let gelesen = Settings::parse(&s.serialize());
         assert_eq!(gelesen.tear_position, 1);
         assert!(!gelesen.module_dynamic_fire);
-        // Alte Werte (1..3 = Oben/Unten/Austastluecke) werden "Unsichtbar".
+        // Alte Werte (1..3 = Oben/Unten/Austastluecke) werden "Scanout-Timing".
         assert_eq!(Settings::parse("tear_position=3\n").tear_position, 1);
         assert_eq!(standard_timing(), TEAR_TIMING_DEFAULT_US);
         let mut t = Settings::parse("show_hud=true\n");
