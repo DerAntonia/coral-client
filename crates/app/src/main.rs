@@ -39272,25 +39272,57 @@ impl App {
     // sich, ploppt es (Popup) -- bei einem Doppelklick (Wort) stattdessen Step, bei einem
     // Dreifachklick (Zeile) Click. Hebt ein Mausklick oder Strg+D sie auf, kommt Erase; durch
     // Tippen oder Seitenwechsel bleibt es still.
+    // Das Ploppen beim Zeichenweise-Markieren steigt wie in osu! (OsuTextBox.PlayFeedbackSample)
+    // mit dem markierten Anteil am Text: Wiedergabe um bis zu 15 % schneller, ganz markiert
+    // also gut 2,4 Halbtoene hoeher.
     fn selection_sounds(&mut self) {
-        let jetzt = self.selected_chars();
+        let (jetzt, gesamt) = self.selection_extent();
         let vorher = std::mem::replace(&mut self.selection_sound_chars, jetzt);
         let hinweis = self.selection_sound_hint.take();
         let klick = std::mem::take(&mut self.selection_sound_deselect);
         if jetzt > 0 && (jetzt != vorher || hinweis.is_some()) {
-            self.play_ui_sound(hinweis.unwrap_or(ui_sound::UiSound::Popup));
+            match hinweis {
+                Some(klang) => self.play_ui_sound(klang),
+                None => {
+                    let anteil = jetzt as f32 / gesamt.max(1) as f32;
+                    self.play_ui_sound_pitched(ui_sound::UiSound::Popup, 12.0 * (1.0 + 0.15 * anteil.min(1.0)).log2());
+                }
+            }
         } else if jetzt == 0 && vorher > 0 && klick {
             self.play_ui_sound(ui_sound::UiSound::Erase);
         }
     }
 
-    // Wie viele Zeichen gerade markiert sind: im Eingabefeld, im Chat (Tastatur oder Maus) und
-    // im Log.
+    // Wie viele Zeichen gerade markiert sind (im Eingabefeld, in der Chat-Eingabe, im
+    // Chatverlauf oder Log) und wie lang der Text ist, in dem markiert wird: das Feld, die
+    // Chat-Eingabe, sonst die Zeilen, die die Markierung beruehrt.
+    fn selection_extent(&mut self) -> (usize, usize) {
+        let zeichen = |t: &str, r: std::ops::Range<usize>| (t[r].chars().count(), t.chars().count());
+        if let Some(f) = self.active_text_field() {
+            if let Some(r) = f.selection() {
+                return zeichen(f.text(), r);
+            }
+        }
+        if let Some(c) = self.chat_input.as_ref() {
+            if let Some(r) = c.keyboard_selection() {
+                return zeichen(c.text(), r);
+            }
+        }
+        if self.text_selection.is_none() {
+            return (0, 0);
+        }
+        if let (Some(r), Some(c)) = (self.chat_input_selection(), self.chat_input.as_ref()) {
+            return zeichen(c.text(), r);
+        }
+        let Some(gpu) = self.gpu.as_ref() else { return (0, 0) };
+        let runs = gpu.text_runs.borrow();
+        let markiert = self.selected_ranges(&runs);
+        let gesamt = markiert.iter().map(|(i, _)| runs[*i].glyphs.len()).sum();
+        (selection_text(&runs, &markiert).chars().count(), gesamt)
+    }
+
     fn selected_chars(&mut self) -> usize {
-        let feld = self.active_text_field().and_then(|f| f.selection().map(|r| f.text()[r].chars().count())).unwrap_or(0);
-        let chat = self.chat_input.as_ref().and_then(|c| c.keyboard_selection().map(|r| c.text()[r].chars().count())).unwrap_or(0);
-        let text = if self.text_selection.is_some() { self.selected_text().chars().count() } else { 0 };
-        feld + chat.max(text)
+        self.selection_extent().0
     }
 
     // Strg+D: jede Markierung aufheben (Eingabefeld, Chat, Log). Gibt zurueck, ob es eine gab --
@@ -47414,7 +47446,7 @@ impl App {
         feld.set_cursor(ziel);
         if vorher != (ziel, false) {
             if !vorher.1 {
-                self.play_ui_sound(ui_sound::UiSound::Step);
+                self.play_ui_sound(ui_sound::UiSound::Slider);
             }
             self.request_command_suggestions();
         }
