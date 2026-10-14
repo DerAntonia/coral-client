@@ -44,15 +44,15 @@ if [ "v$version" != "$tag" ]; then
 fi
 
 # Der Tag soll genau auf den Stand zeigen, aus dem gebaut wird: also nur ohne uncommittete
-# Aenderungen, und den Branch vorher pushen (sonst legt GitHub den Tag auf den Default-Branch).
+# Aenderungen.
 if [ -n "$(git status --porcelain)" ]; then
     echo "Uncommittete Aenderungen -- erst committen." >&2
     exit 1
 fi
-git push -u origin HEAD
 # Das oeffentliche Repo DerAntonia/coral-client hat eine EIGENE, frische Historie (ohne die alte
 # mit Vanilla-Zitaten). Derselbe Stand kommt dort als ein neuer Commit auf main, und darauf
-# zeigt der Tag -- den lokalen Commit gibt es dort nicht.
+# zeigt der Tag -- den lokalen Commit gibt es dort nicht. Das alte private Repo
+# (DerAntonia/mc-client, Remote origin) wird nicht mehr bedient.
 git remote get-url coral >/dev/null 2>&1 || git remote add coral https://github.com/DerAntonia/coral-client.git
 git fetch -q coral
 if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'coral/main^{tree}')" ]; then
