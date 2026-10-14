@@ -172,7 +172,8 @@ These files are not covered by the above and keep their own licenses:
   Mojang or Microsoft. "Minecraft" is a trademark of Mojang AB.
 - Coral Client is made and published by DerAntonia, who alone is responsible for it. Mojang
   and Microsoft are not.
-- Contact: hubertjohnson1231236@gmail.com, or on Discord: `derantonia`.
+- Contact: best on Discord: `derantonia`, where I will very likely reply. There is also the
+  email address hubertjohnson1231236@gmail.com, but I hardly ever check it.
 - The project contains no textures, sounds, models or code from Mojang. All game assets come
   from your own installation at runtime. It does contain tables of game data read out of the
   game (block states, collision shapes, mining values), as projects like PrismarineJS do too.
