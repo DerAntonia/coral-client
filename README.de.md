@@ -106,22 +106,9 @@ im Spiel.
 - Mehrere Einstellungs-Configs, im Launcher wählbar.
 - Ein Spielmodus-Rad und frei belegbare Tasten, auch doppelt belegt.
 
-## Stand
-
 Version 1.0 ist das erste stabile Release. Vieles funktioniert wie in Vanilla, manches fehlt
-noch oder sieht anders aus. Gebaut und getestet wird er gegen 1.21.11. Andere Versionen werden nicht unterstützt.
-
-**Noch nicht da:**
-- Rezeptbuch
-- Fortschritte: kein Bildschirm und keine Meldungen
-- Statistik-Bildschirm
-- Vignette: der dunkle Bildrand und die rote Warnung nahe der Weltgrenze
-- Bildeffekte: das Wabern bei Übelkeit und im Nether-Portal, das Portal-Overlay und das
-  Pulsieren bei Dunkelheit
-- Einige Item-Komponenten: Kürbis-Overlay, Elytra-Flügel aus Pack-Ausrüstung, Tooltip-Stil
-  und Attributzeilen
-- Core-Shader aus Packs funktionieren bisher nur für Items in der Welt und die Weltgrenze. Für
-  Gelände, Entities, Text sowie Items in der Hand und im Inventar fehlen sie noch.
+noch oder sieht anders aus. Gebaut und getestet wird der Client gegen 1.21.11. Andere Versionen
+werden nicht unterstützt.
 
 ### Selbst bauen
 

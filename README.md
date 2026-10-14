@@ -105,22 +105,9 @@ in the game.
 - Several settings configs, selectable in the launcher.
 - A game mode wheel and freely bindable keys, including double bindings.
 
-## Status
-
 Version 1.0 is the first stable release. A lot works like Vanilla; some things are still
-missing or look different. It is built and tested against 1.21.11. Other versions are not supported.
-
-**Not there yet:**
-- Recipe book
-- Advancements: no screen and no toasts
-- Statistics screen
-- Vignette: the dark screen edge and the red warning near the world border
-- Screen effects: the wobble from nausea and in nether portals, the portal overlay and the
-  pulsing from darkness
-- Some item components: pumpkin overlay, elytra wings from pack equipment, tooltip style and
-  attribute lines
-- Core shaders from packs so far only work for items in the world and the world border. They
-  are still missing for terrain, entities, text, and items in the hand and in the inventory.
+missing or look different. The client is built and tested against 1.21.11. Other versions are
+not supported.
 
 ### Building it yourself
 
