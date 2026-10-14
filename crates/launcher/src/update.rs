@@ -10,8 +10,7 @@
 // unvollstaendige Downloads ab -- nicht aber jemanden mit Zugriff aufs Repo, der Datei und
 // Pruefsumme gemeinsam austauschen koennte (dafuer braeuchte es eine Signatur).
 //
-// Das Repo ist privat -- ohne Token antwortet die API mit 404. Der Token kommt aus GH_TOKEN/
-// GITHUB_TOKEN oder, falls installiert, aus der GitHub-CLI (`gh auth token`).
+// Das Repo ist oeffentlich: Release-Liste und Downloads gehen ohne Anmeldung.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -49,9 +48,9 @@ pub struct Release {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReleaseAsset {
     pub name: String,
-    // API-URL des Assets (nicht browser_download_url): nur die funktioniert mit Token auch
-    // fuer private Repos.
-    pub url: String,
+    // Direkter Download-Link. Zaehlt anders als die API-URL des Assets nicht gegen GitHubs
+    // Anfragegrenze ohne Anmeldung (60 je Stunde).
+    pub browser_download_url: String,
     pub size: u64,
     // "sha256:<hex>" -- fehlt bei Releases, die GitHub vor Einfuehrung des Felds angelegt hat.
     #[serde(default)]
@@ -94,19 +93,6 @@ impl Release {
     }
 }
 
-fn github_token() -> Option<String> {
-    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(token) = std::env::var(var) {
-            if !token.trim().is_empty() {
-                return Some(token.trim().to_string());
-            }
-        }
-    }
-    let output = std::process::Command::new("gh").args(["auth", "token"]).output().ok()?;
-    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    (output.status.success() && !token.is_empty()).then_some(token)
-}
-
 fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .user_agent(concat!("coral-client-launcher/", env!("CARGO_PKG_VERSION")))
@@ -114,18 +100,12 @@ fn client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-fn authorized(request: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
-    match github_token() {
-        Some(token) => request.bearer_auth(token),
-        None => request,
-    }
-}
-
 /// Alle veroeffentlichten Releases (ohne Entwuerfe), neueste Version zuerst -- stabile wie
 /// Betas; welche davon angezeigt werden, entscheidet der Aufrufer (s. visible/newest). Leer =
 /// das Repo hat noch keins.
 pub fn fetch_releases() -> Result<Vec<Release>, String> {
-    let response = authorized(client()?.get(format!("https://api.github.com/repos/{REPO}/releases?per_page=50")))
+    let response = client()?
+        .get(format!("https://api.github.com/repos/{REPO}/releases?per_page=50"))
         .header("Accept", "application/vnd.github+json")
         .send()
         .map_err(|e| format!("GitHub nicht erreichbar: {e}"))?;
@@ -136,8 +116,9 @@ pub fn fetch_releases() -> Result<Vec<Release>, String> {
             releases.sort_by(|a, b| compare_versions(&b.tag_name, &a.tag_name));
             Ok(releases)
         }
-        // 404 heisst hier: Repo nicht sichtbar (privat, kein oder falscher Token).
-        404 => Err(format!("{REPO} nicht gefunden -- das Repo ist privat. Mit `gh auth login` anmelden oder GH_TOKEN setzen.")),
+        404 => Err(format!("{REPO} nicht gefunden.")),
+        // Ohne Anmeldung erlaubt GitHub 60 API-Anfragen je Stunde und Adresse.
+        403 | 429 => Err("GitHub-Anfragegrenze erreicht -- in einer Stunde nochmal versuchen.".to_string()),
         status => Err(format!("GitHub antwortet mit {status}")),
     }
 }
@@ -164,8 +145,8 @@ pub struct Progress {
 /// abgebrochener Download hinterlaesst so kein halbes Binary, und ein Hardlink auf `target`
 /// (z.B. coral-client-linux/coral-client -> target/release/coral-client) wird nicht mit ueberschrieben.
 pub fn download(asset: &ReleaseAsset, target: &Path, progress: Arc<Mutex<Progress>>) -> Result<(), String> {
-    let mut response = authorized(client()?.get(&asset.url))
-        .header("Accept", "application/octet-stream")
+    let mut response = client()?
+        .get(&asset.browser_download_url)
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
@@ -317,7 +298,7 @@ mod tests {
         std::fs::write(&path, "abc").unwrap();
         assert_eq!(sha256_file(&path).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         let _ = std::fs::remove_file(&path);
-        let asset = ReleaseAsset { name: "x".into(), url: String::new(), size: 3, digest: Some("sha256:BA78".into()) };
+        let asset = ReleaseAsset { name: "x".into(), browser_download_url: String::new(), size: 3, digest: Some("sha256:BA78".into()) };
         assert_eq!(asset.sha256().as_deref(), Some("ba78"));
         let ohne = ReleaseAsset { digest: None, ..asset };
         assert_eq!(ohne.sha256(), None);

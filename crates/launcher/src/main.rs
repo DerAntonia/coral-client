@@ -656,6 +656,10 @@ impl Launcher {
                     }
                 }
             }
+            // Releases gibt es, aber alle sind Betas und der Schalter ist aus.
+            UpdateState::NoRelease if !self.releases.is_empty() => {
+                ui.label("Noch keine stabile Version. Die Betas zeigt \"Beta-Versionen anzeigen\".");
+            }
             UpdateState::NoRelease => {
                 ui.label(format!("{} hat noch kein Release.", update::REPO));
             }
