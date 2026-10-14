@@ -136,6 +136,63 @@ pub fn facing_state(item_name: &str, yaw_deg: f32) -> Option<Option<u32>> {
     }))
 }
 
+// Truhen, Endertruhe und Kupfergolem-Statue: Blick zum Spieler wie oben, dazu
+// waterlogged nach dem Platz (FluidState.is(WATER): nur stehendes Quellwasser). Gemeldet wie
+// frueher bei den Staemmen -- ohne Vorhersage Ton und Armschwung ohne Block, und der naechste
+// Klick traf die beim Server schon verdeckte Flaeche. Eine Truhe wird nur EINZELN
+// vorhergesagt: steht nebenan eine einzelne Truhe, kann sie sich anschliessen
+// (ChestBlock.getStateForPlacement), dann setzt der Server allein. None: nicht in der Liste.
+pub fn facing_waterlogged_state(item_name: &str, yaw_deg: f32, water: bool, single_chest_beside: bool) -> Option<Option<u32>> {
+    let feste: &[(&str, &str)] = match item_name {
+        "ender_chest" => &[],
+        "chest" | "trapped_chest" => &[("type", "single")],
+        n if n.ends_with("copper_chest") => &[("type", "single")],
+        n if world::copper_golem_statue_texture(n).is_some() => &[("copper_golem_pose", "standing")],
+        _ => return None,
+    };
+    if single_chest_beside && feste.contains(&("type", "single")) {
+        return Some(None);
+    }
+    let blick = ((yaw_deg / 90.0 + 0.5).floor() as i32).rem_euclid(4);
+    let richtung = ["north", "east", "south", "west"][blick as usize];
+    let nass = if water { "true" } else { "false" };
+    Some((0..block_registry::state_count() as u32).find(|&state| {
+        block_registry::block_name(state) == Some(item_name)
+            && world::state_props::property(state, "facing") == Some(richtung)
+            && world::state_props::property(state, "waterlogged") == Some(nass)
+            && feste.iter().all(|(k, v)| world::state_props::property(state, k) == Some(*v))
+    }))
+}
+
+// Kupfergolem-Statue: jeder Klick ohne Axt schaltet die Haltung weiter (CopperGolemStatueBlock.
+// useItemOn -> updatePose, auch mit leerer Hand): Stehen, Sitzen, Laufen, Stern, wieder Stehen.
+// Vanillas Client tut das sofort selbst; ohne Vorhersage hing jeder Wechsel an der Rundreise.
+// None: keine Statue, oder die Axt (dann PASS -- sie schabt oder entwachst).
+pub fn next_statue_pose_state(state: u32, item: Option<&str>) -> Option<u32> {
+    world::copper_golem_statue_texture(block_registry::block_name(state)?)?;
+    if item.is_some_and(|n| n.ends_with("_axe") && !n.ends_with("pickaxe")) {
+        return None;
+    }
+    let naechste = match world::state_props::property(state, "copper_golem_pose")? {
+        "standing" => "sitting",
+        "sitting" => "running",
+        "running" => "star",
+        _ => "standing",
+    };
+    state_with(state, "copper_golem_pose", naechste)
+}
+
+// Stehendes Quellwasser (Fluids.WATER, nicht FLOWING_WATER): Wasser mit level 0.
+pub fn is_water_source(state: u32) -> bool {
+    block_registry::block_name(state) == Some("water") && world::state_props::property(state, "level") == Some("0")
+}
+
+// Eine einzelne Truhe, an die sich eine neue anschliessen koennte (s. facing_waterlogged_state).
+pub fn is_single_chest(state: u32) -> bool {
+    block_registry::block_name(state).is_some_and(|n| n == "chest" || n == "trapped_chest" || n.ends_with("copper_chest"))
+        && world::state_props::property(state, "type") == Some("single")
+}
+
 // Saeulen (PillarBlock: Staemme, Holz, Basalt, Quarz- und Purpursaeule, Heuballen,
 // Knochenblock ...): die Achse ist die der getroffenen Flaeche, sonst gibt es keine Property.
 // Erkannt an genau drei States, die sich nur in `axis` unterscheiden. Ohne
@@ -153,11 +210,84 @@ pub fn axis_state(item_name: &str, face: i32) -> Option<u32> {
     staende.into_iter().find(|&s| world::state_props::property(s, "axis") == Some(achse))
 }
 
-// Steckte der Block in JEDER seiner Formen im Spieler? Fuer Bloecke ohne Vorhersage (Treppen,
-// Zaeune): Vanilla setzt dann sicher nichts -- kein Ton, kein Armschwung, kein Item weg.
-pub fn every_state_collides(item_name: &str, pos: (i32, i32, i32), shapes: &BlockShapes, spieler_min: [f64; 3], spieler_max: [f64; 3]) -> bool {
-    let mut staende = (0..block_registry::state_count() as u32).filter(|&s| block_registry::block_name(s) == Some(item_name)).peekable();
+// Steckte der Block in JEDER Form, die Vanilla beim Setzen waehlen kann, im Spieler? Fuer
+// Bloecke ohne Vorhersage (Treppen, Zaeune): Vanilla setzt dann sicher nichts -- kein Ton,
+// kein Armschwung, kein Item weg.
+pub fn every_state_collides(item_name: &str, pos: (i32, i32, i32), ort: &PlaceSpot, shapes: &BlockShapes, spieler_min: [f64; 3], spieler_max: [f64; 3]) -> bool {
+    let mut staende = placement_candidates(item_name, ort).into_iter().peekable();
     staende.peek().is_some() && staende.all(|s| collides_with_player(pos, s, shapes, spieler_min, spieler_max))
+}
+
+// Was getStateForPlacement ueber den Klick weiss (BlockPlaceContext).
+pub struct PlaceSpot {
+    // Getroffene Flaeche, Vanilla-Index (s. target_pos).
+    pub face: i32,
+    // Hoehe des Treffers ueber der Unterkante der ZIELzelle (clickLocation.y - pos.y).
+    pub rel_y: f32,
+    pub yaw_deg: f32,
+    // Was vorher in der Zielzelle stand.
+    pub vorher: u32,
+}
+
+// Die Zustaende, die getStateForPlacement liefern kann. Alle Zustaende des Blocks waeren zu
+// viele: offene Falltueren und Zauntore, angebissene Kuchen, obere Stufen oder quer liegende
+// Ketten stecken mitunter nicht im Spieler, gesetzt wird aber die eine Form, die der Klick
+// bestimmt -- und die steckt drin. Mit allen Zustaenden kamen dort Ton und Armschwung ohne
+// Block. Was nur an Redstone haengt (open/powered), gilt ohne Strom. Offen bleibt, was an den
+// Nachbarn haengt (Verbindungen von Zaun, Scheibe, Gitter).
+fn placement_candidates(item_name: &str, ort: &PlaceSpot) -> Vec<u32> {
+    use world::state_props::property;
+    let face = ort.face;
+    // Schnee, Kerzen, Seegurken: auf denselben Block eins mehr, sonst eins.
+    let gleicher = block_registry::block_name(ort.vorher) == Some(item_name);
+    let anzahl = |k: &str| match property(ort.vorher, k) {
+        Some(n) if gleicher => n.parse::<u32>().map_or(1, |n| n + 1).to_string(),
+        _ => "1".to_string(),
+    };
+    let (lagen, kerzen, gurken) = (anzahl("layers"), anzahl("candles"), anzahl("pickles"));
+    let flaeche = ["down", "up", "north", "south", "west", "east"].get(face as usize).copied().unwrap_or("up");
+    let achse = match face {
+        0 | 1 => "y",
+        2 | 3 => "z",
+        _ => "x",
+    };
+    // Blickrichtung des Spielers (getHorizontalDirection) und ihr Gegenteil.
+    let blick = ((ort.yaw_deg / 90.0 + 0.5).floor() as i32).rem_euclid(4) as usize;
+    let zum_spieler = ["north", "east", "south", "west"][blick];
+    let weg = ["south", "west", "north", "east"][blick];
+    // SlabBlock/StairBlock: unten, ausser an der Unterseite oder oberhalb der Mitte einer
+    // Seite. TrapDoorBlock: an einer Seite nach der Hoehe, sonst nach der Flaeche.
+    let unten = face != 0 && (face == 1 || ort.rel_y <= 0.5);
+    let halb_unten = if face >= 2 { ort.rel_y <= 0.5 } else { face == 1 };
+    let knospe = item_name.ends_with("amethyst_bud") || item_name == "amethyst_cluster";
+    let stange = item_name.ends_with("lightning_rod") || item_name == "end_rod";
+    let tuer = item_name.ends_with("_door");
+    let falltuer = item_name.ends_with("_trapdoor");
+    let stufe = item_name.ends_with("_slab");
+    (0..block_registry::state_count() as u32)
+        .filter(|&s| block_registry::block_name(s) == Some(item_name))
+        .filter(|&s| {
+            let gleich = |k: &str, v: &str| property(s, k).is_none_or(|x| x == v);
+            gleich("open", "false")
+                && gleich("powered", "false")
+                && gleich("extended", "false")
+                && gleich("bites", "0")
+                && gleich("tilt", "none")
+                && gleich("layers", &lagen)
+                && gleich("candles", &kerzen)
+                && gleich("pickles", &gurken)
+                && (!item_name.ends_with("_wall") || gleich("up", "true"))
+                && (!(knospe || stange || item_name == "ladder") || gleich("facing", flaeche))
+                && (!item_name.ends_with("_fence_gate") || gleich("facing", weg))
+                && gleich("eye", "false")
+                && (!item_name.ends_with("chain") || gleich("axis", achse))
+                && (item_name != "pale_moss_carpet" || gleich("bottom", "true"))
+                && (!stufe || gleich("type", if gleicher { "double" } else if unten { "bottom" } else { "top" }))
+                && (!falltuer || gleich("half", if halb_unten { "bottom" } else { "top" }))
+                && (!tuer || (gleich("half", "lower") && gleich("facing", weg)))
+                && (!item_name.ends_with("_shelf") || gleich("facing", zum_spieler))
+        })
+        .collect()
 }
 
 // Wohin der Block kommt: in den getroffenen Block selbst, falls der ersetzbar ist, sonst
@@ -184,7 +314,10 @@ pub fn target_pos(hit: (i32, i32, i32), face: i32, hit_block_name: Option<&str>)
 // weg und machte die Abweichung groesser statt kleiner.
 #[allow(clippy::too_many_arguments)]
 pub fn collides_with_player(pos: (i32, i32, i32), state: u32, shapes: &BlockShapes, spieler_min: [f64; 3], spieler_max: [f64; 3]) -> bool {
-    shapes.shapes_of(state).iter().any(|shape| {
+    // Die KOLLISIONSform wie Vanillas canPlace, nicht die Modellform: Truhen, Betten, Koepfe
+    // und Statuen haben ein leeres Blockmodell (gezeichnet wird das Entity-Modell) und
+    // steckten sonst nie im Spieler -- Ton und Armschwung kamen trotzdem.
+    world::collision_boxes(state, shapes).iter().any(|shape| {
         let min = [pos.0 as f64 + shape.min[0] as f64, pos.1 as f64 + shape.min[1] as f64, pos.2 as f64 + shape.min[2] as f64];
         let max = [pos.0 as f64 + shape.max[0] as f64, pos.1 as f64 + shape.max[1] as f64, pos.2 as f64 + shape.max[2] as f64];
         (0..3).all(|i| min[i] < spieler_max[i] && max[i] > spieler_min[i])
@@ -578,6 +711,37 @@ mod tests {
     }
 
     #[test]
+    fn truhen_schauen_zum_spieler() {
+        let p = |s: u32, k: &str| world::state_props::property(s, k);
+        // Blick nach Norden (yaw 180): die Truhe schaut nach Sueden, einzeln, trocken.
+        let s = facing_waterlogged_state("chest", 180.0, false, false).flatten().expect("Truhe");
+        assert_eq!((p(s, "facing"), p(s, "type"), p(s, "waterlogged")), (Some("south"), Some("single"), Some("false")));
+        let n = facing_waterlogged_state("ender_chest", 0.0, true, true).flatten().expect("Endertruhe");
+        assert_eq!((p(n, "facing"), p(n, "waterlogged")), (Some("north"), Some("true")));
+        assert_eq!(facing_waterlogged_state("trapped_chest", 0.0, false, true), Some(None), "koennte sich anschliessen");
+        let g = facing_waterlogged_state("copper_golem_statue", 90.0, false, false).flatten().expect("Statue");
+        assert_eq!((p(g, "facing"), p(g, "copper_golem_pose")), (Some("east"), Some("standing")));
+        assert!(facing_waterlogged_state("stone", 0.0, false, false).is_none());
+        // Haltungen der Reihe nach, mit leerer Hand und Block; die Axt schaltet nichts.
+        let mut haltungen = vec![];
+        let mut z = g;
+        for _ in 0..4 {
+            z = next_statue_pose_state(z, None).expect("Statue");
+            haltungen.push(p(z, "copper_golem_pose").unwrap());
+            assert_eq!((p(z, "facing"), block_registry::block_name(z)), (Some("east"), Some("copper_golem_statue")));
+        }
+        assert_eq!(haltungen, ["sitting", "running", "star", "standing"]);
+        assert!(next_statue_pose_state(g, Some("stone")).is_some());
+        assert!(next_statue_pose_state(g, Some("iron_axe")).is_none());
+        assert!(next_statue_pose_state(g, Some("iron_pickaxe")).is_some());
+        // Leeres Blockmodell (wie bei uns die Truhe): in den Fuessen zaehlt trotzdem die
+        // Kollisionsform.
+        let leer = BlockShapes::new(vec![Some(Vec::new()); block_registry::state_count()]);
+        assert!(collides_with_player((5, 10, 5), s, &leer, [5.3, 10.0, 5.3], [5.9, 11.8, 5.9]), "Truhe in den Füßen");
+        assert!(collides_with_player((5, 10, 5), g, &leer, [5.3, 10.0, 5.3], [5.9, 11.8, 5.9]), "Statue in den Füßen");
+    }
+
+    #[test]
     fn saeulen_nehmen_die_achse_der_flaeche() {
         for (face, achse) in [(0, "y"), (1, "y"), (2, "z"), (3, "z"), (4, "x"), (5, "x")] {
             let s = axis_state("jungle_log", face).expect("Dschungelstamm ist eine Säule");
@@ -758,5 +922,64 @@ mod tests {
         let state = default_state_for_item("respawn_anchor").expect("Anker muss vorhersagbar sein");
         assert_eq!(block_registry::block_name(state), Some("respawn_anchor"));
         assert_eq!(world::state_props::property(state, "charges"), Some("0"));
+    }
+}
+
+#[cfg(test)]
+mod fuesse_tests {
+    use super::*;
+
+    // Kein Block-Item ohne Vorhersage, bei dem es vom Zufall abhaengt, ob er in einem mittig
+    // stehenden Spieler steckt: die Kandidaten stecken alle drin oder keiner. Sonst kaeme
+    // wieder Ton und Armschwung ohne Block (gemeldet fuer Truhen, Staemme, Falltueren ...).
+    #[test]
+    fn kein_block_unsicher_in_den_fuessen() {
+        let leer = BlockShapes::new(vec![Some(Vec::new()); block_registry::state_count()]);
+        let (min, max) = ([0.2, 0.0, 0.2], [0.8, 1.8, 0.8]);
+        let mut unsicher = Vec::new();
+        for id in 0..world::item_registry::item_count() as u32 {
+            let Some(item) = world::item_registry::item_name(id) else { continue };
+            if !block_registry::is_block(item) {
+                continue;
+            }
+            for (face, yaw) in [(1, 0.0), (0, 90.0), (2, 180.0), (5, 270.0)] {
+                let vorhergesagt = torch_state(item, face)
+                    .or_else(|| facing_state(item, yaw))
+                    .or_else(|| facing_waterlogged_state(item, yaw, false, false))
+                    .unwrap_or_else(|| axis_state(item, face).or_else(|| default_state_for_item(item)));
+                if vorhergesagt.is_some() {
+                    continue;
+                }
+                let staende = placement_candidates(item, &PlaceSpot { face, rel_y: 0.3, yaw_deg: yaw, vorher: world::STATE_AIR });
+                let drin = staende.iter().filter(|&&s| collides_with_player((0, 0, 0), s, &leer, min, max)).count();
+                if drin > 0 && drin < staende.len() {
+                    unsicher.push(format!("{item} (Fläche {face})"));
+                }
+            }
+        }
+        assert!(unsicher.is_empty(), "unsicher: {unsicher:?}");
+    }
+
+    // Stufe/Falltuer nach Trefferhoehe, Kette nach Flaeche, Tuer in Blickrichtung.
+    #[test]
+    fn kandidaten_nach_dem_klick() {
+        let p = |s: u32, k: &str| world::state_props::property(s, k).unwrap().to_string();
+        let ort = |face, rel_y, yaw_deg| PlaceSpot { face, rel_y, yaw_deg, vorher: world::STATE_AIR };
+        let alle = |item: &str, o: &PlaceSpot, k: &str| {
+            let mut v: Vec<String> = placement_candidates(item, o).into_iter().map(|s| p(s, k)).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        assert_eq!(alle("oak_slab", &ort(2, 0.7, 0.0), "type"), ["top"]);
+        assert_eq!(alle("oak_slab", &ort(2, 0.3, 0.0), "type"), ["bottom"]);
+        assert_eq!(alle("oak_slab", &ort(0, 0.0, 0.0), "type"), ["top"]);
+        assert_eq!(alle("oak_trapdoor", &ort(1, 0.0, 0.0), "half"), ["bottom"]);
+        assert_eq!(alle("oak_trapdoor", &ort(4, 0.8, 0.0), "half"), ["top"]);
+        assert_eq!(alle("oak_trapdoor", &ort(4, 0.8, 0.0), "open"), ["false"]);
+        assert_eq!(alle("iron_chain", &ort(5, 0.5, 0.0), "axis"), ["x"]);
+        assert_eq!(alle("oak_door", &ort(1, 0.0, 90.0), "facing"), ["west"]);
+        assert_eq!(alle("oak_door", &ort(1, 0.0, 90.0), "half"), ["lower"]);
+        assert_eq!(alle("oak_fence_gate", &ort(1, 0.0, 180.0), "facing"), ["north"]);
     }
 }

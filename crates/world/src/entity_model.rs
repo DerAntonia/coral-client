@@ -1871,6 +1871,26 @@ pub fn chest_transform(block: [f32; 3], yaw_deg: f32) -> Affine {
         .then(Affine::translation([-0.5, -0.5, -0.5]))
 }
 
+// CopperGolemStatueModel.setupAnim, fuer Block wie Item: die Wurzel auf y = 0 und um Z halb
+// gedreht, in JEDER Haltung. Die Layer sind verschieden gebacken -- Stehen mit der Wurzel bei
+// 24, Sitzen, Laufen und Stern bei 0. Wie ein Lebewesen eingebettet (Wurzel 24 = Fusshoehe)
+// schwebten die drei anderen Haltungen deshalb 24 Pixel = 1,5 Bloecke hoch.
+pub fn copper_golem_statue_pose(model: &Model) -> Pose {
+    let mut pose = Pose::new();
+    if let Some(wurzel) = model.parts.iter().find(|p| p.name == "root") {
+        // Pose-Werte kommen zur Grundlage dazu; Vanilla SETZT zRot und y.
+        let rotation = [0.0, 0.0, std::f32::consts::PI - wurzel.rotation[2]];
+        pose.set("root", PartPose { rotation, pivot_offset: [0.0, -wurzel.pivot[1], 0.0], ..PartPose::default() });
+    }
+    pose
+}
+
+// CopperGolemStatueBlockRenderer.modelTransformation: translation(0.5, 0, 0.5), dann um Y
+// gedreht (StatueInstance::yaw_deg) -- ab der Blockecke.
+pub fn copper_golem_statue_transform(block: [f32; 3], yaw_deg: f32) -> Affine {
+    Affine::translation([block[0] + 0.5, block[1], block[2] + 0.5]).then(Affine::rotation_y_deg(yaw_deg))
+}
+
 // Platzhalter: die tatsaechliche Textur haengt an der Bettfarbe und wird erst beim Zeichnen
 // gewaehlt (emit bekommt das Atlas-Rechteck uebergeben, s. block_entity::BedInstance).
 const BED_MODEL_TEXTURE: &str = "entity/bed/red";

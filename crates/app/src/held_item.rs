@@ -53,12 +53,27 @@ enum Resolved {
 pub(crate) enum SpecialKind {
     Chest,
     ShulkerBox,
+    // Kupfergolem-Statue (CopperGolemStatueSpecialRenderer), gezeigt in der Grundpose.
+    CopperGolemStatue,
+}
+
+// Das Basismodell der Statuen-Items: items/*copper_golem_statue.json waehlt per select auf
+// die Haltung, jeder Zweig mit demselben Template -- daraus kommen die Haltungen (display).
+pub(crate) const STATUE_TEMPLATE: &str = "item/template_copper_golem_statue";
+
+// Die "transformation" aus items/*copper_golem_statue.json, nach Vanillas translate(-0.5):
+// translation (0.5, 1.5, 0.5), scale (1, -1, -1).
+pub(crate) fn statue_item_transform() -> Affine {
+    Affine::translation([0.5, 1.5, 0.5]).then(Affine::scale([1.0, -1.0, -1.0]))
 }
 
 // Sondermodell und Entity-Textur eines Items (items/<name>.json: "type": "special"). Die
 // Truhen-Items kennen wie die Bloecke Weihnachtstruhen (select auf local_time), die
 // Kupfertruhen und die Endertruhe nicht.
 pub(crate) fn special_item(name: &str) -> Option<(SpecialKind, String)> {
+    if let Some(texture) = world::copper_golem_statue_texture(name) {
+        return Some((SpecialKind::CopperGolemStatue, texture.to_string()));
+    }
     let name = name.strip_prefix("waxed_").unwrap_or(name);
     let truhe = match name {
         "chest" | "trapped_chest" if crate::is_christmas() => Some("christmas"),
@@ -90,6 +105,11 @@ fn emit_special(kind: SpecialKind, tex: TexRect, base: Affine, brightness: f32, 
         SpecialKind::Chest => world::emit_entity_model(em::chest_model(world::ChestHalf::Single), &em::chest_pose(0.0), base, tex, brightness, out),
         SpecialKind::ShulkerBox => {
             world::emit_entity_model(em::shulker_box_model(), &em::shulker_box_pose(0.0), base.then(em::shulker_box_transform([0.0; 3], "up")), tex, brightness, out)
+        }
+        SpecialKind::CopperGolemStatue => {
+            if let Some(model) = world::model_data::layer_model("copper_golem#main") {
+                world::emit_entity_model(model, &em::copper_golem_statue_pose(model), base.then(statue_item_transform()), tex, brightness, out);
+            }
         }
     }
 }
@@ -355,8 +375,9 @@ impl HeldItems {
         list
     }
 
-    fn resolve_model(model: &str, mc: &mut MinecraftInstallation) -> Option<Resolved> {
-        let display = Displays {
+    // Die Haltungen eines MODELLS (statt eines Items).
+    fn model_displays(model: &str, mc: &mut MinecraftInstallation) -> Displays {
+        Displays {
             third_person: assets::model_hand_display(mc, model, "thirdperson_righthand"),
             first_person: assets::model_hand_display(mc, model, "firstperson_righthand"),
             third_person_left: assets::model_hand_display(mc, model, "thirdperson_lefthand"),
@@ -365,7 +386,11 @@ impl HeldItems {
             ground: assets::model_hand_display(mc, model, "ground"),
             head: assets::model_hand_display(mc, model, "head"),
             gui: assets::model_hand_display(mc, model, "gui"),
-        };
+        }
+    }
+
+    fn resolve_model(model: &str, mc: &mut MinecraftInstallation) -> Option<Resolved> {
+        let display = Self::model_displays(model, mc);
         match assets::model_world_textures(mc, model)? {
             ItemWorldTextures::Sprite(texture) => Some(Resolved::Sprite { texture, layers: Vec::new(), display }),
             ItemWorldTextures::Block(textures) => Some(Resolved::Block { textures, display }),
@@ -397,6 +422,9 @@ impl HeldItems {
             return Some(Resolved::Skull { display });
         }
         if let Some((kind, texture)) = special_item(name) {
+            // Die Statue haengt hinter einem select auf die Haltung; ihre Haltungen stehen im
+            // gemeinsamen Template.
+            let display = if matches!(kind, SpecialKind::CopperGolemStatue) { Self::model_displays(STATUE_TEMPLATE, mc) } else { display };
             return Some(Resolved::Special { kind, texture, rect: None, display });
         }
         match assets::item_world_textures(mc, name)? {

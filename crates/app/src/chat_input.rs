@@ -37,6 +37,17 @@ pub enum Move {
     End,
 }
 
+// Was eine Bearbeitung geloescht hat: wo es im ALTEN Text begann, der Text selbst und ob der
+// Cursor daran stand (Ruecktaste, Entf, Tastaturmarkierung -- nicht bei einer Mausmarkierung,
+// dort bleibt der Cursor, wo er war). Fuer das Herausfallen der Zeichen (s. main.rs,
+// erased_pieces): aus dem Text allein ist die Stelle oft nicht eindeutig.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Erased {
+    pub start: usize,
+    pub text: String,
+    pub at_cursor: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct ChatInput {
     text: String,
@@ -66,6 +77,9 @@ pub struct ChatInput {
     // getippt hat.
     pending_id: i32,
     next_id: i32,
+    // Zuletzt Geloeschtes und wie viele Bearbeitungen seit dem letzten take_erased kamen.
+    erased: Option<Erased>,
+    edits: u32,
 }
 
 impl ChatInput {
@@ -244,6 +258,8 @@ impl ChatInput {
         if start == ende && neu.is_empty() {
             return false;
         }
+        let am_cursor = (start..=ende).contains(&self.cursor);
+        self.erased = (start < ende).then(|| Erased { start, text: self.text[start..ende].to_string(), at_cursor: am_cursor });
         self.text.replace_range(start..ende, &neu);
         self.cursor = if self.cursor < start {
             self.cursor
@@ -260,6 +276,7 @@ impl ChatInput {
     pub fn backspace(&mut self) -> bool {
         let Some(c) = self.text[..self.cursor].chars().next_back() else { return false };
         self.cursor -= c.len_utf8();
+        self.erased = Some(Erased { start: self.cursor, text: c.to_string(), at_cursor: true });
         self.text.remove(self.cursor);
         self.on_edit();
         true
@@ -270,7 +287,8 @@ impl ChatInput {
         if self.cursor >= self.text.len() {
             return false;
         }
-        self.text.remove(self.cursor);
+        let c = self.text.remove(self.cursor);
+        self.erased = Some(Erased { start: self.cursor, text: c.to_string(), at_cursor: true });
         self.on_edit();
         true
     }
@@ -278,11 +296,19 @@ impl ChatInput {
     // Nach jeder Aenderung von Hand: die Vorschlaege gelten fuer den alten Text und sind
     // damit hinfaellig, und man ist wieder in seinem eigenen Entwurf (nicht mehr im Verlauf).
     fn on_edit(&mut self) {
+        self.edits += 1;
         self.anchor = None;
         self.suggestions.clear();
         self.selected = 0;
         self.history_offset = 0;
         self.draft.clear();
+    }
+
+    // Das seit dem letzten Aufruf Geloeschte. None, wenn nichts geloescht wurde oder mehr als
+    // eine Bearbeitung dazukam -- dann passt die Stelle nicht mehr zum Text.
+    pub fn take_erased(&mut self) -> Option<Erased> {
+        let erased = self.erased.take();
+        (std::mem::take(&mut self.edits) == 1).then_some(erased).flatten()
     }
 
     // Die naechste Anfrage-ID. Der Aufrufer schickt sie mit; nur die Antwort darauf gilt.
@@ -766,5 +792,20 @@ mod tests {
         assert_eq!(chat.text(), "altx");
         chat.step(Step::Up);
         assert_eq!(chat.text(), "alt", "oben holt wieder die letzte Nachricht");
+    }
+
+    #[test]
+    fn geloeschtes_wird_mit_stelle_gemeldet() {
+        let mut chat = ChatInput::new("aasdasdasd".into());
+        chat.backspace();
+        assert_eq!(chat.take_erased(), Some(Erased { start: 9, text: "d".into(), at_cursor: true }));
+        assert_eq!(chat.take_erased(), None, "nur einmal");
+        // Mausmarkierung weit vom Cursor (der am Ende steht).
+        chat.replace_range(1..4, "");
+        assert_eq!(chat.take_erased(), Some(Erased { start: 1, text: "asd".into(), at_cursor: false }));
+        // Zwei Bearbeitungen vor dem Abholen: die Stelle passt nicht mehr, keine Meldung.
+        chat.backspace();
+        chat.push_str("x");
+        assert_eq!(chat.take_erased(), None);
     }
 }

@@ -145,9 +145,10 @@ pub struct StatueInstance {
     // Modell-Layer der Haltung (copper_golem_pose): stehend, sitzend, laufend, Stern.
     pub layer: &'static str,
     pub texture: &'static str,
-    // Wie ein Lebewesen gedreht (entity_transform): die Statue schaut in ihre FACING-Richtung.
-    // Vanilla dreht um Direction.getOpposite().toYRot() -- als Koerperdrehung 180 minus das.
-    pub body_yaw_deg: f32,
+    // Drehung um Y wie Vanilla: MINUS Direction.getOpposite().toYRot() von FACING
+    // (s. entity_model::copper_golem_statue_transform). Ohne das Minus -- es steht als fneg im
+    // Jar -- schauten nach Osten und Westen gesetzte Statuen genau verkehrt herum.
+    pub yaw_deg: f32,
 }
 
 pub fn statue_instance(pos: (i32, i32, i32), state: u32) -> Option<StatueInstance> {
@@ -165,7 +166,7 @@ pub fn statue_instance(pos: (i32, i32, i32), state: u32) -> Option<StatueInstanc
         Some("south") => 180.0,
         _ => 270.0,
     };
-    Some(StatueInstance { pos, layer, texture, body_yaw_deg: 180.0 - gegen })
+    Some(StatueInstance { pos, layer, texture, yaw_deg: -gegen })
 }
 
 fn is_statue(state: u32) -> bool {
@@ -405,10 +406,18 @@ mod shulker_tests {
                 .unwrap_or_else(|| panic!("{name} {pose} {facing} fehlt"))
         };
         let s = statue_instance((0, 0, 0), finde("waxed_exposed_copper_golem_statue", "sitting", "south")).expect("Statue");
-        assert_eq!((s.layer, s.texture, s.body_yaw_deg), ("copper_golem_sitting#main", "entity/copper_golem/exposed_copper_golem", 0.0));
+        assert_eq!((s.layer, s.texture, s.yaw_deg), ("copper_golem_sitting#main", "entity/copper_golem/exposed_copper_golem", -180.0));
         let n = statue_instance((0, 0, 0), finde("copper_golem_statue", "standing", "north")).expect("Statue");
-        assert_eq!((n.layer, n.body_yaw_deg), ("copper_golem#main", 180.0));
+        assert_eq!((n.layer, n.yaw_deg), ("copper_golem#main", 0.0));
         assert!(is_model_block(finde("copper_golem_statue", "star", "east")));
+        // Das Gesicht (Modell -z, nach der Z-Halbdrehung unveraendert) zeigt in FACING-Richtung.
+        for (facing, richtung) in [("north", [0.0, -1.0]), ("south", [0.0, 1.0]), ("east", [1.0, 0.0]), ("west", [-1.0, 0.0])] {
+            let st = statue_instance((0, 0, 0), finde("copper_golem_statue", "standing", facing)).expect("Statue");
+            let t = crate::entity_model::copper_golem_statue_transform([0.0; 3], st.yaw_deg);
+            let (mitte, nase) = (t.apply([0.0, 0.0, 0.0]), t.apply([0.0, 0.0, -1.0]));
+            let blick = [nase[0] - mitte[0], nase[2] - mitte[2]];
+            assert!((blick[0] - richtung[0]).abs() < 1e-5 && (blick[1] - richtung[1]).abs() < 1e-5, "{facing}: schaut nach {blick:?}");
+        }
     }
     use crate::block_registry::state_count;
 

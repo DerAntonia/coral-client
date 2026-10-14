@@ -892,6 +892,11 @@ fn is_leaves(name: &str) -> bool {
 // Vanillas Fliesstextur fuer Wasser -- die schraeg gestreifte Variante, die auf bewegten
 // Zellen liegt (water_still ist die ruhige). Fest verdrahtet aus demselben Grund wie
 // fixed_fluid_texture: sie darf nicht ueber einen Modell-/Partikel-Umweg aufgeloest werden.
+// Wie weit jede Atlaskachel nach innen rueckt, in Atlaspixeln (s. uv_of in BlockAtlas::build).
+// Rundungsreste der UV-Interpolation liegen um Groessenordnungen darunter; ein 32stel Texel
+// verschiebt die Texelgrenzen dagegen nicht sichtbar.
+const TILE_UV_INSET_PX: f32 = 1.0 / 32.0;
+
 const WATER_FLOW_TEXTURE: &str = "block/water_flow";
 
 // Feuer: Vanilla hat je Feuertextur EINE Atlas-Kachel, alle Feuerbloecke mit derselben Textur
@@ -1233,10 +1238,17 @@ impl BlockAtlas {
         let tiles_per_row = (tile_count as f64).sqrt().ceil() as u32;
         let tiles_per_row = tiles_per_row.max(1).next_power_of_two();
         let size = tiles_per_row * tile_size;
+        // Jede Kachel um einen Bruchteil eines Atlaspixels nach innen (TILE_UV_INSET_PX): ein
+        // Bildpunkt genau an einer Blockkante bekommt seine UV interpoliert und kann dabei um
+        // Rundungsreste ueber den Kachelrand hinaus landen -- mit Nearest-Sampling ist das ein
+        // Texel der NACHBARKACHEL im Atlas. In der Ferne bei flachem Blick (genau entlang
+        // einer Achse liegen die Kanten waagerecht im Bild) blitzte das als gestrichelte
+        // fremdfarbige Linie zwischen den Bloecken. Vanilla rueckt aus demselben Grund ein.
         let uv_of = |index: u32| -> UvRect {
             let (tx, ty) = (index % tiles_per_row, index / tiles_per_row);
             let s = tile_size as f32 / size as f32;
-            [tx as f32 * s, ty as f32 * s, (tx + 1) as f32 * s, (ty + 1) as f32 * s]
+            let e = TILE_UV_INSET_PX / size as f32;
+            [tx as f32 * s + e, ty as f32 * s + e, (tx + 1) as f32 * s - e, (ty + 1) as f32 * s - e]
         };
 
         // Mipmap-Kette: JE KACHEL EINZELN verkleinert (s. downsample_tile-Kommentar), erst

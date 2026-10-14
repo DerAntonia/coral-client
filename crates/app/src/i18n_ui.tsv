@@ -61,6 +61,16 @@ Status	Status	Status
 Status: {}	Status: {}	Status: {}
 Mit Microsoft anmelden	Sign in with Microsoft	Per Microsoft inīre
 Abmelden	Sign out	Exīre
+Ausloggen	Sign out	Exīre
+Account vergessen	Forget account	Ratiōnem oblīvīscī
+ungültig	invalid	irrita
+abgelaufen	expired	exspīrāta
+noch {} Tage	{} days left	{} diēs reliquī
+noch {} h	{} h left	{} h reliquae
+noch {} min	{} min left	{} min reliqua
+Konto {} vergessen.	Forgot account {}.	Ratiō {} oblīta.
+Kontenliste konnte nicht gespeichert werden: {}	Could not save the account list: {}	Index ratiōnum servārī nōn potuit: {}
+{} Konto(en) in Prism, davon {} neu.	{} account(s) in Prism, {} of them new.	{} ratiō(nēs) in Prism, ex hīs {} novae.
 Abgemeldet.	Signed out.	Exitum est.
 Angemeldet	Signed in	Initum
 Angemeldet als {}	Signed in as {}	Initum ut {}
@@ -91,7 +101,6 @@ Kein Azure-Client-ID gesetzt -- Microsoft-Login nicht möglich (Token-Feld nutze
 Kein Prism-Konto gefunden -- in Prism anmelden und importieren.	No Prism account found -- sign in in Prism and import.	Nūlla ratiō Prism inventa -- in Prism inī et importā.
 Keine Launcher-Konten gefunden (Prism/PolyMC). Ist ein Konto angemeldet?	No launcher accounts found (Prism/PolyMC). Is an account signed in?	Nūllae ratiōnēs launcher inventae (Prism/PolyMC). Estne ratiō inita?
 {} Konto(en) aus Prism gefunden -- anklicken zum Anmelden:	{} account(s) found in Prism -- click to sign in:	{} ratiō(nes) in Prism inventa(ē) -- preme ut inīrēs:
-{} Launcher-Konto(en) gefunden -- anklicken zum Anmelden.	{} launcher account(s) found -- click to sign in.	{} ratiō(nes) launcher inventa(ē) -- preme ut inīrēs.
 Application-ID	Application ID	Application-ID
 Client-ID	Client ID	Client-ID
 HUD-Editor	HUD editor	Ēditor HUD
@@ -259,6 +268,7 @@ Im HUD	In the HUD	In HUD
 Im Inventar	In the inventory	In inventāriō
 Scoreboard	Scoreboard	Tabula punctōrum
 Actionbar	Action bar	Virga āctiōnis
+Bossbar	Boss bar	Virga dominī
 Titel	Title	Titulus
 Untertitel	Subtitles	Subtitulī
 Hotbar	Hotbar	Virga īnstrūmentōrum
@@ -659,7 +669,8 @@ angemeldet	signed in	initum
 offline	offline	absēns
 Speichern fehlgeschlagen	Saving failed	Servāre nōn potuit
 KONTEN	ACCOUNTS	RATIŌNĒS
-anmelden →	sign in →	inīre →
+TOKENS	TOKENS	TESSERAE
+PRISM-KONTEN	PRISM ACCOUNTS	RATIŌNĒS PRISM
 Noch kein Konto. Mit Microsoft anmelden oder aus Prism importieren.	No account yet. Sign in with Microsoft or import from Prism.	Nūlla ratiō adhūc. Per Microsoft inī aut ex Prism importā.
 MINECRAFT-TOKEN (STRG+V)	MINECRAFT TOKEN (CTRL+V)	TESSERA MINECRAFT (CTRL+V)
 AZURE-CLIENT-ID	AZURE CLIENT ID	AZURE CLIENT ID

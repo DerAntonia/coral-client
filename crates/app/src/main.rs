@@ -3,6 +3,7 @@
 // Menu-Modus: Server-Adresseingabe, Connect-/Tearing-Test-Button, Log-Panel mit
 // Verbindungsstatus. World-Modus (Tab): freistehender Test-Chunk mit Fly-Kamera.
 
+mod accounts;
 mod block_anim;
 mod block_place;
 mod book;
@@ -1211,12 +1212,63 @@ fn typed_runs<'a>(texts: impl Iterator<Item = &'a UiText>) -> Vec<TypedRun> {
 // Was zwischen zwei Frames aus dem getippten Text verschwunden ist, an seiner ALTEN Stelle:
 // gemeinsamer Anfang und gemeinsames Ende bleiben, der Rest des alten Texts ist geloescht.
 // `breite` misst Text in Pixeln, so wie er in diesem Stueck steht (Schrift, Skalierung).
-fn erased_pieces(alt: &[TypedRun], neu: &[TypedRun], breite: impl Fn(&TypedRun, &str) -> f32) -> Vec<TypedRun> {
+//
+// `caret` = wo der Cursor im alten Frame stand. Er entscheidet zweierlei:
+//   - WELCHE Zeichen weg sind, wenn der Text das offenlaesst: aus "asdasdasd" wird durch
+//     Loeschen jedes "asd" dasselbe "asdasd". Geloescht wird immer am Cursor (Ruecktaste
+//     davor, Entf dahinter, eine Markierung reicht an ihn heran), also die Stelle dort.
+//   - WO sie losfallen: ein Stueck, das am Cursor sass, faellt buendig an ihm. Im Chat gleitet
+//     der Text links vom Cursor nach jedem Loeschen noch kurz (s. ChatSlide); wer schnell
+//     loescht, faende die Zeichen sonst dort, wo der Text gerade hinglitt, vor dem Cursor.
+//
+// `genau` = was das Feld selbst gemeldet hat (s. chat_input::Erased): Anfang im alten Text,
+// Laenge und ob der Cursor daran stand. Passt es zum Text, gilt es statt jeder Vermutung --
+// eine Mausmarkierung kann weit weg vom Cursor liegen, dort fiele sonst das Falsche.
+fn erased_pieces(alt: &[TypedRun], neu: &[TypedRun], breite: impl Fn(&TypedRun, &str) -> f32, mut caret: Option<(f32, f32)>, genau: Option<(usize, usize, bool)>) -> Vec<TypedRun> {
     let a: String = alt.iter().map(|r| r.text.as_str()).collect();
     let b: String = neu.iter().map(|r| r.text.as_str()).collect();
     let anfang: usize = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).map(|(x, _)| x.len_utf8()).sum();
     let ende: usize = a[anfang..].chars().rev().zip(b[anfang..].chars().rev()).take_while(|(x, y)| x == y).map(|(x, _)| x.len_utf8()).sum();
-    let (von, bis) = (anfang, a.len() - ende);
+    let (mut von, mut bis) = (anfang, a.len() - ende);
+    // Ergibt alt ohne a[s..s+n] wieder neu?
+    let passt = |s: usize, n: usize| a.len() == b.len() + n && a.is_char_boundary(s) && a.is_char_boundary(s + n) && a[..s] == b[..s] && a[s + n..] == b[s..];
+    // Bildschirmstelle einer Byte-Position im alten Text: (x, y) des Zeichens dort bzw. des
+    // Endes des letzten Stuecks.
+    let stelle = |pos: usize, am_ende: bool| -> Option<(f32, f32)> {
+        let mut offset = 0;
+        for r in alt {
+            let (s, e) = (offset, offset + r.text.len());
+            offset = e;
+            if (s <= pos && pos < e) || (am_ende && s < pos && pos <= e) {
+                return Some((r.x + breite(r, &r.text[..pos - s]), r.y));
+            }
+        }
+        None
+    };
+    if let Some((s, n, am_cursor)) = genau.filter(|&(s, n, _)| passt(s, n)) {
+        (von, bis) = (s, s + n);
+        // Nur was am Cursor sass, rueckt an ihn heran.
+        if !am_cursor {
+            caret = None;
+        }
+    } else if let Some((cx, cy)) = caret.filter(|_| a.len() > b.len()) {
+        // Reines Loeschen: jede Lage p, bei der alt ohne a[p..p+n] wieder neu ergibt, passt.
+        // Davon die, deren Anfang oder Ende dem Cursor am naechsten liegt.
+        let n = a.len() - b.len();
+        let hinten: usize = a.chars().rev().zip(b.chars().rev()).take_while(|(x, y)| x == y).map(|(x, _)| x.len_utf8()).sum();
+        let abstand = |p: usize| {
+            [stelle(p, false), stelle(p + n, true)]
+                .into_iter()
+                .flatten()
+                .map(|(x, y)| (x - cx).abs() + (y - cy).abs())
+                .fold(f32::INFINITY, f32::min)
+        };
+        let erste = b.len().saturating_sub(hinten);
+        let beste = (erste..=anfang.min(b.len())).filter(|&p| passt(p, n)).min_by(|&p, &q| abstand(p).total_cmp(&abstand(q)));
+        if let Some(p) = beste {
+            (von, bis) = (p, p + n);
+        }
+    }
     let mut out = Vec::new();
     let mut offset = 0;
     for r in alt {
@@ -1227,7 +1279,18 @@ fn erased_pieces(alt: &[TypedRun], neu: &[TypedRun], breite: impl Fn(&TypedRun, 
             continue;
         }
         let (i, j) = (lo - s, hi - s);
-        out.push(TypedRun { text: r.text[i..j].to_string(), x: r.x + breite(r, &r.text[..i]), ..r.clone() });
+        let mut stueck = TypedRun { text: r.text[i..j].to_string(), x: r.x + breite(r, &r.text[..i]), ..r.clone() };
+        // Sass das Stueck in der Zeile des Cursors an ihm, buendig an ihn (s. oben).
+        if let Some((cx, cy)) = caret {
+            let w = breite(r, &stueck.text);
+            let h = 8.0 * r.scale;
+            let (vorn, hinten) = (cx - stueck.x, cx - (stueck.x + w));
+            let schub = if hinten.abs() <= vorn.abs() { hinten } else { vorn };
+            if (stueck.y - cy).abs() < h && schub.abs() < 4.0 * h {
+                stueck.x += schub;
+            }
+        }
+        out.push(stueck);
     }
     out
 }
@@ -1899,6 +1962,12 @@ const PAUSE_FIRST_Y: f32 = 200.0;
 const PAUSE_ROW_H: f32 = 68.0;
 fn pause_button(row: usize, screen_w: f32) -> Rect {
     Rect { x: ((screen_w - PAUSE_BTN_W) / 2.0).round().max(UI_MARGIN), y: PAUSE_FIRST_Y + row as f32 * PAUSE_ROW_H, w: PAUSE_BTN_W, h: PAUSE_BTN_H }
+}
+
+// Wie pause_button, aber so gestapelt, dass Zeile `mitte` genau in der Bildschirmmitte steht.
+fn pause_button_around_center(row: usize, mitte: usize, screen_w: f32, screen_h: f32) -> Rect {
+    let y = (screen_h - PAUSE_BTN_H) / 2.0 + (row as f32 - mitte as f32) * PAUSE_ROW_H;
+    Rect { y: y.round(), ..pause_button(row, screen_w) }
 }
 
 // Einstellungen-Tab: Beschriftung links, Bedienelement rechts davon.
@@ -3230,6 +3299,8 @@ fn hud_config_rows(element: HudElement, set: &Settings) -> usize {
         HudElement::Effects => EFFECTS_STYLE_ROW + 1,
         HudElement::Perf | HudElement::Scoreboard | HudElement::ShieldCooldown | HudElement::Arrows => 0,
         HudElement::ActionBar => 1,
+        // Groesse.
+        HudElement::BossBar => 1,
         // Die Chat-Einstellungen (s. CHAT_TOOLTIPS): Groesse, Breite, Hintergrund, Abdunkeln,
         // Zeilen im Spiel und beim Tippen, Ausblenden.
         HudElement::Chat => CHAT_TOOLTIPS.len(),
@@ -3579,26 +3650,25 @@ fn set_special_icons(icons: &mut ItemIcons, entity_atlas: &assets::EntityAtlas, 
     let base = Affine::translation([-0.5, -0.5, -0.5]);
     for id in 0..world::item_registry::item_count() as u32 {
         let Some(name) = world::item_registry::item_name(id) else { continue };
-        let (boxes, gui) = if let Some((kind, texture)) = held_item::special_item(name) {
-            let Some(tex) = entity_atlas.rect(&texture) else { continue };
-            let boxes = match kind {
-                held_item::SpecialKind::Chest => em::emit_boxes(em::chest_model(world::ChestHalf::Single), &em::chest_pose(0.0), base, tex),
-                held_item::SpecialKind::ShulkerBox => {
-                    em::emit_boxes(em::shulker_box_model(), &em::shulker_box_pose(0.0), base.then(em::shulker_box_transform([0.0; 3], "up")), tex)
-                }
-            };
-            (boxes, assets::item_named_display(installation, name, "gui"))
-        } else if let Some(texture) = world::copper_golem_statue_texture(name) {
-            // Der Layer so, wie er gebacken ist (Wurzel 24 Pixel tiefer, Kopf nach -y); die halbe
-            // Drehung um Z steckt in der gui-Haltung des Templates. Nachgerechnet steht die Figur
-            // damit aufrecht und genau mittig im Feld (s. Test kupfergolem_statue_steht_aufrecht).
-            // Gezeigt wird die Grundpose (Stehen); die anderen haengen am Blockzustand des Stapels.
-            let (Some(model), Some(tex)) = (world::model_data::layer_model("copper_golem#main"), entity_atlas.rect(texture)) else { continue };
-            let pose = world::Pose::new();
-            let gui = assets::model_hand_display(installation, "item/template_copper_golem_statue", "gui");
-            (em::emit_boxes(model, &pose, base, tex), gui)
-        } else {
-            continue;
+        let Some((kind, texture)) = held_item::special_item(name) else { continue };
+        let Some(tex) = entity_atlas.rect(&texture) else { continue };
+        let (boxes, gui) = match kind {
+            held_item::SpecialKind::Chest => {
+                (em::emit_boxes(em::chest_model(world::ChestHalf::Single), &em::chest_pose(0.0), base, tex), assets::item_named_display(installation, name, "gui"))
+            }
+            held_item::SpecialKind::ShulkerBox => (
+                em::emit_boxes(em::shulker_box_model(), &em::shulker_box_pose(0.0), base.then(em::shulker_box_transform([0.0; 3], "up")), tex),
+                assets::item_named_display(installation, name, "gui"),
+            ),
+            // Wie Vanilla: nach dem -0.5 die Transformation aus items/copper_golem_statue.json,
+            // dann die Statuen-Haltung. Ohne beides zeigte das Icon den Ruecken und sass gut 3
+            // Pixel zu hoch (s. Test kupfergolem_statue_steht_aufrecht). Gezeigt wird die
+            // Grundpose (Stehen); die anderen haengen am Blockzustand des Stapels.
+            held_item::SpecialKind::CopperGolemStatue => {
+                let Some(model) = world::model_data::layer_model("copper_golem#main") else { continue };
+                let gui = assets::model_hand_display(installation, held_item::STATUE_TEMPLATE, "gui");
+                (em::emit_boxes(model, &em::copper_golem_statue_pose(model), base.then(held_item::statue_item_transform()), tex), gui)
+            }
         };
         icons.set_entity_model_gui(name, &boxes, gui);
     }
@@ -9293,11 +9363,13 @@ enum HudElement {
     // die Schalter fuer die Anzeige im HUD und neben dem Inventar. Die Spielerliste steht
     // bewusst NICHT im Editor -- sie sitzt fest oben mittig wie in Vanilla.
     Effects,
+    // Die Bossbars (BossBarHud), alle zusammen als ein Block.
+    BossBar,
 }
 
 impl HudElement {
     #[cfg(test)]
-    const ALL: [HudElement; 11] = [
+    const ALL: [HudElement; 12] = [
         HudElement::Perf,
         HudElement::Crosshair,
         HudElement::Title,
@@ -9309,6 +9381,7 @@ impl HudElement {
         HudElement::Chat,
         HudElement::ShieldCooldown,
         HudElement::Arrows,
+        HudElement::BossBar,
     ];
 
     fn label(self) -> &'static str {
@@ -9324,6 +9397,7 @@ impl HudElement {
             HudElement::Title => "Titel",
             HudElement::Subtitle => "Untertitel",
             HudElement::Effects => "Effekte",
+            HudElement::BossBar => "Bossbar",
         }
     }
 }
@@ -9612,7 +9686,7 @@ impl EditableValue {
     // statt am Geschmack: Chunk-Update-Threads (1..32, an der Kernzahl bemessen),
     // Render-Ahead (0..4), sowie alles, was gar keine Zahl ist (Present-Modus, Projektion,
     // Fadenkreuz-Farbe, Audiogeraet).
-    const ALL: [EditableValue; 66] = [
+    const ALL: [EditableValue; 67] = [
         EditableValue::MouseSensitivity,
         EditableValue::MouseSensitivityY,
         EditableValue::CursorSensitivity,
@@ -9657,6 +9731,7 @@ impl EditableValue {
         EditableValue::UiSoundVolume(8),
         EditableValue::UiSoundVolume(9),
         EditableValue::UiSoundVolume(10),
+        EditableValue::UiSoundVolume(11),
         EditableValue::ShadowThickness(0),
         EditableValue::ShadowOpacity(0),
         EditableValue::ShadowThickness(1),
@@ -10994,6 +11069,12 @@ struct Settings {
     // Aufloesung und bei jeder GUI-Skalierung mittig unten.
     hud_hotbar_x: f32,
     hud_hotbar_y: f32,
+    // Bossbars: normierte MITTE und OBERKANTE (s. App::hud_bossbar_rect). Der Standard 0.5/0.0
+    // ist genau Vanillas Lage.
+    hud_bossbar_x: f32,
+    hud_bossbar_y: f32,
+    // Groesse in Prozent der GUI-Skala, wie bei den Effekten.
+    hud_bossbar_scale: u32,
     // GUI-Skalierung der Hotbar: 0 = Auto (Vanillas "Auto", so gross wie das Grundraster
     // erlaubt, s. inventory::gui_scale), 1..4 = fest wie Vanillas x1..x4.
     hud_hotbar_scale: u32,
@@ -11618,6 +11699,22 @@ fn save_chat_history(verlauf: &[String]) -> std::io::Result<()> {
     let body: String = verlauf.iter().map(|z| format!("{}\n", z.replace('\n', " "))).collect();
     std::fs::write(&path, body)
 }
+
+// Gespeicherte Konten laden. Gibt es noch keine Liste, kommt das bisher angemeldete Konto
+// hinein, damit es mit der Umstellung nicht verschwindet; die Prism-Konten immer dazu.
+fn load_account_store(settings: &Settings) -> accounts::Store {
+    let mut store = accounts::load().unwrap_or_default();
+    if store.list.is_empty() && !settings.mc_access_token.is_empty() && !settings.account_uuid.is_empty() {
+        let creds = auth::Credentials { access_token: settings.mc_access_token.clone(), profile_id: settings.account_uuid.clone(), username: settings.account_name.clone() };
+        let msa = (!settings.msa_refresh_token.is_empty()).then(|| (settings.msa_refresh_token.clone(), settings.azure_client_id.clone()));
+        store.upsert(&creds, msa, accounts::Source::Token);
+    }
+    store.merge_prism(&auth::launcher_accounts(), false, accounts::now_unix());
+    store
+}
+
+// Wie lange eine Konto-Pruefung gilt, bevor das Oeffnen der Liste sie wiederholt.
+const ACCOUNT_RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn load_servers() -> Vec<ServerEntry> {
     let Some(path) = servers_path() else {
@@ -12811,12 +12908,13 @@ impl Settings {
                         }
                     }
                 }
-                "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" => {
+                "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" => {
                     if let Ok(v) = value.parse::<u32>() {
                         let v = v.clamp(HUD_SCALE_PCT_MIN, HUD_SCALE_PCT_MAX);
                         match key {
                             "hud_title_scale" => settings.hud_title_scale = v,
                             "hud_subtitle_scale" => settings.hud_subtitle_scale = v,
+                            "hud_bossbar_scale" => settings.hud_bossbar_scale = v,
                             _ => settings.hud_effects_scale = v,
                         }
                     }
@@ -12844,6 +12942,16 @@ impl Settings {
                 "hud_hotbar_y" => {
                     if let Ok(v) = value.parse::<f32>() {
                         settings.hud_hotbar_y = v.clamp(0.0, 1.0);
+                    }
+                }
+                "hud_bossbar_x" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        settings.hud_bossbar_x = v.clamp(0.0, 1.0);
+                    }
+                }
+                "hud_bossbar_y" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        settings.hud_bossbar_y = v.clamp(0.0, 1.0);
                     }
                 }
                 "inventory_scale" => {
@@ -13677,7 +13785,7 @@ impl Settings {
              max_render_distance={}\nmax_chunk_count={}\nchunk_update_threads={}\n\
              hud_perf_x={}\nhud_perf_y={}\nhud_crosshair_x={}\nhud_crosshair_y={}\n\
              hud_actionbar_x={}\nhud_actionbar_y={}\nhud_scoreboard_x={}\nhud_scoreboard_y={}\n\
-             hud_hotbar_x={}\nhud_hotbar_y={}\nhud_hotbar_scale={}\n\
+             hud_hotbar_x={}\nhud_hotbar_y={}\nhud_hotbar_scale={}\nhud_bossbar_x={}\nhud_bossbar_y={}\nhud_bossbar_scale={}\n\
              hud_chat_x={}\nhud_chat_y={}\nchat_scale_percent={}\nchat_width={}\nchat_lines={}\nchat_lines_open={}\nchat_background={}\nchat_open_dim={}\nchat_fade_secs={}\n\
              master_volume={}\ninventory_transparency={}\ninventory_cursor_to_slot={}\ninventory_scale={}\ncrosshair_color_mode={}\ncrosshair_hue={}\ncrosshair_saturation={}\ncrosshair_value={}\ncrosshair_brightness_boost={}\ncrosshair_outline={}\ncrosshair_ring_outline={}\nfov={}\nfov_third_back={}\nfov_third_front={}\ncamera_distance_back={}\ncamera_distance_front={}\ncamera_y_offset_back={}\ncamera_y_offset_front={}\nprojection_mode={}\nparticles_mode={}\nfont={}\ntext_shadow={}\nwallpaper={}\ncmaa2_enabled={}\naudio_output_device={}\nui_pitch_semitones={}\nmodule_totem_indicator={}\nmodule_totem_sound={}\nmodule_ghost_tolerance={}\nghost_tolerance_ms={}\n\
              module_hitbox_enabled={}\nmodule_hitbox_show_smoothed={}\nmodule_hitbox_show_raw={}\nmodule_hitbox_dotted={}\nmodule_hitbox_items={}\nmodule_hitbox_self={}\nmodule_hitbox_density_px={}\nmodule_hitbox_opacity={}\n\
@@ -13718,6 +13826,9 @@ impl Settings {
             self.hud_hotbar_x,
             self.hud_hotbar_y,
             self.hud_hotbar_scale,
+            self.hud_bossbar_x,
+            self.hud_bossbar_y,
+            self.hud_bossbar_scale,
             self.hud_chat_x,
             self.hud_chat_y,
             self.chat_scale_percent,
@@ -14094,6 +14205,9 @@ impl Default for Settings {
             hud_actionbar_y: 0.82,
             hud_scoreboard_x: 0.995,
             hud_scoreboard_y: 0.28,
+            hud_bossbar_x: 0.5,
+            hud_bossbar_y: 0.0,
+            hud_bossbar_scale: 100,
             hud_title_x: 0.5,
             hud_title_y: 0.34,
             hud_title_align: 1,
@@ -14585,8 +14699,12 @@ struct PlayerSkin {
 enum AuthEvent {
     // Anzuzeigender Code + URL, unter der sich der Nutzer im Browser anmeldet.
     DeviceCode { user_code: String, verification_uri: String },
-    // Anmeldung fertig: fertige Credentials + (evtl. neues) Refresh-Token zum Speichern.
-    LoggedIn { credentials: auth::Credentials, refresh_token: Option<String> },
+    // Anmeldung fertig: fertige Credentials, bei Microsoft das (neue) Refresh-Token mit der
+    // Client-ID, fuer die es gilt, sonst die Quelle des Tokens (fuer die Kontenliste).
+    LoggedIn { credentials: auth::Credentials, msa: Option<(String, String)>, source: accounts::Source },
+    // Ein gespeichertes Konto ist geprueft (s. App::check_accounts): Schluessel und entweder
+    // die frischen Credentials (bei Erneuerung mit neuem Refresh-Token) oder der Fehler.
+    AccountChecked { key: String, result: Result<(auth::Credentials, Option<(String, String)>), String> },
     // Fehlgeschlagen -- Meldung fuers Log.
     Failed(String),
     // Reiner Status-/Fortschrittstext fuers Log.
@@ -14832,6 +14950,8 @@ enum ButtonAction {
     // Launcher-Konten (Prism/PolyMC) neu einlesen bzw. eines davon per Klick uebernehmen.
     ImportLauncherAccounts,
     UseLauncherAccount(usize),
+    // Gespeichertes Konto (Index in App::accounts.list) anklicken: damit anmelden.
+    UseAccount(usize),
     ToggleTearing,
     ToggleHud,
     PresentModePrev,
@@ -15576,14 +15696,20 @@ struct AccElem {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum AccountContextItem {
+    Logout,
+    Forget,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum AccKind {
     Current,
     Other,
+    Header,
     Hint,
     Field,
     Button,
     Primary,
-    Danger,
     Close,
 }
 
@@ -16022,6 +16148,12 @@ struct App {
     // Beim Betreten des Account-Screens aus dem Launcher (Prism/PolyMC) eingelesene Konten --
     // pro Eintrag ein Button zum Ein-Klick-Import. Leer = keiner gefunden.
     launcher_accounts: Vec<auth::LauncherAccount>,
+    // Gespeicherte Konten des Acc-Managers (s. accounts.rs), dazu je Konto (Schluessel:
+    // accounts::key) das Ergebnis der letzten Pruefung und wann sie begann bzw. endete.
+    accounts: accounts::Store,
+    account_checks: std::collections::HashMap<String, (accounts::Check, Instant)>,
+    // Rechtsklick-Menue im Acc-Manager: Konto (Index in accounts.list) und Klickpunkt.
+    account_context: Option<(usize, (f32, f32))>,
     // Chat (urspruenglich fuers Debugging gedacht: Grim-Meldungen/Server-Antworten
     // direkt im Client sehen, ohne die Server-Konsole zu beobachten). Some(text) waehrend
     // der Eingabe (geoeffnet per T, s. window_event) -- blockiert waehrenddessen
@@ -16372,6 +16504,10 @@ struct App {
     // Mindestabstand.
     ui_sound_last: [Option<Instant>; ui_sound::UiSound::ALL.len()],
     erase_pending: bool,
+    // Wo der Schreibcursor in diesem Frame steht (s. push_caret) und wo im letzten -- das
+    // Loeschen laesst die Zeichen dort herausfallen (s. erased_pieces).
+    caret_drawn: std::cell::Cell<Option<(f32, f32)>>,
+    caret_prev: Option<(f32, f32)>,
     falling_glyphs: Vec<FallingGlyph>,
     // Zaehler fuer den Zufall der fallenden Zeichen (Weg, Drift, Drehung).
     erase_seed: u32,
@@ -17647,6 +17783,9 @@ impl App {
             unknown_server_icon: false,
             server_edit: None,
             launcher_accounts: Vec::new(),
+            accounts: load_account_store(&settings),
+            account_checks: std::collections::HashMap::new(),
+            account_context: None,
             chat_input: None,
             chat_history: load_chat_history(),
             chat_messages: std::collections::VecDeque::new(),
@@ -17792,6 +17931,8 @@ impl App {
             typed_prev: Vec::new(),
             ui_sound_last: [None; ui_sound::UiSound::ALL.len()],
             erase_pending: false,
+            caret_drawn: std::cell::Cell::new(None),
+            caret_prev: None,
             falling_glyphs: Vec::new(),
             erase_seed: 0,
             caret_anim: std::cell::Cell::new(None),
@@ -18726,6 +18867,9 @@ impl App {
         }
         if self.account_menu_open {
             self.account_menu_open = false;
+            return;
+        }
+        if self.account_context.take().is_some() {
             return;
         }
         if self.account_manager_open {
@@ -22131,7 +22275,7 @@ impl App {
             let _ = tx.send(AuthEvent::Status("Angemeldet -- hole Minecraft-Profil ...".into()));
             match auth::msa_to_minecraft(&msa.access_token).await {
                 Ok(creds) => {
-                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, refresh_token: Some(msa.refresh_token) });
+                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, msa: Some((msa.refresh_token, client_id.clone())), source: accounts::Source::Microsoft });
                 }
                 Err(e) => {
                     let _ = tx.send(AuthEvent::Failed(e.to_string()));
@@ -22142,7 +22286,7 @@ impl App {
 
     // Nutzt ein manuell eingegebenes Minecraft-Access-Token (Token-Feld) direkt -- holt nur
     // noch Name + UUID dazu. Kein Refresh-Token (das gibt es nur ueber den Microsoft-Login).
-    fn submit_token_login(&mut self, token: String) {
+    fn submit_token_login(&mut self, token: String, source: accounts::Source) {
         let token = token.trim().to_string();
         if token.is_empty() {
             return;
@@ -22153,7 +22297,7 @@ impl App {
         self.tokio_rt.spawn(async move {
             match auth::credentials_from_token(&token).await {
                 Ok(creds) => {
-                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, refresh_token: None });
+                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, msa: None, source });
                 }
                 Err(e) => {
                     let _ = tx.send(AuthEvent::Failed(e.to_string()));
@@ -22177,6 +22321,15 @@ impl App {
             self.push_log("Keine Client-ID gesetzt -- ein Refresh-Token braucht die ID der App, die es ausgestellt hat.");
             return;
         }
+        self.redeem_refresh_token(refresh_token, client_id);
+    }
+
+    // Refresh-Token gegen frische Tokens tauschen und damit anmelden (eingefuegtes Token oder
+    // ein gespeichertes Microsoft-Konto aus der Liste, dann mit dessen Client-ID).
+    fn redeem_refresh_token(&mut self, refresh_token: String, client_id: String) {
+        if self.login_busy {
+            return;
+        }
         self.login_busy = true;
         self.push_log("Refresh-Token wird eingelöst ...");
         let tx = self.auth_tx.clone();
@@ -22191,7 +22344,7 @@ impl App {
             let _ = tx.send(AuthEvent::Status("Token gültig -- hole Minecraft-Profil ...".into()));
             match auth::msa_to_minecraft(&msa.access_token).await {
                 Ok(creds) => {
-                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, refresh_token: Some(msa.refresh_token) });
+                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, msa: Some((msa.refresh_token, client_id.clone())), source: accounts::Source::Microsoft });
                 }
                 Err(e) => {
                     let _ = tx.send(AuthEvent::Failed(e.to_string()));
@@ -22207,7 +22360,13 @@ impl App {
         if self.login_busy || self.credentials.is_some() {
             return;
         }
-        let client_id = self.settings.azure_client_id.trim().to_string();
+        // Das Refresh-Token gilt nur mit der Client-ID, fuer die es ausgestellt wurde.
+        let client_id = self
+            .accounts
+            .find(&self.settings.account_uuid)
+            .map(|i| self.accounts.list[i].client_id.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| self.settings.azure_client_id.trim().to_string());
         let refresh_token = self.settings.msa_refresh_token.trim().to_string();
         if client_id.is_empty() || refresh_token.is_empty() {
             return;
@@ -22224,7 +22383,7 @@ impl App {
             };
             match auth::msa_to_minecraft(&msa.access_token).await {
                 Ok(creds) => {
-                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, refresh_token: Some(msa.refresh_token) });
+                    let _ = tx.send(AuthEvent::LoggedIn { credentials: creds, msa: Some((msa.refresh_token, client_id.clone())), source: accounts::Source::Microsoft });
                 }
                 Err(e) => {
                     let _ = tx.send(AuthEvent::Failed(e.to_string()));
@@ -22233,8 +22392,126 @@ impl App {
         });
     }
 
+    // Angemeldetes Konto setzen und fuer den naechsten Start merken. Das Refresh-Token kommt
+    // aus der Kontenliste: ein Konto ohne eigenes darf nicht das des vorigen behalten, sonst
+    // meldete try_refresh_login einen beim naechsten Start wieder beim vorigen an.
+    fn set_active_account(&mut self, credentials: auth::Credentials) {
+        self.settings.account_name = credentials.username.clone();
+        self.settings.account_uuid = credentials.profile_id.clone();
+        self.settings.mc_access_token = credentials.access_token.clone();
+        self.settings.msa_refresh_token = self.accounts.find(&credentials.profile_id).map(|i| self.accounts.list[i].refresh_token.clone()).unwrap_or_default();
+        self.credentials = Some(credentials);
+        self.persist_settings();
+        // Ein neu angelegtes Konto hat noch keinen Kopf geladen.
+        self.request_account_heads();
+    }
+
+    fn persist_accounts(&mut self) {
+        if let Err(e) = accounts::save(&self.accounts) {
+            self.push_log(format!("Kontenliste konnte nicht gespeichert werden: {e}"));
+        }
+    }
+
+    fn account_check(&self, a: &accounts::Account) -> accounts::Check {
+        self.account_checks.get(&accounts::key(&a.uuid)).map_or(accounts::Check::Unknown, |(c, _)| c.clone())
+    }
+
+    fn is_active_account(&self, a: &accounts::Account) -> bool {
+        self.credentials.as_ref().is_some_and(|c| accounts::key(&c.profile_id) == accounts::key(&a.uuid))
+    }
+
+    // Beim Oeffnen der Kontenliste und des Acc-Managers: Prism neu einlesen, Koepfe laden und
+    // alle Konten pruefen. `import` = Knopf "Aus Prism importieren" (holt auch vergessene).
+    fn refresh_account_list(&mut self, import: bool) {
+        self.launcher_accounts = auth::launcher_accounts();
+        let neu = self.accounts.merge_prism(&self.launcher_accounts, import, accounts::now_unix());
+        if neu > 0 || import {
+            self.persist_accounts();
+        }
+        if import {
+            if self.launcher_accounts.is_empty() {
+                self.push_log("Keine Launcher-Konten gefunden (Prism/PolyMC). Ist ein Konto angemeldet?");
+            } else {
+                self.push_log(format!("{} Konto(en) in Prism, davon {neu} neu.", self.launcher_accounts.len()));
+            }
+        }
+        self.request_account_heads();
+        self.check_accounts();
+    }
+
+    // Alle gespeicherten Konten pruefen: das Token beim Profil-Endpunkt vorzeigen; ist es
+    // abgelaufen und das Konto hat ein Refresh-Token, wird es erneuert. Ein Konto hoechstens
+    // einmal je ACCOUNT_RECHECK.
+    fn check_accounts(&mut self) {
+        let jetzt = accounts::now_unix();
+        for a in self.accounts.list.clone() {
+            let key = accounts::key(&a.uuid);
+            if let Some((check, wann)) = self.account_checks.get(&key) {
+                if *check == accounts::Check::Checking || wann.elapsed() < ACCOUNT_RECHECK {
+                    continue;
+                }
+            }
+            // Abgelaufen und nichts zum Erneuern: das steht auch ohne Netz fest.
+            if a.refresh_token.is_empty() && accounts::expiry(&a.access_token).is_some_and(|exp| exp <= jetzt) {
+                self.account_checks.insert(key, (accounts::Check::Invalid("abgelaufen".into()), Instant::now()));
+                continue;
+            }
+            self.account_checks.insert(key.clone(), (accounts::Check::Checking, Instant::now()));
+            let tx = self.auth_tx.clone();
+            self.tokio_rt.spawn(async move {
+                let result = async {
+                    // Ein Token kurz vor dem Ablauf gleich erneuern statt es noch vorzuzeigen.
+                    if accounts::expiry(&a.access_token).is_none_or(|exp| exp > jetzt + 60) {
+                        match auth::credentials_from_token(&a.access_token).await {
+                            Ok(c) => return Ok((c, None)),
+                            Err(e) if a.refresh_token.is_empty() => return Err(e.to_string()),
+                            Err(_) => {}
+                        }
+                    }
+                    let msa = auth::refresh_msa(&a.client_id, &a.refresh_token).await.map_err(|e| e.to_string())?;
+                    let c = auth::msa_to_minecraft(&msa.access_token).await.map_err(|e| e.to_string())?;
+                    Ok((c, Some((msa.refresh_token, a.client_id.clone()))))
+                }
+                .await;
+                let _ = tx.send(AuthEvent::AccountChecked { key, result });
+            });
+        }
+    }
+
+    // Klick auf ein Konto: damit anmelden. Ein geprueftes, noch laufendes Token wird direkt
+    // genommen; sonst erst erneuern (Microsoft) bzw. pruefen.
+    fn use_account(&mut self, i: usize) {
+        let Some(a) = self.accounts.list.get(i).cloned() else { return };
+        if self.is_active_account(&a) || self.login_busy {
+            return;
+        }
+        let laeuft = accounts::expiry(&a.access_token).is_none_or(|exp| exp > accounts::now_unix() + 60);
+        if self.account_check(&a) == accounts::Check::Valid && laeuft {
+            self.push_log(format!("Angemeldet als {}", a.name));
+            self.notify(notifications::Notification::success("Angemeldet", format!("als {}", a.name)));
+            self.set_active_account(a.credentials());
+        } else if !a.refresh_token.is_empty() {
+            self.redeem_refresh_token(a.refresh_token, a.client_id);
+        } else {
+            self.submit_token_login(a.access_token, a.source);
+        }
+    }
+
+    // Rechtsklick-Menue "Account vergessen": aus der Liste nehmen (ein Prism-Konto kommt erst
+    // mit "Aus Prism importieren" wieder); war es angemeldet, auch abmelden.
+    fn forget_account(&mut self, i: usize) {
+        let aktiv = self.accounts.list.get(i).is_some_and(|a| self.is_active_account(a));
+        let Some(a) = self.accounts.forget(i) else { return };
+        self.account_checks.remove(&accounts::key(&a.uuid));
+        self.persist_accounts();
+        if aktiv {
+            self.logout();
+        }
+        self.push_log(format!("Konto {} vergessen.", a.name));
+    }
+
     // Meldet ab: verwirft Credentials und das gespeicherte Refresh-Token (naechster Connect
-    // laeuft wieder Offline-Mode).
+    // laeuft wieder Offline-Mode). Das Konto bleibt in der Liste.
     fn logout(&mut self) {
         self.credentials = None;
         self.settings.msa_refresh_token.clear();
@@ -22265,7 +22542,9 @@ impl App {
                     if let Some(t) = textures {
                         self.head_textures.insert(key, t);
                     }
-                    if self.account_menu_open {
+                    // Das Profil eines gespeicherten Kontos: jetzt seinen Skin laden -- auch bei
+                    // geschlossener Liste, der Kopf oben in der Leiste braucht ihn ebenso.
+                    if self.accounts.list.iter().any(|a| uuid_bytes_from_hex(&a.uuid) == Some(key)) {
                         self.request_account_heads();
                     }
                 }
@@ -22278,20 +22557,33 @@ impl App {
                     self.push_log(format!("Login fehlgeschlagen: {msg}"));
                     self.notify(notifications::Notification::error("Login fehlgeschlagen", msg));
                 }
-                AuthEvent::LoggedIn { credentials, refresh_token } => {
+                AuthEvent::LoggedIn { credentials, msa, source } => {
                     self.login_busy = false;
                     self.input_field = None;
                     self.push_log(format!("Angemeldet als {}", credentials.username));
                     self.notify(notifications::Notification::success("Angemeldet", format!("als {}", credentials.username)));
-                    // Zur Anzeige UND zum Wiederherstellen nach Neustart speichern.
-                    self.settings.account_name = credentials.username.clone();
-                    self.settings.account_uuid = credentials.profile_id.clone();
-                    self.settings.mc_access_token = credentials.access_token.clone();
-                    if let Some(rt) = refresh_token {
-                        self.settings.msa_refresh_token = rt;
-                    }
-                    self.credentials = Some(credentials);
-                    self.persist_settings();
+                    self.accounts.upsert(&credentials, msa, source);
+                    self.account_checks.insert(accounts::key(&credentials.profile_id), (accounts::Check::Valid, Instant::now()));
+                    self.persist_accounts();
+                    self.set_active_account(credentials);
+                }
+                AuthEvent::AccountChecked { key, result } => {
+                    let check = match result {
+                        Ok((creds, msa)) => {
+                            // Inzwischen vergessen? Dann nicht wieder anlegen.
+                            if let Some(i) = self.accounts.find(&creds.profile_id) {
+                                let source = self.accounts.list[i].source;
+                                self.accounts.upsert(&creds, msa, source);
+                                self.persist_accounts();
+                                if self.credentials.as_ref().is_some_and(|c| accounts::key(&c.profile_id) == key) {
+                                    self.set_active_account(creds);
+                                }
+                            }
+                            accounts::Check::Valid
+                        }
+                        Err(e) => accounts::Check::Invalid(e),
+                    };
+                    self.account_checks.insert(key, (check, Instant::now()));
                 }
             }
         }
@@ -22860,19 +23152,13 @@ impl App {
                     // Esc-Pausemenue (verbunden/verbindend): HUD-Editor, Disconnect,
                     // Einstellungen. Reconnect steckt weiterhin im Connect-Pfad, ist hier
                     // aber selten noetig -- ueber Disconnect -> Startbildschirm erreichbar.
-                    out.push(Self::nav_button(
-                        ButtonAction::OpenScreen(MenuScreen::HudEditor),
-                        pause_button(0, screen_w),
-                        "HUD-Editor",
-                        UI_SCALE_NORMAL,
-                    ));
-                    out.push(Self::nav_button(ButtonAction::Disconnect, pause_button(1, screen_w), "Disconnect", UI_SCALE_NORMAL));
-                    out.push(Self::nav_button(
-                        ButtonAction::OpenScreen(MenuScreen::Settings),
-                        pause_button(2, screen_w),
-                        "Einstellungen",
-                        UI_SCALE_NORMAL,
-                    ));
+                    // Disconnect genau in der Bildschirmmitte: dort erscheint der Zeiger beim
+                    // Pausieren (s. on_escape), er liegt also gleich darauf.
+                    let screen_h = self.gpu.as_ref().map_or(720.0, |g| g.size().1);
+                    let zeile = |row: usize| pause_button_around_center(row, 1, screen_w, screen_h);
+                    out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::HudEditor), zeile(0), "HUD-Editor", UI_SCALE_NORMAL));
+                    out.push(Self::nav_button(ButtonAction::Disconnect, zeile(1), "Disconnect", UI_SCALE_NORMAL));
+                    out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::Settings), zeile(2), "Einstellungen", UI_SCALE_NORMAL));
                 }
             }
             MenuScreen::Connect => {
@@ -23613,6 +23899,16 @@ impl App {
                                     out.push(Self::step_slider(prev, next, stepper_value_rect(row), wert as f64, min as f64, max as f64, true));
                                 }
                             }
+                            HudElement::BossBar => {
+                                let pct = self.settings.hud_bossbar_scale;
+                                out.extend(Self::stepper(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    0,
+                                    pct > HUD_SCALE_PCT_MIN,
+                                    pct < HUD_SCALE_PCT_MAX,
+                                ));
+                            }
                             HudElement::Effects => {
                                 let pct = self.settings.hud_effects_scale;
                                 out.extend(Self::stepper(
@@ -23879,6 +24175,11 @@ impl App {
         self.hud_scale(screen) * self.settings.player_list_scale as f32 / 100.0
     }
 
+    // Faktor der Bossbars: GUI-Skala mal eigener Prozentwert (im Standard Vanillas Groesse).
+    fn bossbar_scale(&self, screen: (f32, f32)) -> f32 {
+        self.hud_scale(screen) * self.settings.hud_bossbar_scale as f32 / 100.0
+    }
+
     // Faktor der Effektanzeige: Hotbar-Skala (Vanillas GUI-Skala) mal eigener Prozentwert.
     fn effects_scale(&self, screen: (f32, f32)) -> f32 {
         self.hud_scale(screen) * self.settings.hud_effects_scale as f32 / 100.0
@@ -23920,6 +24221,7 @@ impl App {
             HudElement::Title => self.hud_title_rect(gpu),
             HudElement::Subtitle => self.hud_subtitle_rect(gpu),
             HudElement::Effects => self.hud_effects_rect(gpu, true),
+            HudElement::BossBar => self.hud_bossbar_rect(gpu),
         }
     }
 
@@ -23953,6 +24255,8 @@ impl App {
             Some(HudElement::Perf)
         } else if hits(self.hud_scoreboard_rect(gpu)) {
             Some(HudElement::Scoreboard)
+        } else if hits(self.hud_bossbar_rect(gpu)) {
+            Some(HudElement::BossBar)
         } else if hits(self.hud_title_rect(gpu)) {
             Some(HudElement::Title)
         } else if hits(self.hud_subtitle_rect(gpu)) {
@@ -24038,6 +24342,11 @@ impl App {
                 self.settings.effects_name_color = defaults.effects_name_color;
                 self.settings.effects_timer_style = defaults.effects_timer_style;
                 self.settings.effects_timer_color = defaults.effects_timer_color;
+            }
+            HudElement::BossBar => {
+                self.settings.hud_bossbar_x = defaults.hud_bossbar_x;
+                self.settings.hud_bossbar_y = defaults.hud_bossbar_y;
+                self.settings.hud_bossbar_scale = defaults.hud_bossbar_scale;
             }
             HudElement::Scoreboard => {
                 self.settings.hud_scoreboard_x = defaults.hud_scoreboard_x;
@@ -24130,6 +24439,11 @@ impl App {
             HudElement::Scoreboard => {
                 self.settings.hud_scoreboard_x = ((cx - ox) / sw).clamp(0.0, 1.0);
                 self.settings.hud_scoreboard_y = ((cy - oy) / sh).clamp(0.0, 1.0);
+            }
+            HudElement::BossBar => {
+                // Gespeichert werden MITTE und Oberkante (s. hud_bossbar_rect).
+                self.settings.hud_bossbar_x = ((cx - ox + w / 2.0) / sw).clamp(0.0, 1.0);
+                self.settings.hud_bossbar_y = ((cy - oy) / sh).clamp(0.0, 1.0);
             }
             HudElement::Hotbar => {
                 // ox/oy sind relativ zur linken OBEREN Ecke; gespeichert werden Mitte und
@@ -24497,12 +24811,12 @@ impl App {
                     // Offen ist der Knopf der Acc-Manager: er oeffnet das Konten-Fenster.
                     self.account_menu_open = false;
                     self.account_manager_open = true;
-                    self.launcher_accounts = auth::launcher_accounts();
+                    self.account_context = None;
                 } else {
                     self.account_menu_open = true;
-                    self.launcher_accounts = auth::launcher_accounts();
-                    self.request_account_heads();
                 }
+                // Koepfe laden und alle Tokens pruefen, sobald die Liste aufgeht.
+                self.refresh_account_list(false);
             }
             ButtonAction::ToggleNotificationPanel => {
                 self.set_notification_panel(!self.notification_panel_open);
@@ -24581,19 +24895,13 @@ impl App {
                 }
             }
             ButtonAction::Logout => self.logout(),
-            ButtonAction::ImportLauncherAccounts => {
-                self.launcher_accounts = auth::launcher_accounts();
-                if self.launcher_accounts.is_empty() {
-                    self.push_log("Keine Launcher-Konten gefunden (Prism/PolyMC). Ist ein Konto angemeldet?");
-                } else {
-                    self.push_log(format!("{} Launcher-Konto(en) gefunden -- anklicken zum Anmelden.", self.launcher_accounts.len()));
-                }
-            }
+            ButtonAction::ImportLauncherAccounts => self.refresh_account_list(true),
+            ButtonAction::UseAccount(i) => self.use_account(i),
             ButtonAction::UseLauncherAccount(i) => {
                 if let Some(acc) = self.launcher_accounts.get(i) {
                     // Token validieren (credentials_from_token holt Name/UUID frisch); bei
                     // abgelaufenem Token kommt ein klarer Fehler -> Launcher einmal starten.
-                    self.submit_token_login(acc.token.clone());
+                    self.submit_token_login(acc.token.clone(), accounts::Source::Prism);
                 }
             }
             // --- Server-Liste (Connect-Screen) ---
@@ -24956,6 +25264,7 @@ impl App {
                     HudElement::Title => &mut self.settings.hud_title_scale,
                     HudElement::Subtitle => &mut self.settings.hud_subtitle_scale,
                     HudElement::Effects => &mut self.settings.hud_effects_scale,
+                    HudElement::BossBar => &mut self.settings.hud_bossbar_scale,
                     _ => return,
                 };
                 *wert = if groesser { *wert + HUD_SCALE_PCT_STEP } else { wert.saturating_sub(HUD_SCALE_PCT_STEP) }
@@ -26028,7 +26337,7 @@ impl App {
     fn submit_input_field(&mut self) {
         let Some((kind, text)) = self.input_field.take() else { return };
         match kind {
-            InputKind::Token => self.submit_token_login(text),
+            InputKind::Token => self.submit_token_login(text, accounts::Source::Token),
             InputKind::RefreshToken => self.submit_refresh_token_login(text),
             InputKind::ClientId => {
                 self.settings.azure_client_id = text.trim().to_string();
@@ -28310,9 +28619,9 @@ impl App {
     }
 
     // Kupfergolem-Statuen (CopperGolemStatueBlockRenderer): das Golem-Modell der Haltung auf
-    // der Blockmitte, in die FACING-Richtung gedreht. Vanillas Statuen-Haltung (Wurzel auf
-    // y = 0, um Z halb gedreht) ist genau die Einbettung eines Lebewesens -- scale(-1, -1, 1)
-    // um die zur Fusshoehe verschobene Wurzel --, deshalb entity_transform.
+    // der Blockmitte, in die FACING-Richtung gedreht, mit Vanillas Statuen-Haltung (Wurzel auf
+    // y = 0, um Z halb gedreht). Frueher als Lebewesen eingebettet -- das stimmte nur fuer
+    // den Stehend-Layer, die anderen Haltungen schwebten 1,5 Bloecke hoch.
     fn emit_statues(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
         const STATUE_RENDER_DISTANCE: f64 = 64.0;
         let auge = self.physics.eye_pos();
@@ -28324,8 +28633,8 @@ impl App {
             }
             let (Some(model), Some(tex)) = (world::model_data::layer_model(statue.layer), self.entity_atlas.rect(statue.texture)) else { continue };
             let b = block_rel(pos, eye);
-            let base = world::entity_transform([b[0] + 0.5, b[1], b[2] + 0.5], statue.body_yaw_deg, 1.0, 1.0);
-            world::emit_entity_model(model, &world::Pose::new(), base, tex, ENTITY_BRIGHTNESS, out);
+            let base = world::entity_model::copper_golem_statue_transform(b, statue.yaw_deg);
+            world::emit_entity_model(model, &world::entity_model::copper_golem_statue_pose(model), base, tex, ENTITY_BRIGHTNESS, out);
         }
     }
 
@@ -29533,7 +29842,7 @@ impl App {
                 if !matches!(self.game_mode, GAME_MODE_CREATIVE | GAME_MODE_SPECTATOR) {
                     self.build_status_bars(gpu, &mut sprites, &mut texts);
                 }
-                self.build_boss_bars(gpu, &mut sprites, &mut texts);
+                self.build_boss_bars(gpu, &self.boss_bars, &mut sprites, &mut texts);
                 self.build_voice_hud(gpu, &mut texts);
                 if self.settings.show_effects_hud && self.conn_status == ConnStatus::Connected {
                     self.build_effect_hud(gpu, &mut sprites, &mut texts, false, 1.0);
@@ -29885,12 +30194,12 @@ impl App {
         }
     }
 
-    // Koepfe der Kontenliste oben rechts (s. build_account_menu): derselbe Weg wie bei
+    // Koepfe der Kontenliste oben rechts und im Acc-Manager: derselbe Weg wie bei
     // Spielerkoepfen -- Profil einmal bei Mojang nachschlagen (s. note_head_profile), dann den
     // Skin in den Atlas laden. Beim Oeffnen der Liste und wenn ein Profil ankommt; nur in
     // freie Plaetze, ein Konto in der Liste nimmt keinem Spieler seinen Skin weg.
     fn request_account_heads(&mut self) {
-        let schluessel: Vec<[u8; 16]> = self.launcher_accounts.iter().filter_map(|a| uuid_bytes_from_hex(&a.uuid)).collect();
+        let schluessel: Vec<[u8; 16]> = self.accounts.list.iter().filter_map(|a| uuid_bytes_from_hex(&a.uuid)).collect();
         for key in schluessel {
             if self.skins.get(&key).is_some_and(|s| s.slot.is_some()) {
                 continue;
@@ -31162,16 +31471,43 @@ impl App {
         }
     }
 
-    // Kontenliste unter dem Konto-Knopf: zuerst das angemeldete Konto, dann die uebrigen
-    // (aus dem Launcher). None = Zeile des angemeldeten Kontos.
+    // Reihenfolge der gespeicherten Konten in Liste und Acc-Manager (s. accounts::display_order).
+    fn account_order(&self) -> Vec<usize> {
+        accounts::display_order(&self.accounts.list, |a| self.account_check(a), self.credentials.as_ref().map(|c| c.profile_id.as_str()))
+    }
+
+    // Kontenliste unter dem Konto-Knopf: zuerst das angemeldete Konto, dann die uebrigen,
+    // ungueltige zuletzt. Some = Index in accounts.list; None = "Nicht angemeldet" (bzw. ein
+    // angemeldetes Konto, das nicht in der Liste steht).
     fn account_menu_rows(&self, gpu: &GpuState) -> Vec<(Rect, Option<usize>)> {
         let l = self.topbar_layout(gpu);
-        let w = l.konto.w.max(300.0);
+        let w = l.konto.w.max(340.0);
         let x = l.konto.x + l.konto.w - w;
-        let eigener = self.credentials.as_ref().map(|c| c.username.to_lowercase());
-        let mut zeilen = vec![None];
-        zeilen.extend((0..self.launcher_accounts.len()).filter(|&i| Some(self.launcher_accounts[i].name.to_lowercase()) != eigener).map(Some));
+        let mut zeilen = Vec::new();
+        if self.credentials.as_ref().is_none_or(|c| self.accounts.find(&c.profile_id).is_none()) {
+            zeilen.push(None);
+        }
+        zeilen.extend(self.account_order().into_iter().map(Some));
         zeilen.into_iter().enumerate().map(|(n, z)| (Rect { x, y: TOPBAR_H + 4.0 + n as f32 * 48.0, w, h: 44.0 }, z)).collect()
+    }
+
+    // Kopf eines Kontos in `bild`: Gesicht + Hutlage aus dem Skin; waehrend der Pruefung der
+    // Ladekreis an seiner Stelle, ein ungueltiges Konto blass.
+    fn push_account_head(&self, a: Option<&accounts::Account>, uuid: Option<[u8; 16]>, bild: Rect, rects: &mut Vec<UiRect>, sprites: &mut Vec<UiSprite>) {
+        use theme::Slot;
+        let g = theme::get;
+        rects.push(UiRect::rounded(Rect { x: bild.x - 2.0, y: bild.y - 2.0, w: bild.w + 4.0, h: bild.h + 4.0 }, g(Slot::Border2), 4.0));
+        if let Some((accounts::Check::Checking, seit)) = a.and_then(|a| self.account_checks.get(&accounts::key(&a.uuid))) {
+            rects.push(UiRect::rounded(bild, g(Slot::SurfaceSunken), 3.0));
+            rects.extend(loading_dots(bild, seit.elapsed().as_secs_f32(), g(Slot::Accent)));
+            return;
+        }
+        let blass = a.is_some_and(|a| matches!(self.account_check(a), accounts::Check::Invalid(_)));
+        let tint = if blass { [1.0, 1.0, 1.0, 0.35] } else { [1.0; 4] };
+        let uuid = uuid.unwrap_or([0; 16]);
+        for (px, py) in [(8.0, 8.0), (40.0, 8.0)] {
+            sprites.push(UiSprite::quad(bild.x, bild.y, bild.w, bild.h, self.skin_face_uv(&uuid, px, py), tint, SpriteAtlas::Entity));
+        }
     }
 
     fn build_account_menu(&self, overlay: &mut UiOverlay) {
@@ -31186,29 +31522,37 @@ impl App {
         let mut sprites = Vec::new();
         let (cx, cy) = self.cursor_pos;
         for (r, z) in zeilen {
-            let (name, aktiv, uuid) = match z {
+            let konto = z.and_then(|i| self.accounts.list.get(i));
+            let (name, aktiv, uuid) = match konto {
                 None => (
                     self.credentials.as_ref().map_or("Nicht angemeldet".to_string(), |c| c.username.clone()),
                     true,
                     self.credentials.as_ref().and_then(|c| uuid_bytes_from_hex(&c.profile_id)),
                 ),
-                Some(i) => (self.launcher_accounts[i].name.clone(), false, uuid_bytes_from_hex(&self.launcher_accounts[i].uuid)),
+                Some(a) => (a.name.clone(), self.is_active_account(a), uuid_bytes_from_hex(&a.uuid)),
             };
+            let ungueltig = konto.is_some_and(|a| matches!(self.account_check(a), accounts::Check::Invalid(_)));
             if aktiv {
                 rects.push(UiRect::rounded(r, g(Slot::AccentSurface), 6.0));
             } else if r.contains(cx, cy) {
                 rects.push(UiRect::rounded(r, g(Slot::Surface2), 6.0));
             }
-            // Kopf aus dem Skin (Gesicht + Hutlage) wie oben in der Leiste; solange der Skin
-            // eines Kontos noch laedt, der Standard-Skin (s. request_account_heads).
+            // Kopf aus dem Skin wie oben in der Leiste; solange der Skin eines Kontos noch
+            // laedt, der Standard-Skin (s. request_account_heads).
             let bild = Rect { x: r.x + 8.0, y: r.y + 6.0, w: 32.0, h: 32.0 };
-            rects.push(UiRect::rounded(Rect { x: bild.x - 2.0, y: bild.y - 2.0, w: bild.w + 4.0, h: bild.h + 4.0 }, g(Slot::Border2), 4.0));
-            let uuid = uuid.unwrap_or([0; 16]);
-            for (px, py) in [(8.0, 8.0), (40.0, 8.0)] {
-                sprites.push(UiSprite::quad(bild.x, bild.y, bild.w, bild.h, self.skin_face_uv(&uuid, px, py), [1.0; 4], SpriteAtlas::Entity));
-            }
+            self.push_account_head(konto, uuid, bild, &mut rects, &mut sprites);
             let ty = (r.y + (r.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-            texts.push(UiText { text: name, x: bild.x + bild.w + 12.0, y: ty, color: if aktiv { g(Slot::AccentText) } else { theme::text() }, scale: UI_SCALE_SMALL });
+            let farbe = if aktiv && !ungueltig {
+                g(Slot::AccentText)
+            } else if ungueltig {
+                theme::text_3()
+            } else {
+                theme::text()
+            };
+            texts.push(UiText { text: name, x: bild.x + bild.w + 12.0, y: ty, color: farbe, scale: UI_SCALE_SMALL });
+            if let Some(a) = konto {
+                self.push_account_info(gpu, a, r, &mut texts);
+            }
         }
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites, pivot: (0.0, 0.0), angle: 0.0 });
     }
@@ -31225,7 +31569,7 @@ impl App {
         self.account_menu_open = false;
         if let Some((_, Some(i))) = treffer {
             self.play_ui_sound(ui_sound::UiSound::Click);
-            self.run_menu_action(ButtonAction::UseLauncherAccount(i));
+            self.use_account(i);
         }
         true
     }
@@ -31238,36 +31582,55 @@ impl App {
         let innen = w - 2.0 * pad;
         let mut el = Vec::new();
         let mut y = 20.0 + gpu.text_height(UI_SCALE_NORMAL) + 12.0 + gpu.text_height(UI_SCALE_SMALL) + 24.0;
-        // Ueberschrift der Liste.
-        y += gpu.text_height(TOPBAR_SUB_SCALE) + 8.0;
-        let eigener = self.credentials.as_ref().map(|c| c.username.to_lowercase());
-        if let Some(c) = &self.credentials {
-            el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 48.0 }, action: None, label: c.username.clone(), kind: AccKind::Current });
-            el.push(AccElem { rect: Rect { x: pad + innen - 120.0 - 8.0, y: y + 6.0, w: 120.0, h: 36.0 }, action: Some(ButtonAction::Logout), label: "Abmelden".into(), kind: AccKind::Danger });
-            y += 52.0;
-        }
-        for (i, acc) in self.launcher_accounts.iter().enumerate() {
-            if Some(acc.name.to_lowercase()) == eigener {
+        // Drei Gruppen mit eigener Ueberschrift, leere fallen weg: echte Konten (erneuern sich
+        // selbst), eingefuegte Tokens (laufen ab) und die aus Prism (Tokens, die Prism
+        // erneuert und wir bei jedem Oeffnen neu lesen). Ein Klick meldet an, ein Rechtsklick
+        // oeffnet "Ausloggen"/"Account vergessen".
+        let ordnung = self.account_order();
+        let fremd = self.credentials.as_ref().filter(|c| self.accounts.find(&c.profile_id).is_none());
+        let mut erste = true;
+        for (quelle, titel) in [(accounts::Source::Microsoft, "KONTEN"), (accounts::Source::Token, "TOKENS"), (accounts::Source::Prism, "PRISM-KONTEN")] {
+            let zeilen: Vec<usize> = ordnung.iter().copied().filter(|&i| self.accounts.list[i].source == quelle).collect();
+            let konten = quelle == accounts::Source::Microsoft;
+            // Ohne jedes Konto steht "Konten" mit dem Hinweis da.
+            let leer = ordnung.is_empty() && fremd.is_none();
+            if zeilen.is_empty() && !(konten && (fremd.is_some() || leer)) {
                 continue;
             }
-            el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 48.0 }, action: Some(ButtonAction::UseLauncherAccount(i)), label: acc.name.clone(), kind: AccKind::Other });
-            y += 52.0;
-        }
-        if el.is_empty() {
-            el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 40.0 }, action: None, label: "Noch kein Konto. Mit Microsoft anmelden oder aus Prism importieren.".into(), kind: AccKind::Hint });
-            y += 44.0;
+            if !erste {
+                y += 12.0;
+            }
+            erste = false;
+            el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: gpu.text_height(TOPBAR_SUB_SCALE) }, action: None, label: titel.into(), kind: AccKind::Header });
+            y += gpu.text_height(TOPBAR_SUB_SCALE) + 8.0;
+            // Angemeldet, aber (noch) nicht in der Liste: als eigene Zeile ohne Aktion.
+            if let Some(c) = fremd.filter(|_| konten) {
+                el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 48.0 }, action: None, label: c.username.clone(), kind: AccKind::Current });
+                y += 52.0;
+            }
+            for i in zeilen {
+                let a = &self.accounts.list[i];
+                let kind = if self.is_active_account(a) { AccKind::Current } else { AccKind::Other };
+                el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 48.0 }, action: Some(ButtonAction::UseAccount(i)), label: a.name.clone(), kind });
+                y += 52.0;
+            }
+            if konten && leer {
+                el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 40.0 }, action: None, label: "Noch kein Konto. Mit Microsoft anmelden oder aus Prism importieren.".into(), kind: AccKind::Hint });
+                y += 44.0;
+            }
         }
         y += 16.0;
-        // Anmelden: zwei Reihen zu je zwei Knoepfen.
+        // Anmelden: Microsoft neben seiner Client-ID, die beiden Token-Wege nebeneinander,
+        // darunter Prism.
         let halb = (innen - 12.0) / 2.0;
         let knopf = |x: f32, y: f32, action, label: &str, kind| AccElem { rect: Rect { x, y, w: halb, h: 40.0 }, action: Some(action), label: label.into(), kind };
         el.push(knopf(pad, y, ButtonAction::MicrosoftLogin, "Mit Microsoft anmelden", AccKind::Primary));
-        el.push(knopf(pad + halb + 12.0, y, ButtonAction::OpenInputField(InputKind::Token), "Token eingeben", AccKind::Button));
-        y += 48.0;
-        el.push(knopf(pad, y, ButtonAction::ImportLauncherAccounts, "Aus Prism importieren", AccKind::Button));
         el.push(knopf(pad + halb + 12.0, y, ButtonAction::OpenInputField(InputKind::ClientId), "Client-ID", AccKind::Button));
         y += 48.0;
         el.push(knopf(pad, y, ButtonAction::OpenInputField(InputKind::RefreshToken), "Refresh-Token", AccKind::Button));
+        el.push(knopf(pad + halb + 12.0, y, ButtonAction::OpenInputField(InputKind::Token), "Token eingeben", AccKind::Button));
+        y += 48.0;
+        el.push(knopf(pad, y, ButtonAction::ImportLauncherAccounts, "Aus Prism importieren", AccKind::Button));
         y += 48.0;
         // Offenes Eingabefeld (Token, Refresh-Token oder Client-ID) mit OK.
         if matches!(self.input_field, Some((InputKind::Token | InputKind::RefreshToken | InputKind::ClientId, _))) {
@@ -31299,43 +31662,41 @@ impl App {
             UiRect::shadow(p, 8.0, 12.0, 32.0, 0.6),
             UiRect::framed(p, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
         ];
+        let mut sprites = Vec::new();
         let mut texts = vec![UiText { text: "Acc-Manager".into(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL }];
         let (status, farbe) = self.account_status_line();
         let status_y = p.y + 20.0 + gpu.text_height(UI_SCALE_NORMAL) + 12.0;
         texts.push(UiText { text: status, x: p.x + 24.0, y: status_y, color: farbe, scale: UI_SCALE_SMALL });
-        texts.push(UiText {
-            text: "KONTEN".into(),
-            x: p.x + 24.0,
-            y: status_y + gpu.text_height(UI_SCALE_SMALL) + 24.0,
-            color: theme::text_3(),
-            scale: TOPBAR_SUB_SCALE,
-        });
         let mitte_y = |r: Rect, scale: f32| (r.y + (r.h - gpu.text_height(scale)) / 2.0).round();
         for e in &el {
             let hover = e.rect.contains(cx, cy);
             match e.kind {
                 AccKind::Current | AccKind::Other => {
                     let an = e.kind == AccKind::Current;
-                    let fill = if an { g(Slot::AccentSurface) } else if hover { g(Slot::Surface2) } else { g(Slot::Surface1) };
+                    let konto = match e.action {
+                        Some(ButtonAction::UseAccount(i)) => self.accounts.list.get(i),
+                        _ => None,
+                    };
+                    let ungueltig = konto.is_some_and(|a| matches!(self.account_check(a), accounts::Check::Invalid(_)));
+                    let fill = if an { g(Slot::AccentSurface) } else if hover || self.account_context.is_some_and(|(i, _)| konto.is_some_and(|a| self.accounts.list.get(i) == Some(a))) { g(Slot::Surface2) } else { g(Slot::Surface1) };
                     rects.push(UiRect::framed(e.rect, fill, 6.0, 1.0, if an { g(Slot::Accent) } else { g(Slot::Border1) }));
                     let bild = Rect { x: e.rect.x + 8.0, y: e.rect.y + 8.0, w: 32.0, h: 32.0 };
-                    rects.push(UiRect::rounded(bild, g(Slot::SurfaceSunken), 6.0));
-                    let b: String = e.label.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                    texts.push(gpu.centered_text(bild, b, theme::text_2(), UI_SCALE_SMALL));
-                    texts.push(UiText {
-                        text: e.label.clone(),
-                        x: bild.x + bild.w + 12.0,
-                        y: mitte_y(e.rect, UI_SCALE_SMALL),
-                        color: if an { g(Slot::AccentText) } else { theme::text() },
-                        scale: UI_SCALE_SMALL,
-                    });
-                    if !an && hover {
-                        let t = "anmelden →";
-                        let w = gpu.measure_text(t, UI_SCALE_SMALL);
-                        texts.push(UiText { text: t.into(), x: (e.rect.x + e.rect.w - 12.0 - w).round(), y: mitte_y(e.rect, UI_SCALE_SMALL), color: g(Slot::Accent), scale: UI_SCALE_SMALL });
+                    let uuid = konto.map(|a| a.uuid.as_str()).or(self.credentials.as_ref().map(|c| c.profile_id.as_str())).and_then(uuid_bytes_from_hex);
+                    self.push_account_head(konto, uuid, bild, &mut rects, &mut sprites);
+                    let farbe = if ungueltig {
+                        theme::text_3()
+                    } else if an {
+                        g(Slot::AccentText)
+                    } else {
+                        theme::text()
+                    };
+                    texts.push(UiText { text: e.label.clone(), x: bild.x + bild.w + 12.0, y: mitte_y(e.rect, UI_SCALE_SMALL), color: farbe, scale: UI_SCALE_SMALL });
+                    if let Some(a) = konto {
+                        self.push_account_info(gpu, a, e.rect, &mut texts);
                     }
                 }
                 AccKind::Hint => texts.push(UiText { text: e.label.clone(), x: e.rect.x, y: mitte_y(e.rect, UI_SCALE_SMALL), color: theme::text_3(), scale: UI_SCALE_SMALL }),
+                AccKind::Header => texts.push(UiText { text: e.label.clone(), x: e.rect.x, y: e.rect.y, color: theme::text_3(), scale: TOPBAR_SUB_SCALE }),
                 AccKind::Field => {
                     let Some((kind, wert)) = &self.input_field else { continue };
                     let label = match kind {
@@ -31352,10 +31713,9 @@ impl App {
                     push_typed_marker(&mut texts);
                     texts.push(UiText { text: gezeigt, x: e.rect.x + 12.0, y: ty, color: theme::text(), scale: UI_SCALE_SMALL });
                 }
-                AccKind::Button | AccKind::Primary | AccKind::Danger | AccKind::Close => {
+                AccKind::Button | AccKind::Primary | AccKind::Close => {
                     let farbe = match e.kind {
                         AccKind::Primary => g(Slot::Accent),
-                        AccKind::Danger => g(Slot::DangerSurface),
                         _ => g(Slot::Surface2),
                     };
                     let b = Button { slider: None, action: ButtonAction::Back, rect: e.rect, label: String::new(), enabled: true, color: farbe, scale: UI_SCALE_SMALL };
@@ -31364,6 +31724,94 @@ impl App {
                     texts.push(gpu.centered_text(e.rect, e.label.clone(), textfarbe, UI_SCALE_SMALL));
                 }
             }
+        }
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites, pivot: (0.0, 0.0), angle: 0.0 });
+    }
+
+    // Rechts in einer Kontozeile: bei Tokens, die sich nicht selbst erneuern, wie lange sie
+    // noch gelten; ein ungueltiges Konto sagt das statt dessen. Woher ein Konto stammt, steht
+    // im Acc-Manager schon in der Ueberschrift seiner Gruppe.
+    fn push_account_info(&self, gpu: &GpuState, a: &accounts::Account, zeile: Rect, texts: &mut Vec<UiText>) {
+        let (text, farbe) = match self.account_check(a) {
+            accounts::Check::Invalid(_) => ("ungültig".to_string(), theme::get(theme::Slot::Danger)),
+            _ if a.source != accounts::Source::Microsoft => match accounts::expiry(&a.access_token) {
+                Some(exp) => (accounts::remaining_text(exp, accounts::now_unix()), theme::text_2()),
+                None => return,
+            },
+            _ => return,
+        };
+        let ty = (zeile.y + (zeile.h - gpu.text_height(TOPBAR_SUB_SCALE)) / 2.0).round();
+        let x = zeile.x + zeile.w - 12.0 - gpu.measure_text(&text, TOPBAR_SUB_SCALE);
+        texts.push(UiText { text, x: x.round(), y: ty, color: farbe, scale: TOPBAR_SUB_SCALE });
+    }
+
+    // Rechtsklick-Menue eines Kontos im Acc-Manager: am Zeiger, in den Bildschirm geschoben.
+    // "Ausloggen" nur beim angemeldeten Konto.
+    fn account_context_layout(&self) -> Option<(Rect, Vec<(Rect, AccountContextItem)>)> {
+        let (i, at) = self.account_context?;
+        let a = self.accounts.list.get(i)?;
+        let mut items = Vec::new();
+        if self.is_active_account(a) {
+            items.push(AccountContextItem::Logout);
+        }
+        items.push(AccountContextItem::Forget);
+        let (sw, sh) = ui_screen();
+        let h = items.len() as f32 * SERVER_CONTEXT_ROW_H + 12.0;
+        let x = at.0.min(sw - SERVER_CONTEXT_W - 8.0);
+        let y = at.1.min(sh - h - 8.0);
+        let p = Rect { x, y, w: SERVER_CONTEXT_W, h };
+        let zeilen = items.into_iter().enumerate().map(|(n, item)| (Rect { x: p.x + 6.0, y: p.y + 6.0 + n as f32 * SERVER_CONTEXT_ROW_H, w: p.w - 12.0, h: SERVER_CONTEXT_ROW_H }, item)).collect();
+        Some((p, zeilen))
+    }
+
+    fn account_context_open(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let (cx, cy) = self.cursor_pos;
+        let (_, el) = self.account_manager_layout(gpu);
+        self.account_context = el.iter().find_map(|e| match e.action {
+            Some(ButtonAction::UseAccount(i)) if e.rect.contains(cx, cy) => Some((i, (cx, cy))),
+            _ => None,
+        });
+        if self.account_context.is_some() {
+            self.play_ui_sound(ui_sound::UiSound::Open);
+        }
+    }
+
+    // Linke Taste bei offenem Konto-Menue: Zeile ausfuehren, daneben schliesst es nur.
+    fn account_context_press(&mut self) {
+        let Some((_, zeilen)) = self.account_context_layout() else { return };
+        let Some((i, _)) = self.account_context.take() else { return };
+        let (cx, cy) = self.cursor_pos;
+        match zeilen.into_iter().find(|(r, _)| r.contains(cx, cy)).map(|(_, item)| item) {
+            Some(AccountContextItem::Logout) => {
+                self.play_ui_sound(ui_sound::UiSound::Click);
+                self.logout();
+            }
+            Some(AccountContextItem::Forget) => {
+                self.play_ui_sound(ui_sound::UiSound::Close);
+                self.forget_account(i);
+            }
+            None => {}
+        }
+    }
+
+    fn build_account_context(&self, overlay: &mut UiOverlay) {
+        let Some((gpu, (p, zeilen))) = self.gpu.as_ref().zip(self.account_context_layout()).filter(|_| self.account_manager_open && self.mode == AppMode::Menu) else { return };
+        use theme::Slot;
+        let g = theme::get;
+        let (cx, cy) = self.cursor_pos;
+        let mut rects = vec![UiRect::shadow(p, 8.0, 8.0, 24.0, 0.5), UiRect::framed(p, g(Slot::Surface1), 8.0, 1.0, g(Slot::Border1))];
+        let mut texts = Vec::new();
+        for (r, item) in zeilen {
+            let (label, farbe) = match item {
+                AccountContextItem::Logout => ("Ausloggen", theme::text()),
+                AccountContextItem::Forget => ("Account vergessen", g(Slot::Danger)),
+            };
+            if r.contains(cx, cy) {
+                rects.push(UiRect::rounded(r, g(Slot::Surface2), 6.0));
+            }
+            let ty = (r.y + (r.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+            texts.push(UiText { text: label.to_string(), x: r.x + 12.0, y: ty, color: farbe, scale: UI_SCALE_SMALL });
         }
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
     }
@@ -31377,7 +31825,7 @@ impl App {
             self.account_manager_open = false;
             return;
         }
-        // Spaetere Elemente liegen oben (Abmelden auf der Kontozeile).
+        // Spaetere Elemente liegen oben.
         let Some(e) = el.into_iter().rev().find(|e| e.rect.contains(cx, cy)) else { return };
         self.play_ui_sound(ui_sound::UiSound::Click);
         match (e.kind, e.action) {
@@ -31818,7 +32266,19 @@ impl App {
     // faellt, als oberste Ebene dazulegen. Nach dem Aufbau der UI aufrufen.
     fn update_falling_glyphs(&mut self, texts: &[UiText], overlay: &mut UiOverlay) {
         let jetzt = Instant::now();
+        // Der Cursor des alten Frames gehoert zu dessen Text (typed_prev).
+        let caret = std::mem::replace(&mut self.caret_prev, self.caret_drawn.take());
         let runs = typed_runs(texts.iter().chain(overlay.groups.iter().flat_map(|g| g.texts.iter())));
+        // Was der Chat selbst als geloescht meldet -- jedes Bild abholen, sonst gaelte eine alte
+        // Meldung fuer ein spaeteres Loeschen. Seine Stelle im alten Frame: der alte Chat-Text
+        // (der jetzige mit dem Geloeschten wieder drin) unter den getippten Texten.
+        let chat_geloescht = self.chat_input.as_mut().and_then(chat_input::ChatInput::take_erased);
+        let genau = chat_geloescht.and_then(|e| {
+            let jetzt_text = self.chat_input.as_ref()?.text();
+            let alt_text = format!("{}{}{}", jetzt_text.get(..e.start)?, e.text, jetzt_text.get(e.start..)?);
+            let a: String = self.typed_prev.iter().map(|r| r.text.as_str()).collect();
+            Some((a.find(&alt_text)? + e.start, e.text.len(), e.at_cursor))
+        });
         if std::mem::take(&mut self.erase_pending) {
             if let Some(gpu) = self.gpu.as_ref() {
                 let vorher = gpu.layout_font.get();
@@ -31828,7 +32288,7 @@ impl App {
                     gpu.set_layout_font(r.font);
                     gpu.measure_text(t, r.scale)
                 };
-                for stueck in erased_pieces(&self.typed_prev, &runs, mass) {
+                for stueck in erased_pieces(&self.typed_prev, &runs, mass, caret, genau) {
                     let h = gpu.text_height(stueck.scale);
                     for (i, c) in stueck.text.char_indices().filter(|(_, c)| !c.is_whitespace()) {
                         let x = stueck.x + mass(&stueck, &stueck.text[..i]);
@@ -36484,22 +36944,28 @@ impl App {
         self.build_experience_bar(gpu, rect, scale, sprites, texts);
     }
 
-    // Bossbars oben mittig (BossBarHud.render): je Bar 182x5 ab y = 12, der Name 9 darueber,
-    // die naechste 19 tiefer; Schluss, sobald ein Drittel der Bildhoehe erreicht ist.
-    fn build_boss_bars(&self, gpu: &GpuState, sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
-        if self.boss_bars.is_empty() {
+    // Bossbars (BossBarHud.render): je Bar 182x5, die erste 12 unter der Oberkante, der Name 9
+    // darueber, die naechste 19 tiefer; Schluss, sobald ein Drittel der Bildhoehe
+    // durchlaufen ist. Die Lage kommt aus dem HUD-Editor (s. hud_bossbar_rect) -- im Standard
+    // genau Vanillas oben mittig.
+    fn build_boss_bars(&self, gpu: &GpuState, bars: &[BossBarState], sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
+        if bars.is_empty() {
             return;
         }
         const BREITE: f32 = 182.0;
         const HOEHE: f32 = 5.0;
         let (sw, sh) = gpu.size();
-        let scale = self.hud_scale((sw, sh));
-        let x = ((sw / scale / 2.0).floor() - 91.0) * scale;
+        let scale = self.bossbar_scale((sw, sh));
+        let rect = self.hud_bossbar_rect(gpu);
+        let x = rect.x;
+        // Der Name mittig ueber der Bar -- im Standard Vanillas Bildschirmmitte, die von der
+        // Bar-Mitte um bis zu einen GUI-Pixel abweicht (die Bar steht auf ganzen GUI-Pixeln).
+        let mitte = (self.settings.hud_bossbar_x * sw).clamp(rect.x + rect.w / 2.0 - scale, rect.x + rect.w / 2.0 + scale);
         let mut y = 12.0f32;
         let jetzt = Instant::now();
         self.begin_text_area(gpu, texts, ShadowArea::Title);
-        for bar in &self.boss_bars {
-            let sy = (y * scale).round();
+        for bar in bars {
+            let sy = (rect.y + y * scale).round();
             let lage = |sprites: &mut Vec<UiSprite>, name: &str, w: f32| {
                 if let Some(r) = self.ui_atlas.rect(name) {
                     sprites.push(UiSprite::quad(x.round(), sy, w * scale, HOEHE * scale, r.sub(0, 0, w as u32, HOEHE as u32), [1.0; 4], SpriteAtlas::Ui));
@@ -36519,10 +36985,11 @@ impl App {
                     lage(sprites, &format!("boss_bar/notched_{k}_progress"), gefuellt);
                 }
             }
-            let text_scale = scale.round().max(1.0);
+            // Auf Viertel gerundet wie title_scale (bei ganzer GUI-Skala unveraendert).
+            let text_scale = ((scale * 4.0).round() / 4.0).max(1.0);
             let w = span_row_width(gpu, &bar.name, text_scale);
-            let tx = ((sw - w) / 2.0).round();
-            let ty = ((y - 9.0) * scale).round();
+            let tx = (mitte - w / 2.0).round();
+            let ty = (rect.y + (y - 9.0) * scale).round();
             let weiss = self.ui_atlas.rect(assets::UI_WHITE).map(|r| r.uv);
             push_styled_row(gpu, &bar.name, tx, ty, COLOR_WHITE, text_scale, texts, &mut |r, c| {
                 if let Some(uv) = weiss {
@@ -36535,6 +37002,33 @@ impl App {
             }
         }
         Self::end_text_area(gpu, texts);
+    }
+
+    // Wie viele Bossbars build_boss_bars zeichnet (mindestens eine, fuer den Platzhalter).
+    fn boss_bars_drawn(&self, scale: f32, sh: f32) -> usize {
+        let mut n = 0;
+        let mut y = 12.0f32;
+        for _ in 0..self.boss_bars.len().max(1) {
+            n += 1;
+            y += 19.0;
+            if y * scale >= sh / 3.0 {
+                break;
+            }
+        }
+        n
+    }
+
+    // Griff-/Zeichen-Rechteck der Bossbars: 182 GUI-Pixel breit, vom ersten Namen (3 unter der
+    // Oberkante, darueber frei) bis unter die letzte Bar. hud_bossbar_x ist die Mitte, auf
+    // ganze GUI-Pixel wie Vanillas `scaledWidth / 2 - 91`.
+    fn hud_bossbar_rect(&self, gpu: &GpuState) -> Rect {
+        let (sw, sh) = gpu.size();
+        let scale = self.bossbar_scale((sw, sh));
+        let w = 182.0 * scale;
+        let h = (19.0 * self.boss_bars_drawn(scale, sh) as f32 - 2.0) * scale;
+        let x = (((self.settings.hud_bossbar_x * sw / scale).floor() - 91.0) * scale).clamp(0.0, (sw - w).max(0.0)).round();
+        let y = (self.settings.hud_bossbar_y * sh).clamp(0.0, (sh - h).max(0.0)).round();
+        Rect { x, y, w, h }
     }
 
     // BossBarS2CPacket auf die Liste anwenden (BossBarHud.handlePacket). Aenderungen fuer
@@ -38376,6 +38870,7 @@ impl App {
     // und blinken gleich -- sichtbar ab der letzten Bewegung, dann halb an, halb aus.
     fn push_caret(&self, rects: &mut Vec<UiRect>, ziel: Rect, color: [f32; 4]) {
         let jetzt = Instant::now();
+        self.caret_drawn.set(Some((ziel.x, ziel.y)));
         let gleich = |a: &Rect| a.y == ziel.y && a.h == ziel.h;
         let a = match self.caret_anim.get() {
             Some(a) if gleich(&a.to) && a.to.x == ziel.x => a,
@@ -38397,9 +38892,14 @@ impl App {
         let vorschlaege = feld.has_suggestions();
         let alt = feld.text().to_string();
         feld.step(step);
-        if !vorschlaege && feld.text() != alt {
+        // Ein Schritt in der Vorschlagsliste klickt, eine Nachricht aus dem Verlauf ploppt auf;
+        // am Ende des Verlaufs passiert nichts und es bleibt still.
+        if vorschlaege {
+            self.play_ui_sound(ui_sound::UiSound::Step);
+        } else if feld.text() != alt {
             self.chat_recall = Some(ChatRecall { alt, nach_oben: step == chat_input::Step::Up, start: Instant::now() });
             *self.chat_slide.borrow_mut() = None;
+            self.play_ui_sound(ui_sound::UiSound::Popup);
         }
     }
 
@@ -38582,6 +39082,12 @@ impl App {
                 self.world.column_count(),
                 self.mesh_jobs_pending.len(),
                 self.render_limit_meshed.len(),
+            ),
+            format!(
+                "Chunks: {} empfangen, {} gemesht  |  Mesh-VRAM: {:.1} MB",
+                self.chunks_received,
+                gpu.block_renderer.mesh_count(),
+                gpu.block_renderer.vertex_bytes() as f32 / (1024.0 * 1024.0),
             ),
             match self.gpu.as_ref().map(|g| g.block_renderer.culling_stats) {
                 Some((gesamt, gezeichnet)) if self.settings.cave_culling => {
@@ -39330,7 +39836,7 @@ impl App {
 
     // Main-Screen: getrennt -> Startbildschirm (nur Titel + Buttons Verbinden/Einstellungen;
     // die Adress-Eingabe steckt jetzt im Connect-Screen), verbunden -> Esc-Pausemenue
-    // (Titel + Status). Die Buttons kommen aus buttons().
+    // (nur Titel). Die Buttons kommen aus buttons().
     fn build_main_screen(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         // Titel wie die Buttons mittig.
         let (sw, _) = gpu.size();
@@ -39345,26 +39851,8 @@ impl App {
             }
             texts.push(titel("Coral Client"));
         } else {
+            // Nur der Titel; die Chunk-Zahlen stehen im F3-Overlay.
             texts.push(titel("Pause"));
-            // Status + kurze Welt-Statistik mittig unter den gestapelten Buttons (4 Stueck).
-            let unter = pause_button(4, sw);
-            texts.push(gpu.centered_text(
-                Rect { x: 0.0, y: unter.y, w: sw, h: PAUSE_BTN_H },
-                format!("Status: {}", self.conn_status.label()),
-                self.conn_status.color(),
-                UI_SCALE_NORMAL,
-            ));
-            texts.push(gpu.centered_text(
-                Rect { x: 0.0, y: unter.y + PAUSE_BTN_H, w: sw, h: 24.0 },
-                format!(
-                    "Chunks: {} empfangen, {} gemesht | Mesh-VRAM: {:.1} MB",
-                    self.chunks_received,
-                    gpu.block_renderer.mesh_count(),
-                    gpu.block_renderer.vertex_bytes() as f32 / (1024.0 * 1024.0),
-                ),
-                [0.6, 0.6, 0.6, 1.0],
-                UI_SCALE_SMALL,
-            ));
         }
     }
 
@@ -39600,6 +40088,12 @@ impl App {
                     texts.push(gpu.centered_text(value_rect, format!("{pct} %"), theme::text(), UI_SCALE_SMALL));
                 }
             }
+            HudElement::BossBar => {
+                texts.push(UiText { text: "Größe".to_string(), x: HUD_CONFIG_LABEL_X, y: row0_y, color: theme::text(), scale: UI_SCALE_SMALL });
+                let value_rect = stepper_value_rect(0);
+                rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                texts.push(gpu.centered_text(value_rect, format!("{} %", self.settings.hud_bossbar_scale), theme::text(), UI_SCALE_SMALL));
+            }
             HudElement::Effects => {
                 texts.push(UiText { text: "Größe".to_string(), x: HUD_CONFIG_LABEL_X, y: row0_y, color: theme::text(), scale: UI_SCALE_SMALL });
                 let value_rect = stepper_value_rect(0);
@@ -39772,6 +40266,31 @@ impl App {
             let tw = gpu.measure_text(&text, scale);
             let x = align_left(align_anchor(rect.x, rect.w, a), tw, a).round();
             texts.push(UiText { text, x, y: rect.y, color: COLOR_HUD, scale });
+        }
+
+        // Bossbars: Griff-Rahmen und die echten Bars, ohne Verbindung eine Beispiel-Bar.
+        {
+            let rect = self.hud_bossbar_rect(gpu);
+            let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
+            rects.push(UiRect {
+                rect: frame,
+                color: if dragging == Some(HudElement::BossBar) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE },
+                ..UiRect::FLAT
+            });
+            if self.boss_bars.is_empty() {
+                let beispiel = BossBarState {
+                    uuid: [0; 16],
+                    name: vec![protocol::nbt::TextSpan { text: "Bossbar".to_string(), ..Default::default() }],
+                    shown: 0.6,
+                    target: 0.6,
+                    set_at: Instant::now(),
+                    color: 0,
+                    style: 0,
+                };
+                self.build_boss_bars(gpu, std::slice::from_ref(&beispiel), sprites, texts);
+            } else {
+                self.build_boss_bars(gpu, &self.boss_bars, sprites, texts);
+            }
         }
 
         // Effekte: Griff-Rahmen, die echten Effekte oder Beispiele. Ist die HUD-Anzeige aus,
@@ -44676,7 +45195,7 @@ impl App {
                         sequence,
                     ));
                 }
-                match self.resolve_block_use(hit.block, hit.face, sequence, item, abkuehlend, hand) {
+                match self.resolve_block_use(hit.block, hit.face, hit.cursor.1, sequence, item, abkuehlend, hand) {
                     BlockUse::Angenommen { schwingt } => {
                         if schwingt {
                             self.swing_arm();
@@ -44867,6 +45386,7 @@ impl App {
         &mut self,
         block: (i32, i32, i32),
         face: i32,
+        cursor_y: f32,
         sequence: i32,
         item: Option<&'static str>,
         abkuehlend: bool,
@@ -44885,7 +45405,12 @@ impl App {
                 AnkerBenutzung::KeinAnker | AnkerBenutzung::Standard => {}
                 AnkerBenutzung::Ergebnis(ergebnis) => return ergebnis,
                 // PASS: onUse entfaellt, weiter mit dem Item dieser Hand.
-                AnkerBenutzung::NurItem => return self.use_item_on_block(block, face, sequence, item, abkuehlend, hand),
+                AnkerBenutzung::NurItem => return self.use_item_on_block(block, face, cursor_y, sequence, item, abkuehlend, hand),
+            }
+            // Kupfergolem-Statue: onUseWithItem mit dieser Hand, also auch die Nebenhand.
+            if let Some(neu) = block_place::next_statue_pose_state(self.world.block_at(block.0, block.1, block.2), item) {
+                self.predict_block_state(block, neu, sequence);
+                return BlockUse::Angenommen { schwingt: true };
             }
             if haupthand {
                 if self.predict_openable_toggle(block, sequence) {
@@ -44900,7 +45425,7 @@ impl App {
                 }
             }
         }
-        self.use_item_on_block(block, face, sequence, item, abkuehlend, hand)
+        self.use_item_on_block(block, face, cursor_y, sequence, item, abkuehlend, hand)
     }
 
     // Schritt 3 von interactBlockInternal: itemStack.useOnBlock.
@@ -44908,6 +45433,7 @@ impl App {
         &mut self,
         block: (i32, i32, i32),
         face: i32,
+        cursor_y: f32,
         sequence: i32,
         item: Option<&'static str>,
         abkuehlend: bool,
@@ -44922,7 +45448,7 @@ impl App {
         // Platzierung war unmoeglich (FAIL). Beides beendet die Benutzung -- ein USE_ITEM
         // hinterher waere ein Paket, das Vanilla nie schickt.
         if world::block_registry::is_block(item) {
-            return if self.predict_block_place(block, face, sequence, item) {
+            return if self.predict_block_place(block, face, cursor_y, sequence, item) {
                 // BlockItem.place: `itemStack.decrementUnlessCreative(1, player)` -- auch im
                 // Client (s. consume_hand_item).
                 self.consume_hand_item(hand);
@@ -45183,7 +45709,7 @@ impl App {
     // Rueckgabe: waere hier ein Block gesetzt worden? Das ist NICHT dasselbe wie "wurde etwas
     // vorhergesagt" -- vorhergesagt wird nur bei eindeutiger Ausrichtung, gesetzt wird auch
     // eine Treppe. Fuer den Armschwung zaehlt die Platzierung, nicht die Vorhersage.
-    fn predict_block_place(&mut self, hit_block: (i32, i32, i32), face: i32, sequence: i32, item: &'static str) -> bool {
+    fn predict_block_place(&mut self, hit_block: (i32, i32, i32), face: i32, cursor_y: f32, sequence: i32, item: &'static str) -> bool {
         if !world::block_registry::is_block(item) {
             return false;
         }
@@ -45198,8 +45724,12 @@ impl App {
         // Ab hier steht fest, dass Vanilla platziert. Ob wir es auch VORHERSAGEN, haengt
         // daran, ob die Ausrichtung eindeutig ist -- mehrstatige Bloecke (Treppen, Zaeune)
         // setzt der Server allein, der Arm schwingt trotzdem.
+        let truhe_daneben = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .iter()
+            .any(|(dx, dz)| block_place::is_single_chest(self.world.block_at(ziel.0 + dx, ziel.1, ziel.2 + dz)));
         let state = block_place::torch_state(item, face)
             .or_else(|| block_place::facing_state(item, self.camera.yaw))
+            .or_else(|| block_place::facing_waterlogged_state(item, self.camera.yaw, block_place::is_water_source(vorher), truhe_daneben))
             .unwrap_or_else(|| block_place::axis_state(item, face).or_else(|| block_place::default_state_for_item(item)));
         // Ein Block IM Spieler wird in Vanilla gar nicht erst gesetzt -- wuerden wir ihn
         // vorhersagen, schoebe unsere eigene Kollision uns weg und die Abweichung zum Server
@@ -45214,7 +45744,9 @@ impl App {
         let Some(state) = state else {
             // Ausrichtung unbekannt: steckte der Block in jeder Form im Spieler, setzt Vanilla
             // sicher nichts.
-            if block_place::every_state_collides(item, ziel, &self.block_shapes, min, max) {
+            // Trefferhoehe ueber der Zielzelle wie clickLocation.y - pos.y.
+            let ort = block_place::PlaceSpot { face, rel_y: (hit_block.1 - ziel.1) as f32 + cursor_y, yaw_deg: self.camera.yaw, vorher };
+            if block_place::every_state_collides(item, ziel, &ort, &self.block_shapes, min, max) {
                 return false;
             }
             self.play_place_sound(ziel, item);
@@ -46374,12 +46906,14 @@ impl App {
         let mut feld = chat_input::ChatInput::new(String::new());
         feld.restore_history(self.chat_history.clone());
         self.chat_input = Some(feld);
-        // Der offene Chat gibt die Maus frei (Links anklicken, s. chat_click): Zeiger in die
-        // Mitte, Ansicht wieder ganz unten.
+        // Der offene Chat gibt die Maus frei (Links anklicken, s. chat_click): Zeiger mittig
+        // unter die Eingabe (sie sitzt in der Mitte, s. chat_input_rect) -- nicht auf sie,
+        // sonst laege er ueber dem Text. Ansicht wieder ganz unten.
         self.chat_scroll = 0;
         self.chat_history_scroll = 0;
         if let Some(gpu) = self.gpu.as_ref() {
-            self.cursor_pos = (gpu.size().0 / 2.0, gpu.size().1 / 2.0);
+            let eingabe = self.chat_input_rect(gpu);
+            self.cursor_pos = (gpu.size().0 / 2.0, eingabe.y + eingabe.h + 2.0 * Self::chat_input_line_h(gpu));
         }
         // ALLE Tasten loslassen, wie Vanilla beim Oeffnen eines Screens (KeyBinding.
         // unpressAll). Das ist hier keine Kosmetik, sondern behebt zwei Fehler mit
@@ -46906,6 +47440,9 @@ impl ApplicationHandler for App {
         self.apply_pack_shaders();
         self.connect_block_animations();
         self.request_wallpaper(true);
+        // Kopf oben in der Leiste (und der Liste) gleich zeigen, nicht erst beim Oeffnen der
+        // Kontenliste -- sonst steht bis dahin der Standard-Skin da.
+        self.request_account_heads();
         // Erst jetzt moeglich: der Treiber meldet seine Present-Modi erst mit der Surface.
         self.apply_present_mode();
         self.apply_frame_latency();
@@ -47195,9 +47732,21 @@ impl ApplicationHandler for App {
                 if button == MouseButton::Left && state == ElementState::Pressed && self.account_menu_open && self.account_menu_press() {
                     return;
                 }
-                // Acc-Manager liegt ueber der ganzen Seite und schluckt jeden Klick.
-                if button == MouseButton::Left && state == ElementState::Pressed && self.account_manager_open && self.mode == AppMode::Menu {
-                    self.account_manager_press();
+                // Acc-Manager liegt ueber der ganzen Seite und schluckt jeden Klick. Rechts auf ein
+                // Konto oeffnet dessen Menue; ein offenes Menue schluckt den naechsten Druck.
+                if matches!(button, MouseButton::Left | MouseButton::Right) && state == ElementState::Pressed && self.account_manager_open && self.mode == AppMode::Menu {
+                    if self.account_context.is_some() {
+                        if button == MouseButton::Left {
+                            self.account_context_press();
+                        } else {
+                            self.account_context = None;
+                            self.account_context_open();
+                        }
+                    } else if button == MouseButton::Left {
+                        self.account_manager_press();
+                    } else {
+                        self.account_context_open();
+                    }
                     return;
                 }
                 // Quick Connect liegt ueber der ganzen Seite und schluckt jeden Klick.
@@ -47775,14 +48324,8 @@ impl ApplicationHandler for App {
                         }
                         // Pfeile: bei offener Vorschlagsliste blaettern sie durch DIESE, sonst
                         // durch den Nachrichtenverlauf (s. chat_input::ChatInput::step).
-                        Key::Named(NamedKey::ArrowUp) => {
-                            self.step_chat(chat_input::Step::Up);
-                            self.play_ui_sound(ui_sound::UiSound::Step);
-                        }
-                        Key::Named(NamedKey::ArrowDown) => {
-                            self.step_chat(chat_input::Step::Down);
-                            self.play_ui_sound(ui_sound::UiSound::Step);
-                        }
+                        Key::Named(NamedKey::ArrowUp) => self.step_chat(chat_input::Step::Up),
+                        Key::Named(NamedKey::ArrowDown) => self.step_chat(chat_input::Step::Down),
                         _ => {
                             if !self.modifiers.control_key() {
                                 if let Some(text) = key_event.text.clone() {
@@ -48047,6 +48590,7 @@ impl ApplicationHandler for App {
                         self.build_skin_files(&mut overlay);
                         self.build_account_menu(&mut overlay);
                         self.build_account_manager(&mut overlay);
+                        self.build_account_context(&mut overlay);
                         let (rects, texts, sprites, cursor, hud_fenster) = self.build_menu_ui();
                         // Unter Benachrichtigungen, Farbfenster & Co., aber ueber dem Editor.
                         if let Some(g) = hud_fenster {
@@ -48903,15 +49447,40 @@ mod damage_tint_tests {
         let run = |text: &str, x: f32, y: f32| TypedRun { text: text.to_string(), x, y, scale: 2.0, color: [1.0; 4], font: None, shadow: None };
         let breite = |r: &TypedRun, t: &str| t.chars().count() as f32 * 6.0 * r.scale;
         // Ruecktaste am Ende: das letzte Zeichen, hinter "hall".
-        assert_eq!(erased_pieces(&[run("hallo", 10.0, 0.0)], &[run("hall", 10.0, 0.0)], breite), vec![run("o", 10.0 + 4.0 * 12.0, 0.0)]);
+        assert_eq!(erased_pieces(&[run("hallo", 10.0, 0.0)], &[run("hall", 10.0, 0.0)], breite, None, None), vec![run("o", 10.0 + 4.0 * 12.0, 0.0)]);
         // Mehrere Zeichen ueber eine Zeilengrenze (Chat bricht um): je Zeile ein Stueck.
         let alt = [run("abc", 0.0, 0.0), run("def", 0.0, 20.0)];
         let neu = [run("ab", 5.0, 0.0), run("f", 5.0, 20.0)];
-        assert_eq!(erased_pieces(&alt, &neu, breite), vec![run("c", 24.0, 0.0), run("de", 0.0, 20.0)]);
+        assert_eq!(erased_pieces(&alt, &neu, breite, None, None), vec![run("c", 24.0, 0.0), run("de", 0.0, 20.0)]);
         // Mitten im Wort, mit Umlauten (Byte- statt Zeichengrenzen waeren hier falsch).
-        assert_eq!(erased_pieces(&[run("Grüße", 0.0, 0.0)], &[run("Grße", 0.0, 0.0)], breite), vec![run("ü", 24.0, 0.0)]);
+        assert_eq!(erased_pieces(&[run("Grüße", 0.0, 0.0)], &[run("Grße", 0.0, 0.0)], breite, None, None), vec![run("ü", 24.0, 0.0)]);
         // Nichts geloescht, nur getippt: nichts faellt.
-        assert!(erased_pieces(&[run("ab", 0.0, 0.0)], &[run("abc", 0.0, 0.0)], breite).is_empty());
+        assert!(erased_pieces(&[run("ab", 0.0, 0.0)], &[run("abc", 0.0, 0.0)], breite, None, None).is_empty());
+    }
+
+    // Wiederholter Text: welches "asd" weg ist, sagt erst der Cursor. Und ein Stueck am Cursor
+    // faellt buendig an ihm, auch wenn der Text davor noch gleitet (Chat, schnelles Loeschen).
+    #[test]
+    fn geloescht_wird_am_cursor() {
+        let run = |text: &str, x: f32, y: f32| TypedRun { text: text.to_string(), x, y, scale: 1.0, color: [1.0; 4], font: None, shadow: None };
+        let breite = |_: &TypedRun, t: &str| t.chars().count() as f32 * 10.0;
+        let alt = [run("aasdasdasd", 0.0, 0.0)];
+        let neu = [run("aasdasd", 0.0, 0.0)];
+        // Markierung "asd" an Stelle 1..4, Cursor an ihrem Ende (x = 40).
+        assert_eq!(erased_pieces(&alt, &neu, breite, Some((40.0, 0.0)), None), vec![run("asd", 10.0, 0.0)]);
+        // Cursor am Ende: das letzte.
+        assert_eq!(erased_pieces(&alt, &neu, breite, Some((100.0, 0.0)), None), vec![run("asd", 70.0, 0.0)]);
+        // Der Text links vom Cursor stand noch 25 px zu weit links (gleitend): das Zeichen
+        // faellt trotzdem direkt vor dem Cursor.
+        let alt = [run("hallo", -25.0, 0.0)];
+        assert_eq!(erased_pieces(&alt, &[run("hall", 0.0, 0.0)], breite, Some((50.0, 0.0)), None), vec![run("o", 40.0, 0.0)]);
+        // Mausmarkierung "asd" an 1..4, der Cursor bleibt am Ende stehen: das Feld meldet die
+        // Stelle selbst, und die Zeichen fallen dort, ohne an den Cursor zu ruecken.
+        let alt = [run("aasdasdasd", 0.0, 0.0)];
+        let neu = [run("aasdasd", 0.0, 0.0)];
+        assert_eq!(erased_pieces(&alt, &neu, breite, Some((100.0, 0.0)), Some((1, 3, false))), vec![run("asd", 10.0, 0.0)]);
+        // Eine Meldung, die nicht zum Text passt, wird nicht geglaubt.
+        assert_eq!(erased_pieces(&alt, &neu, breite, Some((100.0, 0.0)), Some((0, 3, false))), vec![run("asd", 70.0, 0.0)]);
     }
 
     #[test]
@@ -49245,22 +49814,28 @@ mod text_shadow_tests {
 mod hud_split_tests {
     use super::*;
 
-    // Kupfergolem-Statue als Icon: der gebackene Layer mit der gui-Haltung des Templates
-    // ([30, 45, 180], 2 hoch, 0.55) -- Kopf ueber den Fuessen, waagrecht mittig.
+    // Kupfergolem-Statue als Icon wie Vanilla (-0.5, statue_item_transform, Statuen-Haltung, gui-Haltung
+    // des Templates [30, 45, 180], 2 hoch, 0.55): Kopf ueber den Fuessen, waagrecht mittig, und
+    // das Gesicht (Modell -z) zum Betrachter (+z) -- frueher zeigte das Icon den Ruecken.
     #[test]
     fn kupfergolem_statue_steht_aufrecht() {
         use world::entity_model::{self as em, Affine, Cuboid, Part};
         let mut wurzel = Part::new("root", [0.0, 24.0, 0.0], Vec::new());
         wurzel.children.push(Part::new("kopf", [0.0, 0.0, 0.0], vec![Cuboid::new([0.0, 0.0], [-4.0, -24.0, -4.0], [8.0, 8.0, 8.0])]));
         wurzel.children.push(Part::new("fuss", [0.0, 0.0, 0.0], vec![Cuboid::new([0.0, 0.0], [-4.0, -5.0, -4.0], [8.0, 5.0, 8.0])]));
+        wurzel.children.push(Part::new("nase", [0.0, 0.0, 0.0], vec![Cuboid::new([0.0, 0.0], [-1.0, -20.0, -6.0], [2.0, 2.0, 2.0])]));
         let model = world::Model { texture: "", tex_size: [64.0, 64.0], parts: vec![wurzel] };
-        let boxes = em::emit_boxes(&model, &world::Pose::new(), Affine::translation([-0.5; 3]), [0.0, 0.0, 1.0, 1.0]);
+        let boxes = em::emit_boxes(&model, &em::copper_golem_statue_pose(&model), Affine::translation([-0.5; 3]).then(held_item::statue_item_transform()), [0.0, 0.0, 1.0, 1.0]);
         let gui = Affine::translation([0.0, 2.0 / 16.0, 0.0]).then(Affine::rotation_xyz_deg(30.0, 45.0, 180.0)).then(Affine::scale([0.55; 3]));
-        // Bildschirm-y waechst nach unten: -y nach der Haltung.
-        let hoehe = |b: &Vec<world::BlockVertex>| -b.iter().map(|v| gui.apply(v.position)[1]).sum::<f32>() / b.len() as f32;
-        assert!(hoehe(&boxes[0]) < hoehe(&boxes[1]), "Kopf {} nicht ueber den Fuessen {}", hoehe(&boxes[0]), hoehe(&boxes[1]));
-        let mitte_x = |b: &Vec<world::BlockVertex>| b.iter().map(|v| gui.apply(v.position)[0]).sum::<f32>() / b.len() as f32;
-        assert!(mitte_x(&boxes[0]).abs() < 0.01 && mitte_x(&boxes[1]).abs() < 0.01, "nicht waagrecht mittig");
+        let mitte = |b: &Vec<world::BlockVertex>, a: usize| b.iter().map(|v| gui.apply(v.position)[a]).sum::<f32>() / b.len() as f32;
+        // Bildschirm-y waechst nach unten: Kopf hat das groessere y nach der Haltung.
+        assert!(mitte(&boxes[0], 1) > mitte(&boxes[1], 1), "Kopf {} nicht ueber den Fuessen {}", mitte(&boxes[0], 1), mitte(&boxes[1], 1));
+        assert!(mitte(&boxes[0], 0).abs() < 0.01 && mitte(&boxes[1], 0).abs() < 0.01, "nicht waagrecht mittig");
+        assert!(mitte(&boxes[2], 2) > mitte(&boxes[0], 2), "Gesicht zeigt nicht zum Betrachter");
+        // Senkrecht: Kopfoberkante bis Fusssohle liegen um die Feldmitte (Vanilla: 2 Pixel hoch).
+        let ys: Vec<f32> = boxes[..2].iter().flatten().map(|v| gui.apply(v.position)[1]).collect();
+        let (lo, hi) = ys.iter().fold((f32::MAX, f32::MIN), |(l, h), &y| (l.min(y), h.max(y)));
+        assert!(((lo + hi) / 2.0).abs() < 0.2, "senkrecht weit aus der Mitte: {lo}..{hi}");
     }
 
     // Abgerundetes Pack-Bild: die aeusserste Ecke ist weg, Mitte und Kantenmitte bleiben.
@@ -49331,7 +49906,7 @@ mod hud_split_tests {
     // Titel, Untertitel und Effekte sind eigene Elemente (die Spielerliste steht nicht mehr
     // im Editor); alles Neue ueberlebt Speichern und Laden.
     fn titel_untertitel_und_effekte_sind_eigene_elemente() {
-        for e in [HudElement::Title, HudElement::Subtitle, HudElement::Effects] {
+        for e in [HudElement::Title, HudElement::Subtitle, HudElement::Effects, HudElement::BossBar] {
             assert!(HudElement::ALL.contains(&e));
         }
         let set = Settings {
@@ -49356,9 +49931,15 @@ mod hud_split_tests {
             effects_name_color: true,
             effects_timer_style: 2,
             effects_timer_color: true,
+            hud_bossbar_x: 0.25,
+            hud_bossbar_y: 0.6,
+            hud_bossbar_scale: 150,
             ..Default::default()
         };
         let g = Settings::parse(&set.serialize());
+        assert_eq!((g.hud_bossbar_x, g.hud_bossbar_y, g.hud_bossbar_scale), (0.25, 0.6, 150));
+        // Standard: Vanillas Lage oben mittig.
+        assert_eq!((Settings::default().hud_bossbar_x, Settings::default().hud_bossbar_y), (0.5, 0.0));
         assert!(g.effects_detailed && !g.effects_icon && g.effects_name_color && g.effects_timer_color);
         assert!(!g.effects_name && g.effects_timer_blink == EFFECTS_BLINK_DYNAMIC && g.effects_hide_ambient);
         // Alte Datei mit dem Schalter.
@@ -49865,6 +50446,19 @@ mod tests {
             let Some(r) = ev.slider() else { continue };
             assert!(r.min < r.soft && r.soft <= r.hard, "{:?}", r);
             assert!(ev.slider_value_rect().x > ev.slider_track().x + ev.slider_track().w);
+        }
+    }
+
+    // Kommt ein UI-Klang oder eine Lautstaerke-Kategorie dazu, muss ihr Regler auch in
+    // EditableValue::ALL stehen -- sonst ist er zu sehen, laesst sich aber nicht ziehen
+    // (so war es beim "Aufploppen").
+    #[test]
+    fn jede_lautstaerke_hat_einen_regler() {
+        for i in 0..ui_sound::UiSound::ALL.len() {
+            assert!(EditableValue::ALL.contains(&EditableValue::UiSoundVolume(i)), "UI-Klang {i}");
+        }
+        for i in 0..VOLUME_CATEGORIES.len() {
+            assert!(EditableValue::ALL.contains(&EditableValue::CategoryVolume(i)), "Kategorie {i}");
         }
     }
 
