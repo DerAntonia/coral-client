@@ -20,7 +20,7 @@
 mod desktop_entry;
 mod update;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -48,8 +48,10 @@ fn main() -> eframe::Result {
         #[cfg(target_os = "linux")]
         desktop_entry::install(&exe);
     }
-    update::cleanup_old_files(&client_path());
-    move_client_from_launcher_dir();
+    let installed = LauncherConf::load().installed;
+    move_client_from_launcher_dir(&installed);
+    name_client_with_version(&installed);
+    update::cleanup_old_files(&client_path(&installed));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Coral Client Launcher").with_app_id("coral-client-launcher").with_inner_size([560.0, 620.0]).with_min_inner_size([420.0, 380.0]),
         ..Default::default()
@@ -111,9 +113,8 @@ enum ClientCheck {
     NoDigest,
 }
 
-fn check_client(release: Option<&Release>) -> ClientCheck {
+fn check_client(release: Option<&Release>, path: &Path) -> ClientCheck {
     let Some(asset) = release.and_then(|r| r.asset_for_platform()) else { return ClientCheck::Unknown };
-    let path = client_path();
     if !path.is_file() {
         return ClientCheck::Missing;
     }
@@ -281,7 +282,7 @@ impl Launcher {
                 // Geprueft wird der Client gegen das Release, das installiert sein SOLLTE --
                 // sonst gegen das neueste im Kanal.
                 let bezug = releases.iter().find(|r| r.tag_name == installed).or_else(|| update::newest(&releases, beta));
-                let check = check_client(bezug);
+                let check = check_client(bezug, &client_path(&installed));
                 (releases, check)
             });
             let _ = tx.send(result);
@@ -299,7 +300,7 @@ impl Launcher {
         let total = asset.size + launcher.as_ref().map_or(0, |(a, _)| a.size);
         let progress = Arc::new(Mutex::new(Progress { done: 0, total }));
         let (tx, rx) = channel();
-        let (target, thread_progress, ctx) = (client_path(), progress.clone(), ctx.clone());
+        let (target, thread_progress, ctx) = (client_path(&release.tag_name), progress.clone(), ctx.clone());
         std::thread::spawn(move || {
             let result = update::download(&asset, &target, thread_progress.clone()).and_then(|()| match &launcher {
                 Some((launcher_asset, exe)) => update::download(launcher_asset, exe, thread_progress).map(|()| true),
@@ -361,6 +362,7 @@ impl Launcher {
                         Ok(launcher_updated) => {
                             self.conf.installed = tag.clone();
                             self.conf.save();
+                            remove_other_clients(tag);
                             self.chosen_tag = None;
                             self.client_check = ClientCheck::Matches;
                             UpdateState::Installed { tag: tag.clone(), launcher_updated }
@@ -523,7 +525,7 @@ impl Launcher {
     }
 
     fn play(&mut self) {
-        let path = client_path();
+        let path = client_path(&self.conf.installed);
         let log = std::fs::File::create(log_path());
         let mut command = Command::new(&path);
         command.arg("--config").arg(&self.config);
@@ -670,7 +672,7 @@ impl Launcher {
                         action = Some(release.clone());
                     }
                 } else {
-                    ui.colored_label(egui::Color32::from_rgb(210, 150, 60), format!("(kein {} im Release)", update::ASSET_NAME));
+                    ui.colored_label(egui::Color32::from_rgb(210, 150, 60), format!("(kein {} im Release)", release.client_asset_name()));
                 }
                 ui.hyperlink_to("auf GitHub", &release.html_url);
             }
@@ -767,7 +769,7 @@ impl Launcher {
     }
 
     fn play_section(&mut self, ui: &mut egui::Ui) {
-        let client_exists = client_path().is_file();
+        let client_exists = client_path(&self.conf.installed).is_file();
         let installation_ok = self.selected_candidate().is_some_and(|c| c.files.is_ok());
         let running = self.client.is_some();
         let downloading = matches!(self.update, UpdateState::Downloading { .. });
@@ -777,7 +779,7 @@ impl Launcher {
         } else if matches!(self.game_data, GameData::Extracting { .. }) {
             Some("Spieldaten werden extrahiert ...".to_string())
         } else if !client_exists {
-            Some(format!("{} fehlt -- ueber Updates herunterladen.", client_path().display()))
+            Some(format!("{} fehlt -- ueber Updates herunterladen.", client_path(&self.conf.installed).display()))
         } else if !installation_ok {
             Some("Erst eine nutzbare Installation waehlen.".to_string())
         } else {
@@ -837,13 +839,44 @@ fn custom_candidate(source: GameSource) -> Candidate {
 
 /// Das Client-Binary liegt in ~/coral-client/binary (bei den Skins), damit der Launcher ueberall
 /// liegen kann -- z.B. allein auf dem Schreibtisch. Ohne Benutzerordner neben dem Launcher.
-fn client_path() -> PathBuf {
-    let dir = assets::user_dir().map(|d| d.join("binary")).unwrap_or_else(launcher_dir);
-    dir.join(client_file_name())
+fn client_dir() -> PathBuf {
+    assets::user_dir().map(|d| d.join("binary")).unwrap_or_else(launcher_dir)
 }
 
-fn client_file_name() -> String {
+/// Der Client einer Version: coral-client-v26.10.1 (unter Windows mit .exe). Es liegt immer nur
+/// der installierte dort, s. remove_other_clients.
+fn client_path(tag: &str) -> PathBuf {
+    client_dir().join(format!("coral-client-{tag}{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Bis 1.0.0 hiess der Client ohne Version so.
+fn legacy_client_file_name() -> String {
     format!("coral-client{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// Einmalig: ein Client ohne Version im Namen (bis 1.0.0) bekommt die installierte Version.
+fn name_client_with_version(installed: &str) {
+    let (old, new) = (client_dir().join(legacy_client_file_name()), client_path(installed));
+    if old.is_file() && !new.exists() {
+        if let Err(e) = std::fs::rename(&old, &new) {
+            eprintln!("[launcher] {} nicht in {} umbenannt: {e}", old.display(), new.display());
+        }
+    }
+}
+
+/// Nach einem Update: die anderen Versionen weg, nur der installierte Client bleibt. Laeuft unter
+/// Windows noch ein alter, laesst er sich nicht loeschen -- dann beim naechsten Update.
+fn remove_other_clients(installed: &str) {
+    let behalten = client_path(installed);
+    let Ok(eintraege) = std::fs::read_dir(client_dir()) else { return };
+    for eintrag in eintraege.flatten() {
+        let pfad = eintrag.path();
+        let name = eintrag.file_name().to_string_lossy().into_owned();
+        let ist_client = name.strip_suffix(std::env::consts::EXE_SUFFIX).is_some_and(|n| n == "coral-client" || n.starts_with("coral-client-v"));
+        if ist_client && pfad != behalten && pfad.is_file() {
+            let _ = std::fs::remove_file(&pfad);
+        }
+    }
 }
 
 fn launcher_dir() -> PathBuf {
@@ -852,8 +885,8 @@ fn launcher_dir() -> PathBuf {
 
 /// Frueher lag der Client neben dem Launcher: einmalig nach ~/coral-client/binary umziehen, statt
 /// ihn neu herunterzuladen. Ein schon vorhandener Client dort bleibt unangetastet.
-fn move_client_from_launcher_dir() {
-    let (old, new) = (launcher_dir().join(client_file_name()), client_path());
+fn move_client_from_launcher_dir(installed: &str) {
+    let (old, new) = (launcher_dir().join(legacy_client_file_name()), client_path(installed));
     if old == new || !old.is_file() || new.exists() {
         return;
     }

@@ -2,18 +2,29 @@
 # Baut Client + Launcher fuer Linux und Windows und legt damit ein GitHub-Release an, das der
 # Launcher als Update findet (s. crates/launcher/src/update.rs).
 #
-#   scripts/release.sh v0.2.0 ["Notizen"]
-#   scripts/release.sh v0.3.0-beta.1 ["Notizen"]     -> Beta (Pre-release)
+#   scripts/release.sh v26.10.1 ["Notizen"]
+#   scripts/release.sh v26.10.2-beta.1 ["Notizen"]     -> Beta (Pre-release)
 #
-# Ein Tag mit Bindestrich (v0.3.0-beta.1, v0.3.0-rc.1) wird als Pre-release veroeffentlicht:
+# Versionen seit 1.0.0: Jahr (zweistellig).Monat.Nummer im Monat, ab 1 und ohne fuehrende Nullen
+# (v26.10.1, v26.10.2, v26.11.1, v27.1.1) -- so sortieren sie auch ueber den Jahreswechsel.
+#
+# Ein Tag mit Bindestrich (v26.10.2-beta.1, v26.10.2-rc.1) wird als Pre-release veroeffentlicht:
 # der Launcher zeigt es nur mit eingeschaltetem "Beta-Versionen anzeigen" an. Ohne
 # Notizen-Argument werden, falls vorhanden, die Notizen aus release-notes/<tag>.md genommen.
 #
-# Die Asset-Namen muessen zu update::ASSET_NAME passen. Windows wird mit cargo-zigbuild gebaut
-# (ring braucht sonst eine MinGW-Toolchain).
+# Die Dateien tragen die Version im Namen (coral-client-v26.10.1-linux-x86_64), s.
+# update::Release::asset_for_platform. Dazu dieselben Dateien unter den festen Namen von
+# update::ASSET_NAME/LAUNCHER_ASSET_NAME: nur die finden Launcher bis 1.0.0. Raus, sobald keiner
+# mehr laeuft (die alten aktualisieren sich darueber selbst auf einen neuen Launcher).
+#
+# Windows wird mit cargo-zigbuild gebaut (ring braucht sonst eine MinGW-Toolchain).
 set -e
-tag=${1:?Tag fehlt, z.B. v0.2.0}
+tag=${1:?Tag fehlt, z.B. v26.10.1}
 notes=${2:-}
+if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]{2}\.([1-9]|1[0-2])\.[1-9][0-9]*(-[0-9A-Za-z.]+)?$'; then
+    echo "Tag $tag passt nicht zum Format vJJ.M.N (z.B. v26.10.1, Beta v26.10.2-beta.1)." >&2
+    exit 1
+fi
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo"
 if [ -z "$notes" ] && [ -f "release-notes/$tag.md" ]; then
@@ -63,10 +74,13 @@ for paket in app launcher; do
 done
 
 out=$(mktemp -d)
-cp target/release/coral-client "$out/coral-client-linux-x86_64"
-cp target/release/coral-client-launcher "$out/coral-client-launcher-linux-x86_64"
-cp target/x86_64-pc-windows-gnu/release/coral-client.exe "$out/coral-client-windows-x86_64.exe"
-cp target/x86_64-pc-windows-gnu/release/coral-client-launcher.exe "$out/coral-client-launcher-windows-x86_64.exe"
+for name in coral-client coral-client-launcher; do
+    cp "target/release/$name" "$out/$name-$tag-linux-x86_64"
+    cp "target/x86_64-pc-windows-gnu/release/$name.exe" "$out/$name-$tag-windows-x86_64.exe"
+    # Uebergang: feste Namen fuer Launcher bis 1.0.0.
+    cp "target/release/$name" "$out/$name-linux-x86_64"
+    cp "target/x86_64-pc-windows-gnu/release/$name.exe" "$out/$name-windows-x86_64.exe"
+done
 
 gh release create "$tag" --target "$commit" --repo DerAntonia/coral-client --title "$tag" --notes "$notes" $vorab "$out"/*
 rm -r "$out"

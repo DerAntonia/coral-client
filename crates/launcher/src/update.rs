@@ -21,6 +21,14 @@ use sha2::{Digest, Sha256};
 
 pub const REPO: &str = "DerAntonia/coral-client";
 
+// Plattform-Endung der Release-Dateien. Seit v26.10.1 steht die Version im Namen
+// (coral-client-v26.10.1-linux-x86_64, s. scripts/release.sh); die festen Namen darunter tragen
+// aeltere Releases, und neue tragen sie fuer Launcher bis 1.0.0 zusaetzlich.
+#[cfg(windows)]
+const PLATFORM: &str = "windows-x86_64.exe";
+#[cfg(not(windows))]
+const PLATFORM: &str = "linux-x86_64";
+
 #[cfg(windows)]
 pub const ASSET_NAME: &str = "coral-client-windows-x86_64.exe";
 #[cfg(not(windows))]
@@ -84,12 +92,26 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 impl Release {
+    /// Name der Client-Datei dieses Releases, mit Version (coral-client-v26.10.1-linux-x86_64).
+    pub fn client_asset_name(&self) -> String {
+        format!("coral-client-{}-{PLATFORM}", self.tag_name)
+    }
+
+    fn launcher_asset_name(&self) -> String {
+        format!("coral-client-launcher-{}-{PLATFORM}", self.tag_name)
+    }
+
+    /// Erst der Name mit Version, sonst der feste Name aelterer Releases.
     pub fn asset_for_platform(&self) -> Option<&ReleaseAsset> {
-        self.assets.iter().find(|a| a.name == ASSET_NAME)
+        self.find_asset(&self.client_asset_name(), ASSET_NAME)
     }
 
     pub fn launcher_asset(&self) -> Option<&ReleaseAsset> {
-        self.assets.iter().find(|a| a.name == LAUNCHER_ASSET_NAME)
+        self.find_asset(&self.launcher_asset_name(), LAUNCHER_ASSET_NAME)
+    }
+
+    fn find_asset(&self, mit_version: &str, fest: &str) -> Option<&ReleaseAsset> {
+        self.assets.iter().find(|a| a.name == mit_version).or_else(|| self.assets.iter().find(|a| a.name == fest))
     }
 }
 
@@ -291,6 +313,31 @@ pub fn is_newer(candidate: &str, installed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Neue Releases tragen die Version im Dateinamen, aeltere nur den festen Namen.
+    #[test]
+    fn datei_mit_version_zuerst_sonst_der_feste_name() {
+        let asset = |name: &str| ReleaseAsset { name: name.into(), browser_download_url: String::new(), size: 0, digest: None };
+        let release = |tag: &str, namen: &[&str]| Release {
+            tag_name: tag.into(),
+            name: None,
+            body: None,
+            html_url: String::new(),
+            assets: namen.iter().map(|n| asset(n)).collect(),
+            prerelease: false,
+            draft: false,
+        };
+        let mit = format!("coral-client-v26.10.1-{PLATFORM}");
+        let neu = release("v26.10.1", &[ASSET_NAME, &mit, LAUNCHER_ASSET_NAME]);
+        assert_eq!(neu.asset_for_platform().map(|a| a.name.as_str()), Some(mit.as_str()));
+        assert_eq!(neu.launcher_asset().map(|a| a.name.as_str()), Some(LAUNCHER_ASSET_NAME), "fester Name als Rueckfall");
+        let alt = release("v1.0.0", &[ASSET_NAME]);
+        assert_eq!(alt.asset_for_platform().map(|a| a.name.as_str()), Some(ASSET_NAME));
+        assert!(release("v26.10.1", &[]).asset_for_platform().is_none());
+        // jj.m.n ist neuer als die bisherigen Versionen, auch ueber den Jahreswechsel.
+        assert_eq!(compare_versions("v26.10.1", "v1.0.0"), std::cmp::Ordering::Greater);
+        assert_eq!(compare_versions("v27.1.1", "v26.12.9"), std::cmp::Ordering::Greater);
+    }
 
     #[test]
     fn pruefsumme_wie_sha256sum() {

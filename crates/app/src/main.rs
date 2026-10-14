@@ -1989,7 +1989,7 @@ const STEPPER_VALUE_W: f32 = 200.0;
 // Die fruehere lange Hinweiszeile darunter ist weg -- Erklaerungen stecken jetzt als
 // Hover-Tooltip an der jeweiligen Zeile (s. SETTINGS_TOOLTIPS/hovered_tooltip), nicht mehr
 // staendig sichtbar.
-const SETTINGS_ROW_COUNT: usize = 13;
+const SETTINGS_ROW_COUNT: usize = 12;
 
 // Steuerung-Screen (MenuScreen::SettingsControls): zwei Spalten. Links die Tastenbelegung
 // als scrollbare Tabelle (Aktion/Taste/Halten-Umschalten), rechts die uebrigen
@@ -2485,11 +2485,10 @@ fn hud_done_button() -> Rect {
 // Escape ohne Fenster verlaesst den Editor.
 
 // Labels + Hover-Tooltips der Haupt-Einstellungen-Zeilen (index-gleich, s. build_settings_general_tab
-// und hovered_tooltip). Die Werte selbst (Present-Modus, FPS, ...) sind Laufzeitdaten und
+// und hovered_tooltip). Die Werte selbst (FPS, Render-Ahead, ...) sind Laufzeitdaten und
 // bleiben dort -- hier steht nur, was ohnehin schon feststeht.
 const SETTINGS_LABELS: [&str; SETTINGS_ROW_COUNT] = [
     "FPS-Limit",
-    "Present-Modus",
     "Render-Ahead",
     "Mesh-Budget",
     "Max-Chunk-Anzahl",
@@ -2504,13 +2503,12 @@ const SETTINGS_LABELS: [&str; SETTINGS_ROW_COUNT] = [
 ];
 const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Begrenzt die Bildrate über einen Timer. Bei selbsttaktenden Present-Modi (Fifo/FifoRelaxed) wirkungslos -- die Zeile blendet dann ab. Zahl anklicken für einen eigenen Wert; 0 = Monitor (Bildrate des Monitors), -1 = unbegrenzt.",
-    "Immediate zeigt sofort (Tearing möglich, minimale Latenz), Fifo wartet auf den VBlank (kein Tearing, bis zu ein Bild Verzögerung). Reißt es trotzdem, hilft der TearFree-Schalter unten (sofern der Treiber ihn hat).",
-    "Wie viele Frames die CPU maximal vorproduzieren darf, bevor sie auf die GPU/Anzeige wartet. Wirkt UNABHÄNGIG vom Present-Modus, auch bei Immediate. 0 ist Sodiums 'CPU Render-Ahead Limit: 0' nachgebaut -- eine echte Wartezeit auf das GPU-Ende des vorherigen Frames vor jedem neuen (kostet spürbar FPS/Glätte, minimiert aber die Latenz). 1-4 überlassen die Drosselung stattdessen der Swapchain -- höher kann Ruckler unter Last glätten, kostet aber zusätzliche Eingabelatenz.",
+    "Wie viele Frames die CPU maximal vorproduzieren darf, bevor sie auf die GPU/Anzeige wartet. 0 ist Sodiums 'CPU Render-Ahead Limit: 0' nachgebaut -- eine echte Wartezeit auf das GPU-Ende des vorherigen Frames vor jedem neuen (kostet spürbar FPS/Glätte, minimiert aber die Latenz). 1-4 überlassen die Drosselung stattdessen der Swapchain -- höher kann Ruckler unter Last glätten, kostet aber zusätzliche Eingabelatenz.",
     "Chunk-Spalten, die pro Frame als Mesh-Job an den Worker-Pool geschickt werden. Meshen selbst kostet keine Frame-Zeit mehr -- das begrenzt nur, wie viele Jobs auf einmal losgeschickt werden. Zahl anklicken für einen eigenen Wert.",
     "Zusätzliche Obergrenze für die GESAMTZAHL gerade gezeichneter Spalten, unabhängig vom Radius -- wirkt gleichzeitig mit der Renderdistanz, die nächstgelegenen Spalten gewinnen das Budget zuerst. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.",
     "Größe des dedizierten Worker-Pools fürs Chunk-Meshing (nicht das Netzwerk, das läuft getrennt). Mehr Threads bauen Chunks parallel schneller auf, konkurrieren dabei aber mit allem anderen auf der CPU (Physik, Netzwerk-Decoding, Spiel selbst).",
     "Zeichnet nur die 16er-Abschnitte der Welt, die von der Kamera aus durch Luft, Wasser oder Glas überhaupt zu sehen sein können -- Höhlen unter der Oberfläche, und von unten die Oberfläche, fallen weg. Spart GPU-Zeit, ohne dass sich etwas Sichtbares ändert. AUS zum Vergleichen.",
-    "Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um Present-Modus/TearFree zu testen. Läuft im Menü und im Spiel.",
+    "Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um TearFree und die Riss-Steuerung zu testen. Läuft im Menü und im Spiel.",
     "Globale Anzeigeeinstellung des Grafiktreibers (xrandr) gegen Tearing bei fehlendem Hardware-Flip -- nur bedienbar, wenn der Treiber sie hat (amdgpu, radeon, neuere modesetting; nicht Nvidia).  Gilt nur, während Coral Client im Vordergrund läuft -- danach automatisch zurück auf den Wert von vor dem Start.",
     "Legt bei Immediate (mit FPS-Limit) jeden Bildwechsel knapp vor die Austastlücke des Monitors -- dort ist er unsichtbar, es gibt keinen Riss mehr im Bild. Misst dafür die VBlanks des Monitors (Linux, /dev/dri) und präsentiert jeden Frame auf die Mikrosekunde zu einem daraus berechneten Zeitpunkt; die Bildrate folgt dann exakt dem Monitor (bzw. jedem n-ten Bild bei niedrigerem FPS-Limit). Kostet etwas Latenz (der Frame wird mit Vorlauf fertig gebaut). Bei Fifo wirkungslos -- dort gibt es keinen Riss. Im Frame-Profiler (F6) sieht man, wo er landet.",
     "Verschiebt den Bildwechsel bei \"Unsichtbar\": Minus = früher, der Riss wandert nach oben; Plus = später, er wandert nach unten. Ohne Hardware-Flip setzt der X-Server den Wechsel erst eine Weile nach dem Present um, dann sitzt der Riss bei 0 oben im Bild -- so weit ins Minus drehen, bis er unten auftaucht, und dann ein Stück zurück: dann liegt er am Anfang der Austastlücke, und ein verspäteter Frame rutscht nur tiefer in die Lücke.",
@@ -2520,16 +2518,15 @@ const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
 // Zeilen des Render-Tabs (Reihenfolge wie SETTINGS_LABELS), in Abschnitten: Bildrate,
 // Chunks, Tearing, System. Sichtweiten, Entity-Weite und Block-Rotation stehen im Video-Tab.
 const FPS_LIMIT_ROW: usize = 0;
-const PRESENT_MODE_ROW: usize = 1;
-const FRAME_LATENCY_ROW: usize = 2;
-const MESH_BUDGET_ROW: usize = 3;
-const MAX_CHUNK_COUNT_ROW: usize = 4;
-const CHUNK_THREADS_ROW: usize = 5;
+const FRAME_LATENCY_ROW: usize = 1;
+const MESH_BUDGET_ROW: usize = 2;
+const MAX_CHUNK_COUNT_ROW: usize = 3;
+const CHUNK_THREADS_ROW: usize = 4;
 // Hoehlen-Culling an/aus (Settings::cave_culling), s. render::occlusion.
-const CAVE_CULLING_ROW: usize = 6;
-const TEARING_TEST_ROW: usize = 7;
-const TEARFREE_ROW: usize = 8;
-const GPU_ROW: usize = 12;
+const CAVE_CULLING_ROW: usize = 5;
+const TEARING_TEST_ROW: usize = 6;
+const TEARFREE_ROW: usize = 7;
+const GPU_ROW: usize = 11;
 const BLOCK_ROTATION_TOOLTIP: &str = "Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.";
 const ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 // Renderpfad: vorerst aus den Einstellungen genommen (der Shader-Pfad ruht), Zeile samt Knopf
@@ -2587,7 +2584,7 @@ const TEAR_RESERVE_MIN_US: i32 = 0;
 const TEAR_RESERVE_MAX_US: i32 = 3000;
 const TEAR_RESERVE_STEP_US: i32 = 50;
 const TEAR_RESERVE_DEFAULT_US: i32 = 300;
-const TEAR_RESERVE_ROW: usize = 11;
+const TEAR_RESERVE_ROW: usize = 10;
 // Riss-Timing (Settings::tear_timing_us): Verschiebung des Bildwechsels in Mikrosekunden,
 // negativ = frueher. Ohne Hardware-Flip kopiert der X-Server das Bild erst ~1,5 ms nach dem
 // Present auf den Schirm -- wie lange, haengt an X-Server, Treiber und Monitor und ist von hier
@@ -2596,7 +2593,7 @@ const TEAR_TIMING_MIN_US: i32 = -8000;
 const TEAR_TIMING_MAX_US: i32 = 8000;
 const TEAR_TIMING_STEP_US: i32 = 50;
 const TEAR_TIMING_DEFAULT_US: i32 = 0;
-const TEAR_TIMING_ROW: usize = 10;
+const TEAR_TIMING_ROW: usize = 9;
 // Werte der Riss-Position, Index = Settings::tear_position (s. App::tear_target_phase).
 //
 // Frueher auch "Oben" und "Austastluecke". Gemessen: unsere Present-Aufrufe kamen in allen Modi
@@ -2605,7 +2602,7 @@ const TEAR_TIMING_ROW: usize = 10;
 // weiterem Verschieben unregelmaessig (der Riss sprang wild). Zuverlaessig ist nur der Wechsel
 // knapp VOR der Luecke: er landet unsichtbar darin.
 const TEAR_POSITION_NAMES: [&str; 2] = ["Aus", "Unsichtbar"];
-const TEAR_POSITION_ROW: usize = 9;
+const TEAR_POSITION_ROW: usize = 8;
 // Maus-Empfindlichkeit ist echte Steuerung, keine Performance-Einstellung -- eigene Zeile
 // (Zeile 0) auf dem Steuerung-Screen, s. build_settings_controls_tab.
 const SENSITIVITY_TOOLTIP: &str =
@@ -5755,7 +5752,6 @@ struct GpuState {
     world_backdrop: Option<wgpu::BindGroup>,
     block_renderer: render::BlockRenderer,
     // Vom Treiber gelieferte Present-Modi, in der Reihenfolge der Auswahl.
-    present_modes: Vec<wgpu::PresentMode>,
     // Adapter-Info (Name, Hersteller) -- wgpu liefert das ohnehin mit dem Adapter, kein
     // separates Tool (lspci/glxinfo) noetig. Bestimmt, ob TearFree ueberhaupt Sinn ergibt:
     // die Eigenschaft existiert nur beim amdgpu-Treiber (PCI-Vendor-ID 0x1002).
@@ -6046,15 +6042,16 @@ impl GpuState {
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(surface_caps.formats[0]);
 
-        // Welche Present-Modi es gibt, entscheidet der Treiber -- nur Fifo ist von Vulkan
-        // garantiert. Wir merken uns die tatsaechlich unterstuetzten, damit die Auswahl in
-        // den Einstellungen nichts anbieten kann, was hier nicht existiert.
-        let present_modes: Vec<wgpu::PresentMode> = surface_caps.present_modes.clone();
-        // Startwert: Immediate (kein Warten auf VBlank -> minimale Latenz, Tearing in Kauf
-        // genommen). Fehlt er, nimmt Fifo -- der ist immer da.
-        let present_mode =
-            if present_modes.contains(&wgpu::PresentMode::Immediate) { wgpu::PresentMode::Immediate } else { wgpu::PresentMode::Fifo };
-        println!("[gpu] Present-Modi laut Treiber: {present_modes:?}, Start mit {present_mode:?}");
+        // Immer Immediate: kein Warten auf den VBlank, minimale Latenz. Den Riss legt die
+        // Riss-Steuerung in die Austastluecke. Eine Auswahl gibt es nicht mehr. Kann der Treiber
+        // kein Immediate, Mailbox (reisst nicht, wartet aber auch nicht), sonst Fifo -- den
+        // garantiert Vulkan.
+        let present_modes = &surface_caps.present_modes;
+        let present_mode = [wgpu::PresentMode::Immediate, wgpu::PresentMode::Mailbox]
+            .into_iter()
+            .find(|m| present_modes.contains(m))
+            .unwrap_or(wgpu::PresentMode::Fifo);
+        println!("[gpu] Present-Modi laut Treiber: {present_modes:?}, nehme {present_mode:?}");
 
         let config = wgpu::SurfaceConfiguration {
             // COPY_DST zusaetzlich zu RENDER_ATTACHMENT: der letzte Schritt jedes Frames
@@ -6930,7 +6927,6 @@ impl GpuState {
             world_backdrop: None,
             wallpaper_sampler,
             block_renderer,
-            present_modes,
             adapter_info,
             last_submission: None,
             fence_wait_zero: false,
@@ -6967,34 +6963,6 @@ impl GpuState {
         format!("{vendor}: {}", self.adapter_info.name)
     }
 
-    // Present-Modus umschalten: der steckt in der Surface-Konfiguration, ein
-    // configure() uebernimmt ihn sofort -- kein Neustart noetig.
-    fn set_present_mode(&mut self, index: usize) {
-        let Some(&mode) = self.present_modes.get(index) else {
-            return;
-        };
-        if self.config.present_mode != mode {
-            self.config.present_mode = mode;
-            self.surface.configure(&self.device, &self.config);
-            // Bestaetigt, was wirklich in der Swapchain landet -- nicht, was wir glauben.
-            println!(
-                "[gpu] Present-Modus -> {:?} (max frame latency {})",
-                self.config.present_mode, self.config.desired_maximum_frame_latency
-            );
-        }
-    }
-
-    fn present_mode_index(&self) -> usize {
-        self.present_modes.iter().position(|&m| m == self.config.present_mode).unwrap_or(0)
-    }
-
-    fn present_mode_label(&self, index: usize) -> String {
-        match self.present_modes.get(index) {
-            Some(m) => format!("{m:?}"),
-            None => "?".to_string(),
-        }
-    }
-
     // Taktet der Present-Modus schon selbst? Bei Fifo (und FifoRelaxed) blockiert
     // get_current_texture(), bis ein Swapchain-Bild frei wird -- der VBlank gibt den Takt
     // vor. Ein eigener Timer daneben ist dann nicht nur ueberfluessig, sondern schaedlich:
@@ -7005,11 +6973,7 @@ impl GpuState {
         matches!(self.config.present_mode, wgpu::PresentMode::Fifo | wgpu::PresentMode::FifoRelaxed | wgpu::PresentMode::AutoVsync)
     }
 
-    fn present_mode_count(&self) -> usize {
-        self.present_modes.len()
-    }
-
-    // CPU-Render-Ahead-Limit umschalten -- wie set_present_mode() ein sofortiges configure(),
+    // CPU-Render-Ahead-Limit umschalten -- ein sofortiges configure(),
     // aber OHNE Treiber-Rueckfrage: wgpu akzeptiert jeden Wert >=1 auf jedem Backend, es gibt
     // also keine Liste "unterstuetzter" Werte wie bei present_modes.
     // value=0 ist der Sodium-Style-Zero-Modus (echte Fence-Wait vor jedem Frame statt eines
@@ -9684,7 +9648,7 @@ impl EditableValue {
     // Bewusst NICHT frei eintippbar sind Einstellungen, deren Wertebereich so klein ist,
     // dass die Pfeile schneller sind als das Tippen, bzw. deren Wert an der Hardware haengt
     // statt am Geschmack: Chunk-Update-Threads (1..32, an der Kernzahl bemessen),
-    // Render-Ahead (0..4), sowie alles, was gar keine Zahl ist (Present-Modus, Projektion,
+    // Render-Ahead (0..4), sowie alles, was gar keine Zahl ist (Projektion,
     // Fadenkreuz-Farbe, Audiogeraet).
     const ALL: [EditableValue; 67] = [
         EditableValue::MouseSensitivity,
@@ -10986,10 +10950,6 @@ struct Settings {
     max_chunk_count: u32,
     // Worker-Anzahl des dedizierten Mesh-Pools, s. mesh_pool::MeshPool.
     chunk_update_threads: usize,
-    // Der Present-Modus selbst lebt in der Surface-Konfiguration (die GPU ist dort die
-    // Quelle der Wahrheit). Hier steht nur sein Name, damit er die Sitzung ueberlebt --
-    // welche Modi es gibt, weiss erst der Treiber beim naechsten Start.
-    present_mode: String,
     // CPU-Render-Ahead-Limit -- wie viele Frames die CPU maximal vorproduzieren darf, bevor
     // sie auf die GPU/Anzeige wartet. Wirkt UNABHAENGIG vom Present-Modus (auch bei
     // Immediate). 1..4 steuern wgpu's desired_maximum_frame_latency (Swapchain-Parameter,
@@ -11231,8 +11191,7 @@ struct Settings {
     // Scatter/Deferred-Blend-Architektur noch nicht portiert ist, s. cmaa2.wgsl-Kommentar).
     cmaa2_enabled: bool,
     // Name des gewaehlten Ausgabegeraets (s. audio-Crate). Leer = System-Standard --
-    // absichtlich kein Index, denn welche Geraete es gibt, weiss erst der naechste Start
-    // (wie bei present_mode).
+    // absichtlich kein Index, denn welche Geraete es gibt, weiss erst der naechste Start.
     audio_output_device: String,
     // Master-Tonhoehe fuer UI-Klaenge aus Aufnahmen, in Halbtoenen (s. audio::semitone_factor).
     // Wirkt NUR auf den Aufnahme-Pfad von play_ui_sound, nicht auf Signaltoene wie den
@@ -12807,7 +12766,6 @@ impl Settings {
                         settings.chunk_update_threads = v.clamp(CHUNK_UPDATE_THREADS_MIN, CHUNK_UPDATE_THREADS_MAX);
                     }
                 }
-                "present_mode" => settings.present_mode = value.to_string(),
                 "frame_latency" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.frame_latency = v.clamp(FRAME_LATENCY_MIN, FRAME_LATENCY_MAX);
@@ -13781,7 +13739,7 @@ impl Settings {
         let kb = &self.keybinds;
         let km = &self.keybind_modes;
         let body = format!(
-            "show_tearing_test={}\nshow_hud={}\nfps_limit_hz={}\nmouse_sensitivity={}\ncursor_sensitivity={}\ncursor_size={}\ncursor_circle={}\nmesh_columns_per_frame={}\npresent_mode={}\nframe_latency={}\n\
+            "show_tearing_test={}\nshow_hud={}\nfps_limit_hz={}\nmouse_sensitivity={}\ncursor_sensitivity={}\ncursor_size={}\ncursor_circle={}\nmesh_columns_per_frame={}\nframe_latency={}\n\
              max_render_distance={}\nmax_chunk_count={}\nchunk_update_threads={}\n\
              hud_perf_x={}\nhud_perf_y={}\nhud_crosshair_x={}\nhud_crosshair_y={}\n\
              hud_actionbar_x={}\nhud_actionbar_y={}\nhud_scoreboard_x={}\nhud_scoreboard_y={}\n\
@@ -13810,7 +13768,6 @@ impl Settings {
             self.cursor_size,
             self.cursor_circle,
             self.mesh_columns_per_frame,
-            self.present_mode,
             self.frame_latency,
             self.max_render_distance,
             self.max_chunk_count,
@@ -14187,7 +14144,6 @@ impl Default for Settings {
             max_render_distance: MAX_RENDER_DISTANCE_MAX,
             max_chunk_count: MAX_CHUNK_COUNT_MAX,
             chunk_update_threads: default_chunk_update_threads(),
-            present_mode: "Immediate".to_string(),
             // Start-/Standardwert 1, NICHT FRAME_LATENCY_MIN (0): der Zero-Modus ist ein
             // bewusster CPU-Stall pro Frame (s. FRAME_LATENCY_MIN-Kommentar) -- das soll man
             // aktiv waehlen, nicht ungefragt beim ersten Start bekommen.
@@ -14954,8 +14910,6 @@ enum ButtonAction {
     UseAccount(usize),
     ToggleTearing,
     ToggleHud,
-    PresentModePrev,
-    PresentModeNext,
     FrameLatencyDown,
     FrameLatencyUp,
     FpsLimitPrev,
@@ -22740,9 +22694,8 @@ impl App {
         Button { action, rect, label: label.to_string(), enabled: true, color: theme::get(theme::Slot::Surface2), scale, slider: None }
     }
 
-    // Zeile 0 im Audio-Tab: "System-Standard" plus alle von cpal gelieferten Geraete, wie
-    // present_mode_label() fuer den Praesentationsmodus -- die Liste kommt vom System, nicht
-    // von uns, und kann sich zwischen zwei Starts aendern.
+    // Zeile 0 im Audio-Tab: "System-Standard" plus alle von cpal gelieferten Geraete -- die
+    // Liste kommt vom System, nicht von uns, und kann sich zwischen zwei Starts aendern.
     fn audio_device_options(&self) -> Vec<String> {
         let mut out = vec!["System-Standard".to_string()];
         out.extend(self.audio_devices.iter().cloned());
@@ -23236,20 +23189,7 @@ impl App {
                 let set = &self.settings;
                 out.push(Self::toggle(ButtonAction::ToggleTearing, TEARING_TEST_ROW, set.show_tearing_test));
                 // Die FPS-Anzeige schaltet man im HUD-Editor (Rechtsklick auf sie).
-                // Present-Modus: Auswahl kommt vom Treiber, nicht von uns.
-                let (present_index, present_count) = match self.gpu.as_ref() {
-                    Some(gpu) => (gpu.present_mode_index(), gpu.present_mode_count()),
-                    None => (0, 0),
-                };
-                out.extend(Self::stepper(
-                    ButtonAction::PresentModePrev,
-                    ButtonAction::PresentModeNext,
-                    PRESENT_MODE_ROW,
-                    present_index > 0,
-                    present_index + 1 < present_count,
-                ));
-                // Render-Ahead: treiberunabhaengig (anders als Present-Modus), deshalb feste
-                // Grenzen statt einer vom Treiber gelieferten Liste, s. FRAME_LATENCY_MIN/MAX.
+                // Render-Ahead: feste Grenzen, s. FRAME_LATENCY_MIN/MAX.
                 out.extend(Self::stepper(
                     ButtonAction::FrameLatencyDown,
                     ButtonAction::FrameLatencyUp,
@@ -24918,17 +24858,6 @@ impl App {
             ButtonAction::ToggleTearing => set.show_tearing_test = !set.show_tearing_test,
             ButtonAction::ToggleHud => set.show_hud = !set.show_hud,
             ButtonAction::ToggleCmaa2 => set.cmaa2_enabled = !set.cmaa2_enabled,
-            // Present-Modus lebt in der Surface-Konfiguration, nicht in Settings --
-            // die GPU ist hier die Quelle der Wahrheit.
-            ButtonAction::PresentModePrev | ButtonAction::PresentModeNext => {
-                if let Some(gpu) = self.gpu.as_mut() {
-                    let i = gpu.present_mode_index();
-                    let target = if action == ButtonAction::PresentModePrev { i.saturating_sub(1) } else { i + 1 };
-                    gpu.set_present_mode(target);
-                    // Namen mitfuehren, damit Speichern den gewaehlten Modus erfasst.
-                    self.settings.present_mode = gpu.present_mode_label(gpu.present_mode_index());
-                }
-            }
             ButtonAction::FrameLatencyDown | ButtonAction::FrameLatencyUp => {
                 let delta: i32 = if action == ButtonAction::FrameLatencyDown { -1 } else { 1 };
                 set.frame_latency = (set.frame_latency as i32 + delta).clamp(FRAME_LATENCY_MIN as i32, FRAME_LATENCY_MAX as i32) as u32;
@@ -26411,7 +26340,6 @@ impl App {
     // Was eine geaenderte Einstellung ausserhalb von self.settings nach sich zieht -- fuer
     // den Config-Wechsel, bei dem sich alles auf einmal aendern kann.
     fn apply_switched_settings(&mut self, alt: &Settings) {
-        self.apply_present_mode();
         self.apply_frame_latency();
         self.mesh_pool.resize(self.settings.chunk_update_threads);
         if self.settings.audio_output_device != alt.audio_output_device {
@@ -26523,20 +26451,8 @@ impl App {
         self.settings_status = Some(status);
     }
 
-    // Traegt den gespeicherten Present-Modus in die Surface-Konfiguration ein. Nur hier
-    // moeglich, weil erst der Treiber sagt, welche Modi es auf dieser Maschine gibt --
-    // ein gespeicherter Name kann also ins Leere zeigen (andere GPU, anderer Treiber).
-    fn apply_present_mode(&mut self) {
-        let wanted = self.settings.present_mode.clone();
-        let Some(gpu) = self.gpu.as_mut() else { return };
-        match (0..gpu.present_mode_count()).find(|&i| gpu.present_mode_label(i) == wanted) {
-            Some(index) => gpu.set_present_mode(index),
-            None => println!("[gpu] Present-Modus '{wanted}' wird nicht unterstützt -- behalte Standard"),
-        }
-    }
-
     // Traegt das gespeicherte Render-Ahead-Limit in die Surface-Konfiguration ein. Anders
-    // als apply_present_mode() ohne Treiber-Rueckfrage moeglich (s. GpuState::set_frame_latency).
+    // ohne Treiber-Rueckfrage moeglich (s. GpuState::set_frame_latency).
     fn apply_frame_latency(&mut self) {
         let wanted = self.settings.frame_latency;
         if let Some(gpu) = self.gpu.as_mut() {
@@ -39220,7 +39136,7 @@ impl App {
 
     // Tearing-Test-Balken (s. Settings::show_tearing_test), falls eingeschaltet. Im Menue UND im
     // Spiel: Tearing faellt gerade bei schnellen Kameradrehungen auf, und genau dort muss der
-    // Test mitlaufen, um Present-Modus und TearFree unter echter Last zu pruefen.
+    // Test mitlaufen, um TearFree und die Riss-Steuerung unter echter Last zu pruefen.
     // Riss-Steuerung (Settings::tear_position): nur, wenn wir selbst takten (bei Fifo reisst
     // nichts) und VBlank-Zeitstempel da sind.
     fn tear_control_active(&self) -> bool {
@@ -40418,16 +40334,12 @@ impl App {
         }
 
         // Wertfelder der Stepper (Mesh-Budget/Chunk-Limiter/Threads folgen unten).
-        let present = gpu.present_mode_label(gpu.present_mode_index());
-        let frame_latency = if set.frame_latency == 0 { "0 (Fence)".to_string() } else { format!("{}", set.frame_latency) };
-        // Present-Modus (2) und Render-Ahead (3) sind keine frei tippbaren Zahlen: der eine
-        // ist ein Treibername, der andere hat mit 0..4 einen so kleinen Bereich, dass die
+        // Render-Ahead ist keine frei tippbare Zahl: mit 0..4 ist der Bereich so klein, dass die
         // Pfeile schneller sind (s. EditableValue::ALL-Kommentar).
-        for (row, value) in [(PRESENT_MODE_ROW, present), (FRAME_LATENCY_ROW, frame_latency)] {
-            let rect = stepper_value_rect(row);
-            rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-            texts.push(gpu.centered_text(rect, value, theme::text(), UI_SCALE_SMALL));
-        }
+        let frame_latency = if set.frame_latency == 0 { "0 (Fence)".to_string() } else { format!("{}", set.frame_latency) };
+        let rect = stepper_value_rect(FRAME_LATENCY_ROW);
+        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(rect, frame_latency, theme::text(), UI_SCALE_SMALL));
 
         // FPS-Limit: bei selbsttaktenden Present-Modi ehrlicher als eine Zahl, die
         // gerade nichts bewirkt -- dann auch nicht bearbeitbar (der Stepper blendet dort
@@ -47444,7 +47356,6 @@ impl ApplicationHandler for App {
         // Kontenliste -- sonst steht bis dahin der Standard-Skin da.
         self.request_account_heads();
         // Erst jetzt moeglich: der Treiber meldet seine Present-Modi erst mit der Surface.
-        self.apply_present_mode();
         self.apply_frame_latency();
         // Nur einmal abfragen, nicht bei jedem Frame -- jeder Aufruf startet einen
         // xrandr-Subprozess. Fuer JEDE GPU: ob es TearFree gibt, entscheidet der Treiber
@@ -48666,9 +48577,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::CloseModuleMenu | ButtonAction::CloseKeybindAdvanced => UiSound::Close,
         ButtonAction::OpenScreen(_) | ButtonAction::OpenShaderSettings | ButtonAction::OpenLightLevels | ButtonAction::OpenParticleSettings | ButtonAction::Back => UiSound::Click,
         // Schrittweise Werte: Stepper, Listen, Auswahl.
-        ButtonAction::PresentModePrev
-        | ButtonAction::PresentModeNext
-        | ButtonAction::FrameLatencyDown
+        ButtonAction::FrameLatencyDown
         | ButtonAction::FrameLatencyUp
         | ButtonAction::TearTimingDown
         | ButtonAction::TearTimingUp
@@ -51219,9 +51128,6 @@ mod tests {
         // -- 999 ist ein extremer, aber gueltiger Wert und muss unveraendert uebernommen werden.
         assert_eq!(settings.ui_pitch_semitones, 999);
         assert_eq!(settings.mesh_columns_per_frame, 1, "mindestens eine Spalte pro Frame");
-        // Ein unbekannter Present-Modus bleibt stehen und wird erst beim Anwenden
-        // verworfen -- dort weiss der Treiber, was er kann (s. apply_present_mode).
-        assert_eq!(settings.present_mode, "GibtsNicht");
     }
 
     fn team(sicht: u8) -> TeamInfo {
