@@ -145,7 +145,7 @@ checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
 
 [[package]]
 name = "app"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "ab_glyph",
  "arboard",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "audio",
  "flate2",
@@ -271,7 +271,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "cpal",
  "lewton",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "auth"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "base64",
  "reqwest",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "chunk_saver"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -2108,7 +2108,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "launcher"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "assets",
  "eframe",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "net"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "aes",
  "auth",
@@ -3065,7 +3065,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "pktproxy"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "auth",
  "flate2",
@@ -3211,7 +3211,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "protocol"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "rand 0.8.7",
  "serde_json",
@@ -3456,7 +3456,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "assets",
  "bytemuck",
@@ -4461,7 +4461,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voice"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "aes-gcm",
  "nnnoiseless",
@@ -5364,7 +5364,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "world"
-version = "1.0.0"
+version = "26.10.1"
 dependencies = [
  "bytemuck",
  "protocol",
