@@ -106,7 +106,7 @@ in the game.
 - A game mode wheel and freely bindable keys, including double bindings.
 - The menus take their feel from [osu!lazer](https://github.com/ppy/osu): buttons glow on hover,
   text selection lights up as it grows, the cursor glides, and UI sounds follow your input.
-  osu! served as the reference for timings and behaviour. Coral contains no code from it.
+  osu! served as the reference for timings and behaviour. Coral Client contains no code from it.
 
 Version 1.0 is the first stable release. A lot works like Vanilla; some things are still
 missing or look different. The client is built and tested against 1.21.11. Other versions are
