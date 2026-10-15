@@ -42352,13 +42352,15 @@ impl App {
                 let dwm = i18n::tr("DWM läuft, Umgehung nicht geprüft").into_owned();
                 // Windows: wo die Presents landen (s. vblank::note_present).
                 #[cfg(windows)]
-                let dwm = match vblank::present_lines() {
-                    Some(p) if p.in_luecke * 2 > p.anzahl => format!("{dwm} · {}", i18n::tr("Present in der Austastlücke")),
+                // In ms ab Zeile 0 wie Tear timing, mit der Lage der Luecke dahinter.
+                let dwm = match vblank::present_phase() {
                     Some(p) => format!(
-                        "{dwm} · {} {:.0} % (±{:.0})",
-                        i18n::tr("Present bei"),
-                        p.mitte as f64 * 100.0 / p.sichtbar as f64,
-                        (p.oben - p.unten) as f64 * 50.0 / p.sichtbar as f64
+                        "{dwm} · Present {:.2} ms ±{:.2} ({} {:.2}–{:.2})",
+                        p.mitte_ms,
+                        (p.oben_ms - p.unten_ms) / 2.0,
+                        i18n::tr("Lücke"),
+                        p.sichtbar_ms,
+                        p.periode_ms
                     ),
                     None => dwm,
                 };

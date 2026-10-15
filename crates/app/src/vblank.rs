@@ -419,68 +419,80 @@ mod d3dkmt {
     }
 }
 
-// Windows: der Ausgang der laufenden Messung, fuer note_present.
+// Windows: der Ausgang der laufenden Messung, fuer note_present -- mit sichtbaren und gesamten
+// Zeilen und der Periode, um Zeilen in Zeit umzurechnen.
 #[cfg(windows)]
-static AKTIV: Mutex<Option<(d3dkmt::Source, u32)>> = Mutex::new(None);
-// Bildzeile und "in der Austastluecke" direkt nach den letzten Presents.
+#[derive(Clone, Copy)]
+struct Aktiv {
+    source: d3dkmt::Source,
+    sichtbar: u32,
+    gesamt: u32,
+    periode_ns: f64,
+}
 #[cfg(windows)]
-static PRESENTS: Mutex<std::collections::VecDeque<(u32, bool)>> = Mutex::new(std::collections::VecDeque::new());
+static AKTIV: Mutex<Option<Aktiv>> = Mutex::new(None);
+// Zeit seit Beginn des Auslesens von Zeile 0 (ns) direkt nach den letzten Presents.
+#[cfg(windows)]
+static PRESENTS: Mutex<std::collections::VecDeque<f64>> = Mutex::new(std::collections::VecDeque::new());
 #[cfg(windows)]
 const PRESENT_RING: usize = 240;
 
 /// Windows: direkt nach dem Present die Bildzeile lesen. Unter Windows gibt es keine
 /// Meldung, wann ein Bild wirklich umgeschaltet wurde (unter X11 die Present-Erweiterung) --
-/// bei Immediate schaltet es sofort, die Zeile beim Present ist also die Stelle des Risses,
-/// solange nichts (Treiber, DWM) das Bild zurueckhaelt. Nur waehrend eine Messung laeuft.
+/// das hier ist nur, WANN das Present abgegeben wurde. Als Zeit seit Zeile 0 statt in Prozent
+/// des Bildes: so laeuft der Wert durch die Austastluecke gleichmaessig weiter, wie Tear timing.
+/// Nur waehrend eine Messung laeuft.
 #[cfg(windows)]
 pub fn note_present() {
-    let Some((source, sichtbar)) = AKTIV.lock().ok().and_then(|a| *a) else { return };
-    let Some(zeile) = d3dkmt::scanline(source) else { return };
+    let Some(a) = AKTIV.lock().ok().and_then(|a| *a) else { return };
+    let Some((zeile, in_luecke)) = d3dkmt::scanline(a.source) else { return };
+    // Treiber, die in der Luecke 0 melden: Beginn der Luecke annehmen.
+    let zeile = if in_luecke && zeile < a.sichtbar { a.sichtbar } else { zeile };
+    let ns = zeile as f64 * a.periode_ns / a.gesamt as f64;
     let Ok(mut ring) = PRESENTS.lock() else { return };
-    ring.push_back(zeile);
+    ring.push_back(ns);
     if ring.len() > PRESENT_RING {
         ring.pop_front();
     }
     // Alle 2 s bei 120 Hz eine Zeile ins Log.
     static ZAEHLER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if ZAEHLER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % PRESENT_RING as u32 == PRESENT_RING as u32 - 1 {
-        if let Some(p) = summarize(&ring, sichtbar) {
+        if let Some(p) = summarize(&ring, a) {
             println!(
-                "[riss] Present bei Zeile {} von {sichtbar} (Mitte 50 %: {}..{}), {} von {} in der Austastluecke",
-                p.mitte, p.unten, p.oben, p.in_luecke, p.anzahl
+                "[riss] Present {:.2} ms nach Zeile 0 (Mitte 50 %: {:.2}..{:.2}), Bild bis {:.2}, Luecke bis {:.2} ms",
+                p.mitte_ms, p.unten_ms, p.oben_ms, p.sichtbar_ms, p.periode_ms
             );
         }
     }
 }
 
 #[cfg(windows)]
-pub struct PresentLines {
-    pub mitte: u32,
-    pub unten: u32,
-    pub oben: u32,
-    pub in_luecke: usize,
-    pub anzahl: usize,
-    pub sichtbar: u32,
+pub struct PresentPhase {
+    pub mitte_ms: f64,
+    pub unten_ms: f64,
+    pub oben_ms: f64,
+    // Ende des sichtbaren Bildes und der Luecke, ab Zeile 0.
+    pub sichtbar_ms: f64,
+    pub periode_ms: f64,
 }
 
 #[cfg(windows)]
-fn summarize(ring: &std::collections::VecDeque<(u32, bool)>, sichtbar: u32) -> Option<PresentLines> {
-    let mut zeilen: Vec<u32> = ring.iter().filter(|(z, luecke)| !*luecke && *z < sichtbar).map(|(z, _)| *z).collect();
-    let anzahl = ring.len();
-    let in_luecke = anzahl - zeilen.len();
-    if anzahl < 8 {
+fn summarize(ring: &std::collections::VecDeque<f64>, a: Aktiv) -> Option<PresentPhase> {
+    if ring.len() < 8 {
         return None;
     }
-    zeilen.sort_unstable();
-    let q = |f: f64| zeilen.get(((zeilen.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(sichtbar);
-    Some(PresentLines { mitte: q(0.5), unten: q(0.25), oben: q(0.75), in_luecke, anzahl, sichtbar })
+    let mut werte: Vec<f64> = ring.iter().map(|ns| ns / 1e6).collect();
+    werte.sort_by(f64::total_cmp);
+    let q = |f: f64| werte[((werte.len() as f64 - 1.0) * f).round() as usize];
+    let periode_ms = a.periode_ns / 1e6;
+    Some(PresentPhase { mitte_ms: q(0.5), unten_ms: q(0.25), oben_ms: q(0.75), sichtbar_ms: periode_ms * a.sichtbar as f64 / a.gesamt as f64, periode_ms })
 }
 
 /// Windows: wo die letzten Presents lagen (s. note_present), None ohne Messung.
 #[cfg(windows)]
-pub fn present_lines() -> Option<PresentLines> {
-    let (_, sichtbar) = (*AKTIV.lock().ok()?)?;
-    summarize(&*PRESENTS.lock().ok()?, sichtbar)
+pub fn present_phase() -> Option<PresentPhase> {
+    let a = (*AKTIV.lock().ok()?)?;
+    summarize(&*PRESENTS.lock().ok()?, a)
 }
 
 #[cfg(windows)]
@@ -525,7 +537,8 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
         lines,
     });
     if let Ok(mut a) = AKTIV.lock() {
-        *a = Some((source, h));
+        let (sichtbar, gesamt) = lines.unwrap_or((h, h + 45));
+        *a = Some(Aktiv { source, sichtbar, gesamt, periode_ns: period0 });
     }
     let weak = Arc::downgrade(&monitor);
     std::thread::Builder::new()
@@ -558,7 +571,7 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
             // Messung vorbei: note_present liest nicht mehr -- ausser eine neue Messung hat
             // schon uebernommen.
             if let Ok(mut a) = AKTIV.lock() {
-                if a.is_some_and(|(s, _)| s == source) {
+                if a.is_some_and(|a| a.source == source) {
                     *a = None;
                     if let Ok(mut r) = PRESENTS.lock() {
                         r.clear();
