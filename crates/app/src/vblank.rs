@@ -391,7 +391,7 @@ mod d3dkmt {
         out
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, PartialEq)]
     pub struct Source {
         adapter: u32,
         vidpn: u32,
@@ -417,6 +417,70 @@ mod d3dkmt {
         // SAFETY: gueltiger Adapter-Handle aus open().
         (unsafe { D3DKMTGetScanLine(&mut g) } == 0).then_some((g.ScanLine, g.InVerticalBlank != 0))
     }
+}
+
+// Windows: der Ausgang der laufenden Messung, fuer note_present.
+#[cfg(windows)]
+static AKTIV: Mutex<Option<(d3dkmt::Source, u32)>> = Mutex::new(None);
+// Bildzeile und "in der Austastluecke" direkt nach den letzten Presents.
+#[cfg(windows)]
+static PRESENTS: Mutex<std::collections::VecDeque<(u32, bool)>> = Mutex::new(std::collections::VecDeque::new());
+#[cfg(windows)]
+const PRESENT_RING: usize = 240;
+
+/// Windows: direkt nach dem Present die Bildzeile lesen. Unter Windows gibt es keine
+/// Meldung, wann ein Bild wirklich umgeschaltet wurde (unter X11 die Present-Erweiterung) --
+/// bei Immediate schaltet es sofort, die Zeile beim Present ist also die Stelle des Risses,
+/// solange nichts (Treiber, DWM) das Bild zurueckhaelt. Nur waehrend eine Messung laeuft.
+#[cfg(windows)]
+pub fn note_present() {
+    let Some((source, sichtbar)) = AKTIV.lock().ok().and_then(|a| *a) else { return };
+    let Some(zeile) = d3dkmt::scanline(source) else { return };
+    let Ok(mut ring) = PRESENTS.lock() else { return };
+    ring.push_back(zeile);
+    if ring.len() > PRESENT_RING {
+        ring.pop_front();
+    }
+    // Alle 2 s bei 120 Hz eine Zeile ins Log.
+    static ZAEHLER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if ZAEHLER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % PRESENT_RING as u32 == PRESENT_RING as u32 - 1 {
+        if let Some(p) = summarize(&ring, sichtbar) {
+            println!(
+                "[riss] Present bei Zeile {} von {sichtbar} (Mitte 50 %: {}..{}), {} von {} in der Austastluecke",
+                p.mitte, p.unten, p.oben, p.in_luecke, p.anzahl
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
+pub struct PresentLines {
+    pub mitte: u32,
+    pub unten: u32,
+    pub oben: u32,
+    pub in_luecke: usize,
+    pub anzahl: usize,
+    pub sichtbar: u32,
+}
+
+#[cfg(windows)]
+fn summarize(ring: &std::collections::VecDeque<(u32, bool)>, sichtbar: u32) -> Option<PresentLines> {
+    let mut zeilen: Vec<u32> = ring.iter().filter(|(z, luecke)| !*luecke && *z < sichtbar).map(|(z, _)| *z).collect();
+    let anzahl = ring.len();
+    let in_luecke = anzahl - zeilen.len();
+    if anzahl < 8 {
+        return None;
+    }
+    zeilen.sort_unstable();
+    let q = |f: f64| zeilen.get(((zeilen.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(sichtbar);
+    Some(PresentLines { mitte: q(0.5), unten: q(0.25), oben: q(0.75), in_luecke, anzahl, sichtbar })
+}
+
+/// Windows: wo die letzten Presents lagen (s. note_present), None ohne Messung.
+#[cfg(windows)]
+pub fn present_lines() -> Option<PresentLines> {
+    let (_, sichtbar) = (*AKTIV.lock().ok()?)?;
+    summarize(&*PRESENTS.lock().ok()?, sichtbar)
 }
 
 #[cfg(windows)]
@@ -460,6 +524,9 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
         ),
         lines,
     });
+    if let Ok(mut a) = AKTIV.lock() {
+        *a = Some((source, h));
+    }
     let weak = Arc::downgrade(&monitor);
     std::thread::Builder::new()
         .name("vblank".into())
@@ -487,6 +554,16 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
                 let sample = VblankSample { seq, ts_ns };
                 monitor.push(sample);
                 letzter = Some(sample);
+            }
+            // Messung vorbei: note_present liest nicht mehr -- ausser eine neue Messung hat
+            // schon uebernommen.
+            if let Ok(mut a) = AKTIV.lock() {
+                if a.is_some_and(|(s, _)| s == source) {
+                    *a = None;
+                    if let Ok(mut r) = PRESENTS.lock() {
+                        r.clear();
+                    }
+                }
             }
         })
         .ok()?;

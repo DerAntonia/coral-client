@@ -8181,6 +8181,8 @@ impl GpuState {
         let t = Instant::now();
         let present_ns = vblank::monotonic_ns();
         frame.present();
+        #[cfg(windows)]
+        vblank::note_present();
         let present_ms = t.elapsed().as_secs_f32() * 1000.0;
         if let Some(pending) = screenshot {
             screenshot::finish(&self.device, pending);
@@ -42346,7 +42348,22 @@ impl App {
         let compositor = self.compositing_info.lock().ok().and_then(|g| g.clone());
         let fenster = self.window_path.as_ref().and_then(|w| w.lock().ok().map(|g| *g));
         let compositing = match (compositor, fenster) {
-            (Some(system_info::Compositing::Always), _) => i18n::tr("DWM läuft, Umgehung nicht geprüft").into_owned(),
+            (Some(system_info::Compositing::Always), _) => {
+                let dwm = i18n::tr("DWM läuft, Umgehung nicht geprüft").into_owned();
+                // Windows: wo die Presents landen (s. vblank::note_present).
+                #[cfg(windows)]
+                let dwm = match vblank::present_lines() {
+                    Some(p) if p.in_luecke * 2 > p.anzahl => format!("{dwm} · {}", i18n::tr("Present in der Austastlücke")),
+                    Some(p) => format!(
+                        "{dwm} · {} {:.0} % (±{:.0})",
+                        i18n::tr("Present bei"),
+                        p.mitte as f64 * 100.0 / p.sichtbar as f64,
+                        (p.oben - p.unten) as f64 * 50.0 / p.sichtbar as f64
+                    ),
+                    None => dwm,
+                };
+                dwm
+            }
             (c, Some(system_info::WindowPath { composited: Some(true), .. })) => {
                 let name = match c {
                     Some(system_info::Compositing::On { name: Some(n) }) => n,
