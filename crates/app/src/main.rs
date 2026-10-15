@@ -42346,7 +42346,7 @@ impl App {
         let compositor = self.compositing_info.lock().ok().and_then(|g| g.clone());
         let fenster = self.window_path.as_ref().and_then(|w| w.lock().ok().map(|g| *g));
         let compositing = match (compositor, fenster) {
-            (Some(system_info::Compositing::Always), _) => i18n::tr("DWM, immer an").into_owned(),
+            (Some(system_info::Compositing::Always), _) => i18n::tr("DWM läuft, Umgehung nicht geprüft").into_owned(),
             (c, Some(system_info::WindowPath { composited: Some(true), .. })) => {
                 let name = match c {
                     Some(system_info::Compositing::On { name: Some(n) }) => n,

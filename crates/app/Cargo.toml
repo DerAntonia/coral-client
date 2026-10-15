@@ -41,9 +41,17 @@ x11rb = { version = "0.13", features = ["xkb", "composite", "present", "dri3"] }
 libc = "0.2"
 evdev = "0.12"
 
-# CPU-Name aus der Registry und Arbeitsspeicher fuer den System-Abschnitt (s. system_info.rs).
+# CPU-Name aus der Registry und Arbeitsspeicher fuer den System-Abschnitt (s. system_info.rs),
+# VBlank-Zeitstempel und Uhr fuer Scanout-Timing (s. vblank.rs).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Performance",
+    "Win32_Graphics_Gdi",
+    "Wdk_Graphics_Direct3D",
+] }
 
 [dev-dependencies]
 # Nur zum Pruefen der WGSL-Dateien im Test (s. tests/shaders.rs) -- dieselbe Version, die

@@ -8,7 +8,7 @@
 // /dev/dri/card*. DRM korrigiert die Zeitstempel auf den Beginn des Auslesens der ersten
 // sichtbaren Zeile, Zeitbasis ist CLOCK_MONOTONIC (s. monotonic_ns).
 //
-// Nur Linux; anderswo liefert start() None.
+// Linux ueber DRM, Windows ueber D3DKMT (s. dort); anderswo liefert start() None.
 
 use std::sync::{Arc, Mutex};
 
@@ -121,7 +121,25 @@ pub fn monotonic_ns() -> i64 {
     ts.tv_sec * 1_000_000_000 + ts.tv_nsec
 }
 
-#[cfg(not(target_os = "linux"))]
+// Windows: QueryPerformanceCounter, dieselbe Uhr, auf die die VBlank-Zeitstempel (s. d3dkmt)
+// bezogen werden.
+#[cfg(windows)]
+pub fn monotonic_ns() -> i64 {
+    use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    static FREQ: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    let freq = *FREQ.get_or_init(|| {
+        let mut f = 0;
+        // SAFETY: schreibt nur in f.
+        unsafe { QueryPerformanceFrequency(&mut f) };
+        f.max(1)
+    });
+    let mut c = 0;
+    // SAFETY: schreibt nur in c.
+    unsafe { QueryPerformanceCounter(&mut c) };
+    (c as i128 * 1_000_000_000 / freq as i128) as i64
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn monotonic_ns() -> i64 {
     0
 }
@@ -319,7 +337,163 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
     None
 }
 
-#[cfg(not(target_os = "linux"))]
+// Windows: ueber den Kernel-Grafiktreiber (D3DKMT, gdi32). WaitForVerticalBlankEvent weckt am
+// Beginn der Austastluecke, nicht wie DRM mit dem Zeitpunkt von Zeile 0 -- deshalb wird gleich
+// nach dem Aufwachen die aktuelle Bildzeile gelesen und daraus der Beginn des naechsten
+// Auslesens gerechnet. vtotal (sichtbare Zeilen + Luecke) kennt Windows nicht direkt: beim Start
+// einmal zwei Bilder lang die hoechste gemeldete Zeile gesucht.
+#[cfg(windows)]
+mod d3dkmt {
+    use windows_sys::Wdk::Graphics::Direct3D::{
+        D3DKMTGetScanLine, D3DKMTOpenAdapterFromGdiDisplayName, D3DKMTWaitForVerticalBlankEvent, D3DKMT_GETSCANLINE,
+        D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME, D3DKMT_WAITFORVERTICALBLANKEVENT,
+    };
+    use windows_sys::Win32::Graphics::Gdi::{EnumDisplayDevicesW, EnumDisplaySettingsW, DEVMODEW, DISPLAY_DEVICEW, DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, ENUM_CURRENT_SETTINGS};
+
+    pub struct Display {
+        pub name: [u16; 32],
+        pub x: i32,
+        pub y: i32,
+        pub w: u32,
+        pub h: u32,
+        pub refresh_hz: u32,
+    }
+
+    impl Display {
+        pub fn name(&self) -> String {
+            let n = self.name.iter().position(|&c| c == 0).unwrap_or(self.name.len());
+            String::from_utf16_lossy(&self.name[..n])
+        }
+    }
+
+    // Alle Bildschirme, die zum Desktop gehoeren, mit ihrem aktuellen Modus.
+    pub fn displays() -> Vec<Display> {
+        let mut out = Vec::new();
+        for i in 0..16 {
+            // SAFETY: reine Datenstructs, cb/dmSize wie verlangt gesetzt.
+            let mut dd: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
+            dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+            if unsafe { EnumDisplayDevicesW(std::ptr::null(), i, &mut dd, 0) } == 0 {
+                break;
+            }
+            if dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP == 0 {
+                continue;
+            }
+            let mut dm: DEVMODEW = unsafe { std::mem::zeroed() };
+            dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+            if unsafe { EnumDisplaySettingsW(dd.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut dm) } == 0 {
+                continue;
+            }
+            // SAFETY: bei Bildschirmen ist der Positions-Zweig der Union belegt.
+            let pos = unsafe { dm.Anonymous1.Anonymous2.dmPosition };
+            out.push(Display { name: dd.DeviceName, x: pos.x, y: pos.y, w: dm.dmPelsWidth, h: dm.dmPelsHeight, refresh_hz: dm.dmDisplayFrequency });
+        }
+        out
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct Source {
+        adapter: u32,
+        vidpn: u32,
+    }
+
+    pub fn open(d: &Display) -> Option<Source> {
+        // SAFETY: reines Datenstruct, DeviceName ist nullterminiert (aus EnumDisplayDevicesW).
+        let mut o: D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME = unsafe { std::mem::zeroed() };
+        o.DeviceName = d.name;
+        (unsafe { D3DKMTOpenAdapterFromGdiDisplayName(&mut o) } == 0).then_some(Source { adapter: o.hAdapter, vidpn: o.VidPnSourceId })
+    }
+
+    // Blockiert bis zum naechsten VBlank. false bei Fehler.
+    pub fn wait(s: Source) -> bool {
+        let w = D3DKMT_WAITFORVERTICALBLANKEVENT { hAdapter: s.adapter, hDevice: 0, VidPnSourceId: s.vidpn };
+        // SAFETY: gueltiger Adapter-Handle aus open().
+        unsafe { D3DKMTWaitForVerticalBlankEvent(&w) == 0 }
+    }
+
+    // Aktuelle Bildzeile und ob sie in der Austastluecke liegt.
+    pub fn scanline(s: Source) -> Option<(u32, bool)> {
+        let mut g = D3DKMT_GETSCANLINE { hAdapter: s.adapter, VidPnSourceId: s.vidpn, InVerticalBlank: 0, ScanLine: 0 };
+        // SAFETY: gueltiger Adapter-Handle aus open().
+        (unsafe { D3DKMTGetScanLine(&mut g) } == 0).then_some((g.ScanLine, g.InVerticalBlank != 0))
+    }
+}
+
+#[cfg(windows)]
+pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
+    let displays = d3dkmt::displays();
+    // Wie pick_output, aber mit vorzeichenbehafteter Lage (links vom Hauptbildschirm ist x < 0).
+    let gewaehlt = target
+        .and_then(|t| displays.iter().find(|d| d.x == t.x && d.y == t.y && d.w == t.w && d.h == t.h))
+        .or_else(|| target.and_then(|t| displays.iter().find(|d| d.w == t.w && d.h == t.h)))
+        .or(displays.first())?;
+    let source = d3dkmt::open(gewaehlt)?;
+    if !d3dkmt::wait(source) {
+        return None;
+    }
+    let h = gewaehlt.h;
+    let period0 = 1e9 / gewaehlt.refresh_hz.max(1) as f64;
+    // vtotal: zwei Bilder lang die hoechste Zeile suchen. Treiber, die in der Luecke 0 melden,
+    // liefern nichts ueber h -- dann bleibt es bei der Schaetzung in tear_target_phase.
+    let anfang = monotonic_ns();
+    let mut hoechste = 0;
+    while ((monotonic_ns() - anfang) as f64) < 2.0 * period0 {
+        if let Some((zeile, _)) = d3dkmt::scanline(source) {
+            hoechste = hoechste.max(zeile);
+        }
+    }
+    let lines = (hoechste >= h).then_some((h, hoechste + 1));
+    let monitor = Arc::new(VblankMonitor {
+        inner: Mutex::new(Inner::default()),
+        source: format!(
+            "D3DKMT {} ({}x{} bei {},{}, {} Hz, {})",
+            gewaehlt.name(),
+            gewaehlt.w,
+            h,
+            gewaehlt.x,
+            gewaehlt.y,
+            gewaehlt.refresh_hz,
+            match lines {
+                Some((_, gesamt)) => format!("{gesamt} Zeilen"),
+                None => "Zeilen geschaetzt".into(),
+            }
+        ),
+        lines,
+    });
+    let weak = Arc::downgrade(&monitor);
+    std::thread::Builder::new()
+        .name("vblank".into())
+        .spawn(move || {
+            let mut letzter: Option<VblankSample> = None;
+            while let Some(monitor) = weak.upgrade() {
+                if !d3dkmt::wait(source) {
+                    break;
+                }
+                let jetzt = monotonic_ns();
+                let periode = monitor.latest().map_or(period0, |(_, p)| p);
+                let (sichtbar, gesamt) = lines.unwrap_or((h, h + 45));
+                let zeile_ns = periode / gesamt as f64;
+                // Beginn des Auslesens von Zeile 0, das auf diese Luecke folgt.
+                let ts_ns = match d3dkmt::scanline(source) {
+                    Some((zeile, true)) if zeile >= sichtbar => jetzt + ((gesamt - zeile) as f64 * zeile_ns) as i64,
+                    Some((zeile, _)) if zeile < sichtbar => jetzt - (zeile as f64 * zeile_ns) as i64,
+                    _ => jetzt + ((gesamt - sichtbar) as f64 * zeile_ns) as i64,
+                };
+                // Verpasste VBlanks (Thread kam spaet dran) im Zaehler nachtragen.
+                let seq = match letzter {
+                    Some(l) => l.seq.wrapping_add((((ts_ns - l.ts_ns) as f64 / periode).round() as u32).max(1)),
+                    None => 0,
+                };
+                let sample = VblankSample { seq, ts_ns };
+                monitor.push(sample);
+                letzter = Some(sample);
+            }
+        })
+        .ok()?;
+    Some(monitor)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn start(_target: Option<Target>) -> Option<Arc<VblankMonitor>> {
     None
 }
