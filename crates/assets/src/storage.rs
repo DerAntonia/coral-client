@@ -33,10 +33,14 @@ struct VersionJson {
     libraries: Vec<Library>,
     #[serde(rename = "javaVersion")]
     java_version: Option<JavaVersion>,
+    // Prism-Meta: statt javaVersion.component steht der Laufzeitname hier.
+    #[serde(rename = "compatibleJavaName")]
+    compatible_java_name: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Library {
+    name: Option<String>,
     downloads: Option<Downloads>,
 }
 
@@ -45,9 +49,19 @@ struct Downloads {
     artifact: Option<Artifact>,
 }
 
+// Die Mojang-Versions-JSON nennt den Pfad, die Prism-Meta nicht -- dort steht nur die
+// Maven-Koordinate im `name` der Bibliothek.
 #[derive(Deserialize)]
 struct Artifact {
-    path: String,
+    path: Option<String>,
+}
+
+// "group:artifact:version[:classifier]" -> "group/mit/slashes/artifact/version/artifact-version[-classifier].jar"
+fn maven_path(name: &str) -> Option<String> {
+    let mut teile = name.split(':');
+    let (gruppe, artefakt, version) = (teile.next()?, teile.next()?, teile.next()?);
+    let klassifizierer = teile.next().map(|k| format!("-{k}")).unwrap_or_default();
+    Some(format!("{}/{artefakt}/{version}/{artefakt}-{version}{klassifizierer}.jar", gruppe.replace('.', "/")))
 }
 
 #[derive(Deserialize)]
@@ -190,7 +204,8 @@ fn generate(launch: &JavaLaunch, dir: &Path, datei: &str, quelle_text: &str) -> 
     let mut cp = vec![launch.client_jar.to_string_lossy().into_owned()];
     for lib in &json.libraries {
         if let Some(a) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
-            let pfad = launch.libraries_dir.join(&a.path);
+            let Some(rel) = a.path.clone().or_else(|| lib.name.as_deref().and_then(maven_path)) else { continue };
+            let pfad = launch.libraries_dir.join(rel);
             if pfad.is_file() {
                 cp.push(pfad.to_string_lossy().into_owned());
             }
@@ -205,7 +220,8 @@ fn generate(launch: &JavaLaunch, dir: &Path, datei: &str, quelle_text: &str) -> 
     let quelle = arbeit.join(datei);
     std::fs::write(&quelle, quelle_text)?;
     let ziel = arbeit.join("ausgabe.dat");
-    let java = find_java(launch, json.java_version.as_ref().and_then(|j| j.component.as_deref()));
+    let komponente = json.java_version.as_ref().and_then(|j| j.component.as_deref()).or(json.compatible_java_name.as_deref());
+    let java = find_java(launch, komponente);
     let mut befehl = Command::new(&java);
     // Windows: kein Konsolenfenster aufblitzen lassen (CREATE_NO_WINDOW).
     #[cfg(windows)]
