@@ -136,6 +136,8 @@ fn move_to_trash(path: &Path) -> Result<(), String> {
             "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:CORAL_TRASH, 'OnlyErrorDialogs', 'SendToRecycleBin')",
         ]);
         c.env("CORAL_TRASH", path);
+        // Kein Konsolenfenster aufblitzen lassen (CREATE_NO_WINDOW).
+        std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
         c
     };
     #[cfg(not(windows))]

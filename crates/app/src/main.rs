@@ -3,6 +3,10 @@
 // Menu-Modus: Server-Adresseingabe, Connect-/Tearing-Test-Button, Log-Panel mit
 // Verbindungsstatus. World-Modus (Tab): freistehender Test-Chunk mit Fly-Kamera.
 
+// Unter Windows kein Konsolenfenster neben dem Spiel. Die Ausgabe landet trotzdem im Log, weil
+// der Launcher stdout/stderr in client.log umleitet.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod accounts;
 mod block_anim;
 mod block_place;
@@ -12602,13 +12606,16 @@ fn x11_window_id(window: &winit::window::Window) -> Option<u32> {
 }
 
 // Ordner oder Link mit dem Standardprogramm des Systems oeffnen: xdg-open unter Linux,
-// unter Windows die Shell (`start`; der leere Titel verhindert, dass ein Link in
-// Anfuehrungszeichen als Fenstertitel gelesen wird).
+// unter Windows der Shell-Handler aus url.dll. Nicht `cmd /C start`: cmd liest das `&` in
+// Links als Befehlstrenner und schneidet z.B. die Microsoft-Anmelde-URL nach dem ersten
+// Parameter ab (AADSTS900144 "must contain ... 'scope'").
 fn open_external_command(ziel: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     #[cfg(windows)]
     {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]).arg(ziel);
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler").arg(ziel);
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         c
     }
     #[cfg(not(windows))]
