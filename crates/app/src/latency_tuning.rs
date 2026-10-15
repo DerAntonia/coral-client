@@ -17,7 +17,20 @@ pub fn raise_process_priority() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+// Windows: Prioritaetsklasse "Hoch" (nicht "Echtzeit" -- die kann Maus und Tastatur des
+// ganzen Systems aushungern).
+#[cfg(windows)]
+pub fn raise_process_priority() {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, HIGH_PRIORITY_CLASS};
+    // SAFETY: Pseudo-Handle des eigenen Prozesses.
+    if unsafe { SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS) } != 0 {
+        println!("[latency] Prozess-Priorität erhöht (Prioritätsklasse Hoch)");
+    } else {
+        println!("[latency] Prozess-Priorität konnte nicht erhöht werden: {}", std::io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn raise_process_priority() {}
 
 // Frueher stand hier ein expliziter _NET_WM_BYPASS_COMPOSITOR-Hint. Empirisch entfernt:

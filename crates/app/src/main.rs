@@ -23753,6 +23753,7 @@ impl App {
     // TearFree-Schalter: nur bedienbar, wenn der Grafiktreiber die Eigenschaft hat, sonst
     // abgeblendet mit "n/v" (s. latency_tuning.rs -- das haengt am Treiber, nicht am
     // GPU-Hersteller).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn tearfree_button(tearfree_state: Option<bool>, row: usize) -> Button {
         if tearfree_state.is_none() {
             return Button {
@@ -24327,6 +24328,9 @@ impl App {
                 out.push(Self::step_slider(ButtonAction::ChunkUpdateThreadsDown, ButtonAction::ChunkUpdateThreadsUp, stepper_value_rect(CHUNK_THREADS_ROW), set.chunk_update_threads as f64, CHUNK_UPDATE_THREADS_MIN as f64, CHUNK_UPDATE_THREADS_MAX as f64, true));
                 // Die GPU-Zeile ist reine Information ohne Bedienelement, s.
                 // build_settings_general_tab.
+                // TearFree ist eine X11-Eigenschaft des AMD-Treibers; anderswo steht statt des
+                // Schalters ein Hinweis (s. build_settings_general_tab).
+                #[cfg(target_os = "linux")]
                 out.push(Self::tearfree_button(self.tearfree_state, TEARFREE_ROW));
                 out.push(Self::toggle(ButtonAction::ToggleCaveCulling, CAVE_CULLING_ROW, set.cave_culling));
                 // Renderpfad samt Shadereinstellungen vorerst ausgeblendet (der Shader-Pfad ruht).
@@ -42487,6 +42491,12 @@ impl App {
         // TearFree zeigt seinen Wert direkt im Schalter selbst (AN/AUS/n.v./?), s.
         // tearfree_button() -- kein zusaetzliches Wertfeld noetig. Block-Rotation ist ein
         // Toggle-Button, s. buttons()/ToggleBlockRngRotation.
+        // Ausserhalb von Linux gibt es keinen Schalter, nur den Hinweis.
+        #[cfg(not(target_os = "linux"))]
+        {
+            let y = (settings_row_y(TEARFREE_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+            texts.push(UiText { text: i18n::tr("nur Linux und AMD").into_owned(), x: SETTINGS_CTRL_X, y, color: theme::text_disabled(), scale: UI_SCALE_SMALL });
+        }
 
     }
 

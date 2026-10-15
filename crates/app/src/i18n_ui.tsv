@@ -706,6 +706,7 @@ an	on	accēnsum
 keiner	none	nūllum
 DWM läuft, Umgehung nicht geprüft	DWM running, bypass not checked	DWM currit, praeteritiō nōn probāta
 Lücke	gap	intervallum
+nur Linux und AMD	Linux and AMD only	tantum Linux et AMD
 Prozessor dieses Rechners und wie viele Threads er gleichzeitig ausführt. Reine Information.	This computer's processor and how many threads it runs at once. Information only.	Prōcessōrium huius computātrī et quot fīla simul agit. Tantum nūntius.
 Belegter und gesamter Arbeitsspeicher des ganzen Rechners (nicht nur des Clients). Belegt zählt ohne den Cache, den das System jederzeit freigeben kann.	Used and total memory of the whole computer (not just the client). Used does not count the cache the system can free at any time.	Memoria occupāta et tōta tōtīus computātrī (nōn sōlum clientis). Occupāta sine cache numerātur, quem systēma quōvīs tempore līberāre potest.
 Auslagerung auf die Festplatte. Wird hier viel belegt, reicht der Arbeitsspeicher nicht und es kann ruckeln.	Swap space on the disk. If a lot of it is used, memory is running short and the game may stutter.	Memoria in discō permūtāta. Sī multum occupātur, memoria nōn sufficit et lūdus haesitāre potest.

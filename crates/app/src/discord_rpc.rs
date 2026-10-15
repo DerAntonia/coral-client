@@ -2,7 +2,8 @@
 // IPC-Schnittstelle -- dieselbe, die jeder Rich-Presence-Client benutzt:
 //
 //   * ein Unix-Socket discord-ipc-0..9 im Laufzeitverzeichnis (XDG_RUNTIME_DIR, bei Flatpak-
-//     und Snap-Discord in deren Unterordnern),
+//     und Snap-Discord in deren Unterordnern), unter Windows die Named Pipe
+//     \\.\pipe\discord-ipc-0..9,
 //   * Rahmen = Opcode (u32 LE) + Laenge (u32 LE) + JSON,
 //   * Opcode 0 HANDSHAKE {"v":1,"client_id":...}, danach Opcode 1 FRAME mit
 //     {"cmd":"SET_ACTIVITY","args":{"pid":...,"activity":{...}},"nonce":...}.
@@ -161,9 +162,16 @@ fn worker(rx: Receiver<Command>, status: std::sync::Arc<std::sync::Mutex<Status>
     }
 }
 
+#[cfg(unix)]
+type Stream = std::os::unix::net::UnixStream;
+// Eine Named Pipe oeffnet man unter Windows wie eine Datei; Lesen und Schreiben gehen dann
+// genauso ueber Read/Write.
+#[cfg(windows)]
+type Stream = std::fs::File;
+
 struct Connection {
-    #[cfg(unix)]
-    stream: std::os::unix::net::UnixStream,
+    #[cfg(any(unix, windows))]
+    stream: Stream,
     nonce: u64,
 }
 
@@ -188,7 +196,23 @@ impl Connection {
         }
     }
 
-    #[cfg(not(unix))]
+    // Windows: die erste Pipe, hinter der ein Discord antwortet. Ohne Zeitlimit wie beim
+    // Socket -- die Pipe-Datei kennt keins; der Faden blockiert dann eben, das Spiel nicht.
+    #[cfg(windows)]
+    fn open(client_id: &str) -> Option<Self> {
+        (0..10).find_map(|i| {
+            let stream = std::fs::OpenOptions::new().read(true).write(true).open(format!(r"\\.\pipe\discord-ipc-{i}")).ok()?;
+            let mut c = Connection { stream, nonce: 0 };
+            let hallo = format!("{{\"v\":1,\"client_id\":\"{}\"}}", json_escape(client_id));
+            c.send(OP_HANDSHAKE, &hallo).ok()?;
+            match c.recv() {
+                Ok((OP_FRAME, text)) if text.contains("\"READY\"") => Some(c),
+                _ => None,
+            }
+        })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn open(_client_id: &str) -> Option<Self> {
         None
     }
@@ -201,18 +225,18 @@ impl Connection {
         self.recv().map(|_| ())
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn send(&mut self, op: u32, json: &str) -> std::io::Result<()> {
         use std::io::Write;
         self.stream.write_all(&frame(op, json))
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn send(&mut self, _op: u32, _json: &str) -> std::io::Result<()> {
         Err(std::io::Error::other("kein IPC"))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn recv(&mut self) -> std::io::Result<(u32, String)> {
         use std::io::Read;
         let mut kopf = [0u8; 8];
@@ -227,7 +251,7 @@ impl Connection {
         Ok((op, String::from_utf8_lossy(&body).into_owned()))
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn recv(&mut self) -> std::io::Result<(u32, String)> {
         Err(std::io::Error::other("kein IPC"))
     }

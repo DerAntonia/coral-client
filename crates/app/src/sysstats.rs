@@ -8,6 +8,7 @@
 // fehlerhaft aussahen.
 
 use std::collections::VecDeque;
+#[cfg(not(windows))]
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,31 @@ struct CpuJiffies {
     total: u64,
 }
 
+// Windows: dieselben Zaehler je Kern ueber NtQuerySystemInformation (100-ns-Einheiten statt
+// Jiffies -- fuer die Auslastung zaehlt nur das Verhaeltnis). KernelTime enthaelt die
+// Leerlaufzeit schon, total ist also Kernel + User.
+#[cfg(windows)]
+fn read_cpu_jiffies() -> Vec<CpuJiffies> {
+    use windows_sys::Wdk::System::SystemInformation::{NtQuerySystemInformation, SystemProcessorPerformanceInformation};
+    use windows_sys::Win32::System::WindowsProgramming::SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION;
+    let n = std::thread::available_parallelism().map_or(64, |n| n.get()).max(1);
+    // SAFETY: reines Datenstruct.
+    let mut buf: Vec<SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION> = vec![unsafe { std::mem::zeroed() }; n];
+    let mut laenge = 0u32;
+    let groesse = (buf.len() * std::mem::size_of::<SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION>()) as u32;
+    // SAFETY: Puffer und Groesse passen zusammen.
+    let status = unsafe { NtQuerySystemInformation(SystemProcessorPerformanceInformation, buf.as_mut_ptr().cast(), groesse, &mut laenge) };
+    if status != 0 {
+        return Vec::new();
+    }
+    let anzahl = laenge as usize / std::mem::size_of::<SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION>();
+    buf[..anzahl.min(buf.len())]
+        .iter()
+        .map(|k| CpuJiffies { idle: k.IdleTime.max(0) as u64, total: (k.KernelTime.max(0) + k.UserTime.max(0)) as u64 })
+        .collect()
+}
+
+#[cfg(not(windows))]
 fn read_cpu_jiffies() -> Vec<CpuJiffies> {
     let Ok(text) = fs::read_to_string("/proc/stat") else {
         return Vec::new();
@@ -93,6 +119,16 @@ impl SystemStats {
 
     pub fn core_count(&self) -> usize {
         self.cpu_history.len()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    fn windows_liefert_jeden_kern() {
+        let kerne = super::read_cpu_jiffies();
+        assert_eq!(kerne.len(), std::thread::available_parallelism().unwrap().get());
+        assert!(kerne.iter().all(|k| k.total >= k.idle && k.total > 0));
     }
 }
 
