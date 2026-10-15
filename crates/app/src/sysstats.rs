@@ -13,8 +13,8 @@
 //   RAM gesamt   system_info::memory (RAM + Swap belegt / RAM + Swap gesamt)
 //   RAM Coral    Linux VmRSS + VmSwap, Windows PrivateUsage (privat zugesagt, ob im RAM
 //                oder ausgelagert)
-//   GPU gesamt   Linux amdgpu gpu_busy_percent, Windows "GPU Engine"-Zaehler (wie der
-//                Task-Manager: je Engine-Typ summiert, davon der hoechste)
+//   GPU gesamt   Linux amdgpu gpu_busy_percent, Windows "GPU Engine"-Zaehler (je Engine-Typ
+//                summiert, davon der hoechste -- nur Grafik/Compute, s. windows_gpu::rendert)
 //   GPU Coral    Linux drm-engine-* in /proc/self/fdinfo, Windows dieselben Zaehler, nur
 //                die Instanzen mit unserer PID
 
@@ -406,6 +406,14 @@ mod windows_gpu {
         name.rsplit_once("_engtype_").map_or(name, |(_, t)| t)
     }
 
+    // Nur was rendert: 3D/Grafik und Compute. Video-Dekodierung (ein YouTube-Video im
+    // Browser), Kopier- und Encoder-Engines laufen daneben her und bremsen das Spiel nicht --
+    // mitgezaehlt standen sie als Spitzen im Graphen, die mit Coral nichts zu tun hatten.
+    fn rendert(typ: &str) -> bool {
+        let t = typ.to_ascii_lowercase();
+        t.contains("3d") || t.starts_with("compute") || t.starts_with("graphics")
+    }
+
     impl Pdh {
         pub fn open() -> Option<Self> {
             let mut query = 0isize;
@@ -462,6 +470,9 @@ mod windows_gpu {
                     String::from_utf16_lossy(std::slice::from_raw_parts(e.szName, n))
                 };
                 let typ = engine_typ(&name).to_string();
+                if !rendert(&typ) {
+                    continue;
+                }
                 *gesamt.entry(typ.clone()).or_default() += wert;
                 if name.starts_with(&self.pid) {
                     *eigen.entry(typ).or_default() += wert;
@@ -478,6 +489,12 @@ mod windows_gpu {
         fn engine_typ_aus_dem_namen() {
             assert_eq!(super::engine_typ("pid_1234_luid_0x00000000_0x0000D1B5_phys_0_eng_0_engtype_3D"), "3D");
             assert_eq!(super::engine_typ("pid_8_luid_0x0_0x1_phys_0_eng_3_engtype_VideoDecode"), "VideoDecode");
+        }
+
+        #[test]
+        fn nur_rendernde_engines() {
+            assert!(super::rendert("3D") && super::rendert("Compute_0") && super::rendert("High Priority 3D"));
+            assert!(!super::rendert("video codec engine") && !super::rendert("VideoDecode") && !super::rendert("Copy"));
         }
     }
 }

@@ -4239,6 +4239,9 @@ struct UiLine {
     // Zum Viereck je Ecke eine eigene Farbe (sonst `color` ueberall) -- fuer Verlaeufe wie die
     // auslaufende Flaeche unter den F3-Graphen.
     quad_colors: Option<[[f32; 4]; 4]>,
+    // Ganz oben zeichnen, nach dem Text und der Overlay-Ebene (die F3-Graphen liegen ueber
+    // dem Scoreboard). Sonst vor dem Text.
+    top: bool,
 }
 
 struct UiText {
@@ -4565,22 +4568,42 @@ fn push_graph_fill(lines: &mut Vec<UiLine>, area: Rect, kurve: &[(f32, f32)], fa
             feather: 0.0,
             quad: Some([a, b, (b.0, unten), (a.0, unten)]),
             quad_colors: Some([oben, oben, leer, leer]),
+            top: true,
         });
     }
 }
 
 fn push_graph_line(lines: &mut Vec<UiLine>, kurve: &[(f32, f32)], farbe: [f32; 4]) {
     for w in kurve.windows(2) {
-        lines.push(UiLine { p0: w[0], p1: w[1], color: farbe, width: GRAPH_LINE_THICKNESS, feather: 1.0, quad: None, quad_colors: None });
+        lines.push(UiLine { p0: w[0], p1: w[1], color: farbe, width: GRAPH_LINE_THICKNESS, feather: 1.0, quad: None, quad_colors: None, top: true });
     }
 }
 
-// Ein ganzer Graph: schwarze Flaeche, Ueberschrift darueber, gruen (gesamt) und pink (Coral).
-fn push_stats_graph(gpu: &GpuState, rects: &mut Vec<UiRect>, lines: &mut Vec<UiLine>, texts: &mut Vec<UiText>, area: Rect, titel: &str, serie: &sysstats::Series) {
+// Lage der drei F3-Graphen unten rechts, von unten: CPU, RAM, GPU. Gross und ueber allem
+// anderen HUD (auch dem Scoreboard): die Flaechen und Ueberschriften stehen in der Overlay-
+// Ebene (s. debug_graph_overlay), die Kurven als UiLine mit top (s. render_world).
+const DEBUG_GRAPH_W: f32 = 640.0;
+const DEBUG_GRAPH_H: f32 = 190.0;
+fn debug_graph_areas(gpu: &GpuState) -> [Rect; 3] {
+    const RAND: f32 = 16.0;
+    let (sw, sh) = gpu.size();
+    let abstand = DEBUG_GRAPH_H + gpu.text_height(UI_SCALE_SMALL) + 14.0;
+    std::array::from_fn(|i| Rect { x: sw - DEBUG_GRAPH_W - RAND, y: sh - RAND - DEBUG_GRAPH_H - i as f32 * abstand, w: DEBUG_GRAPH_W, h: DEBUG_GRAPH_H })
+}
+
+// Schwarze Flaeche und Ueberschrift eines Graphen.
+fn push_stats_graph_frame(gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>, area: Rect, titel: &str, serie: &sysstats::Series) {
     rects.push(UiRect { rect: area, color: [0.0, 0.0, 0.0, 1.0], ..UiRect::FLAT });
     let zeile = gpu.text_height(UI_SCALE_SMALL) + 2.0;
     let text = if serie.available { serie.label.clone() } else { format!("{titel}: n/v") };
-    texts.push(UiText { text, x: area.x, y: area.y - zeile, color: COLOR_WHITE, scale: UI_SCALE_SMALL });
+    // Ueberschrift auf schwarzem Streifen, damit sie auch ueber dem Scoreboard lesbar ist.
+    let breite = gpu.measure_text(&text, UI_SCALE_SMALL) + 12.0;
+    rects.push(UiRect { rect: Rect { x: area.x, y: area.y - zeile - 2.0, w: breite, h: zeile + 2.0 }, color: [0.0, 0.0, 0.0, 1.0], ..UiRect::FLAT });
+    texts.push(UiText { text, x: area.x + 6.0, y: area.y - zeile, color: COLOR_WHITE, scale: UI_SCALE_SMALL });
+}
+
+// Die Kurven eines Graphen: gruen (gesamt) und pink (Coral), je mit Flaeche darunter.
+fn push_stats_graph(lines: &mut Vec<UiLine>, area: Rect, serie: &sysstats::Series) {
     if serie.history.len() < 2 {
         return;
     }
@@ -8594,8 +8617,13 @@ impl GpuState {
         // normale UI-Rechtecke vorsieht. Ein gemeinsamer Puffer haette entweder den Menu-
         // Rechteck-Puffer unnoetig aufblasen muessen oder waere bei vielen Kernen ueber die
         // Kapazitaet hinaus beschrieben worden (wgpu-Validierungsfehler).
+        // Erst die normalen Linien, dahinter die obersten (top, nach dem Text gezeichnet).
         let mut line_data: Vec<Vertex> = Vec::with_capacity(hud_lines.len() * VERTS_PER_QUAD);
-        for line in hud_lines {
+        let mut top_start = None;
+        for line in hud_lines.iter().filter(|l| !l.top).chain(hud_lines.iter().filter(|l| l.top)) {
+            if line.top && top_start.is_none() {
+                top_start = Some(line_data.len() as u32);
+            }
             let verts: &[Vertex] = if let Some(q) = line.quad {
                 &free_quad_verts_colored(q, line.quad_colors.unwrap_or([line.color; 4]), screen_px)
             } else if line.feather > 0.0 {
@@ -8611,6 +8639,15 @@ impl GpuState {
         if !line_data.is_empty() {
             self.queue.write_buffer(&self.line_vertex_buffer, 0, bytemuck::cast_slice(&line_data));
         }
+        let line_len = line_data.len() as u32;
+        let top_start = top_start.unwrap_or(line_len).min(line_len);
+        let draw_top_lines = |pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline, buffer: &wgpu::Buffer| {
+            if top_start < line_len {
+                pass.set_pipeline(pipeline);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(top_start..line_len, 0..1);
+            }
+        };
 
         let mut sprite_data: Vec<TextVertex> = Vec::new();
         // Mit Spielerfigur wird die Sprite-Liste GETEILT: alles vor dem Einfuegepunkt (der
@@ -8809,10 +8846,10 @@ impl GpuState {
                 pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
                 pass.draw(0..quad_split, 0..1);
             }
-            if !line_data.is_empty() {
+            if top_start > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
                 pass.set_vertex_buffer(0, self.line_vertex_buffer.slice(..));
-                pass.draw(0..line_data.len() as u32, 0..1);
+                pass.draw(0..top_start, 0..1);
             }
             if !sprite_data.is_empty() {
                 pass.set_pipeline(&self.sprite_pipeline);
@@ -8824,6 +8861,7 @@ impl GpuState {
             if sprite_runs_after.is_none() {
                 // Zeiger ganz zuletzt -- er gehoert immer nach vorn (s. render_menu).
                 self.draw_ui_top(&mut pass, (text_split, text_len), (quad_split, quad_len), &ov.ranges, (sprite_split, sprite_len), cursor.is_some(), &schriften);
+                draw_top_lines(&mut pass, &self.quad_pipeline, &self.line_vertex_buffer);
             }
         }
 
@@ -8863,6 +8901,7 @@ impl GpuState {
                 self.draw_sprite_runs(&mut pass, &sprite_runs_after);
             }
             self.draw_ui_top(&mut pass, (text_split, text_len), (quad_split, quad_len), &ov.ranges, (sprite_split, sprite_len), cursor.is_some(), &schriften);
+            draw_top_lines(&mut pass, &self.quad_pipeline, &self.line_vertex_buffer);
         }
 
         // offscreen_texture (Welt + HUD-Text, vollstaendig fertig) in die praesentierbare
@@ -37150,13 +37189,13 @@ impl App {
             if t.shadow {
                 for &(x, _) in &kreuze {
                     for (p0, p1) in toteming::cross_segments((x, cy), t.size, unit, kontur) {
-                        lines.push(UiLine { p0, p1, color: [0.0, 0.0, 0.0, 0.85], width: dicke + 2.0 * kontur, feather: feder, quad: None, quad_colors: None });
+                        lines.push(UiLine { p0, p1, color: [0.0, 0.0, 0.0, 0.85], width: dicke + 2.0 * kontur, feather: feder, quad: None, quad_colors: None, top: false });
                     }
                 }
             }
             for &(x, farbe) in &kreuze {
                 for (p0, p1) in toteming::cross_segments((x, cy), t.size, unit, 0.0) {
-                    lines.push(UiLine { p0, p1, color: farbe, width: dicke, feather: feder, quad: None, quad_colors: None });
+                    lines.push(UiLine { p0, p1, color: farbe, width: dicke, feather: feder, quad: None, quad_colors: None, top: false });
                 }
             }
         }
@@ -40971,18 +41010,28 @@ impl App {
         }
 
         // Graphen unten rechts, von oben: GPU, RAM (mit Swap), CPU. Gruen = Rechner gesamt,
-        // pink = Coral (s. sysstats, push_stats_graph).
-        const GRAPH_MARGIN: f32 = 16.0;
-        const GRAPH_W: f32 = 460.0;
-        const GRAPH_H: f32 = 120.0;
-        let (screen_w, screen_h) = gpu.size();
-        let graph_x = screen_w - GRAPH_W - GRAPH_MARGIN;
-        let abstand = GRAPH_H + line_height + 12.0;
+        // pink = Coral (s. sysstats). Hier nur die Kurven; Flaechen und Ueberschriften liegen in
+        // der Overlay-Ebene (s. debug_graph_overlay), damit alles ueber dem Scoreboard steht.
+        let _ = rects;
         let stats = self.sys_stats.snapshot();
-        for (i, (titel, serie)) in [("CPU", &stats.cpu), ("RAM", &stats.ram), ("GPU", &stats.gpu)].into_iter().enumerate() {
-            let y = screen_h - GRAPH_MARGIN - GRAPH_H - i as f32 * abstand;
-            push_stats_graph(gpu, rects, hud_lines, texts, Rect { x: graph_x, y, w: GRAPH_W, h: GRAPH_H }, titel, serie);
+        for (area, serie) in debug_graph_areas(gpu).into_iter().zip([&stats.cpu, &stats.ram, &stats.gpu]) {
+            push_stats_graph(hud_lines, area, serie);
         }
+    }
+
+    // Flaechen und Ueberschriften der F3-Graphen als unterste Overlay-Gruppe: ueber dem
+    // normalen HUD-Text (Scoreboard), unter Benachrichtigungen.
+    fn debug_graph_overlay(&self, overlay: &mut UiOverlay) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        if !(self.debug_overlay && self.mode == AppMode::World && !self.hud_hidden) || self.connecting_view() {
+            return;
+        }
+        let stats = self.sys_stats.snapshot();
+        let (mut rects, mut texts) = (Vec::new(), Vec::new());
+        for (area, (titel, serie)) in debug_graph_areas(gpu).into_iter().zip([("CPU", &stats.cpu), ("RAM", &stats.ram), ("GPU", &stats.gpu)]) {
+            push_stats_graph_frame(gpu, &mut rects, &mut texts, area, titel, serie);
+        }
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
     }
 
     // Verbindungs-Overlay (World-Modus, bevor der erste Chunk da ist): Titel + Status +
@@ -45528,6 +45577,8 @@ impl App {
     fn build_notifications(&self) -> UiOverlay {
         let mut overlay = UiOverlay::default();
         let Some(gpu) = self.gpu.as_ref() else { return overlay };
+        // Zuerst, also unter den Karten.
+        self.debug_graph_overlay(&mut overlay);
         let now = Instant::now();
         // Fallende Karten zuletzt, also obenauf: sie stuerzen an den stehenden vorbei.
         let mut karten: Vec<_> = self.notifications.cards(now).collect();
