@@ -42491,11 +42491,13 @@ impl App {
         // TearFree zeigt seinen Wert direkt im Schalter selbst (AN/AUS/n.v./?), s.
         // tearfree_button() -- kein zusaetzliches Wertfeld noetig. Block-Rotation ist ein
         // Toggle-Button, s. buttons()/ToggleBlockRngRotation.
-        // Ausserhalb von Linux gibt es keinen Schalter, nur den Hinweis.
+        // Ausserhalb von Linux gibt es keinen Schalter, nur den Hinweis -- als Feld wie die
+        // System-Zeilen, nicht grau: graue Texte filtert build_menu_ui auf Einstellungsseiten weg.
         #[cfg(not(target_os = "linux"))]
         {
-            let y = (settings_row_y(TEARFREE_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-            texts.push(UiText { text: i18n::tr("nur Linux und AMD").into_owned(), x: SETTINGS_CTRL_X, y, color: theme::text_disabled(), scale: UI_SCALE_SMALL });
+            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(TEARFREE_ROW), w: STEPPER_VALUE_W, h: SETTINGS_CTRL_H };
+            rects.push(UiRect { rect: feld, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+            texts.push(gpu.centered_text(feld, i18n::tr("nur Linux und AMD").into_owned(), theme::text(), UI_SCALE_SMALL));
         }
 
     }
