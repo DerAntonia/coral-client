@@ -4138,7 +4138,9 @@ const MAX_UI_RECTS: usize = 4096;
 // (89) Segmente pro Kern. 2048 deckt bis zu ~23 Kerne komplett gefuellt ab -- deutlich mehr
 // als aktuell ueblich (dieser Rechner hat 16, s. nproc), mit Luft nach oben statt einer
 // Zahl, die exakt am aktuellen Kernkontingent klebt.
-const MAX_UI_LINE_SEGMENTS: usize = 2048;
+// Die drei F3-Graphen brauchen allein ~13000 (je Kurve ~360 Stuecke, Flaeche 1 + weiche
+// Linie 5 Vierecke).
+const MAX_UI_LINE_SEGMENTS: usize = 16384;
 // Doppelt so viel wie Zeichen je Bild noetig -- der Textschatten (s. shape_text) zeichnet
 // jede Glyphe zweimal.
 const MAX_UI_GLYPHS: usize = 32768; // Schatten zeichnet jedes Zeichen 8x mit (s. shape_text)
@@ -4234,6 +4236,9 @@ struct UiLine {
     // Statt der Strecke ein beliebiges Viereck (Ecken der Reihe nach), einfarbig -- fuer
     // Kreisringe wie das Spielmodus-Rad. p0/p1/width zaehlen dann nicht.
     quad: Option<[(f32, f32); 4]>,
+    // Zum Viereck je Ecke eine eigene Farbe (sonst `color` ueberall) -- fuer Verlaeufe wie die
+    // auslaufende Flaeche unter den F3-Graphen.
+    quad_colors: Option<[[f32; 4]; 4]>,
 }
 
 struct UiText {
@@ -4411,9 +4416,9 @@ fn quad_verts(x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4], screen_px: (f
 // (p1-p0) verschiebt beide Endpunkte um die halbe Dicke nach links/rechts, macht daraus
 // ein Viereck mit 4 Ecken, das dann wie jedes andere Quad trianguliert wird (gleiches
 // Vertex-Format wie quad_verts, laeuft ueber dieselbe Pipeline).
-fn free_quad_verts(q: [(f32, f32); 4], color: [f32; 4], screen_px: (f32, f32)) -> [Vertex; 6] {
-    let v = |p: (f32, f32)| Vertex { position: pixel_to_ndc(p.0, p.1, screen_px), color, ..Vertex::PLAIN };
-    [v(q[0]), v(q[1]), v(q[2]), v(q[0]), v(q[2]), v(q[3])]
+fn free_quad_verts_colored(q: [(f32, f32); 4], c: [[f32; 4]; 4], screen_px: (f32, f32)) -> [Vertex; 6] {
+    let v = |i: usize| Vertex { position: pixel_to_ndc(q[i].0, q[i].1, screen_px), color: c[i], ..Vertex::PLAIN };
+    [v(0), v(1), v(2), v(0), v(2), v(3)]
 }
 
 fn line_quad_verts(line: &UiLine, thickness: f32, screen_px: (f32, f32)) -> [Vertex; 6] {
@@ -4515,51 +4520,77 @@ fn vanilla_block_outline(screen_width: f32) -> ([f32; 4], f32) {
     ([0.0, 0.0, 0.0, 0.4], breite / 2.0)
 }
 
-// Farben fuer die F3-Debug-Graphen (s. App::build_debug_overlay). Kern-Palette bewusst
-// mit hohem Kontrast zwischen benachbarten Eintraegen (nicht einfach ein Regenbogen-
-// Verlauf) -- bei 8-16 Kernen sollen Nachbar-Kerne auch bei dichten, ueberlappenden
-// Punktwolken auseinanderzuhalten sein.
-const CORE_COLORS: [[f32; 4]; 8] = [
-    [1.0, 0.3, 0.3, 1.0],
-    [0.3, 1.0, 0.4, 1.0],
-    [0.35, 0.55, 1.0, 1.0],
-    [1.0, 0.85, 0.2, 1.0],
-    [1.0, 0.4, 0.9, 1.0],
-    [0.3, 0.9, 0.9, 1.0],
-    [1.0, 0.6, 0.2, 1.0],
-    [0.75, 0.75, 0.75, 1.0],
-];
-const COLOR_GRAPH_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
-const GRAPH_LINE_THICKNESS: f32 = 1.6;
+// F3-Graphen (s. App::build_debug_overlay): gruen = Rechner gesamt, pink = Anteil von Coral.
+const GRAPH_GREEN: [f32; 4] = [0.24, 0.86, 0.48, 1.0];
+const GRAPH_PINK: [f32; 4] = [1.0, 0.40, 0.67, 1.0];
+const GRAPH_LINE_THICKNESS: f32 = 2.0;
+// Zwischenpunkte je Messabstand fuer die gerundete Kurve.
+const GRAPH_SUBDIVISIONS: usize = 3;
 
-// Dunkler Hintergrund fuer einen Graphen-Bereich -- rein optisch (Kontrast/Abgrenzung
-// gegen die Welt dahinter), traegt keine Daten.
-fn push_graph_background(rects: &mut Vec<UiRect>, area: Rect) {
-    rects.push(UiRect { rect: area, color: COLOR_GRAPH_BG, ..UiRect::FLAT });
+// Werte (0..100, aeltester vorn) als glatte Kurve: Catmull-Rom durch die Messpunkte, rechts
+// buendig (der neueste Wert steht an der rechten Kante, aeltere wandern nach links hinaus).
+fn graph_curve(area: Rect, werte: &[f32]) -> Vec<(f32, f32)> {
+    let n = werte.len();
+    let schritt = area.w / (sysstats::HISTORY_LEN.max(2) - 1) as f32;
+    let x0 = area.x + area.w - (n.saturating_sub(1)) as f32 * schritt;
+    let y = |v: f32| area.y + area.h * (1.0 - (v / 100.0).clamp(0.0, 1.0));
+    let wert = |i: isize| werte[i.clamp(0, n as isize - 1) as usize];
+    let mut out = Vec::with_capacity(n * GRAPH_SUBDIVISIONS);
+    for i in 0..n.saturating_sub(1) {
+        let (p0, p1, p2, p3) = (wert(i as isize - 1), wert(i as isize), wert(i as isize + 1), wert(i as isize + 2));
+        for k in 0..GRAPH_SUBDIVISIONS {
+            let t = k as f32 / GRAPH_SUBDIVISIONS as f32;
+            let v = 0.5 * (2.0 * p1 + (p2 - p0) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t);
+            out.push((x0 + (i as f32 + t) * schritt, y(v)));
+        }
+    }
+    if n > 0 {
+        out.push((x0 + (n - 1) as f32 * schritt, y(werte[n - 1])));
+    }
+    out
 }
 
-// Eine Werte-Reihe als ECHTE Linie (verbundene Segmente, keine Punktwolke) in `area`
-// einzeichnen, skaliert auf `max_value` (0 unten, max_value oben). `history` ist ein Ring
-// mit dem AELTESTEN Wert vorn (s. sysstats::push_capped: pop_front beim Ueberlauf,
-// push_back fuer neue Werte) -- Index 0 landet deshalb links, der letzte (aktuellste)
-// Wert rechts, wie bei Vanillas Graphen.
-fn push_graph_series(lines: &mut Vec<UiLine>, area: Rect, history: &std::collections::VecDeque<f32>, max_value: f32, color: [f32; 4]) {
-    if history.len() < 2 {
+// Flaeche unter der Kurve: an der Kurve `alpha` Deckkraft, nach unten auf 0 auslaufend.
+fn push_graph_fill(lines: &mut Vec<UiLine>, area: Rect, kurve: &[(f32, f32)], farbe: [f32; 4], alpha: f32) {
+    let unten = area.y + area.h;
+    let oben = [farbe[0], farbe[1], farbe[2], alpha];
+    let leer = [farbe[0], farbe[1], farbe[2], 0.0];
+    for w in kurve.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        lines.push(UiLine {
+            p0: a,
+            p1: b,
+            color: oben,
+            width: 0.0,
+            feather: 0.0,
+            quad: Some([a, b, (b.0, unten), (a.0, unten)]),
+            quad_colors: Some([oben, oben, leer, leer]),
+        });
+    }
+}
+
+fn push_graph_line(lines: &mut Vec<UiLine>, kurve: &[(f32, f32)], farbe: [f32; 4]) {
+    for w in kurve.windows(2) {
+        lines.push(UiLine { p0: w[0], p1: w[1], color: farbe, width: GRAPH_LINE_THICKNESS, feather: 1.0, quad: None, quad_colors: None });
+    }
+}
+
+// Ein ganzer Graph: schwarze Flaeche, Ueberschrift darueber, gruen (gesamt) und pink (Coral).
+fn push_stats_graph(gpu: &GpuState, rects: &mut Vec<UiRect>, lines: &mut Vec<UiLine>, texts: &mut Vec<UiText>, area: Rect, titel: &str, serie: &sysstats::Series) {
+    rects.push(UiRect { rect: area, color: [0.0, 0.0, 0.0, 1.0], ..UiRect::FLAT });
+    let zeile = gpu.text_height(UI_SCALE_SMALL) + 2.0;
+    let text = if serie.available { serie.label.clone() } else { format!("{titel}: n/v") };
+    texts.push(UiText { text, x: area.x, y: area.y - zeile, color: COLOR_WHITE, scale: UI_SCALE_SMALL });
+    if serie.history.len() < 2 {
         return;
     }
-    let denom = (sysstats::HISTORY_LEN.max(2) - 1) as f32;
-    let point = |i: usize, value: f32| {
-        let x = area.x + (i as f32 / denom) * area.w;
-        let fraction = (value / max_value).clamp(0.0, 1.0);
-        let y = area.y + area.h * (1.0 - fraction);
-        (x, y)
-    };
-    let mut prev = point(0, history[0]);
-    for (i, &value) in history.iter().enumerate().skip(1) {
-        let cur = point(i, value);
-        lines.push(UiLine { p0: prev, p1: cur, color, width: GRAPH_LINE_THICKNESS, feather: 0.0, quad: None });
-        prev = cur;
-    }
+    let gesamt: Vec<f32> = serie.history.iter().map(|s| s.total).collect();
+    let coral: Vec<f32> = serie.history.iter().map(|s| s.own).collect();
+    let (kurve_g, kurve_c) = (graph_curve(area, &gesamt), graph_curve(area, &coral));
+    push_graph_fill(lines, area, &kurve_g, GRAPH_GREEN, 0.30);
+    push_graph_fill(lines, area, &kurve_c, GRAPH_PINK, 0.40);
+    push_graph_line(lines, &kurve_g, GRAPH_GREEN);
+    push_graph_line(lines, &kurve_c, GRAPH_PINK);
 }
 
 // "+"-Fadenkreuz aus zwei sich ueberlappenden Balken (Rechtecken), mittig auf dem
@@ -8566,7 +8597,7 @@ impl GpuState {
         let mut line_data: Vec<Vertex> = Vec::with_capacity(hud_lines.len() * VERTS_PER_QUAD);
         for line in hud_lines {
             let verts: &[Vertex] = if let Some(q) = line.quad {
-                &free_quad_verts(q, line.color, screen_px)
+                &free_quad_verts_colored(q, line.quad_colors.unwrap_or([line.color; 4]), screen_px)
             } else if line.feather > 0.0 {
                 &soft_line_verts(line, screen_px)
             } else {
@@ -37119,13 +37150,13 @@ impl App {
             if t.shadow {
                 for &(x, _) in &kreuze {
                     for (p0, p1) in toteming::cross_segments((x, cy), t.size, unit, kontur) {
-                        lines.push(UiLine { p0, p1, color: [0.0, 0.0, 0.0, 0.85], width: dicke + 2.0 * kontur, feather: feder, quad: None });
+                        lines.push(UiLine { p0, p1, color: [0.0, 0.0, 0.0, 0.85], width: dicke + 2.0 * kontur, feather: feder, quad: None, quad_colors: None });
                     }
                 }
             }
             for &(x, farbe) in &kreuze {
                 for (p0, p1) in toteming::cross_segments((x, cy), t.size, unit, 0.0) {
-                    lines.push(UiLine { p0, p1, color: farbe, width: dicke, feather: feder, quad: None });
+                    lines.push(UiLine { p0, p1, color: farbe, width: dicke, feather: feder, quad: None, quad_colors: None });
                 }
             }
         }
@@ -40939,26 +40970,18 @@ impl App {
             texts.push(UiText { text: line.clone(), x: 6.0, y: 6.0 + row as f32 * line_height, color: COLOR_WHITE, scale: UI_SCALE_SMALL });
         }
 
-        // CPU-Graph pro Kern, unten rechts, als echte verbundene Linien (s.
-        // push_graph_series/UiLine) statt der fruehreren Punktwolke oben links -- RAM/GPU-
-        // Graphen sind raus (sahen fehlerhaft aus).
+        // Graphen unten rechts, von oben: GPU, RAM (mit Swap), CPU. Gruen = Rechner gesamt,
+        // pink = Coral (s. sysstats, push_stats_graph).
         const GRAPH_MARGIN: f32 = 16.0;
         const GRAPH_W: f32 = 460.0;
-        const GRAPH_H: f32 = 220.0;
+        const GRAPH_H: f32 = 120.0;
         let (screen_w, screen_h) = gpu.size();
         let graph_x = screen_w - GRAPH_W - GRAPH_MARGIN;
-        let graph_y = screen_h - GRAPH_H - GRAPH_MARGIN;
-        texts.push(UiText {
-            text: format!("CPU ({} Kerne)", self.sys_stats.core_count()),
-            x: graph_x,
-            y: graph_y - line_height,
-            color: COLOR_WHITE,
-            scale: UI_SCALE_SMALL,
-        });
-        let cpu_area = Rect { x: graph_x, y: graph_y, w: GRAPH_W, h: GRAPH_H };
-        push_graph_background(rects, cpu_area);
-        for (i, core) in self.sys_stats.cpu_history.iter().enumerate() {
-            push_graph_series(hud_lines, cpu_area, core, 100.0, CORE_COLORS[i % CORE_COLORS.len()]);
+        let abstand = GRAPH_H + line_height + 12.0;
+        let stats = self.sys_stats.snapshot();
+        for (i, (titel, serie)) in [("CPU", &stats.cpu), ("RAM", &stats.ram), ("GPU", &stats.gpu)].into_iter().enumerate() {
+            let y = screen_h - GRAPH_MARGIN - GRAPH_H - i as f32 * abstand;
+            push_stats_graph(gpu, rects, hud_lines, texts, Rect { x: graph_x, y, w: GRAPH_W, h: GRAPH_H }, titel, serie);
         }
     }
 
@@ -42475,7 +42498,10 @@ impl App {
         // Abschnitt System: reine Information, kein Bedienelement -- breitere Felder als die
         // Stepper-Werte, GPU- und CPU-Namen sind lang ("AMD: AMD Radeon Graphics (...)" ~425px).
         for (row, wert) in self.system_rows(gpu) {
-            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(row), w: 500.0, h: SETTINGS_CTRL_H };
+            // Mindestens 500, laengere Werte (Compositing samt Present-Lage) bekommen ihre Breite,
+            // statt mit "..." abgeschnitten zu werden.
+            let breite = (gpu.measure_text(&wert, UI_SCALE_SMALL) + 32.0).max(500.0);
+            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(row), w: breite, h: SETTINGS_CTRL_H };
             rects.push(UiRect { rect: feld, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
             texts.push(gpu.centered_text(feld, wert, theme::text(), UI_SCALE_SMALL));
         }

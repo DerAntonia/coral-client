@@ -117,7 +117,7 @@ impl App {
                 let a0 = von + (bis - von) * k as f32 / SLICES as f32;
                 let a1 = von + (bis - von) * (k + 1) as f32 / SLICES as f32;
                 let quad = [punkt(innen, a0), punkt(aussen, a0), punkt(aussen, a1), punkt(innen, a1)];
-                lines.push(UiLine { p0: quad[0], p1: quad[1], color: farbe, width: 0.0, feather: 0.0, quad: Some(quad) });
+                lines.push(UiLine { p0: quad[0], p1: quad[1], color: farbe, width: 0.0, feather: 0.0, quad: Some(quad), quad_colors: None });
             }
             // Symbol und Name in der Feldmitte.
             let (cx, cy) = punkt((innen + aussen) / 2.0, -90.0 + i as f32 * 90.0);
