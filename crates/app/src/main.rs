@@ -12040,8 +12040,8 @@ fn set_active_config(name: &str) {
 }
 
 // Einstellungen der aktiven Config: ~/coral-client/configs/<Name>.conf (Windows:
-// %USERPROFILE%\coral-client\configs\<Name>.conf), der private Teil (s. is_private_setting)
-// daneben in "private configs".
+// %USERPROFILE%\coral-client\configs\<Name>.conf). Der private Teil (s. is_private_setting)
+// ist fuer alle Configs derselbe: ~/coral-client/private-config.conf, bleibt beim Wechseln.
 fn settings_path() -> Option<std::path::PathBuf> {
     assets::config_path(&active_config())
 }

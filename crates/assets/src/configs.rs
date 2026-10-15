@@ -5,9 +5,10 @@
 // Ablage im sichtbaren Benutzerordner, damit man Configs weitergeben kann:
 // ~/coral-client/configs/<Name>.conf (Windows: %USERPROFILE%\coral-client\configs). Was nur
 // zu diesem Rechner und Spieler passt (Konto, Skin-Packs, Scanout-Timing, Geraete, ...), steht
-// getrennt in ~/coral-client/private configs/<Name>.conf -- welche Schluessel das sind,
-// entscheidet der Client beim Speichern. Was fuer alle Configs gleich ist (Server-Liste,
-// Chat-Verlauf, eigene Klaenge, Hintergrundbild), bleibt in <config_dir>.
+// getrennt in ~/coral-client/private-config.conf -- EINE Datei fuer alle Configs, die beim
+// Wechseln bleibt. Welche Schluessel das sind, entscheidet der Client beim Speichern. Was fuer
+// alle Configs gleich ist (Server-Liste, Chat-Verlauf, eigene Klaenge, Hintergrundbild), bleibt
+// in <config_dir>.
 
 use std::path::{Path, PathBuf};
 
@@ -19,19 +20,25 @@ pub fn configs_dir() -> Option<PathBuf> {
     Some(user_dir()?.join("configs"))
 }
 
-pub fn private_configs_dir() -> Option<PathBuf> {
-    Some(user_dir()?.join("private configs"))
-}
-
 /// Datei einer Config (muss nicht existieren -- eine fehlende Config startet mit Standardwerten
 /// und wird beim ersten Speichern angelegt).
 pub fn config_path(name: &str) -> Option<PathBuf> {
     Some(configs_dir()?.join(format!("{name}.conf")))
 }
 
-/// Der private Teil derselben Config.
-pub fn private_config_path(name: &str) -> Option<PathBuf> {
-    Some(private_configs_dir()?.join(format!("{name}.conf")))
+/// Der private Teil, gleich fuer alle Configs. v26.10.3 hatte ihn noch je Config im Ordner
+/// "private configs" (<Name>.conf): dann wird der von `active` zu dieser Datei, der Ordner
+/// verschwindet, sobald er leer ist.
+pub fn private_config_path(active: &str) -> Option<PathBuf> {
+    let user = user_dir()?;
+    let pfad = user.join("private-config.conf");
+    let alt_dir = user.join("private configs");
+    let alt = alt_dir.join(format!("{active}.conf"));
+    if !pfad.exists() && alt.is_file() {
+        let _ = std::fs::rename(&alt, &pfad);
+        let _ = std::fs::remove_dir(&alt_dir);
+    }
+    Some(pfad)
 }
 
 /// Alte Ablagen umziehen, solange es im neuen Ordner noch keine Config gibt: erst die frueher
@@ -128,14 +135,6 @@ pub fn create_config(name: &str, copy_from: Option<&str>) -> std::io::Result<Str
         None => Vec::new(),
     };
     std::fs::write(target, content)?;
-    // Die Kopie bekommt auch den privaten Teil (Konto, Skin-Packs, ...): sie laeuft ja auf
-    // demselben Rechner.
-    if let (Some(von), Some(nach)) = (copy_from.and_then(private_config_path), private_config_path(&name)) {
-        if von.is_file() {
-            std::fs::create_dir_all(nach.parent().unwrap())?;
-            std::fs::copy(von, nach)?;
-        }
-    }
     Ok(name)
 }
 
@@ -153,11 +152,6 @@ pub fn rename_config(old: &str, new: &str) -> std::io::Result<String> {
         std::fs::create_dir_all(to.parent().unwrap())?;
         std::fs::write(to, "")?;
     }
-    if let (Some(von), Some(nach)) = (private_config_path(old), private_config_path(&new)) {
-        if von.is_file() {
-            std::fs::rename(von, nach)?;
-        }
-    }
     if last_used().as_deref() == Some(old) {
         set_last_used(&new);
     }
@@ -170,9 +164,6 @@ pub fn delete_config(name: &str) -> std::io::Result<()> {
         return Err(io_err("die letzte Config kann nicht geloescht werden"));
     }
     if let Some(path) = config_path(name) {
-        std::fs::remove_file(path)?;
-    }
-    if let Some(path) = private_config_path(name).filter(|p| p.is_file()) {
         std::fs::remove_file(path)?;
     }
     Ok(())
