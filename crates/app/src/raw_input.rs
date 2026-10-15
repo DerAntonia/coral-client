@@ -94,6 +94,7 @@ mod linux {
     use std::thread;
     use std::time::{Duration, Instant};
     use winit::keyboard::KeyCode;
+    use super::evdev_key_to_keycode;
 
     // Wie oft der Waechter nachsieht. Ein halbe Sekunde nach dem Einstecken ist fuer den
     // Menschen "sofort", und das Verzeichnis zu lesen kostet so gut wie nichts.
@@ -514,12 +515,18 @@ mod linux {
         });
     }
 
-    // Linux-Input-Event-Codes (stabil, entsprechen input-event-codes.h) auf winits KeyCode.
-    // Beide bezeichnen die PHYSISCHE Taste (US-QWERTY-Referenzlage), stimmen also ueberein --
-    // dadurch passt der hier gelieferte KeyCode direkt zu den ueber winit erfassten Keybinds
-    // (s. Keybinds in main.rs). Nicht abgebildete Codes liefern None und loesen keine Aktion
-    // aus (dann muesste der Nutzer auf eine abgebildete Taste umbelegen).
-    fn evdev_key_to_keycode(code: u16) -> Option<KeyCode> {
+}
+
+// Linux-Input-Event-Codes (stabil, entsprechen input-event-codes.h) auf winits KeyCode.
+// Beide bezeichnen die PHYSISCHE Taste (US-QWERTY-Referenzlage), stimmen also ueberein --
+// dadurch passt der hier gelieferte KeyCode direkt zu den ueber winit erfassten Keybinds
+// (s. Keybinds in main.rs). Nicht abgebildete Codes liefern None und loesen keine Aktion
+// aus (dann muesste der Nutzer auf eine abgebildete Taste umbelegen). Auch fuer Windows:
+// die evdev-Codes 1..88 SIND die PC-Scancodes (Satz 1), s. windows::scancode_to_evdev.
+#[cfg(any(target_os = "linux", windows))]
+fn evdev_key_to_keycode(code: u16) -> Option<winit::keyboard::KeyCode> {
+    use winit::keyboard::KeyCode;
+    {
         Some(match code {
             1 => KeyCode::Escape,
             2 => KeyCode::Digit1,
@@ -631,6 +638,262 @@ mod linux {
 #[cfg(target_os = "linux")]
 pub use linux::{open, DeviceWatcher, MouseButton, RawKeyboard, RawMouse, RawMouseEvent};
 
+// Windows: derselbe Bypass ueber Raw Input (WM_INPUT). Ein eigener Thread mit einem
+// unsichtbaren Nachrichtenfenster empfaengt die Rohdaten von Maus und Tastatur -- nicht ueber
+// die Nachrichtenschleife des Spielfensters, die waehrend des Renderns steht. Dieselben
+// Kanaele wie unter Linux: Bewegung, Tasten und Rad in EINEM geordneten Strom (s.
+// RawMouseEvent), Tastenwechsel als physische KeyCodes.
+//
+// Raw Input gilt je Prozess und Geraeteklasse fuer EIN Zielfenster: diese Registrierung loest
+// die von winit ab (winit registriert beim Anlegen der Event-Loop, open() laeuft danach).
+// winit liefert dann keine DeviceEvents mehr -- die ignoriert die App bei aktivem Bypass
+// ohnehin (s. device_event). Die normalen Fensternachrichten (Texteingabe, Escape, Klicks
+// auf die Oberflaeche) bleiben, es gibt kein RIDEV_NOLEGACY.
+//
+// Kein Waechter fuer neue Geraete: Raw Input liefert von selbst alle Maeuse und Tastaturen,
+// auch spaeter angesteckte.
+#[cfg(windows)]
+mod windows {
+    use super::{MouseButton, RawMouseEvent};
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Input::{
+        GetRawInputData, RegisterRawInputDevices, HRAWINPUT, MOUSE_MOVE_ABSOLUTE, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RIDEV_INPUTSINK, RID_INPUT,
+        RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassExW, HWND_MESSAGE, MSG, RI_KEY_BREAK, RI_KEY_E0, RI_KEY_E1,
+        RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_4_UP, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_BUTTON_5_UP, RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP,
+        RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP, RI_MOUSE_WHEEL, WM_INPUT,
+        WNDCLASSEXW,
+    };
+    use winit::keyboard::KeyCode;
+
+    pub struct RawMouse {
+        rx: Receiver<RawMouseEvent>,
+    }
+
+    impl RawMouse {
+        // Alles seit dem letzten Aufruf, in der Reihenfolge von Windows (s. Linux-Pendant).
+        pub fn drain(&self) -> Vec<RawMouseEvent> {
+            self.rx.try_iter().collect()
+        }
+    }
+
+    pub struct RawKeyboard {
+        rx: Receiver<(KeyCode, bool)>,
+    }
+
+    impl RawKeyboard {
+        pub fn drain(&self) -> Vec<(KeyCode, bool)> {
+            self.rx.try_iter().collect()
+        }
+    }
+
+    // Kanaele des Lesefadens. Thread-lokal, weil die Fensterprozedur nur ueber globale Wege an
+    // sie herankommt; das Fenster gehoert genau diesem einen Faden.
+    thread_local! {
+        static KANAELE: std::cell::RefCell<Option<(Sender<RawMouseEvent>, Sender<(KeyCode, bool)>)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Satz-1-Scancode (mit E0-Praefix) auf den evdev-Code derselben Taste. Ohne E0 sind beide
+    /// gleich; die E0-Tasten (Pfeile, rechte Strg/Alt, Navigationsblock) hat evdev auf eigenen
+    /// Codes. None fuer die unechten Umschalttasten, die Windows vor manche E0-Tasten setzt.
+    pub fn scancode_to_evdev(code: u16, e0: bool) -> Option<u16> {
+        if !e0 {
+            return Some(code);
+        }
+        Some(match code {
+            0x1C => 96,  // Ziffernblock-Enter
+            0x1D => 97,  // Strg rechts
+            0x35 => 98,  // Ziffernblock /
+            0x38 => 100, // Alt rechts (AltGr)
+            0x47 => 102, // Pos1
+            0x48 => 103, // Pfeil hoch
+            0x49 => 104, // Bild hoch
+            0x4B => 105, // Pfeil links
+            0x4D => 106, // Pfeil rechts
+            0x4F => 107, // Ende
+            0x50 => 108, // Pfeil runter
+            0x51 => 109, // Bild runter
+            0x52 => 110, // Einfg
+            0x53 => 111, // Entf
+            0x5B => 125, // Windows links
+            0x5C => 126, // Windows rechts
+            0x5D => 127, // Kontextmenue
+            _ => return None,
+        })
+    }
+
+    fn senden(mouse: &[RawMouseEvent], key: Option<(KeyCode, bool)>) {
+        KANAELE.with(|k| {
+            if let Some((mtx, ktx)) = k.borrow().as_ref() {
+                for e in mouse {
+                    let _ = mtx.send(*e);
+                }
+                if let Some(t) = key {
+                    let _ = ktx.send(t);
+                }
+            }
+        });
+    }
+
+    fn maus(m: &windows_sys::Win32::UI::Input::RAWMOUSE) {
+        let mut out = Vec::new();
+        // Bewegung zuerst, dann Tasten: ein Paket kann beides tragen, und der Klick soll an
+        // der Position NACH der Bewegung gelten (s. RawMouseEvent). Absolute Meldungen
+        // (Grafiktablett, Fernsitzung) sind keine Maus-Deltas.
+        if m.usFlags & MOUSE_MOVE_ABSOLUTE == 0 && (m.lLastX != 0 || m.lLastY != 0) {
+            out.push(RawMouseEvent::Motion(m.lLastX as f64, m.lLastY as f64));
+        }
+        // SAFETY: bei RIM_TYPEMOUSE ist der Tasten-Zweig der Union belegt.
+        let (flags, daten) = unsafe { (m.Anonymous.Anonymous.usButtonFlags as u32, m.Anonymous.Anonymous.usButtonData) };
+        let tasten = [
+            (RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP, MouseButton::Left),
+            (RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP, MouseButton::Right),
+            (RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP, MouseButton::Middle),
+            (RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_4_UP, MouseButton::Side),
+            (RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_BUTTON_5_UP, MouseButton::Extra),
+        ];
+        for (runter, hoch, taste) in tasten {
+            if flags & runter as u32 != 0 {
+                out.push(RawMouseEvent::Button(taste, true));
+            }
+            if flags & hoch as u32 != 0 {
+                out.push(RawMouseEvent::Button(taste, false));
+            }
+        }
+        // Rad: WHEEL_DELTA (120) je Raste, positiv = von sich weg = hoch, wie evdev REL_WHEEL.
+        // Feine Raeder melden Bruchteile -- die zaehlen anteilig.
+        if flags & RI_MOUSE_WHEEL as u32 != 0 {
+            let rasten = daten as i16 as f32 / 120.0;
+            if rasten != 0.0 {
+                out.push(RawMouseEvent::Wheel(rasten));
+            }
+        }
+        if !out.is_empty() {
+            senden(&out, None);
+        }
+    }
+
+    fn tastatur(k: &windows_sys::Win32::UI::Input::RAWKEYBOARD) {
+        // E1 = Pause/Untbr, 0xFF = Ueberlauf: beide keine belegbaren Tasten.
+        if k.Flags as u32 & RI_KEY_E1 as u32 != 0 || k.MakeCode == 0xFF || k.MakeCode == 0 {
+            return;
+        }
+        let e0 = k.Flags as u32 & RI_KEY_E0 as u32 != 0;
+        let gedrueckt = k.Flags as u32 & RI_KEY_BREAK as u32 == 0;
+        if let Some(code) = scancode_to_evdev(k.MakeCode, e0).and_then(super::evdev_key_to_keycode) {
+            senden(&[], Some((code, gedrueckt)));
+        }
+    }
+
+    unsafe extern "system" fn fensterprozedur(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if msg == WM_INPUT {
+            let mut puffer = std::mem::MaybeUninit::<RAWINPUT>::uninit();
+            let mut groesse = std::mem::size_of::<RAWINPUT>() as u32;
+            let gelesen = GetRawInputData(lparam as HRAWINPUT, RID_INPUT, puffer.as_mut_ptr().cast(), &mut groesse, std::mem::size_of::<RAWINPUTHEADER>() as u32);
+            if gelesen != u32::MAX && gelesen as usize >= std::mem::size_of::<RAWINPUTHEADER>() {
+                let ri = puffer.assume_init_ref();
+                match ri.header.dwType {
+                    RIM_TYPEMOUSE => maus(&ri.data.mouse),
+                    RIM_TYPEKEYBOARD => tastatur(&ri.data.keyboard),
+                    _ => {}
+                }
+            }
+        }
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+
+    // Lesefaden mit eigenem Nachrichtenfenster. Meldet ueber `bereit`, ob die Registrierung
+    // geklappt hat, und laeuft danach so lange wie der Prozess.
+    fn lesefaden(mouse_tx: Sender<RawMouseEvent>, key_tx: Sender<(KeyCode, bool)>, bereit: Sender<Result<(), String>>) {
+        KANAELE.with(|k| *k.borrow_mut() = Some((mouse_tx, key_tx)));
+        let klasse: Vec<u16> = "CoralRawInput\0".encode_utf16().collect();
+        // SAFETY: Klasse und Fenster gehoeren diesem Faden; alle Zeiger leben bis zum Aufruf.
+        let hwnd = unsafe {
+            let instanz = GetModuleHandleW(std::ptr::null());
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(fensterprozedur),
+                hInstance: instanz,
+                lpszClassName: klasse.as_ptr(),
+                ..std::mem::zeroed()
+            };
+            RegisterClassExW(&wc);
+            CreateWindowExW(0, klasse.as_ptr(), klasse.as_ptr(), 0, 0, 0, 0, 0, HWND_MESSAGE, std::ptr::null_mut(), instanz, std::ptr::null())
+        };
+        if hwnd.is_null() {
+            let _ = bereit.send(Err("Nachrichtenfenster nicht erstellt".into()));
+            return;
+        }
+        // Maus (Usage 2) und Tastatur (Usage 6) auf der Generic-Desktop-Seite. INPUTSINK: auch
+        // ohne Vordergrund empfangen, wie evdev -- die App wertet nur mit Fokus aus und leert die
+        // Kanaele sonst (s. about_to_wait).
+        let geraete = [2u16, 6].map(|usage| RAWINPUTDEVICE { usUsagePage: 1, usUsage: usage, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd });
+        // SAFETY: gueltiges Array, Groesse passt.
+        let ok = unsafe { RegisterRawInputDevices(geraete.as_ptr(), geraete.len() as u32, std::mem::size_of::<RAWINPUTDEVICE>() as u32) } != 0;
+        if !ok {
+            let _ = bereit.send(Err(format!("RegisterRawInputDevices: {}", std::io::Error::last_os_error())));
+            return;
+        }
+        let _ = bereit.send(Ok(()));
+        // SAFETY: Standard-Nachrichtenschleife dieses Fadens.
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    pub fn open() -> (Option<RawMouse>, Option<RawKeyboard>, Option<super::DeviceWatcher>) {
+        let (mouse_tx, mouse_rx) = mpsc::channel();
+        let (key_tx, key_rx) = mpsc::channel();
+        let (bereit_tx, bereit_rx) = mpsc::channel();
+        let gestartet = std::thread::Builder::new().name("raw-input".into()).spawn(move || lesefaden(mouse_tx, key_tx, bereit_tx));
+        match gestartet.ok().and_then(|_| bereit_rx.recv().ok()) {
+            Some(Ok(())) => {
+                println!("[latency] Raw-Input-Bypass aktiv (Windows WM_INPUT in eigenem Faden): Maus und Tastatur");
+                (Some(RawMouse { rx: mouse_rx }), Some(RawKeyboard { rx: key_rx }), None)
+            }
+            Some(Err(e)) => {
+                println!("[latency] Raw-Input-Bypass aus ({e}), Fallback auf winit");
+                (None, None, None)
+            }
+            None => {
+                println!("[latency] Raw-Input-Bypass aus (Faden nicht gestartet), Fallback auf winit");
+                (None, None, None)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn scancodes_treffen_die_richtigen_tasten() {
+            let taste = |c, e0| scancode_to_evdev(c, e0).and_then(crate::raw_input::evdev_key_to_keycode);
+            assert_eq!(taste(0x11, false), Some(KeyCode::KeyW));
+            assert_eq!(taste(0x1E, false), Some(KeyCode::KeyA));
+            assert_eq!(taste(0x39, false), Some(KeyCode::Space));
+            assert_eq!(taste(0x2A, false), Some(KeyCode::ShiftLeft));
+            assert_eq!(taste(0x1D, false), Some(KeyCode::ControlLeft));
+            assert_eq!(taste(0x1D, true), Some(KeyCode::ControlRight));
+            assert_eq!(taste(0x48, true), Some(KeyCode::ArrowUp));
+            assert_eq!(taste(0x48, false), Some(KeyCode::Numpad8));
+            assert_eq!(taste(0x57, false), Some(KeyCode::F11));
+            // Unechtes Umschalt vor E0-Tasten zaehlt nicht.
+            assert_eq!(taste(0x2A, true), None);
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use windows::{open, RawKeyboard, RawMouse};
+
 #[cfg(not(target_os = "linux"))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MouseButton {
@@ -641,11 +904,11 @@ pub enum MouseButton {
     Extra,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub struct RawMouse;
 
-// Ohne evdev gibt es keinen Bypass und keinen Waechter.
-#[cfg(not(target_os = "linux"))]
+// Ohne evdev bzw. Raw Input gibt es keinen Bypass und keinen Waechter.
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn open() -> (Option<RawMouse>, Option<RawKeyboard>, Option<DeviceWatcher>) {
     (None, None, None)
 }
@@ -660,7 +923,7 @@ impl DeviceWatcher {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 impl RawMouse {
     pub fn drain(&self) -> Vec<RawMouseEvent> {
         Vec::new()
@@ -675,10 +938,10 @@ pub enum RawMouseEvent {
     Wheel(f32),
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub struct RawKeyboard;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 impl RawKeyboard {
     pub fn drain(&self) -> Vec<(winit::keyboard::KeyCode, bool)> {
         Vec::new()

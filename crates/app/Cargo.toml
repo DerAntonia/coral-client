@@ -51,6 +51,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Performance",
     "Win32_Graphics_Gdi",
     "Wdk_Graphics_Direct3D",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
