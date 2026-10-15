@@ -26,7 +26,7 @@ pub use item_model::{ItemDefinition, ItemModelInput, Leaf as ItemModelLeaf, SELE
 pub use equipment::{parse_equipment_model, EquipmentLayer, EquipmentModel};
 pub use storage::{extract_game_data, game_data_dir, game_data_status, stored_creative_tabs, stored_entity_models, stored_item_components, GameDataStatus};
 pub use configs::{
-    config_path, create_config, delete_config, last_used, list_configs, rename_config, set_last_used, startup_config, validate_name, DEFAULT_CONFIG,
+    config_path, configs_dir, create_config, private_config_path, delete_config, last_used, list_configs, rename_config, set_last_used, startup_config, validate_name, DEFAULT_CONFIG,
 };
 pub use entity_atlas::{
     build as build_entity_atlas, build_trim_texture, EntityAtlas, CAPE_HEIGHT, CAPE_SLOTS, CAPE_WIDTH, HEAD_SLOTS, HEAD_SLOT_HEIGHT, HEAD_SLOT_WIDTH, ITEM_SLOTS, MAP_SLOTS, MAP_SLOT_SIZE, TRIM_HEIGHT, TRIM_SLOTS, TRIM_WIDTH, ITEM_SLOT_SIZE, SKIN_SIZE, SKIN_SLOTS,

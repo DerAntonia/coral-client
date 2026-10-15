@@ -2,18 +2,25 @@
 // zwischen Launcher (auswaehlen, anlegen, umbenennen, loeschen) und Client (laedt und speichert
 // die beim Start gewaehlte) -- deshalb hier neben config_dir().
 //
-// Ablage: <config_dir>/configs/<Name>.conf, Format wie bisher settings.conf. Was fuer alle
-// Configs gleich ist (Server-Liste, Chat-Verlauf, eigene Klaenge, Hintergrundbild), bleibt
-// direkt in <config_dir>.
+// Ablage im sichtbaren Benutzerordner, damit man Configs weitergeben kann:
+// ~/coral-client/configs/<Name>.conf (Windows: %USERPROFILE%\coral-client\configs). Was nur
+// zu diesem Rechner und Spieler passt (Konto, Skin-Packs, Scanout-Timing, Geraete, ...), steht
+// getrennt in ~/coral-client/private configs/<Name>.conf -- welche Schluessel das sind,
+// entscheidet der Client beim Speichern. Was fuer alle Configs gleich ist (Server-Liste,
+// Chat-Verlauf, eigene Klaenge, Hintergrundbild), bleibt in <config_dir>.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::source::config_dir;
+use crate::source::{config_dir, user_dir};
 
 pub const DEFAULT_CONFIG: &str = "Standard";
 
-fn configs_dir() -> Option<PathBuf> {
-    Some(config_dir()?.join("configs"))
+pub fn configs_dir() -> Option<PathBuf> {
+    Some(user_dir()?.join("configs"))
+}
+
+pub fn private_configs_dir() -> Option<PathBuf> {
+    Some(user_dir()?.join("private configs"))
 }
 
 /// Datei einer Config (muss nicht existieren -- eine fehlende Config startet mit Standardwerten
@@ -22,21 +29,40 @@ pub fn config_path(name: &str) -> Option<PathBuf> {
     Some(configs_dir()?.join(format!("{name}.conf")))
 }
 
-/// Die frueher einzige settings.conf wird zur Config "Standard", sobald es noch keine Configs
-/// gibt. Verschieben statt kopieren: zwei Dateien mit denselben Einstellungen liefen sonst
-/// auseinander, ohne dass klar waere, welche gilt.
+/// Der private Teil derselben Config.
+pub fn private_config_path(name: &str) -> Option<PathBuf> {
+    Some(private_configs_dir()?.join(format!("{name}.conf")))
+}
+
+/// Alte Ablagen umziehen, solange es im neuen Ordner noch keine Config gibt: erst die frueher
+/// einzige settings.conf (wird "Standard"), dann <config_dir>/configs/ von vor dem Umzug in den
+/// Benutzerordner. Verschieben statt kopieren: zwei Dateien mit denselben Einstellungen liefen
+/// sonst auseinander, ohne dass klar waere, welche gilt. Den privaten Teil trennt der Client
+/// beim naechsten Speichern ab.
 pub fn migrate_legacy() {
     let (Some(base), Some(dir)) = (config_dir(), configs_dir()) else { return };
-    let legacy = base.join("settings.conf");
-    if !legacy.is_file() || !list_raw(&dir).is_empty() {
+    if !list_raw(&dir).is_empty() {
         return;
     }
-    if std::fs::create_dir_all(&dir).is_ok() {
+    let alt = base.join("configs");
+    let namen = list_raw(&alt);
+    if !namen.is_empty() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            for name in namen {
+                let datei = format!("{name}.conf");
+                let _ = std::fs::rename(alt.join(&datei), dir.join(&datei));
+            }
+            let _ = std::fs::remove_dir(&alt);
+        }
+        return;
+    }
+    let legacy = base.join("settings.conf");
+    if legacy.is_file() && std::fs::create_dir_all(&dir).is_ok() {
         let _ = std::fs::rename(&legacy, dir.join(format!("{DEFAULT_CONFIG}.conf")));
     }
 }
 
-fn list_raw(dir: &std::path::Path) -> Vec<String> {
+fn list_raw(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -102,6 +128,14 @@ pub fn create_config(name: &str, copy_from: Option<&str>) -> std::io::Result<Str
         None => Vec::new(),
     };
     std::fs::write(target, content)?;
+    // Die Kopie bekommt auch den privaten Teil (Konto, Skin-Packs, ...): sie laeuft ja auf
+    // demselben Rechner.
+    if let (Some(von), Some(nach)) = (copy_from.and_then(private_config_path), private_config_path(&name)) {
+        if von.is_file() {
+            std::fs::create_dir_all(nach.parent().unwrap())?;
+            std::fs::copy(von, nach)?;
+        }
+    }
     Ok(name)
 }
 
@@ -119,6 +153,11 @@ pub fn rename_config(old: &str, new: &str) -> std::io::Result<String> {
         std::fs::create_dir_all(to.parent().unwrap())?;
         std::fs::write(to, "")?;
     }
+    if let (Some(von), Some(nach)) = (private_config_path(old), private_config_path(&new)) {
+        if von.is_file() {
+            std::fs::rename(von, nach)?;
+        }
+    }
     if last_used().as_deref() == Some(old) {
         set_last_used(&new);
     }
@@ -131,6 +170,9 @@ pub fn delete_config(name: &str) -> std::io::Result<()> {
         return Err(io_err("die letzte Config kann nicht geloescht werden"));
     }
     if let Some(path) = config_path(name) {
+        std::fs::remove_file(path)?;
+    }
+    if let Some(path) = private_config_path(name).filter(|p| p.is_file()) {
         std::fs::remove_file(path)?;
     }
     Ok(())

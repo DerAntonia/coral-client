@@ -12039,10 +12039,52 @@ fn set_active_config(name: &str) {
     *ACTIVE_CONFIG.lock().unwrap_or_else(|e| e.into_inner()) = name.to_string();
 }
 
-// Einstellungen der aktiven Config: ~/.config/coral-client/configs/<Name>.conf
-// (Windows: %APPDATA%\coral-client\configs\<Name>.conf).
+// Einstellungen der aktiven Config: ~/coral-client/configs/<Name>.conf (Windows:
+// %USERPROFILE%\coral-client\configs\<Name>.conf), der private Teil (s. is_private_setting)
+// daneben in "private configs".
 fn settings_path() -> Option<std::path::PathBuf> {
     assets::config_path(&active_config())
+}
+
+fn private_settings_path() -> Option<std::path::PathBuf> {
+    assets::private_config_path(&active_config())
+}
+
+// Schluessel, die nur zu diesem Rechner und Spieler passen und deshalb nicht in die
+// weitergebbare Config gehoeren: Konto, eigene Skin-Packs, Scanout-Timing (je Monitor
+// eingemessen), Bildrate des Monitors, Audiogeraete, Thread-Zahlen der CPU und wo man im
+// Menue zuletzt stand.
+fn is_private_setting(key: &str) -> bool {
+    matches!(
+        key,
+        "msa_refresh_token"
+            | "account_name"
+            | "mc_access_token"
+            | "account_uuid"
+            | "active_skin"
+            | "skin_order"
+            | "tear_position"
+            | "tear_timing_us"
+            | "tear_reserve_us"
+            | "fps_limit_hz"
+            | "audio_output_device"
+            | "voice_mic_device"
+            | "chunk_update_threads"
+            | "chunk_saver_threads"
+            | "settings_category"
+    ) || key.starts_with("scroll_")
+}
+
+// Gespeicherter Text in (Config, privater Teil) aufteilen.
+fn split_private_settings(text: &str) -> (String, String) {
+    let (mut oeffentlich, mut privat) = (String::new(), String::new());
+    for zeile in text.lines() {
+        let schluessel = zeile.split_once('=').map_or("", |(k, _)| k.trim());
+        let ziel = if is_private_setting(schluessel) { &mut privat } else { &mut oeffentlich };
+        ziel.push_str(zeile);
+        ziel.push('\n');
+    }
+    (oeffentlich, privat)
 }
 
 // Was fuer alle Configs gleich ist (Server-Liste, Chat-Verlauf, eigene Klaenge, Hintergrundbild),
@@ -13155,10 +13197,18 @@ impl Settings {
         let Some(path) = settings_path() else {
             return Self::default();
         };
+        let privat = private_settings_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
         let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
+            return Self::parse(&privat);
         };
-        Self::parse(&text)
+        // Der private Teil zuletzt: er gilt vor dem, was in der Config steht.
+        let settings = Self::parse(&format!("{text}\n{privat}"));
+        // Config von vor der Trennung (oder von Hand mit privaten Werten ergaenzt): gleich
+        // aufteilen, damit beim Weitergeben kein Konto mitwandert.
+        if !split_private_settings(&text).1.is_empty() {
+            let _ = settings.save();
+        }
+        settings
     }
 
     // Getrennt vom Dateizugriff, damit das Klemmen der Werte pruefbar ist (s. Tests
@@ -13179,7 +13229,12 @@ impl Settings {
     }
 
     fn parse(text: &str) -> Self {
-        let mut settings = Self::default();
+        Self::parse_onto(Self::default(), text)
+    }
+
+    // Wie parse, aber auf `settings` statt auf den Standardwerten -- so entstehen die
+    // Standardwerte selbst (s. Default): die Grundwerte aus base, darueber default-settings.conf.
+    fn parse_onto(mut settings: Self, text: &str) -> Self {
         // Fernsicht aus einer settings.conf von vor der LOD-Render-Distance: dort zeichnete sie
         // nur mit eingeschaltetem Modul und "Fernsicht zeichnen", in "chunk_saver_distance".
         let mut lod_neu = false;
@@ -14314,10 +14369,14 @@ impl Settings {
 
     fn save(&self) -> std::io::Result<std::path::PathBuf> {
         let path = settings_path().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "kein Konfigurationsverzeichnis"))?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+        let privat_pfad = private_settings_path().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "kein Konfigurationsverzeichnis"))?;
+        let (oeffentlich, privat) = split_private_settings(&self.serialize());
+        for (pfad, inhalt) in [(&privat_pfad, privat), (&path, oeffentlich)] {
+            if let Some(dir) = pfad.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(pfad, inhalt)?;
         }
-        std::fs::write(&path, self.serialize())?;
         Ok(path)
     }
 
@@ -14755,8 +14814,22 @@ fn set_keybind_mode_from_str(modes: &mut KeybindModes, action: KeyBindAction, va
     }
 }
 
+// Standardwerte fuer neue Installationen, Schluessel wie in settings.conf (s. Default).
+const DEFAULT_SETTINGS_CONF: &str = include_str!("default-settings.conf");
+
+// Neue Installationen starten mit den Werten aus default-settings.conf; was dort nicht steht,
+// kommt aus Settings::base. Gebraucht nur beim Laden und Zuruecksetzen -- die paar hundert
+// Zeilen jedes Mal zu lesen kostet dort nichts.
 impl Default for Settings {
     fn default() -> Self {
+        Settings::parse_onto(Settings::base(), DEFAULT_SETTINGS_CONF)
+    }
+}
+
+impl Settings {
+    // Grundwerte im Code, meist wie Vanilla. Was davon fuer neue Installationen abweicht, steht
+    // in default-settings.conf.
+    fn base() -> Self {
         Self {
             show_tearing_test: false,
             show_hud: true,
@@ -15593,6 +15666,7 @@ enum ButtonAction {
     // (erster Klick fragt nach, s. App::config_delete_armed).
     SelectConfig(usize),
     EditConfig(ConfigEdit),
+    OpenConfigFolder,
     DeleteConfig,
     ScatteringPrev,
     ScatteringNext,
@@ -18889,6 +18963,22 @@ impl App {
     // Den Skin-Ordner im Dateimanager zeigen. Er wird dabei ANGELEGT, falls es ihn noch
     // nicht gibt: beim ersten Mal existiert er nie, und ein Knopf, der dann nichts tut,
     // waere schlimmer als keiner.
+    // Configs-Seite "Ordner öffnen": der Ordner mit den weitergebbaren Configs.
+    fn open_configs_dir(&mut self) {
+        let Some(dir) = assets::configs_dir() else {
+            self.push_log("Config-Ordner unbekannt (kein HOME gesetzt)".to_string());
+            return;
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.push_log(format!("Config-Ordner konnte nicht angelegt werden ({e}): {}", dir.display()));
+            return;
+        }
+        match open_external_command(&dir).spawn() {
+            Ok(_) => self.push_log(format!("Config-Ordner geöffnet: {}", dir.display())),
+            Err(e) => self.push_log(format!("Config-Ordner konnte nicht geöffnet werden ({e}): {}", dir.display())),
+        }
+    }
+
     fn open_skins_dir(&mut self) {
         let Some(dir) = skins_dir() else {
             self.push_log("Skin-Ordner unbekannt (kein HOME gesetzt)".to_string());
@@ -24590,6 +24680,7 @@ impl App {
                         slider: None,
                     });
                 }
+                out.push(Self::nav_button(ButtonAction::OpenConfigFolder, config_button_rect(4), "Ordner öffnen", UI_SCALE_SMALL));
                 out.push(Button {
                     action: ButtonAction::DeleteConfig,
                     rect: config_button_rect(3),
@@ -25798,6 +25889,7 @@ impl App {
                 | ButtonAction::AudioTestTone
                 | ButtonAction::AudioSpatialTest
                 | ButtonAction::OpenSkinFolder
+                | ButtonAction::OpenConfigFolder
                 // Configs speichern selbst (s. switch_config); ein Speichern danach schriebe
                 // nur dieselben Werte noch einmal.
                 | ButtonAction::SelectConfig(_)
@@ -26519,12 +26611,15 @@ impl App {
                 self.restore_held_controls();
             }
             // Tatsaechlich behandelt NACH dem match (braucht &mut self).
-            ButtonAction::OpenSkinFolder => {}
+            ButtonAction::OpenSkinFolder | ButtonAction::OpenConfigFolder => {}
             ButtonAction::ToggleSkinAutoUnzip => set.skin_auto_unzip = !set.skin_auto_unzip,
         }
 
         if action == ButtonAction::OpenSkinFolder {
             self.open_skins_dir();
+        }
+        if action == ButtonAction::OpenConfigFolder {
+            self.open_configs_dir();
         }
         if action == ButtonAction::CycleWallpaper {
             self.request_wallpaper(true);
@@ -51471,18 +51566,18 @@ mod theme_settings_tests {
 
     #[test]
     fn eigene_themes_ueberstehen_speichern_und_laden() {
-        let mut s = Settings::parse("show_hud=true\n");
+        let mut s = Settings::parse_onto(Settings::base(), "show_hud=true\n");
         assert_eq!(s.theme_choice, ThemeChoice::Preset(0));
         let mut farben = theme::PRESETS[3].colors;
         farben[theme::Slot::Accent.index()] = 0x123456;
         s.custom_themes.push(CustomTheme { name: "Mein | Theme".to_string(), colors: farben });
         s.select_theme(ThemeChoice::Custom(0));
-        let gelesen = Settings::parse(&s.serialize());
+        let gelesen = Settings::parse_onto(Settings::base(), &s.serialize());
         assert_eq!(gelesen.custom_themes, s.custom_themes);
         assert_eq!(gelesen.theme_choice, ThemeChoice::Custom(0));
         assert_eq!(gelesen.theme, farben);
         s.select_theme(ThemeChoice::Preset(7));
-        let gelesen = Settings::parse(&s.serialize());
+        let gelesen = Settings::parse_onto(Settings::base(), &s.serialize());
         assert_eq!((gelesen.theme_choice, gelesen.theme), (ThemeChoice::Preset(7), theme::PRESETS[7].colors));
     }
 
@@ -51495,10 +51590,10 @@ mod theme_settings_tests {
             .filter(|&sl| sl != theme::Slot::Selection)
             .map(|sl| format!("theme_{}={:06X}\n", sl.key(), rosa.colors[sl.index()]))
             .collect();
-        assert_eq!(Settings::parse(&zeilen).theme_choice, ThemeChoice::Preset(4));
+        assert_eq!(Settings::parse_onto(Settings::base(), &zeilen).theme_choice, ThemeChoice::Preset(4));
         // Geaenderte Farben: werden ein eigenes Theme.
         let geaendert = format!("{zeilen}theme_accent=ABCDEF\n");
-        let s = Settings::parse(&geaendert);
+        let s = Settings::parse_onto(Settings::base(), &geaendert);
         assert_eq!(s.theme_choice, ThemeChoice::Custom(0));
         assert_eq!(s.theme[theme::Slot::Accent.index()], 0xABCDEF);
         assert_eq!(s.custom_themes[0].colors, s.theme);
@@ -51683,7 +51778,7 @@ mod damage_tint_tests {
     // ist also 1 - 178/255.
     #[test]
     fn vorgabe_ist_vanillas_rot_mit_vanillas_anteil() {
-        let set = Settings::default();
+        let set = Settings::base();
         let [r, g, b, a] = set.damage_tint_rgba();
         assert!((r - 1.0).abs() < 1e-6, "reines Rot");
         assert!(g.abs() < 1e-6 && b.abs() < 1e-6, "kein Grün-/Blauanteil");
@@ -51722,7 +51817,7 @@ mod damage_tint_tests {
             damage_tint_alpha: 75,
             ..Default::default()
         };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.damage_tint_hue, 210);
         assert_eq!(geladen.damage_tint_saturation, 45);
         assert_eq!(geladen.damage_tint_value, 65);
@@ -51734,10 +51829,10 @@ mod damage_tint_tests {
     #[test]
     fn kreuz_farbe_ueberlebt_speichern_und_laden() {
         let set = Settings { crosshair_color_mode: 1, crosshair_hue: 123, crosshair_saturation: 45, crosshair_value: 67, ..Default::default() };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!((geladen.crosshair_color_mode, geladen.crosshair_hue, geladen.crosshair_saturation, geladen.crosshair_value), (1, 123, 45, 67));
         let alt = |modus: u32| {
-            let s = Settings::parse(&format!("crosshair_color_mode={modus}\n"));
+            let s = Settings::parse_onto(Settings::base(), &format!("crosshair_color_mode={modus}\n"));
             (s.crosshair_color_mode, s.crosshair_hue, s.crosshair_saturation, s.crosshair_value)
         };
         assert_eq!(alt(0), (0, 0, 0, 100));
@@ -51751,34 +51846,34 @@ mod damage_tint_tests {
     #[test]
     fn ring_kontur_und_umriss_komplementaer_ueberleben_speichern_und_laden() {
         let set = Settings { crosshair_outline: true, crosshair_ring_outline: false, block_outline_complementary: true, ..Default::default() };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert!(geladen.crosshair_outline && !geladen.crosshair_ring_outline && geladen.block_outline_complementary);
-        assert!(Settings::parse("crosshair_outline=true\n").crosshair_ring_outline, "alte Datei: Ring wie das Kreuz");
+        assert!(Settings::parse_onto(Settings::base(), "crosshair_outline=true\n").crosshair_ring_outline, "alte Datei: Ring wie das Kreuz");
     }
 
     // Die eigenen Arten der Hitbox-Anzeige: Schalter, Farbe und Deckkraft je Art.
     #[test]
     fn hitbox_arten_ueberleben_speichern_und_laden() {
         use hitbox_kinds::{HitboxKind, HitboxStyle};
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         set.module_hitbox_styles[HitboxKind::EnderPearl.index()] = HitboxStyle { on: false, custom: true, hue: 12, saturation: 34, value: 56, alpha: 78 };
         set.module_hitbox_styles[HitboxKind::Water.index()].on = true;
         set.module_hitbox_items = true;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.module_hitbox_styles, set.module_hitbox_styles);
         assert!(geladen.module_hitbox_items);
     }
 
     #[test]
     fn schild_modul_einstellungen_ueberleben_speichern_und_laden() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert!(!set.module_shields, "Modul ist anfangs aus");
         set.module_shields = true;
         set.shield_cd_players = false;
         set.shield_hold_alpha = 60;
         set.shield_cd_hue = 120;
         set.hud_shield_cd_y = 0.7;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert!(geladen.module_shields);
         assert!(!geladen.shield_cd_players);
         assert_eq!(geladen.shield_hold_alpha, 60);
@@ -51816,7 +51911,7 @@ mod damage_tint_tests {
     // Die neuen Anzeige-Einstellungen des Schild-Moduls ueberleben eine Speicherrunde.
     #[test]
     fn schild_anzeigen_werden_gespeichert() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert_eq!(set.shield_mark(ShieldColor::Cooldown), ShieldMark::Hitbox);
         assert_eq!(set.shield_mark(ShieldColor::Hold), ShieldMark::Model);
         set.shield_cd_mark = 0;
@@ -51826,13 +51921,13 @@ mod damage_tint_tests {
         set.shield_cd_text_style = 1;
         set.arrow_text_style = 0;
         set.shield_cd_alpha = 70;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.shield_mark(ShieldColor::Cooldown), ShieldMark::Model);
         assert_eq!(geladen.shield_mark(ShieldColor::Hold), ShieldMark::Hitbox);
         assert_eq!((geladen.shield_cd_self_mode, geladen.shield_cd_text_style, geladen.arrow_text_style), (1, 1, 0));
         assert_eq!(geladen.font_of(ShadowArea::ShieldCountdown), Some(FontKind::DmSans));
         // Alte Modul-Schriften werden als feste Bereichs-Schrift uebernommen.
-        let alt = Settings::parse("shield_cd_font=0\narrow_text_font=2\n");
+        let alt = Settings::parse_onto(Settings::base(), "shield_cd_font=0\narrow_text_font=2\n");
         assert_eq!(alt.font_of(ShadowArea::ShieldCountdown), Some(FontKind::Minecraft));
         assert_eq!(alt.font_of(ShadowArea::ArrowNumber), Some(FontKind::Outfit));
         assert_eq!(geladen.shield_cd_alpha, 70);
@@ -51853,7 +51948,7 @@ mod damage_tint_tests {
             sens_calc_dpi: 1600,
             ..Default::default()
         };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!((geladen.sens_calc_mc_percent, geladen.sens_calc_dpi), (57.5, 1600));
     }
 
@@ -51883,13 +51978,13 @@ mod damage_tint_tests {
         assert!((zoomed_fov(80.0, 40, 0.5) - 40.0).abs() < 1e-3, "geometrisch: halber Weg = Wurzel der Stärke");
         assert_eq!(zoom_sens_factor(25, 0.0), 1.0);
         assert!((zoom_sens_factor(25, 1.0) - 0.25).abs() < 1e-6);
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert!(set.module_zoom);
         assert_eq!(set.keybinds.binds(KeyBindAction::Zoom).next(), Some(Bind::Key(KeyCode::KeyC)));
         set.zoom_factor_tenths = 65;
         set.zoom_sens_percent = 40;
         set.keybind_modes.set(KeyBindAction::Zoom, KeybindMode::Toggle);
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!((geladen.zoom_factor_tenths, geladen.zoom_sens_percent), (65, 40));
         assert!(geladen.keybind_modes.get(KeyBindAction::Zoom) == KeybindMode::Toggle);
     }
@@ -51905,19 +52000,19 @@ mod damage_tint_tests {
         assert_eq!(chat_fade_step(0, -1), 0);
         assert_eq!(chat_fade_step(120, 1), 120);
         assert_eq!((chat_fade_step(4, 1), chat_fade_step(4, -1)), (5, 3), "Zwischenwert rastet in Schrittrichtung ein");
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert_eq!(set.chat_fade_secs, 10);
         set.chat_fade_secs = 0;
-        assert_eq!(Settings::parse(&set.serialize()).chat_fade_secs, 0);
+        assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).chat_fade_secs, 0);
     }
 
     #[test]
     fn lichtstaerken_werden_gespeichert() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         set.set_light_factor("torch", 50);
         set.set_light_factor("glowstone", 200);
         set.set_light_factor("lantern", 100);
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.light_factor_of("torch"), 50);
         assert_eq!(geladen.light_factor_of("glowstone"), 200);
         assert_eq!(geladen.light_factor_of("lantern"), 100);
@@ -51926,10 +52021,10 @@ mod damage_tint_tests {
 
     #[test]
     fn zeiger_in_slotmitte_ist_an_und_wird_gespeichert() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert!(set.inventory_cursor_to_slot);
         set.inventory_cursor_to_slot = false;
-        assert!(!Settings::parse(&set.serialize()).inventory_cursor_to_slot);
+        assert!(!Settings::parse_onto(Settings::base(), &set.serialize()).inventory_cursor_to_slot);
     }
 
     #[test]
@@ -51937,7 +52032,7 @@ mod damage_tint_tests {
     // Einstellungs-Kategorie oder Seite klickt nur.
     fn fenster_rauschen_seitenwechsel_klicken() {
         use ui_sound::UiSound;
-        let set = Settings::default();
+        let set = Settings::base();
         for fenster in [ButtonAction::OpenQuickConnect, ButtonAction::NewServer] {
             assert_eq!(ui_sound_for_action(fenster, &set), UiSound::Open);
         }
@@ -51994,42 +52089,42 @@ mod damage_tint_tests {
     #[test]
     fn kategorie_lautstaerke_wird_gespeichert_und_verrechnet() {
         use protocol::packets::SoundCategory as C;
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         set.master_volume = 50;
         let spieler = VOLUME_CATEGORIES.iter().position(|c| c.category == C::Players).unwrap();
         let ui = VOLUME_CATEGORIES.iter().position(|c| c.category == C::Ui).unwrap();
         set.category_volume[spieler] = 40;
         set.category_volume[ui] = 30;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.category_volume, set.category_volume);
         assert!((geladen.sound_gain(C::Players) - 0.2).abs() < 1e-6);
         assert!((geladen.sound_gain(C::Blocks) - 0.5).abs() < 1e-6);
         // Die Oberflaeche haengt nicht an der Hauptlautstaerke.
         assert!((geladen.sound_gain(C::Ui) - 0.3).abs() < 1e-6);
         // Die Lautstaerke je UI-Klang uebersteht Speichern und Laden.
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         set.ui_sound_volume[ui_sound::UiSound::Erase.index()] = 35;
         set.ui_sound_volume[ui_sound::UiSound::Hover.index()] = 0;
-        assert_eq!(Settings::parse(&set.serialize()).ui_sound_volume, set.ui_sound_volume);
+        assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).ui_sound_volume, set.ui_sound_volume);
     }
 
     #[test]
     fn nur_skin_und_dauer_ueberleben_speichern_und_laden() {
-        let set = Settings::default();
+        let set = Settings::base();
         // Vorgabe wie Vanilla: nur der Skin blitzt, 10 Ticks.
         assert!(set.damage_tint_skin_only);
         assert_eq!(set.damage_tint_ticks, 10);
         let mut set = set;
         set.damage_tint_skin_only = false;
         set.damage_tint_ticks = 23;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert!(!geladen.damage_tint_skin_only);
         // Der alte Schalter "Ruestung faerben = AN" heisst jetzt "Nur Skin = AUS".
-        assert!(!Settings::parse("damage_tint_armor=true").damage_tint_skin_only);
+        assert!(!Settings::parse_onto(Settings::base(), "damage_tint_armor=true").damage_tint_skin_only);
         assert_eq!(geladen.damage_tint_ticks, 23);
         // Unsinn aus der Datei wird in den Bereich geklemmt.
-        assert_eq!(Settings::parse("damage_tint_ticks=0").damage_tint_ticks, DAMAGE_TINT_TICKS_MIN);
-        assert_eq!(Settings::parse("damage_tint_ticks=999").damage_tint_ticks, DAMAGE_TINT_TICKS_MAX);
+        assert_eq!(Settings::parse_onto(Settings::base(), "damage_tint_ticks=0").damage_tint_ticks, DAMAGE_TINT_TICKS_MIN);
+        assert_eq!(Settings::parse_onto(Settings::base(), "damage_tint_ticks=999").damage_tint_ticks, DAMAGE_TINT_TICKS_MAX);
         assert_eq!(damage_tint_duration_text(10), "0,50 s");
         assert_eq!(damage_tint_duration_text(1), "0,05 s");
     }
@@ -52060,7 +52155,7 @@ mod sky_color_tests {
         assert_eq!(sky_time_label(6000), "12:00");
         assert_eq!(sky_time_label(18_000), "00:00");
         assert_eq!(sky_time_label(23_750), "05:45");
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert!(set.sky_mode == SkyMode::Solid && !set.module_sky_fixed_time, "Vorgabe wie bisher: nur die Farbe");
         set.module_sky_time = 0;
         adjust_sky_time(&mut set, -1);
@@ -52072,11 +52167,11 @@ mod sky_color_tests {
         set.sky_mode = SkyMode::Gradient;
         set.sky_moon = false;
         set.sky_stars = false;
-        let zurueck = Settings::parse(&set.serialize());
+        let zurueck = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!((zurueck.module_sky_time, zurueck.module_sky_fixed_time, zurueck.sky_mode), (13_250, true, SkyMode::Gradient));
         assert!(zurueck.sky_sun && !zurueck.sky_moon && !zurueck.sky_stars);
         // Alte Einstellung "feste Farbe aus" heisst jetzt Skin.
-        assert_eq!(Settings::parse("module_sky_fixed_color=false\n").sky_mode, SkyMode::Skin);
+        assert_eq!(Settings::parse_onto(Settings::base(), "module_sky_fixed_color=false\n").sky_mode, SkyMode::Skin);
     }
 
     // PvP-Packs machen rain.png/snow.png voll durchsichtig: ohne Modul bleibt das so, mit
@@ -52114,7 +52209,7 @@ mod sky_color_tests {
 
     #[test]
     fn wetter_modul_einstellungen() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert!(!set.module_weather && set.weather_mode == WeatherMode::Server && set.weather_radius == precipitation::RADIUS_DEFAULT);
         assert_eq!(set.weather_radius_inner, 0, "Vorgabe wie Vanilla: von der Kamera an");
         assert_eq!(WeatherMode::Snow.next(), WeatherMode::Server, "Auswahl laeuft im Kreis");
@@ -52123,20 +52218,20 @@ mod sky_color_tests {
         set.weather_mode = WeatherMode::Snow;
         set.weather_radius = 5;
         set.weather_radius_inner = 3;
-        let zurueck = Settings::parse(&set.serialize());
+        let zurueck = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(
             (zurueck.module_weather, zurueck.weather_mode, zurueck.weather_radius_inner, zurueck.weather_radius),
             (true, WeatherMode::Snow, 3, 5)
         );
         // Unsinn in der Datei: Vorgaben bzw. geklemmt.
-        let kaputt = Settings::parse("weather_mode=hagel\nweather_radius=99\n");
+        let kaputt = Settings::parse_onto(Settings::base(), "weather_mode=hagel\nweather_radius=99\n");
         assert_eq!((kaputt.weather_mode, kaputt.weather_radius), (WeatherMode::Server, precipitation::RADIUS_MAX));
     }
 
     #[test]
     fn das_modul_steht_im_menue_und_ist_anfangs_aus() {
         assert!(MODULE_IDS.contains(&ModuleId::SkyColor));
-        assert!(!Settings::default().module_sky_color_enabled);
+        assert!(!Settings::base().module_sky_color_enabled);
         assert!(matches!(ModuleId::SkyColor.toggle_action(), ButtonAction::ToggleModuleSkyColor));
     }
 
@@ -52144,7 +52239,7 @@ mod sky_color_tests {
     // Die Vorgabefarbe soll dem bisherigen Tageshimmel entsprechen: wer das Modul einschaltet,
     // soll keinen Farbsprung sehen, sondern nur, dass der Himmel stehen bleibt.
     fn die_vorgabe_trifft_den_tageshimmel() {
-        let set = Settings::default();
+        let set = Settings::base();
         let aus_hsv = set.sky_color_rgb();
         for i in 0..3 {
             // Nicht exakt gleich: die Regler laufen im Raster (10 Grad / 5 Prozent), der
@@ -52168,7 +52263,7 @@ mod sky_color_tests {
             module_sky_color_value: 60,
             ..Default::default()
         };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert!(geladen.module_sky_color_enabled);
         assert_eq!(geladen.module_sky_color_hue, 280);
         assert_eq!(geladen.module_sky_color_saturation, 35);
@@ -52265,24 +52360,24 @@ mod text_shadow_tests {
         assert_eq!(shadow_marker(&texts[2]), None);
         assert!(is_selection_boundary(&texts[2]) && !is_selection_boundary(&texts[0]));
 
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert_eq!(set.global_text_shadow(), TextShadow::Outline);
         set.text_shadow_style = 1;
         assert_eq!(set.global_text_shadow(), TextShadow::Vanilla);
         set.area_shadow[ShadowArea::Chat.index()] = 3;
         assert_eq!(set.shadow_of(ShadowArea::Chat), Some(TextShadow::Off));
         assert_eq!(set.shadow_of(ShadowArea::Hotbar), None);
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.text_shadow_style, 1);
         assert_eq!(geladen.area_shadow, set.area_shadow);
 
         // Staerke je Kaestchen: bei der Kontur die Dicke, sonst die Deckkraft.
         set.shadow_thickness[1 + ShadowArea::Hotbar.index()] = 25;
         set.shadow_opacity[0] = 40;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.shadow_strength(1 + ShadowArea::Hotbar.index(), TextShadow::Outline), 2.5);
         assert_eq!(geladen.shadow_strength(0, TextShadow::Vanilla), 0.4);
-        assert_eq!(Settings::parse("shadow_thickness=99,1\n").shadow_thickness[..2], [SHADOW_THICKNESS_RANGE.1, SHADOW_THICKNESS_RANGE.0]);
+        assert_eq!(Settings::parse_onto(Settings::base(), "shadow_thickness=99,1\n").shadow_thickness[..2], [SHADOW_THICKNESS_RANGE.1, SHADOW_THICKNESS_RANGE.0]);
     }
 
     #[test]
@@ -52305,12 +52400,12 @@ mod text_shadow_tests {
         push_shadow_marker(&mut grenze, None);
         assert!(grenze.iter().all(|t| font_marker(t).is_none()));
 
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert_eq!(set.font_of(ShadowArea::Inventory), None);
         set.area_font[ShadowArea::Inventory.index()] = 3;
         set.area_font[ShadowArea::Chat.index()] = FontKind::ALL.len() as u8;
         set.area_shadow[ShadowArea::Inventory.index()] = 2;
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.font_of(ShadowArea::Inventory), Some(FontKind::Outfit));
         assert_eq!(geladen.font_of(ShadowArea::Chat), FontKind::ALL.last().copied());
         assert_eq!(geladen.shadow_of(ShadowArea::Inventory), Some(TextShadow::Vanilla));
@@ -52444,21 +52539,21 @@ mod hud_split_tests {
             hud_bossbar_scale: 150,
             ..Default::default()
         };
-        let g = Settings::parse(&set.serialize());
+        let g = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!((g.hud_bossbar_x, g.hud_bossbar_y, g.hud_bossbar_scale), (0.25, 0.6, 150));
         // Standard: Vanillas Lage oben mittig.
-        assert_eq!((Settings::default().hud_bossbar_x, Settings::default().hud_bossbar_y), (0.5, 0.0));
+        assert_eq!((Settings::base().hud_bossbar_x, Settings::base().hud_bossbar_y), (0.5, 0.0));
         assert!(g.effects_detailed && !g.effects_icon && g.effects_name_color && g.effects_timer_color);
         assert!(!g.effects_name && g.effects_timer_blink == EFFECTS_BLINK_DYNAMIC && g.effects_hide_ambient);
         // Alte Datei mit dem Schalter.
-        assert_eq!(Settings::parse("effects_timer_blink=false\n").effects_timer_blink, EFFECTS_BLINK_OFF);
-        assert_eq!(Settings::parse("effects_timer_blink=true\n").effects_timer_blink, EFFECTS_BLINK_ON);
+        assert_eq!(Settings::parse_onto(Settings::base(), "effects_timer_blink=false\n").effects_timer_blink, EFFECTS_BLINK_OFF);
+        assert_eq!(Settings::parse_onto(Settings::base(), "effects_timer_blink=true\n").effects_timer_blink, EFFECTS_BLINK_ON);
         assert_eq!((g.hud_effects_detail_x, g.hud_effects_detail_y, g.effects_align, g.effects_timer_style), (0.4, 0.6, EFFECTS_ALIGN_BOTTOM, 2));
         assert_eq!((g.hud_subtitle_x, g.hud_subtitle_y, g.hud_subtitle_align), (0.2, 0.8, 0));
         assert_eq!((g.hud_title_scale, g.hud_subtitle_scale), (150, 70));
         assert_eq!((g.hud_effects_x, g.hud_effects_y, g.hud_effects_scale), (0.3, 0.1, 120));
         assert!(!g.show_effects_hud && !g.show_effects_inventory);
-        assert!(Settings::default().show_effects_hud && Settings::default().show_effects_inventory);
+        assert!(Settings::base().show_effects_hud && Settings::base().show_effects_inventory);
     }
 }
 
@@ -52472,14 +52567,14 @@ mod crit_color_tests {
     fn steht_im_video_tab_unter_der_schadens_faerbung_und_ist_anfangs_aus() {
         const { assert!(CRIT_COLOR_ROW > DAMAGE_TINT_TICKS_ROW) };
         const { assert!(CRIT_COLOR_ROW < VIDEO_ROW_COUNT) };
-        assert!(!Settings::default().module_crit_color_enabled, "eine Abweichung von Vanilla soll man einschalten müssen");
+        assert!(!Settings::base().module_crit_color_enabled, "eine Abweichung von Vanilla soll man einschalten müssen");
     }
 
     #[test]
     // Die Vorgabefarbe muss sich vom gewoehnlichen Treffer deutlich unterscheiden -- sonst
     // taugt das Modul nichts, ohne dass man erst die Regler suchen muss.
     fn die_vorgabefarbe_hebt_sich_vom_gewoehnlichen_treffer_ab() {
-        let set = Settings::default();
+        let set = Settings::base();
         let normal = set.damage_tint_rgba();
         let crit = set.crit_color_rgba();
         let abstand: f32 = (0..3).map(|i| (normal[i] - crit[i]).abs()).sum();
@@ -52490,7 +52585,7 @@ mod crit_color_tests {
     // Die beiden Farben sind UNABHAENGIG -- wer die eine verstellt, darf die andere nicht
     // mitziehen. Genau das waere passiert, wenn beide auf denselben Feldern saessen.
     fn die_crit_farbe_und_die_gewoehnliche_stoeren_sich_nicht() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         let vorher = set.damage_tint_rgba();
         *set.crit_color_mut(DamageTintAxis::Hue) = 200;
         *set.crit_color_mut(DamageTintAxis::Alpha) = 10;
@@ -52507,7 +52602,7 @@ mod crit_color_tests {
             module_crit_color_alpha: 85,
             ..Default::default()
         };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert!(geladen.module_crit_color_enabled);
         assert_eq!(geladen.module_crit_color_hue, 300);
         assert_eq!(geladen.module_crit_color_saturation, 40);
@@ -52517,7 +52612,7 @@ mod crit_color_tests {
 
     #[test]
     fn der_blockumriss_ueberlebt_speichern_und_laden() {
-        assert!(!Settings::default().module_block_outline, "eine Abweichung von Vanilla soll man einschalten müssen");
+        assert!(!Settings::base().module_block_outline, "eine Abweichung von Vanilla soll man einschalten müssen");
         let set = Settings {
             module_block_outline: true,
             block_outline_hue: 120,
@@ -52527,12 +52622,12 @@ mod crit_color_tests {
             block_outline_width_px: 4,
             ..Default::default()
         };
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert!(geladen.module_block_outline);
         assert_eq!(geladen.block_outline_rgba(), set.block_outline_rgba());
         assert_eq!(geladen.block_outline_width_px, 4);
         // Kaputte Werte werden geklemmt statt uebernommen.
-        let kaputt = Settings::parse("block_outline_width_px=99\nblock_outline_alpha=500\n");
+        let kaputt = Settings::parse_onto(Settings::base(), "block_outline_width_px=99\nblock_outline_alpha=500\n");
         assert_eq!(kaputt.block_outline_width_px, BLOCK_OUTLINE_WIDTH_MAX);
         assert_eq!(kaputt.block_outline_alpha, HSV_SAT_VAL_MAX);
     }
@@ -53079,11 +53174,11 @@ mod tests {
     // behalten, sonst faenden alle Nutzer nach dem Update wortlos Monitor-Refresh vor.
     #[test]
     fn altes_fps_limit_wird_auf_den_hz_wert_gehoben() {
-        assert_eq!(Settings::parse("fps_limit=4\n").fps_limit, 120);
-        assert_eq!(Settings::parse("fps_limit=0\n").fps_limit, FPS_LIMIT_MONITOR);
+        assert_eq!(Settings::parse_onto(Settings::base(), "fps_limit=4\n").fps_limit, 120);
+        assert_eq!(Settings::parse_onto(Settings::base(), "fps_limit=0\n").fps_limit, FPS_LIMIT_MONITOR);
         // Neuer Schluessel gewinnt und traegt beliebige Zwischenwerte, die nie in der Liste standen.
-        assert_eq!(Settings::parse("fps_limit_hz=165\n").fps_limit, 165);
-        assert_eq!(Settings::parse(&format!("fps_limit_hz={FPS_LIMIT_UNLIMITED}\n")).fps_limit, FPS_LIMIT_UNLIMITED);
+        assert_eq!(Settings::parse_onto(Settings::base(), "fps_limit_hz=165\n").fps_limit, 165);
+        assert_eq!(Settings::parse_onto(Settings::base(), &format!("fps_limit_hz={FPS_LIMIT_UNLIMITED}\n")).fps_limit, FPS_LIMIT_UNLIMITED);
         // Ein absurder Tippwert wird geklemmt, die beiden Sonderwerte bleiben unangetastet.
         assert_eq!(clamp_fps_limit(999_999), FPS_LIMIT_TYPED_MAX);
         assert_eq!(clamp_fps_limit(FPS_LIMIT_MONITOR), FPS_LIMIT_MONITOR);
@@ -53140,7 +53235,7 @@ mod tests {
     fn hotbar_blaettern_liegt_standardmaessig_auf_dem_rad() {
         // Auch eine alte settings.conf ohne die beiden Eintraege bekommt das Rad -- sonst
         // liesse sich nach dem Update die Hotbar nicht mehr blaettern.
-        let kb = Settings::parse("keybind_forward=KeyW\n").keybinds;
+        let kb = Settings::parse_onto(Settings::base(), "keybind_forward=KeyW\n").keybinds;
         assert_eq!(kb.bind_at(KeyBindAction::HotbarPrev, 0), Some(Bind::Mouse(BindMouse::WheelUp)));
         assert_eq!(kb.bind_at(KeyBindAction::HotbarNext, 0), Some(Bind::Mouse(BindMouse::WheelDown)));
         assert!(KeyBindAction::HotbarPrev.is_press_action() && KeyBindAction::HotbarNext.is_press_action());
@@ -53162,16 +53257,16 @@ mod tests {
             assert_eq!(bind_from_name(&name), Some(Bind::Mouse(button)), "Rundreise fehlgeschlagen für {name}");
         }
         assert_eq!(
-            Settings::parse("keybind_sprint=Maus zurück\n").keybinds.bind_at(KeyBindAction::Sprint, 0),
+            Settings::parse_onto(Settings::base(), "keybind_sprint=Maus zurück\n").keybinds.bind_at(KeyBindAction::Sprint, 0),
             Some(Bind::Mouse(BindMouse::Back))
         );
 
         // Eine settings.conf aus der Zeit vor den Maustasten enthaelt nur KeyCode-Namen --
         // die muessen unveraendert weiter gelesen werden.
-        assert_eq!(Settings::parse("keybind_sprint=KeyR\n").keybinds.bind_at(KeyBindAction::Sprint, 0), Some(Bind::Key(KeyCode::KeyR)));
+        assert_eq!(Settings::parse_onto(Settings::base(), "keybind_sprint=KeyR\n").keybinds.bind_at(KeyBindAction::Sprint, 0), Some(Bind::Key(KeyCode::KeyR)));
         // Unsinn im Wert laesst den Standard stehen, statt die Aktion unbelegt zu machen.
         assert_eq!(
-            Settings::parse("keybind_sprint=VoelligerUnsinn\n").keybinds.bind_at(KeyBindAction::Sprint, 0),
+            Settings::parse_onto(Settings::base(), "keybind_sprint=VoelligerUnsinn\n").keybinds.bind_at(KeyBindAction::Sprint, 0),
             Keybinds::default().bind_at(KeyBindAction::Sprint, 0)
         );
     }
@@ -53227,7 +53322,7 @@ mod tests {
     // laeuft unveraendert durch, ein leerer Wert heisst "unbelegt".
     #[test]
     fn mehrfachbelegung_ueberlebt_die_datei() {
-        let parsed = Settings::parse("keybind_sprint=ControlLeft,Maus zurück\n").keybinds;
+        let parsed = Settings::parse_onto(Settings::base(), "keybind_sprint=ControlLeft,Maus zurück\n").keybinds;
         assert_eq!(parsed.bind_at(KeyBindAction::Sprint, 0), Some(Bind::Key(KeyCode::ControlLeft)));
         assert_eq!(parsed.bind_at(KeyBindAction::Sprint, 1), Some(Bind::Mouse(BindMouse::Back)));
 
@@ -53235,9 +53330,9 @@ mod tests {
         assert_eq!(binds_to_str(&parsed, KeyBindAction::Sprint), "ControlLeft,Maus zurück");
 
         // Alte Datei: ein Name, keine Kommas.
-        assert_eq!(Settings::parse("keybind_jump=Space\n").keybinds.count(KeyBindAction::Jump), 1);
+        assert_eq!(Settings::parse_onto(Settings::base(), "keybind_jump=Space\n").keybinds.count(KeyBindAction::Jump), 1);
         // Leer = bewusst unbelegt, nicht "Standard nehmen".
-        assert_eq!(Settings::parse("keybind_jump=\n").keybinds.count(KeyBindAction::Jump), 0);
+        assert_eq!(Settings::parse_onto(Settings::base(), "keybind_jump=\n").keybinds.count(KeyBindAction::Jump), 0);
     }
 
     // Belegung und H/T- bzw. "Erweitert"-Kaestchen duerfen sich nicht ueberlagern.
@@ -53412,13 +53507,13 @@ mod tests {
 
     #[test]
     fn wiederholen_ist_vorgabe_wie_in_vanilla() {
-        assert_eq!(Settings::default().hold_use_repeat, HoldUseRepeat::Always);
+        assert_eq!(Settings::base().hold_use_repeat, HoldUseRepeat::Always);
         // Alte Schalter-Werte werden weiter verstanden.
-        assert_eq!(Settings::parse("hold_use_repeat=false\n").hold_use_repeat, HoldUseRepeat::Never);
-        assert_eq!(Settings::parse("hold_use_repeat=true\n").hold_use_repeat, HoldUseRepeat::Always);
+        assert_eq!(Settings::parse_onto(Settings::base(), "hold_use_repeat=false\n").hold_use_repeat, HoldUseRepeat::Never);
+        assert_eq!(Settings::parse_onto(Settings::base(), "hold_use_repeat=true\n").hold_use_repeat, HoldUseRepeat::Always);
         for modus in [HoldUseRepeat::Always, HoldUseRepeat::ExceptBlocks, HoldUseRepeat::Never] {
             let set = Settings { hold_use_repeat: modus, ..Default::default() };
-            assert_eq!(Settings::parse(&set.serialize()).hold_use_repeat, modus, "{modus:?} muss das Speichern überleben");
+            assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).hold_use_repeat, modus, "{modus:?} muss das Speichern überleben");
         }
     }
 
@@ -53432,7 +53527,7 @@ mod tests {
         kb.set_at(KeyBindAction::TogglePerspective, 0, Bind::Key(KeyCode::KeyP));
         assert_eq!(kb.bind_at(KeyBindAction::TogglePerspective, 0), Some(Bind::Key(KeyCode::KeyP)));
         assert_eq!(
-            Settings::parse("keybind_toggle_perspective=KeyP\n").keybinds.bind_at(KeyBindAction::TogglePerspective, 0),
+            Settings::parse_onto(Settings::base(), "keybind_toggle_perspective=KeyP\n").keybinds.bind_at(KeyBindAction::TogglePerspective, 0),
             Some(Bind::Key(KeyCode::KeyP))
         );
 
@@ -53502,7 +53597,7 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), KeyBindAction::ALL.len(), "zwei Aktionen teilen sich einen Konfig-Schlüssel");
         // ... und die neuen Belegungen muessen den Weg durch settings.conf ueberleben.
-        let saved = Settings::parse("keybind_hotbar_5=KeyB\nkeybind_drop_item=KeyG\n");
+        let saved = Settings::parse_onto(Settings::base(), "keybind_hotbar_5=KeyB\nkeybind_drop_item=KeyG\n");
         assert_eq!(saved.keybinds.bind_at(KeyBindAction::Hotbar(5), 0), Some(Bind::Key(KeyCode::KeyB)));
         assert_eq!(saved.keybinds.bind_at(KeyBindAction::DropItem, 0), Some(Bind::Key(KeyCode::KeyG)));
         // Alle Aktionen brauchen einen eigenen, stabilen Index (fuer keybind_physical_down).
@@ -53518,7 +53613,7 @@ mod tests {
     // dieselbe Einstellung.
     #[test]
     fn jede_perspektive_hat_ein_eigenes_sichtfeld() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         for (i, p) in Perspective::ALL.into_iter().enumerate() {
             set.set_fov_of(p, 80.0 + i as f32 * 10.0);
         }
@@ -53568,21 +53663,21 @@ mod tests {
     // alte settings.conf (Fernsicht hing am Modul und an "Fernsicht zeichnen") wird uebernommen.
     #[test]
     fn partikel_anpassung_wird_gespeichert_und_alter_explosionsschalter_uebernommen() {
-        let mut set = Settings::parse("");
+        let mut set = Settings::parse_onto(Settings::base(), "");
         assert!(set.particle_tuning.iter().all(|t| *t == particles::ParticleTuning::default()));
         let herzen = particles::KINDS.iter().position(|k| k.key == "damage_indicator").unwrap();
         set.particle_tuning[herzen] =
             particles::ParticleTuning { enabled: false, lifetime_pct: 200, opacity_pct: 40, speed_pct: 50, amount_pct: 25, interval_pct: 100, all_at_once: true };
         let text = set.serialize();
         assert!(text.contains("particle_tuning=damage_indicator:0,200,40,50,25,100,1\n"), "nur Abweichungen: {text}");
-        assert_eq!(Settings::parse(&text).particle_tuning, set.particle_tuning);
+        assert_eq!(Settings::parse_onto(Settings::base(), &text).particle_tuning, set.particle_tuning);
         // Alte Zeile mit vier Werten: "potion" galt damals auch fuer die Spritzer.
-        let alt = Settings::parse("particle_tuning=potion:1,50,100,100\n");
+        let alt = Settings::parse_onto(Settings::base(), "particle_tuning=potion:1,50,100,100\n");
         let art = |key: &str| particles::KINDS.iter().position(|k| k.key == key).unwrap();
         assert_eq!(alt.particle_tuning[art("potion")].lifetime_pct, 50);
         assert_eq!(alt.particle_tuning[art("potion_splash")].lifetime_pct, 50);
         assert_eq!(alt.particle_tuning[art("potion")].amount_pct, 100);
-        let alt = Settings::parse("explosion_particles=false\n");
+        let alt = Settings::parse_onto(Settings::base(), "explosion_particles=false\n");
         assert!(!alt.particle_tuning[particles::KIND_EXPLOSION].enabled);
         assert!(alt.particle_tuning[0].enabled);
         assert_eq!(step_in(&PARTICLE_SPEED_STEPS, 100, false), 75);
@@ -53592,17 +53687,17 @@ mod tests {
 
     #[test]
     fn lod_render_distance_wird_gespeichert_und_uebernommen() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         assert_eq!(set.lod_render_distance, lod::DISTANCE_OFF, "ohne Zutun keine Fernsicht");
         set.lod_render_distance = 256;
-        assert_eq!(Settings::parse(&set.serialize()).lod_render_distance, 256);
+        assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).lod_render_distance, 256);
         set.lod_render_distance = lod::DISTANCE_OFF;
         set.module_chunk_saver = true;
-        let wieder = Settings::parse(&set.serialize());
+        let wieder = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(wieder.lod_render_distance, lod::DISTANCE_OFF, "aus bleibt aus, auch mit Modul");
         assert!(wieder.module_chunk_saver);
 
-        let alt = |text: &str| Settings::parse(text).lod_render_distance;
+        let alt = |text: &str| Settings::parse_onto(Settings::base(), text).lod_render_distance;
         assert_eq!(alt("module_chunk_saver=true\nchunk_saver_render=true\nchunk_saver_distance=320\n"), 320);
         assert_eq!(alt("module_chunk_saver=true\n"), lod::DISTANCE_LEGACY_DEFAULT);
         assert_eq!(alt("module_chunk_saver=true\nchunk_saver_render=false\nchunk_saver_distance=320\n"), lod::DISTANCE_OFF);
@@ -53620,7 +53715,7 @@ mod tests {
     // Attributbereich (0..32) geklemmt und ueberleben einzeln in settings.conf.
     #[test]
     fn kameraabstaende_sind_getrennt_und_geklemmt() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         set.set_camera_distance_of(Perspective::ThirdPersonBack, 6.5);
         set.set_camera_distance_of(Perspective::ThirdPersonFront, 2.0);
         assert_eq!(set.camera_distance_of(Perspective::ThirdPersonBack), 6.5);
@@ -53654,13 +53749,13 @@ mod tests {
         }
 
         let parsed =
-            Settings::parse("camera_distance_back=7.5\ncamera_distance_front=1.5\ncamera_y_offset_back=2.0\ncamera_y_offset_front=-1.5\n");
+            Settings::parse_onto(Settings::base(), "camera_distance_back=7.5\ncamera_distance_front=1.5\ncamera_y_offset_back=2.0\ncamera_y_offset_front=-1.5\n");
         assert_eq!(parsed.camera_y_offset_back, 2.0);
         assert_eq!(parsed.camera_y_offset_front, -1.5);
         assert_eq!(parsed.camera_distance_back, 7.5);
         assert_eq!(parsed.camera_distance_front, 1.5);
         // Alte Datei ohne die Schluessel bleibt auf Vanillas 4.0.
-        assert_eq!(Settings::parse("fov=90\n").camera_distance_back, THIRD_PERSON_DISTANCE);
+        assert_eq!(Settings::parse_onto(Settings::base(), "fov=90\n").camera_distance_back, THIRD_PERSON_DISTANCE);
     }
 
     // Die drei Sichtfelder muessen einzeln in settings.conf ueberleben. Frueher gab es nur
@@ -53668,14 +53763,14 @@ mod tests {
     // starten auf ihrem Standard.
     #[test]
     fn sichtfelder_ueberleben_das_speichern_einzeln() {
-        let parsed = Settings::parse("fov=100\nfov_third_back=120\nfov_third_front=45\n");
+        let parsed = Settings::parse_onto(Settings::base(), "fov=100\nfov_third_back=120\nfov_third_front=45\n");
         assert_eq!(parsed.fov, 100.0);
         assert_eq!(parsed.fov_third_back, 120.0);
         assert_eq!(parsed.fov_third_front, 45.0);
         // Alte Datei ohne die neuen Schluessel: Ego uebernimmt, der Rest bleibt Standard.
-        let old = Settings::parse("fov=95\n");
+        let old = Settings::parse_onto(Settings::base(), "fov=95\n");
         assert_eq!(old.fov, 95.0);
-        assert_eq!(old.fov_third_back, Settings::default().fov_third_back);
+        assert_eq!(old.fov_third_back, Settings::base().fov_third_back);
     }
 
     // Zwei Wertfelder duerfen sich nie ueberlappen -- sonst faenge ein Klick das falsche
@@ -53705,7 +53800,7 @@ mod tests {
     // Schluessel werden ignoriert, unmoegliche Werte auf den gueltigen Bereich geklemmt.
     #[test]
     fn parse_klemmt_unsinnige_werte() {
-        let settings = Settings::parse(
+        let settings = Settings::parse_onto(Settings::base(), 
             "show_tearing_test=true\n\
              show_hud=false\n\
              fps_limit=99\n\
@@ -53940,23 +54035,23 @@ mod tests {
     // uebernommen, und jede Staerke ueberlebt die settings.conf.
     #[test]
     fn weiche_beleuchtung_ist_an_und_wird_gespeichert() {
-        assert_eq!(Settings::parse("").smooth_lighting_percent, 100, "Vanillas Vorgabe ist an");
-        assert_eq!(Settings::parse("smooth_lighting=false\n").smooth_lighting_percent, 0);
-        assert_eq!(Settings::parse("smooth_lighting=true\n").smooth_lighting_percent, 100);
-        assert_eq!(Settings::parse("smooth_lighting_percent=250\n").smooth_lighting_percent, 100);
-        let mut s = Settings::parse("");
+        assert_eq!(Settings::parse_onto(Settings::base(), "").smooth_lighting_percent, 100, "Vanillas Vorgabe ist an");
+        assert_eq!(Settings::parse_onto(Settings::base(), "smooth_lighting=false\n").smooth_lighting_percent, 0);
+        assert_eq!(Settings::parse_onto(Settings::base(), "smooth_lighting=true\n").smooth_lighting_percent, 100);
+        assert_eq!(Settings::parse_onto(Settings::base(), "smooth_lighting_percent=250\n").smooth_lighting_percent, 100);
+        let mut s = Settings::parse_onto(Settings::base(), "");
         s.smooth_lighting_percent = 40;
-        assert_eq!(Settings::parse(&s.serialize()).smooth_lighting_percent, 40, "die Stärke muss eine Speicherrunde überleben");
+        assert_eq!(Settings::parse_onto(Settings::base(), &s.serialize()).smooth_lighting_percent, 40, "die Stärke muss eine Speicherrunde überleben");
     }
 
     fn standard_timing() -> i32 {
-        Settings::parse("show_hud=true\n").tear_timing_us
+        Settings::parse_onto(Settings::base(), "show_hud=true\n").tear_timing_us
     }
 
     // Ruestungs-HUD, Keystrokes, Hurt-Cam und Feuer ueberleben eine Speicherrunde.
     #[test]
     fn hud_module_und_video_werte_werden_gespeichert() {
-        let mut s = Settings::parse("show_hud=true\n");
+        let mut s = Settings::parse_onto(Settings::base(), "show_hud=true\n");
         assert!(!s.module_armor_hud && !s.module_keystrokes && s.hurt_cam && s.armor_trims);
         s.armor_trims = false;
         s.module_armor_hud = true;
@@ -53974,7 +54069,7 @@ mod tests {
         s.fire_mode = FIRE_MODE_CROSSHAIR;
         s.fire_height = 45;
         s.fire_crosshair_hue = 200;
-        let g = Settings::parse(&s.serialize());
+        let g = Settings::parse_onto(Settings::base(), &s.serialize());
         assert!(g.module_armor_hud && g.module_keystrokes && !g.hurt_cam && !g.armor_trims);
         assert_eq!((g.armor_hud_layout, g.armor_hud_sort_flat, g.hud_armor_scale), (armor_hud::LAYOUT_FLAT_HELMET_RIGHT, 1, 150));
         assert_eq!((g.armor_hud_gap, g.armor_hud_number_scale, g.armor_hud_number_x, g.armor_hud_number_y), (-5, 150, 4, -20));
@@ -53983,6 +54078,35 @@ mod tests {
 
     // Der Name ueber der Hotbar erscheint nur bei umbenannten Items oder solchen mit Lore, nicht
     // schon bei Verzauberung oder Trim.
+    #[test]
+    fn private_werte_landen_in_der_privaten_datei() {
+        let mut set = Settings::base();
+        set.account_name = "Spieler".into();
+        set.tear_timing_us = -1400;
+        set.fov = 100.0;
+        let (oeffentlich, privat) = split_private_settings(&set.serialize());
+        assert!(privat.contains("account_name=Spieler") && privat.contains("tear_timing_us=-1400"));
+        assert!(!oeffentlich.contains("account_name") && !oeffentlich.contains("tear_") && oeffentlich.contains("fov=100"));
+        // Beide Teile zusammen ergeben wieder dieselben Einstellungen.
+        let zurueck = Settings::parse_onto(Settings::base(), &format!("{oeffentlich}\n{privat}"));
+        assert_eq!((zurueck.account_name.as_str(), zurueck.tear_timing_us, zurueck.fov), ("Spieler", -1400, 100.0));
+        // Standardwerte fuer alle enthalten nichts Privates.
+        assert!(split_private_settings(DEFAULT_SETTINGS_CONF).1.is_empty());
+    }
+
+    #[test]
+    fn standardwerte_kommen_aus_default_settings_conf() {
+        let set = Settings::default();
+        assert_eq!(set.fov, 110.0);
+        assert_eq!(set.theme_choice, ThemeChoice::Preset(theme::PRESETS.iter().position(|p| p.name == "Rosa").unwrap()));
+        assert!(set.msa_refresh_token.is_empty() && set.mc_access_token.is_empty(), "kein Konto in den Standardwerten");
+        // Jeder Schluessel der Datei muss etwas setzen: einer, den parse nicht kennt, ginge still verloren.
+        let geschrieben = set.serialize();
+        for zeile in DEFAULT_SETTINGS_CONF.lines().filter(|z| !z.starts_with('#')) {
+            assert!(geschrieben.lines().any(|g| g == zeile), "{zeile} kommt nicht an");
+        }
+    }
+
     #[test]
     fn disconnect_fenster_zeigt_nur_die_servermeldung() {
         assert_eq!(disconnect_popup_text("Protokoll-Fehler: Server-Disconnect im Play-State: Du wurdest gekickt"), "Du wurdest gekickt");
@@ -54005,29 +54129,29 @@ mod tests {
     // Riss-Position und Dynamisches Feuer ueberleben eine Speicherrunde; Unsinn faellt auf "Aus".
     #[test]
     fn riss_position_und_feuer_werden_gespeichert() {
-        let standard = Settings::parse("show_hud=true\n");
+        let standard = Settings::parse_onto(Settings::base(), "show_hud=true\n");
         assert_eq!(standard.tear_position, 0);
         assert!(standard.module_dynamic_fire, "Vorgabe an");
         let mut s = standard;
         s.tear_position = 1;
         s.module_dynamic_fire = false;
-        let gelesen = Settings::parse(&s.serialize());
+        let gelesen = Settings::parse_onto(Settings::base(), &s.serialize());
         assert_eq!(gelesen.tear_position, 1);
         assert!(!gelesen.module_dynamic_fire);
         // Alte Werte (1..3 = Oben/Unten/Austastluecke) werden "Scanout-Timing".
-        assert_eq!(Settings::parse("tear_position=3\n").tear_position, 1);
+        assert_eq!(Settings::parse_onto(Settings::base(), "tear_position=3\n").tear_position, 1);
         assert_eq!(standard_timing(), TEAR_TIMING_DEFAULT_US);
-        let mut t = Settings::parse("show_hud=true\n");
+        let mut t = Settings::parse_onto(Settings::base(), "show_hud=true\n");
         t.tear_timing_us = -1250;
-        assert_eq!(Settings::parse(&t.serialize()).tear_timing_us, -1250);
-        assert_eq!(Settings::parse("tear_timing_us=99999\n").tear_timing_us, TEAR_TIMING_MAX_US);
+        assert_eq!(Settings::parse_onto(Settings::base(), &t.serialize()).tear_timing_us, -1250);
+        assert_eq!(Settings::parse_onto(Settings::base(), "tear_timing_us=99999\n").tear_timing_us, TEAR_TIMING_MAX_US);
         // Der alte Feinabgleich schob nach vorn: 1,3 ms werden -1,3 ms.
-        assert_eq!(Settings::parse("tear_latency_us=1300\n").tear_timing_us, -1300);
-        assert_eq!(Settings::parse("show_hud=true\n").tear_reserve_us, TEAR_RESERVE_DEFAULT_US);
-        let mut r = Settings::parse("show_hud=true\n");
+        assert_eq!(Settings::parse_onto(Settings::base(), "tear_latency_us=1300\n").tear_timing_us, -1300);
+        assert_eq!(Settings::parse_onto(Settings::base(), "show_hud=true\n").tear_reserve_us, TEAR_RESERVE_DEFAULT_US);
+        let mut r = Settings::parse_onto(Settings::base(), "show_hud=true\n");
         r.tear_reserve_us = 350;
-        assert_eq!(Settings::parse(&r.serialize()).tear_reserve_us, 350);
-        assert_eq!(Settings::parse("tear_reserve_us=-5\n").tear_reserve_us, TEAR_RESERVE_MIN_US);
+        assert_eq!(Settings::parse_onto(Settings::base(), &r.serialize()).tear_reserve_us, 350);
+        assert_eq!(Settings::parse_onto(Settings::base(), "tear_reserve_us=-5\n").tear_reserve_us, TEAR_RESERVE_MIN_US);
     }
 
     // Die Vorhersage-Toleranz ueberlebt Speichern/Laden und wird auf ihren Bereich geklemmt.
@@ -54047,7 +54171,7 @@ mod tests {
     // Was man in ein Kaestchen des Schrift-Tabs zieht, steht danach genau so darin.
     #[test]
     fn schrift_kaestchen_speichern_was_hineinfaellt() {
-        let mut set = Settings::parse("");
+        let mut set = Settings::parse_onto(Settings::base(), "");
         for tile in FontTile::palette() {
             for slot in FontSlot::all().filter(|s| s.accepts(tile)) {
                 match (slot, tile) {
@@ -54120,26 +54244,26 @@ mod tests {
 
     #[test]
     fn entity_renderdistanz_laden_und_begrenzen() {
-        assert_eq!(Settings::parse("").entity_render_distance, ENTITY_DISTANCE_DEFAULT);
-        assert_eq!(Settings::parse("entity_render_distance=64\n").entity_render_distance, 64);
-        assert_eq!(Settings::parse("entity_render_distance=3\n").entity_render_distance, ENTITY_DISTANCE_MIN);
-        assert_eq!(Settings::parse("entity_render_distance=99999\n").entity_render_distance, ENTITY_DISTANCE_MAX);
+        assert_eq!(Settings::parse_onto(Settings::base(), "").entity_render_distance, ENTITY_DISTANCE_DEFAULT);
+        assert_eq!(Settings::parse_onto(Settings::base(), "entity_render_distance=64\n").entity_render_distance, 64);
+        assert_eq!(Settings::parse_onto(Settings::base(), "entity_render_distance=3\n").entity_render_distance, ENTITY_DISTANCE_MIN);
+        assert_eq!(Settings::parse_onto(Settings::base(), "entity_render_distance=99999\n").entity_render_distance, ENTITY_DISTANCE_MAX);
     }
 
     #[test]
     fn vorhersage_toleranz_wird_gelesen_und_geklemmt() {
-        let n = Settings::parse("module_no_tool_break=false\nno_tool_break_reserve=0\n");
+        let n = Settings::parse_onto(Settings::base(), "module_no_tool_break=false\nno_tool_break_reserve=0\n");
         assert!(!n.module_no_tool_break);
         assert_eq!(n.no_tool_break_reserve, NO_TOOL_BREAK_MIN_RESERVE);
-        assert!(Settings::parse("show_hud=true\n").module_no_tool_break, "Vorgabe an");
-        let s = Settings::parse("ghost_tolerance_ms=275\nmodule_ghost_tolerance=false\n");
+        assert!(Settings::parse_onto(Settings::base(), "show_hud=true\n").module_no_tool_break, "Vorgabe an");
+        let s = Settings::parse_onto(Settings::base(), "ghost_tolerance_ms=275\nmodule_ghost_tolerance=false\n");
         assert_eq!(s.ghost_tolerance_ms, 275);
         assert!(!s.module_ghost_tolerance);
-        let zu_gross = Settings::parse("ghost_tolerance_ms=99999\n");
+        let zu_gross = Settings::parse_onto(Settings::base(), "ghost_tolerance_ms=99999\n");
         assert_eq!(zu_gross.ghost_tolerance_ms, GHOST_TOLERANCE_MAX_MS);
         // Ohne Eintrag bleibt es beim Standard -- eine alte settings.conf darf den Regler
         // nicht auf 0 stellen (das hiesse: immer halbdurchsichtig).
-        assert_eq!(Settings::parse("show_hud=true\n").ghost_tolerance_ms, GHOST_TOLERANCE_DEFAULT_MS);
+        assert_eq!(Settings::parse_onto(Settings::base(), "show_hud=true\n").ghost_tolerance_ms, GHOST_TOLERANCE_DEFAULT_MS);
     }
 
     // Die Schrittweite muss beide Grenzen exakt treffen, sonst bleibt der Regler kurz davor
@@ -54265,14 +54389,14 @@ mod tests {
     #[test]
     fn skalierungen_sind_unabhaengig() {
         let text = "inventory_scale=3\nhud_hotbar_scale=1\nhud_chat_scale=4\n";
-        let settings = Settings::parse(text);
+        let settings = Settings::parse_onto(Settings::base(), text);
         assert_eq!(settings.inventory_scale, 3);
         assert_eq!(settings.hud_hotbar_scale, 1);
         // Die alte Chat-Stufe x4 wird zu 200 % (x4 ist das Doppelte von UI_SCALE_SMALL).
         assert_eq!(settings.chat_scale_percent, 200);
-        assert_eq!(Settings::parse("hud_chat_scale=0\n").chat_scale_percent, 100, "Auto = 100 %");
+        assert_eq!(Settings::parse_onto(Settings::base(), "hud_chat_scale=0\n").chat_scale_percent, 100, "Auto = 100 %");
         // Ueber 4 wird beim Einlesen geklemmt, nicht erst beim Anwenden.
-        assert_eq!(Settings::parse("inventory_scale=9\n").inventory_scale, 4);
+        assert_eq!(Settings::parse_onto(Settings::base(), "inventory_scale=9\n").inventory_scale, 4);
     }
 
     // Die Kontur gehoert in den Fadenkreuz-Pass, nicht in den UI-Pass. Sie MUSS also als eigene
@@ -54389,19 +54513,19 @@ mod tests {
     // Form und Groesse je Form ueberleben Speichern und Laden; Unsinn wird geklemmt.
     #[test]
     fn fadenkreuz_form_und_groessen_werden_gespeichert() {
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         set.step_crosshair_shape(1);
         set.step_crosshair_size(3);
-        let geladen = Settings::parse(&set.serialize());
+        let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.crosshair_shape, CROSSHAIR_SHAPE_DOT);
         assert_eq!(geladen.crosshair_size(), CROSSHAIR_SHAPES[CROSSHAIR_SHAPE_DOT].3 + 3);
         assert_eq!(geladen.crosshair_sizes[0], CROSSHAIR_SHAPES[0].3, "das Kreuz behält seine Größe");
-        let unsinn = Settings::parse("crosshair_shape=99\ncrosshair_sizes=1,999\n");
+        let unsinn = Settings::parse_onto(Settings::base(), "crosshair_shape=99\ncrosshair_sizes=1,999\n");
         assert_eq!(unsinn.crosshair_shape, CROSSHAIR_SHAPES.len() - 1);
         assert_eq!(unsinn.crosshair_sizes[0], CROSSHAIR_SHAPES[0].1);
         assert_eq!(unsinn.crosshair_sizes[1], CROSSHAIR_SHAPES[1].2);
         // Die Auswahl endet bei "Eigene" und schaltet dort den Pixel-Editor-Stand ein.
-        let mut set = Settings::default();
+        let mut set = Settings::base();
         for _ in 0..10 {
             set.step_crosshair_shape(1);
         }
@@ -54414,9 +54538,9 @@ mod tests {
     // Die Aufhellung wird geklemmt und ist standardmaessig aus (reine Gegenfarbe wie bisher).
     #[test]
     fn aufhellung_wird_geklemmt_und_ist_standardmaessig_aus() {
-        assert_eq!(Settings::default().crosshair_brightness_boost, 0);
-        assert_eq!(Settings::parse("crosshair_brightness_boost=40\n").crosshair_brightness_boost, 40);
-        assert_eq!(Settings::parse("crosshair_brightness_boost=250\n").crosshair_brightness_boost, 100);
+        assert_eq!(Settings::base().crosshair_brightness_boost, 0);
+        assert_eq!(Settings::parse_onto(Settings::base(), "crosshair_brightness_boost=40\n").crosshair_brightness_boost, 40);
+        assert_eq!(Settings::parse_onto(Settings::base(), "crosshair_brightness_boost=250\n").crosshair_brightness_boost, 100);
     }
 
     // Der Aufhellungs-Regler gehoert NUR zum Komplementaer-Modus -- bei einer festen Farbe
@@ -54441,7 +54565,7 @@ mod tests {
 
     #[test]
     fn parse_ohne_inhalt_gibt_standardwerte() {
-        let settings = Settings::parse("");
+        let settings = Settings::parse_onto(Settings::base(), "");
         assert_eq!(settings.mesh_columns_per_frame, DEFAULT_MESH_COLUMNS_PER_FRAME);
         assert_eq!(settings.mouse_sensitivity, DEFAULT_MOUSE_SENSITIVITY);
         assert!(settings.show_hud);
@@ -54455,7 +54579,7 @@ mod tests {
     // sonst paniert render_world beim naechsten Frame.
     #[test]
     fn crosshair_farbmodus_wird_geklemmt() {
-        let settings = Settings::parse("crosshair_color_mode=999\nhud_crosshair_x=5.0\nhud_crosshair_y=-3.0\n");
+        let settings = Settings::parse_onto(Settings::base(), "crosshair_color_mode=999\nhud_crosshair_x=5.0\nhud_crosshair_y=-3.0\n");
         assert_eq!(settings.crosshair_color_mode, CROSSHAIR_COLOR_MODES.len() - 1);
         assert_eq!(settings.hud_crosshair_x, 1.0);
         assert_eq!(settings.hud_crosshair_y, 0.0);
