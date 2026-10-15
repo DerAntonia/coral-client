@@ -188,15 +188,41 @@ pub async fn start_browser_login(client_id: &str) -> Result<BrowserLogin, AuthEr
     Ok(BrowserLogin { url, listeners, redirect_uri, verifier, state, client_id: client_id.to_string() })
 }
 
-// Seite, die der Browser nach der Rueckleitung zeigt.
-fn browser_page(deutsch: bool, titel: &str, text: &str) -> String {
+// Farben der Seite nach der Rueckleitung (sRGB 0xRRGGBB) -- der Client gibt sein Theme mit,
+// damit sie aussieht wie seine eigenen Fenster.
+#[derive(Clone, Copy, Debug)]
+pub struct PageTheme {
+    pub background: u32,
+    pub panel: u32,
+    pub border: u32,
+    pub text: u32,
+    pub text_2: u32,
+    pub success: u32,
+    pub danger: u32,
+}
+
+impl Default for PageTheme {
+    fn default() -> Self {
+        PageTheme { background: 0x16181d, panel: 0x1e2128, border: 0x2c3039, text: 0xe8e8ea, text_2: 0xa9adb6, success: 0x4cc38a, danger: 0xe5484d }
+    }
+}
+
+// Seite, die der Browser nach der Rueckleitung zeigt: eine Karte wie die Dialoge des Clients,
+// mit Haken bzw. Kreuz in der Erfolgs- bzw. Fehlerfarbe.
+fn browser_page(deutsch: bool, ok: bool, theme: &PageTheme, titel: &str, text: &str) -> String {
     let lang = if deutsch { "de" } else { "en" };
+    let (zeichen, farbe) = if ok { ("&#10003;", theme.success) } else { ("&#10005;", theme.danger) };
+    let PageTheme { background, panel, border, text: text_1, text_2, .. } = *theme;
     format!(
         "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\"><title>Coral Client</title>\
-         <style>body{{font-family:system-ui,sans-serif;background:#16181d;color:#e8e8ea;display:flex;\
-         align-items:center;justify-content:center;height:100vh;margin:0}}div{{text-align:center}}\
-         h1{{font-size:22px;margin:0 0 8px}}p{{margin:0;opacity:.8}}</style></head>\
-         <body><div><h1>{titel}</h1><p>{text}</p></div></body></html>"
+         <style>body{{font-family:system-ui,sans-serif;background:#{background:06x};color:#{text_1:06x};display:flex;\
+         align-items:center;justify-content:center;height:100vh;margin:0}}\
+         .karte{{background:#{panel:06x};border:1px solid #{border:06x};border-radius:8px;padding:32px 40px;\
+         max-width:420px;text-align:center;box-shadow:0 12px 32px rgba(0,0,0,.4)}}\
+         .zeichen{{width:48px;height:48px;line-height:48px;margin:0 auto 16px;border-radius:50%;\
+         border:2px solid #{farbe:06x};color:#{farbe:06x};font-size:24px}}\
+         h1{{font-size:22px;margin:0 0 8px}}p{{margin:0;color:#{text_2:06x};line-height:1.5}}</style></head>\
+         <body><div class=\"karte\"><div class=\"zeichen\">{zeichen}</div><h1>{titel}</h1><p>{text}</p></div></body></html>"
     )
 }
 
@@ -266,9 +292,9 @@ fn parse_redirect(request_line: &str, state: &str) -> Option<Result<String, Redi
     }
 }
 
-// Auf die Rueckleitung warten (hoechstens 10 Minuten), dem Browser eine Seite zeigen und den
-// Code gegen Tokens tauschen.
-pub async fn finish_browser_login(login: BrowserLogin) -> Result<MsaTokens, AuthError> {
+// Auf die Rueckleitung warten (hoechstens 10 Minuten), dem Browser eine Seite in den Farben
+// von `theme` zeigen und den Code gegen Tokens tauschen.
+pub async fn finish_browser_login(login: BrowserLogin, theme: PageTheme) -> Result<MsaTokens, AuthError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let warten = async {
         loop {
@@ -288,11 +314,11 @@ pub async fn finish_browser_login(login: BrowserLogin) -> Result<MsaTokens, Auth
             let de = prefers_german(&text);
             let (status, seite) = match &ergebnis {
                 None => ("404 Not Found", String::new()),
-                Some(Ok(_)) if de => ("200 OK", browser_page(de, "Angemeldet", "Du kannst dieses Fenster schlie&szlig;en und zu Coral Client zur&uuml;ckkehren.")),
-                Some(Ok(_)) => ("200 OK", browser_page(de, "Signed in", "You can close this window and return to Coral Client.")),
+                Some(Ok(_)) if de => ("200 OK", browser_page(de, true, &theme, "Angemeldet", "Du kannst dieses Fenster schlie&szlig;en und zu Coral Client zur&uuml;ckkehren.")),
+                Some(Ok(_)) => ("200 OK", browser_page(de, true, &theme, "Signed in", "You can close this window and return to Coral Client.")),
                 Some(Err(e)) => {
                     let titel = if de { "Anmeldung fehlgeschlagen" } else { "Sign-in failed" };
-                    ("200 OK", browser_page(de, titel, &e.text(de).replace('&', "&amp;").replace('<', "&lt;")))
+                    ("200 OK", browser_page(de, false, &theme, titel, &e.text(de).replace('&', "&amp;").replace('<', "&lt;")))
                 }
             };
             let antwort = format!(
@@ -785,7 +811,7 @@ mod browser_login_tests {
         let login = start_browser_login("id-123").await.expect("Port");
         let port = login.redirect_uri.rsplit(':').next().unwrap().to_string();
         let state = login.state.clone();
-        let warten = tokio::spawn(finish_browser_login(login));
+        let warten = tokio::spawn(finish_browser_login(login, PageTheme::default()));
         for pfad in ["/favicon.ico".to_string(), format!("/?error=access_denied&state={state}")] {
             let mut sock = tokio::net::TcpStream::connect(format!("localhost:{port}")).await.expect("verbinden");
             sock.write_all(format!("GET {pfad} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes()).await.unwrap();

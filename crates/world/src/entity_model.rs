@@ -658,6 +658,22 @@ fn atlas_uv(u: f32, v: f32, tex_size: [f32; 2], tex: TexRect) -> [f32; 2] {
 mod tests {
     use super::*;
 
+    // Ruestung am Armorstand: Kopf einen Pixel tiefer, Beine ab 11; beim kleinen Stand wie
+    // dessen Koerper umgeformt (Kopf 12.75 und 3/4, Rest halb und 12 tiefer).
+    #[test]
+    fn armorstand_ruestung_sitzt_wie_der_stand() {
+        use crate::armor::ArmorSlot;
+        let teil = |small: bool, slot: ArmorSlot, name: &str| {
+            armor_stand_armor_models(small)[slot.index()].parts.iter().find(|p| p.name == name).cloned().expect("Teil")
+        };
+        assert_eq!(teil(false, ArmorSlot::Head, "head").pivot, [0.0, 1.0, 0.0]);
+        assert_eq!(teil(false, ArmorSlot::Feet, "right_leg").pivot, [-1.9, 11.0, 0.0]);
+        let kopf = teil(true, ArmorSlot::Head, "head");
+        assert_eq!((kopf.pivot, kopf.scale), ([0.0, 12.75, 0.0], [0.75; 3]));
+        let bein = teil(true, ArmorSlot::Legs, "left_leg");
+        assert_eq!((bein.pivot, bein.scale), ([0.95, 17.5, 0.0], [0.5; 3]));
+    }
+
     fn gleiten(ticks: f32, pitch_deg: f32, velocity: [f32; 3]) -> Glide {
         Glide { ticks, pitch_deg, yaw_deg: 0.0, velocity }
     }
@@ -1098,6 +1114,43 @@ pub fn armor_model(slot: crate::armor::ArmorSlot) -> Model {
         tex_size: [64.0, 32.0],
         parts: biped_parts(dilation, 0.0).into_iter().filter(|p| teile.contains(&p.name)).collect(),
     }
+}
+
+// Ruestungsebenen eines Armorstands (ArmorStandArmorModel): dasselbe Biped wie armor_model,
+// nur sitzt der Kopf einen Pixel tiefer und die Beine setzen einen Pixel hoeher an, mit um 0.1
+// duenneren Kaesten -- passend zu den duennen Staeben des Standes. Einmal gebaut, je Slot.
+//
+// `small`: die Ebenen eines kleinen Standes, mit derselben Baby-Umformung wie sein Koerper
+// (armor_stand_small#main): der Kopf auf 3/4 und 16 Pixel tiefer angesetzt, alles andere halb
+// so gross und um 12 Pixel nach unten geschoben.
+pub fn armor_stand_armor_models(small: bool) -> &'static [Model; 4] {
+    static MODELS: std::sync::OnceLock<[[Model; 4]; 2]> = std::sync::OnceLock::new();
+    &MODELS.get_or_init(|| [false, true].map(armor_stand_armor_set))[usize::from(small)]
+}
+
+fn armor_stand_armor_set(small: bool) -> [Model; 4] {
+    std::array::from_fn(|i| {
+        let slot = crate::armor::ArmorSlot::ALL.iter().copied().find(|s| s.index() == i).expect("Slot");
+        let mut model = armor_model(slot);
+        for part in &mut model.parts {
+            match part.name {
+                "head" => part.pivot[1] = 1.0,
+                "right_leg" | "left_leg" => {
+                    part.pivot[1] = 11.0;
+                    for cuboid in &mut part.cuboids {
+                        cuboid.dilation = cuboid.dilation.map(|d| d - 0.1);
+                    }
+                }
+                _ => {}
+            }
+            if small {
+                let (faktor, versatz) = if part.name == "head" { (0.75, 16.0 * 0.75) } else { (0.5, 12.0) };
+                part.pivot = [part.pivot[0] * faktor, part.pivot[1] * faktor + versatz, part.pivot[2] * faktor];
+                part.scale = part.scale.map(|s| s * faktor);
+            }
+        }
+        model
+    })
 }
 
 // DefaultSkinHelper.SKINS -- Reihenfolge ist BEDEUTUNGSTRAGEND (der Index kommt aus dem

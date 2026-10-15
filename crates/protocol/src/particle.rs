@@ -56,6 +56,7 @@ pub const PARTICLE_GUST_EMITTER_LARGE: i32 = 26;
 pub const PARTICLE_GUST_EMITTER_SMALL: i32 = 27;
 pub const PARTICLE_FALLING_DUST: i32 = 29;
 pub const PARTICLE_TINTED_LEAVES: i32 = 36;
+pub const PARTICLE_SCULK_SOUL: i32 = 37;
 pub const PARTICLE_SCULK_CHARGE: i32 = 38;
 pub const PARTICLE_FLASH: i32 = 42;
 pub const PARTICLE_INSTANT_EFFECT: i32 = 46;
@@ -345,6 +346,7 @@ mod tests {
             (PARTICLE_EXPLOSION, "explosion"),
             (PARTICLE_FALLING_DUST, "falling_dust"),
             (PARTICLE_TINTED_LEAVES, "tinted_leaves"),
+            (PARTICLE_SCULK_SOUL, "sculk_soul"),
             (PARTICLE_SCULK_CHARGE, "sculk_charge"),
             (PARTICLE_FLASH, "flash"),
             (PARTICLE_INSTANT_EFFECT, "instant_effect"),

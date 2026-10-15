@@ -91,6 +91,9 @@ pub enum ClientEvent {
     // Server-Resourcepacks bleiben: Vanilla raeumt sie bei einem Transfer nicht ab, der neue
     // Server bietet sie erneut an.
     Transferring { host: String, port: u16 },
+    // Wohin die TCP-Verbindung tatsaechlich geht: "IP:Port", nach einem SRV-Eintrag
+    // "Ziel/IP:Port" -- fuer die Verbindungsanzeige.
+    Route(String),
     // Der Server hat uns neu aufgesetzt (Respawn/Dimensionswechsel). Vanilla baut dabei eine
     // neue ClientPlayerEntity -- alles, was "zuletzt gesendet" merkt, faengt von vorn an.
     // `world_change` = die Dimension im Paket ist eine andere als bisher (Portal, /tp in eine
@@ -2145,6 +2148,9 @@ async fn join_inner(
 ) -> Result<(), NetError> {
     let (typed_host, typed_port) = parse_address(address);
     let (mut host, mut port) = resolve_address(address).await;
+    // Der Name, den man eingegeben hat (nach einem Transfer das Ziel): weicht der verbundene
+    // Host davon ab, kam er aus einem SRV-Eintrag.
+    let mut eingegeben = typed_host.clone();
     // Die Weiterleitung im Log sichtbar machen: sonst wundert man sich bei einem Fehler
     // ueber einen Port/Host, den man nie eingegeben hat.
     if (host.as_str(), port) != (typed_host.as_str(), typed_port) {
@@ -2166,6 +2172,10 @@ async fn join_inner(
         log(events, format!("Verbinde zu {host}:{port} ..."));
         let mut conn = Connection::connect(&host, port).await?;
         conn.cookies = std::mem::take(&mut cookies);
+        if let Ok(gegenueber) = conn.stream.peer_addr() {
+            let ziel = if host == eingegeben { gegenueber.to_string() } else { format!("{host}/{gegenueber}") };
+            let _ = events.send(ClientEvent::Route(ziel));
+        }
 
         // Der Mitschnitt wird NUR bei einem Abbruch mit Fehler geschrieben. Ein normales
         // Trennen durch den Nutzer endet mit Ok und soll kein /tmp vollschreiben. Der Pfad
@@ -2189,6 +2199,7 @@ async fn join_inner(
         let _ = events.send(ClientEvent::Transferring { host: ziel_host.clone(), port: ziel_port });
         // Wie Vanilla (ConnectScreen ueber ServerAddress): auch das Transfer-Ziel geht durch
         // die SRV-Aufloesung, und der Handshake traegt die aufgeloeste Adresse.
+        eingegeben = ziel_host.clone();
         (host, port) = resolve_srv(&ziel_host, ziel_port).await.unwrap_or((ziel_host, ziel_port));
         intent = packets::INTENT_TRANSFER;
     }

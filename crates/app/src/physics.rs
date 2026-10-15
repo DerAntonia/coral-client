@@ -3422,7 +3422,7 @@ pub fn raycast_block(eye: DVec3, dir: DVec3, reach: f64, world: &World, shapes: 
                 // raycast_block.
                 let state = world.block_at(bx, by, bz);
                 let (odx, odz) = world::block_name(state)
-                    .map(|name| world::block_xz_offset(name, bx, bz))
+                    .map(|name| world::outline_xz_offset(name, bx, bz))
                     .unwrap_or((0.0, 0.0));
                 for cbox in world::outline_boxes(state, shapes) {
                     let bmin = DVec3::new(
@@ -3526,7 +3526,7 @@ pub fn raycast_block_far(eye: DVec3, dir: DVec3, reach: f64, world: &World, shap
         if state == world::STATE_AIR {
             im_fels = false;
         } else if !im_fels {
-            let (odx, odz) = world::block_name(state).map(|name| world::block_xz_offset(name, bx, bz)).unwrap_or((0.0, 0.0));
+            let (odx, odz) = world::block_name(state).map(|name| world::outline_xz_offset(name, bx, bz)).unwrap_or((0.0, 0.0));
             let mut best: Option<(f64, usize)> = None;
             for cbox in world::outline_boxes(state, shapes) {
                 let bmin = DVec3::new(bx as f64 + odx as f64 + cbox.min[0] as f64, by as f64 + cbox.min[1] as f64, bz as f64 + odz as f64 + cbox.min[2] as f64);

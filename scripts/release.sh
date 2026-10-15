@@ -13,9 +13,9 @@
 # Notizen-Argument werden, falls vorhanden, die Notizen aus release-notes/<tag>.md genommen.
 #
 # Die Dateien tragen die Version im Namen (coral-client-v26.10.1-linux-x86_64), s.
-# update::Release::asset_for_platform. Dazu dieselben Dateien unter den festen Namen von
-# update::ASSET_NAME/LAUNCHER_ASSET_NAME: nur die finden Launcher bis 1.0.0. Raus, sobald keiner
-# mehr laeuft (die alten aktualisieren sich darueber selbst auf einen neuen Launcher).
+# update::Release::asset_for_platform -- vier Stueck: Client und Launcher fuer Linux und Windows.
+# Die festen Namen von update::ASSET_NAME/LAUNCHER_ASSET_NAME (fuer Launcher bis 1.0.0) gibt es
+# seit v26.10.2 nicht mehr.
 #
 # Windows wird mit cargo-zigbuild gebaut (ring braucht sonst eine MinGW-Toolchain).
 set -e
@@ -55,12 +55,25 @@ fi
 # (DerAntonia/mc-client, Remote origin) wird nicht mehr bedient.
 git remote get-url coral >/dev/null 2>&1 || git remote add coral https://github.com/DerAntonia/coral-client.git
 git fetch -q coral
-if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'coral/main^{tree}')" ]; then
+# Veroeffentlicht wird HEAD ohne die Commits, die lokal bleiben sollen (s. scripts/public-tree.sh).
+baum=$(scripts/public-tree.sh)
+if [ "$baum" = "$(git rev-parse 'coral/main^{tree}')" ]; then
     commit=$(git rev-parse coral/main)
 else
-    commit=$(git commit-tree 'HEAD^{tree}' -p coral/main -m "$tag")
+    commit=$(git commit-tree "$baum" -p coral/main -m "$tag")
     git push coral "$commit:refs/heads/main"
 fi
+
+# Gebaut wird genau dieser Stand, nicht das Arbeitsverzeichnis -- sonst steckte in den
+# Release-Dateien, was im Quelltext fehlt. Ein fester Ordner, damit Cargo seinen Zwischenstand
+# von Release zu Release behaelt.
+bau="$HOME/.cache/coral-client-release"
+if [ -d "$bau" ]; then
+    git -C "$bau" checkout -q --detach -f "$commit"
+else
+    git worktree add -q --detach "$bau" "$commit"
+fi
+cd "$bau"
 
 export PATH="$HOME/.local/zig/zig-linux-x86_64-0.13.0:$PATH"
 # zig bringt keine Importbibliothek fuer d3dcompiler mit (wgpu linkt dagegen); ein Stub aus
@@ -77,9 +90,6 @@ out=$(mktemp -d)
 for name in coral-client coral-client-launcher; do
     cp "target/release/$name" "$out/$name-$tag-linux-x86_64"
     cp "target/x86_64-pc-windows-gnu/release/$name.exe" "$out/$name-$tag-windows-x86_64.exe"
-    # Uebergang: feste Namen fuer Launcher bis 1.0.0.
-    cp "target/release/$name" "$out/$name-linux-x86_64"
-    cp "target/x86_64-pc-windows-gnu/release/$name.exe" "$out/$name-windows-x86_64.exe"
 done
 
 gh release create "$tag" --target "$commit" --repo DerAntonia/coral-client --title "$tag" --notes "$notes" $vorab "$out"/*

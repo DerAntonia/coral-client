@@ -48,7 +48,7 @@ pub use block_entity::{
     bed_instance, chest_instance, copper_golem_statue_texture, is_bed, shulker_instance, skull_instance, statue_instance, BedInstance, ChestHalf, ChestInstance,
     ShulkerInstance, SkullInstance, StatueInstance, BED_TEXTURES, CHEST_TEXTURES, COPPER_GOLEM_STATUE_TEXTURES, SHULKER_TEXTURES,
 };
-pub use block_offset::{block_xz_offset, has_xz_offset, max_xz_offset, xz_offset};
+pub use block_offset::{block_xz_offset, has_xz_offset, max_xz_offset, outline_xz_offset, xz_offset};
 pub use block_registry::{block_name, state_count};
 pub use block_shapes::{BlockShapes, ModelFace, ShapeBox};
 pub use block_uvs::BlockUvs;

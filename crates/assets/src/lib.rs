@@ -48,7 +48,7 @@ pub use shapes::{
 };
 pub use sounds::{SoundIndex, SoundVariant};
 pub use source::{active_source, config_dir, data_dir, discover, migrate_legacy_dirs, user_dir, load_selection, save_selection, Candidate, GameFiles, GameSource};
-pub use ui_atlas::{item_tints, UI_WHITE, 
+pub use ui_atlas::{item_tints, FIRE_OVERLAY, UI_WHITE, 
     build as build_ui_atlas, leaf_icon_key, item_first_person_display, item_fixed_display, item_ground_display, item_named_display, item_first_person_display_left, item_hand_display, item_hand_display_left,
     item_particle_texture, item_sprite_layers, item_world_textures, model_hand_display, model_world_textures, AtlasRect, IconLayer, IconQuad, ItemDisplay, ItemIcon, ItemWorldTextures, UiAtlas, GUI_SHEETS, MOB_EFFECT_SPRITES,
 };

@@ -218,6 +218,9 @@ pub const MOB_EFFECT_SPRITES: [&str; 40] = [
 // (`sub(1, 1, 2, 2)`), damit der Rand nicht mit dem Nachbarn verschwimmt.
 pub const UI_WHITE: &str = "white";
 
+// Textur des Feuers vor den Augen; im Atlas unter "tex/" davor.
+pub const FIRE_OVERLAY: &str = "block/fire_1";
+
 // Ein Bild im Atlas: normierte UVs plus seine Groesse in Vanilla-Pixeln. Bringt ein Pack
 // ein feiner gerastertes Bild (inventory.png in 512x512 statt 256x256), bleibt die Groesse
 // die von Vanilla -- wie in Vanilla, das GUI-Bilder immer ueber die Vanilla-Masse adressiert
@@ -589,6 +592,9 @@ pub fn build(
     for (name, path) in GUI_SHEETS {
         intern_gui(mc, name, path, &mut pending, &mut by_name);
     }
+    // Feuer vor den Augen (ScreenEffectRenderer): als "tex/" angelegt, damit es wie die
+    // Item-Texturen im Spieltakt animiert wird (s. item_animations).
+    intern(mc, format!("tex/{FIRE_OVERLAY}"), crate::blocks::resource_path("textures", FIRE_OVERLAY, ".png"), &mut pending, &mut by_name);
     for name in MOB_EFFECT_SPRITES {
         intern_gui(mc, &format!("mob_effect/{name}"), &format!("minecraft/textures/mob_effect/{name}.png"), &mut pending, &mut by_name);
     }

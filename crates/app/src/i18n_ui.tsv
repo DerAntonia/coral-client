@@ -70,10 +70,10 @@ noch {} h	{} h left	{} h reliquae
 noch {} min	{} min left	{} min reliqua
 Konto {} vergessen.	Forgot account {}.	Ratiō {} oblīta.
 Kontenliste konnte nicht gespeichert werden: {}	Could not save the account list: {}	Index ratiōnum servārī nōn potuit: {}
-{} Konto(en) in Prism, davon {} neu.	{} account(s) in Prism, {} of them new.	{} ratiō(nēs) in Prism, ex hīs {} novae.
 Abgemeldet.	Signed out.	Exitum est.
 Angemeldet	Signed in	Initum
 Angemeldet als {}	Signed in as {}	Initum ut {}
+als {}	as {}	ut {}
 Angemeldet -- hole Minecraft-Profil ...	Signed in -- fetching Minecraft profile ...	Initum -- profilum Minecraft petō ...
 Anmeldung läuft ...	Signing in ...	Inīre cōnor ...
 Nicht angemeldet (Offline-Mode)	Not signed in (offline mode)	Nōn initum (modus sine rēte)
@@ -86,23 +86,14 @@ MICROSOFT-REFRESH-TOKEN (STRG+V)	MICROSOFT REFRESH TOKEN (CTRL+V)	TESSERA RENOV�
 Microsoft-Refresh-Token einfügen (Strg+V), dann OK/Enter:	Paste the Microsoft refresh token (Ctrl+V), then OK/Enter:	Tesseram renovātiōnis Microsoft īnsere (Strg+V), deinde OK/Enter:
 Refresh-Token wird eingelöst ...	Redeeming refresh token ...	Tesseram renovātiōnis solvō ...
 Token gültig -- hole Minecraft-Profil ...	Token valid -- fetching Minecraft profile ...	Tessera valet -- profīlum Minecraft arcessō ...
-Keine Client-ID gesetzt -- ein Refresh-Token braucht die ID der App, die es ausgestellt hat.	No client ID set -- a refresh token needs the ID of the app that issued it.	Nūlla Client-ID -- tessera renovātiōnis ID applicātiōnis quae eam dedit requīrit.
-Aus Prism importieren	Import from Prism	Ex Prism importāre
 Login fehlgeschlagen	Login failed	Introitus dēfēcit
 Login fehlgeschlagen: {}	Login failed: {}	Introitus dēfēcit: {}
 Zum Kontowechsel erst abmelden.	Sign out first to switch accounts.	Ad ratiōnem mūtandam prius exī.
 Microsoft-Anmeldung wird vorbereitet ...	Preparing Microsoft sign-in ...	Introitus Microsoft parātur ...
 Im Browser anmelden: {}	Sign in in your browser: {}	In nāvigātrō inīre: {}
 Code (schon kopiert): {}	Code (already copied): {}	Cōdex (iam exscrīptus): {}
-Azure-Client-ID einfügen, dann OK/Enter:	Paste the Azure client ID, then OK/Enter:	Azure-Client-ID īnsere, deinde OK/Enter:
-Azure-Client-ID gespeichert. Jetzt 'Mit Microsoft anmelden'.	Azure client ID saved. Now 'Sign in with Microsoft'.	Azure-Client-ID servātum. Nunc 'Per Microsoft inīre'.
 Minecraft-Token einfügen (Strg+V), dann OK/Enter:	Paste the Minecraft token (Ctrl+V), then OK/Enter:	Tesseram Minecraft īnsere (Strg+V), deinde OK/Enter:
-Kein Azure-Client-ID gesetzt -- Microsoft-Login nicht möglich (Token-Feld nutzen).	No Azure client ID set -- Microsoft login not possible (use the token field).	Nūllum Azure-Client-ID -- introitus Microsoft fierī nōn potest (campo tesserae ūtere).
-Kein Prism-Konto gefunden -- in Prism anmelden und importieren.	No Prism account found -- sign in in Prism and import.	Nūlla ratiō Prism inventa -- in Prism inī et importā.
-Keine Launcher-Konten gefunden (Prism/PolyMC). Ist ein Konto angemeldet?	No launcher accounts found (Prism/PolyMC). Is an account signed in?	Nūllae ratiōnēs launcher inventae (Prism/PolyMC). Estne ratiō inita?
-{} Konto(en) aus Prism gefunden -- anklicken zum Anmelden:	{} account(s) found in Prism -- click to sign in:	{} ratiō(nes) in Prism inventa(ē) -- preme ut inīrēs:
 Application-ID	Application ID	Application-ID
-Client-ID	Client ID	Client-ID
 HUD-Editor	HUD editor	Ēditor HUD
 Element wählen oder direkt ziehen  |  Esc/Fertig = zurück	Pick an element or drag it directly  |  Esc/Done = back	Elementum ēlige vel dīrēctē trahe  |  Esc/Factum = redīre
 Nur Position (im Verschiebemodus ziehen)	Position only (drag in move mode)	Positiō tantum (in modō movendī trahe)
@@ -665,10 +656,8 @@ offline	offline	absēns
 Speichern fehlgeschlagen	Saving failed	Servāre nōn potuit
 KONTEN	ACCOUNTS	RATIŌNĒS
 TOKENS	TOKENS	TESSERAE
-PRISM-KONTEN	PRISM ACCOUNTS	RATIŌNĒS PRISM
-Noch kein Konto. Mit Microsoft anmelden oder aus Prism importieren.	No account yet. Sign in with Microsoft or import from Prism.	Nūlla ratiō adhūc. Per Microsoft inī aut ex Prism importā.
+Noch kein Konto. Mit Microsoft anmelden.	No account yet. Sign in with Microsoft.	Nūlla ratiō adhūc. Per Microsoft inī.
 MINECRAFT-TOKEN (STRG+V)	MINECRAFT TOKEN (CTRL+V)	TESSERA MINECRAFT (CTRL+V)
-AZURE-CLIENT-ID	AZURE CLIENT ID	AZURE CLIENT ID
 Schließen	Close	Claudere
 Schadensfarbe	Damage color	Color vulneris
 Nur Skin färben	Tint skin only	Pellem tantum tingere

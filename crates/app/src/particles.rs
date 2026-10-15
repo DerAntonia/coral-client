@@ -156,7 +156,7 @@ impl SpawnKind {
 // Alphabetisch nach Namen -- so stehen sie auch in den Einstellungen.
 pub const KIND_BLOCK: usize = 1;
 pub const KIND_EXPLOSION: usize = 2;
-pub const KINDS: [ParticleKind; 15] = [
+pub const KINDS: [ParticleKind; 17] = [
     ParticleKind {
         key: "bubbles",
         label: "Blasensäule",
@@ -170,6 +170,7 @@ pub const KINDS: [ParticleKind; 15] = [
         types: &[pp::PARTICLE_EXPLOSION, pp::PARTICLE_EXPLOSION_EMITTER],
         spawn: SpawnKind::BurstEmitter,
     },
+    ParticleKind { key: "flash", label: "Feuerwerks-Blitz", types: &[pp::PARTICLE_FLASH], spawn: SpawnKind::Single },
     ParticleKind {
         key: "item_shards",
         label: "Item-Splitter",
@@ -182,6 +183,7 @@ pub const KINDS: [ParticleKind; 15] = [
     ParticleKind { key: "dust", label: "Redstone-Staub", types: &[pp::PARTICLE_DUST], spawn: SpawnKind::Lingering },
     ParticleKind { key: "damage_indicator", label: "Schadensherzen", types: &[pp::PARTICLE_DAMAGE_INDICATOR], spawn: SpawnKind::Burst },
     ParticleKind { key: "sweep", label: "Schwungangriff", types: &[pp::PARTICLE_SWEEP_ATTACK], spawn: SpawnKind::Single },
+    ParticleKind { key: "sculk_soul", label: "Sculk-Seele", types: &[pp::PARTICLE_SCULK_SOUL], spawn: SpawnKind::Burst },
     ParticleKind { key: "totem", label: "Totem", types: &[pp::PARTICLE_TOTEM_OF_UNDYING], spawn: SpawnKind::BurstEmitter },
     // Die Wolke eines zerplatzenden Wurf- oder Verweiltranks (effect/instant_effect) -- ein
     // Schwall auf ein Ereignis, anders als die Wirbel darunter.
@@ -316,6 +318,9 @@ struct Particle {
     fades_to_red: bool,
     // AnimatedParticle.tick: ab der halben Lebensdauer ausblenden.
     fades_out: bool,
+    // FireworkParticles.OverlayParticle (flash): Groesse und Deckkraft haengen am Alter samt
+    // angebrochenem Tick, s. size und build_vertices.
+    flash: bool,
     // SpellParticle.tick: Deckkraft je Tick um 5 % zurueck zu der, mit der das Partikel
     // entstand -- nicht zu voll deckend. Ambient-Effekte (Leuchtfeuer, versteckte
     // Server-Effekte) kommen mit 38/255 und bleiben so fast durchsichtig; liefe die Deckkraft
@@ -362,6 +367,7 @@ impl Particle {
             grows_in: false,
             fades_to_red: false,
             fades_out: false,
+            flash: false,
             alpha_target: None,
             needs_water: false,
             behavior: Behavior::Physics,
@@ -423,6 +429,10 @@ impl Particle {
     }
 
     fn size(&self, tick_progress: f32) -> f32 {
+        if self.flash {
+            // Waechst ueber die vier Ticks auf 7.1 und faellt wieder (halbe Sinuswelle).
+            return 7.1 * ((self.age as f32 + tick_progress - 1.0) * 0.25 * std::f32::consts::PI).sin();
+        }
         if self.grows_in {
             self.scale * ((self.age as f32 + tick_progress) / self.max_age as f32 * 32.0).clamp(0.0, 1.0)
         } else {
@@ -833,6 +843,11 @@ impl Particles {
                 Some(p)
             }
             pp::PARTICLE_POOF => self.poof(pos, v),
+            pp::PARTICLE_SCULK_SOUL => self.soul(t, pos, v),
+            pp::PARTICLE_FLASH => match effect.options {
+                ParticleOptions::Tinted(argb) => self.flash(pos, argb),
+                _ => None,
+            },
             pp::PARTICLE_BUBBLE_COLUMN_UP => self.bubble_column_up(pos, v),
             pp::PARTICLE_CURRENT_DOWN => self.current_down(pos),
             pp::PARTICLE_SMOKE => self.smoke(t, pos, v, 1.0),
@@ -957,6 +972,41 @@ impl Particles {
         p.animated_sprites = Some(t);
         p.sheet = Sheet::Opaque;
         p.uv = sprite_by_age(self.sprite_list(t), p.age, p.max_age);
+        Some(p)
+    }
+
+    // SoulParticle ueber RisingParticle (sculk_soul, die leuchtende Fassung): steigt mit
+    // einem Hundertstel der verrauschten Grundgeschwindigkeit plus der mitgegebenen, Daempfung
+    // 0.96, Bild nach Alter, anderthalbfach gross. Das Leuchten entfaellt -- hier ist ohnehin
+    // alles voll hell.
+    fn soul(&mut self, t: i32, pos: DVec3, v: DVec3) -> Option<Particle> {
+        let first = self.first_sprite(t)?;
+        let rng = &mut self.rng;
+        let mut p = Particle::with_velocity(rng, pos, v).billboard(rng, first);
+        p.velocity_multiplier = 0.96;
+        p.vel = p.vel * 0.01f32 as f64 + v;
+        let streuen = |rng: &mut JavaRandom| ((rng.next_float() - rng.next_float()) * 0.05) as f64;
+        p.pos += DVec3::new(streuen(rng), streuen(rng), streuen(rng));
+        p.last = p.pos;
+        p.max_age = (8.0 / (rng.next_float() as f64 * 0.8 + 0.2)) as i32 + 4;
+        p = p.scaled(1.5);
+        p.animated_sprites = Some(t);
+        p.sheet = Sheet::Translucent;
+        p.uv = sprite_by_age(self.sprite_list(t), p.age, p.max_age);
+        Some(p)
+    }
+
+    // FireworkParticles.OverlayParticle (flash): steht still, vier Ticks, in der Farbe aus dem
+    // Paket (s. size/build_vertices fuer Groesse und Deckkraft).
+    fn flash(&mut self, pos: DVec3, argb: u32) -> Option<Particle> {
+        let uv = self.random_sprite(pp::PARTICLE_FLASH)?;
+        let rng = &mut self.rng;
+        let mut p = Particle::base(rng, pos).billboard(rng, uv);
+        p.max_age = 4;
+        let kanal = |shift: u32| ((argb >> shift) & 0xFF) as f32 / 255.0;
+        p.color = [kanal(16), kanal(8), kanal(0), kanal(24)];
+        p.flash = true;
+        p.sheet = Sheet::Translucent;
         Some(p)
     }
 
@@ -1690,6 +1740,10 @@ impl Particles {
                 let center = (p.last.lerp(p.pos, progress as f64) - eye).as_vec3();
                 let s = p.size(progress);
                 let mut color = p.color;
+                if p.flash {
+                    // Die Deckkraft aus den Optionen ueberschreibt Vanilla jedes Bild hiermit.
+                    color[3] = 0.6 - (p.age as f32 + progress - 1.0) * 0.25 * 0.5;
+                }
                 color[3] *= t.opacity();
                 let (r, u) = (right * s, up * s);
                 let [u0, v0, u1, v1] = p.uv;

@@ -26,17 +26,6 @@ pub enum Kind {
     Error,
 }
 
-impl Kind {
-    pub fn accent(self) -> [f32; 4] {
-        match self {
-            Kind::Info => [0.35, 0.62, 1.0, 1.0],
-            Kind::Success => [0.35, 0.85, 0.45, 1.0],
-            Kind::Warning => [1.0, 0.75, 0.25, 1.0],
-            Kind::Error => [1.0, 0.35, 0.35, 1.0],
-        }
-    }
-}
-
 /// Eine Meldung, wie der Aufrufer sie abgibt.
 #[derive(Clone, Debug)]
 pub struct Notification {

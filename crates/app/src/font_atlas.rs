@@ -174,6 +174,10 @@ pub struct FontAtlas {
     // Dasselbe in Fett (s. place_bold), dazu je Zeichen der fette Vorschub in Font-Pixeln.
     placed_bold: HashMap<(u8, char), PlacedGlyph>,
     bold_advance: HashMap<char, f32>,
+    // Vorschub jedes Zeichens in der Minecraft-Schrift, gleich welche Schrift gezeichnet
+    // wird: wo Vanilla nach Breite umbricht (MOTD in der Serverliste), sollen die Zeilen
+    // genauso enden.
+    vanilla_advance: Arc<HashMap<char, f32>>,
     kind: FontKind,
     // Fuer den Neubau der Bind-Group, wenn ein anderes Pack-Glyphenblatt kommt.
     coverage_view: wgpu::TextureView,
@@ -191,6 +195,7 @@ struct AtlasPixels {
     placed: HashMap<(u8, char), PlacedGlyph>,
     placed_bold: HashMap<(u8, char), PlacedGlyph>,
     bold_advance: HashMap<char, f32>,
+    vanilla_advance: Arc<HashMap<char, f32>>,
     cell_height_px: f32,
     ascent_px: f32,
     descent_px: f32,
@@ -230,6 +235,7 @@ impl FontAtlas {
             placed: pixels.placed,
             placed_bold: pixels.placed_bold,
             bold_advance: pixels.bold_advance,
+            vanilla_advance: pixels.vanilla_advance,
             kind,
             coverage_view,
             sampler,
@@ -267,6 +273,7 @@ impl FontAtlas {
         self.placed = pixels.placed;
         self.placed_bold = pixels.placed_bold;
         self.bold_advance = pixels.bold_advance;
+        self.vanilla_advance = pixels.vanilla_advance;
         self.kind = kind;
         Ok(())
     }
@@ -304,6 +311,17 @@ impl FontAtlas {
                 offset_px: [0.0, -g.ascent],
                 advance_px: g.advance,
             }),
+        }
+    }
+
+    // Vorschub in der Minecraft-Schrift (Vanilla-Einheiten, ohne Fett). Server-Symbole aus
+    // Pack-Schriften mit deren Vorschub; Zeichen, die die Minecraft-Schrift nicht kennt, so
+    // breit wie Vanillas Ersatzzeichen.
+    pub fn vanilla_advance(&self, ch: char) -> f32 {
+        match self.resolve(ch) {
+            Some(Resolved::Pack(g)) => g.advance,
+            Some(Resolved::Base(c)) => self.vanilla_advance.get(&c).copied().unwrap_or(6.0),
+            None => 6.0,
         }
     }
 
@@ -579,6 +597,7 @@ fn build_minecraft(installation: &mut assets::MinecraftInstallation) -> Result<A
         levels: vec![coverage],
         width: tex_w,
         height: tex_h,
+        vanilla_advance: Arc::new(glyphs.iter().map(|(&c, g)| (c, g.advance_px)).collect()),
         glyphs,
         placed: HashMap::default(),
         placed_bold: HashMap::default(),
@@ -787,6 +806,7 @@ fn build_ttf(minecraft: &AtlasPixels, spec: TtfSpec) -> AtlasPixels {
         placed,
         placed_bold,
         bold_advance,
+        vanilla_advance: minecraft.vanilla_advance.clone(),
         cell_height_px: minecraft.cell_height_px,
         ascent_px: minecraft.ascent_px,
         descent_px,
@@ -928,6 +948,7 @@ mod tests {
             placed: HashMap::default(),
             placed_bold: HashMap::default(),
             bold_advance: HashMap::default(),
+            vanilla_advance: Arc::default(),
             cell_height_px: 8.0,
             ascent_px: 7.0,
             descent_px: 1.0,
@@ -980,6 +1001,7 @@ mod tests {
             placed: HashMap::default(),
             placed_bold: HashMap::default(),
             bold_advance: HashMap::default(),
+            vanilla_advance: Arc::default(),
             cell_height_px: 8.0,
             ascent_px: 7.0,
             descent_px: 1.0,

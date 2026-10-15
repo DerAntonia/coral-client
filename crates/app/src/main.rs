@@ -59,6 +59,9 @@ mod ui_sound;
 mod vblank;
 mod vehicle;
 mod wallpaper;
+mod last_view;
+mod armor_hud;
+mod keystrokes;
 mod vanilla_sounds;
 mod voicechat;
 
@@ -839,6 +842,13 @@ fn item_needs_tooltip(stack: &protocol::item::ItemStack) -> bool {
         || stack.item_model.is_some()
         || world::bundle::is_bundle(stack)
         || stack.written_book.is_some()
+}
+
+// Zeigt der Stapel beim Wechsel auf ihn seinen Namen ueber der Hotbar? Nur mit eigenem Namen
+// (umbenannt oder vom Server benannt) oder Lore -- Verzauberungen, Traenke oder Trims allein
+// reichen nicht, die zeigt der Tooltip im Inventar.
+fn item_shows_held_name(stack: &protocol::item::ItemStack) -> bool {
+    stack.custom_name.is_some() || stack.item_name_spans.is_some() || !stack.lore.is_empty()
 }
 
 // Wert eines Attributs, das ein Item anlegt, ausgehend von `basis` (dem Grundwert des
@@ -1672,6 +1682,12 @@ fn wrap_chat_message(msg: &[protocol::nbt::TextSpan], max_width: f32, measure: i
 // Farbige Abschnitte auf `max_width` setzen wie wrap_chat_message, Folgezeilen um `einzug`
 // eingerueckt (0 = buendig, wie Vanillas Font.split fuer Buchseiten).
 fn wrap_spans(msg: &[protocol::nbt::TextSpan], max_width: f32, measure: impl Fn(&str) -> f32, einzug: f32) -> Vec<ChatLine> {
+    wrap_spans_styled(msg, max_width, |t, _| measure(t), einzug)
+}
+
+// Wie wrap_spans, die Breite eines Stuecks haengt aber auch an seinem Stil (STYLE_*) -- fuer
+// Vanillas Breiten, in denen Fett jedes Zeichen breiter macht.
+fn wrap_spans_styled(msg: &[protocol::nbt::TextSpan], max_width: f32, measure: impl Fn(&str, u8) -> f32, einzug: f32) -> Vec<ChatLine> {
     let absaetze = split_label_lines(msg);
     let mut out = Vec::new();
     for absatz in absaetze {
@@ -1680,10 +1696,13 @@ fn wrap_spans(msg: &[protocol::nbt::TextSpan], max_width: f32, measure: impl Fn(
         let mut zeilen_einzug = 0.0f32;
         let mut umbrochen = false;
         let anfuegen = |aktuell: &mut Vec<protocol::nbt::TextSpan>, text: &str, span: &protocol::nbt::TextSpan| match aktuell.last_mut() {
-            Some(last) if last.color == span.color && last.link == span.link && last.action == span.action => last.text.push_str(text),
+            Some(last) if last.color == span.color && last.link == span.link && last.action == span.action && last.style == span.style && last.shadow == span.shadow => {
+                last.text.push_str(text)
+            }
             _ => aktuell.push(protocol::nbt::TextSpan { text: text.to_string(), color: span.color, link: span.link.clone(), action: span.action.clone(), style: span.style, shadow: span.shadow }),
         };
         for span in &absatz {
+            let measure = |t: &str| measure(t, span.style);
             for (i, wort) in span.text.split(' ').enumerate() {
                 // Das Leerzeichen VOR dem Wort gehoert dazu -- ausser direkt nach einem
                 // Umbruch, dort faellt es weg.
@@ -1788,6 +1807,22 @@ fn white_veil(alpha: f32) -> [f32; 4] {
 // Gegenstueck zu white_veil fuer schwarze Hintergruende.
 // Abdunklung hinter Fenstern in der Bildschirmmitte (Quick Connect, Acc-Manager, Server-
 // Eintrag, Buch, Schild): ueberall dieselbe, halbe Helligkeit.
+// Was das Disconnect-Fenster zeigt: nur die Meldung des Servers, ohne die Vorsaetze, die
+// der Netz-Task fuers Log davorsetzt. Ohne Servermeldung (IO-Fehler, Timeout) bleibt der
+// ganze Text -- er sagt dann selbst, was passiert ist.
+fn disconnect_popup_text(reason: &str) -> &str {
+    let r = reason.strip_prefix("Protokoll-Fehler: ").unwrap_or(reason);
+    if let Some(grund) = r.strip_prefix("Server hat Login abgelehnt: ") {
+        return grund;
+    }
+    if r.starts_with("Server-Disconnect im ") {
+        if let Some((_, grund)) = r.split_once("-State: ") {
+            return grund;
+        }
+    }
+    r
+}
+
 fn dialog_dim() -> [f32; 4] {
     black_veil(0.5)
 }
@@ -1818,6 +1853,10 @@ const STATUS_BARS_ABOVE_HOTBAR: f32 = 17.0;
 const XP_BAR_ABOVE_HOTBAR: f32 = 7.0;
 const XP_LEVEL_ABOVE_HOTBAR: f32 = 13.0;
 const XP_BAR_HEIGHT: f32 = 5.0;
+// Itemname ueber der Hotbar (Gui.renderSelectedItemName): Oberkante height-59, also 37 ueber
+// der Hotbar; steht zwei Sekunden (40 Ticks bei Vanillas Anzeigedauer 1.0).
+const HELD_NAME_ABOVE_HOTBAR: f32 = 37.0;
+const HELD_NAME_TICKS: i32 = 40;
 // Vanillas Gruen der Stufenzahl (-8323296 = 0x80FF20).
 const COLOR_XP_LEVEL: [f32; 4] = [0.5, 1.0, 0.125, 1.0];
 // Entity.getMaxAir(): 300 Ticks = 15 Sekunden unter Wasser.
@@ -1858,7 +1897,7 @@ const BACK_BUTTON: Rect = Rect { x: 40.0, y: 30.0, w: 160.0, h: 44.0 };
 fn account_row_rect(row: usize) -> Rect {
     Rect { x: 40.0, y: 120.0 + row as f32 * 48.0, w: 360.0, h: 40.0 }
 }
-// Zweite Spalte (z.B. Client-ID neben Token) und das Eingabefeld + OK.
+// Zweite Spalte (z.B. Refresh-Token neben Microsoft) und das Eingabefeld + OK.
 fn account_row_rect_col2(row: usize) -> Rect {
     Rect { x: 412.0, y: 120.0 + row as f32 * 48.0, w: 200.0, h: 40.0 }
 }
@@ -1916,6 +1955,9 @@ fn server_row_h() -> f32 {
     server_icon_px() + 24.0
 }
 const SERVER_ROW_GAP: f32 = 10.0;
+// Breite, auf die Vanilla die MOTD umbricht: Zeile der Serverliste (305) ohne Raender, Icon und
+// Abstand, in Einheiten der Minecraft-Schrift.
+const MOTD_VANILLA_WIDTH: f32 = 267.0;
 
 fn server_list_top() -> f32 {
     server_panel().y
@@ -2031,7 +2073,7 @@ fn settings_wide_rect(row: usize) -> Rect {
 // neben den Kategorien) -- sie haengt jetzt unter Steuerung, wo auch die zugehoerigen
 // Verhaltens-Einstellungen (Auto-Sprung, Sprint-/Sneak-Umschaltung, ...) stecken, s.
 // MenuScreen::SettingsControls.
-const SETTINGS_CATEGORIES: [(MenuScreen, &str); 11] = [
+const SETTINGS_CATEGORIES: [(MenuScreen, &str); 12] = [
     (MenuScreen::SettingsGeneral, "Render"),
     (MenuScreen::SettingsVideo, "Video"),
     (MenuScreen::SettingsAudio, "Audio"),
@@ -2043,6 +2085,7 @@ const SETTINGS_CATEGORIES: [(MenuScreen, &str); 11] = [
     (MenuScreen::SettingsLanguage, "Sprache"),
     (MenuScreen::SettingsModules, "Module"),
     (MenuScreen::SettingsConfigs, "Configs"),
+    (MenuScreen::SettingsMisc, "Sonstiges"),
 ];
 // Zeilen des Sprach-Tabs: Beschriftung und Erklaerung beim Draufzeigen. Zeile 0 stellt alle
 // Bereiche auf einmal um, die anderen je einen (Reihenfolge wie in language_of_row).
@@ -2177,9 +2220,17 @@ const NOTIFICATION_ACCENT_W: f32 = 4.0;
 const NOTIFICATION_PADDING: f32 = 12.0;
 const NOTIFICATION_BODY_GAP: f32 = 6.0;
 const NOTIFICATION_TIMER_H: f32 = 2.0;
-const COLOR_NOTIFICATION_BG: [f32; 4] = [0.08, 0.08, 0.10, 0.94];
-const COLOR_NOTIFICATION_BG_HOVER: [f32; 4] = [0.13, 0.13, 0.16, 0.96];
-const COLOR_NOTIFICATION_BODY: [f32; 4] = [0.72, 0.72, 0.76, 1.0];
+
+// Streifenfarbe einer Benachrichtigung aus dem Theme (Karte oben rechts und Panel).
+fn notification_accent(kind: notifications::Kind) -> [f32; 4] {
+    use theme::Slot;
+    theme::get(match kind {
+        notifications::Kind::Info => Slot::Accent,
+        notifications::Kind::Success => Slot::Success,
+        notifications::Kind::Warning => Slot::Warning,
+        notifications::Kind::Error => Slot::Danger,
+    })
+}
 
 struct NotificationLayout {
     title: Vec<String>,
@@ -2865,6 +2916,9 @@ const PARTICLES_ROW: usize = BLOCK_ROTATION_ROW + 1;
 // Partikeln, die Platzhalter danach.
 const GLINT_SPEED_ROW: usize = PARTICLES_ROW + 1;
 const GLINT_STRENGTH_ROW: usize = GLINT_SPEED_ROW + 1;
+// Ruestungsbesatz (Trims) an getragener Ruestung zeigen (Settings::armor_trims).
+const ARMOR_TRIMS_ROW: usize = GLINT_STRENGTH_ROW + 1;
+const ARMOR_TRIMS_TOOLTIP: &str = "Zeigt den Rüstungsbesatz (Trims) auf getragener Rüstung -- bei Spielern, Mobs und Rüstungsständern. Aus: nur die blanke Rüstung, wie ohne Schmiedevorlage. Die Items im Inventar behalten ihr Aussehen.";
 // Entity-Renderdistanz (Settings::entity_render_distance), in Bloecken.
 const ENTITY_DISTANCE_MIN: u32 = 16;
 // Das Maximum heisst "unbegrenzt".
@@ -2880,7 +2934,7 @@ const ENTITY_DISTANCE_ROW: usize = RENDER_DISTANCE_ROW + 1;
 const LOD_DISTANCE_ROW: usize = ENTITY_DISTANCE_ROW + 1;
 const LOD_DETAIL_ROW: usize = LOD_DISTANCE_ROW + 1;
 const VIDEO_CAMERA_ROW: usize = LOD_DETAIL_ROW + 1;
-const VIDEO_ROW_COUNT: usize = PLAYER_LIST_SCALE_ROW + 1;
+const VIDEO_ROW_COUNT: usize = FIRE_DETAIL_ROW + 1;
 const RENDER_DISTANCE_TOOLTIP: &str = "Radius in Chunks um den Spieler, in dem geladene Chunks gezeichnet werden. Weiter draußen bleiben die Blockdaten geladen (kein Loch beim Zurückkommen), sie werden nur nicht gezeichnet. Unabhängig von der Sichtweite des Servers -- wirkt sofort, ohne neu zu verbinden. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 const LOD_DISTANCE_TOOLTIP: &str = "Wie weit die Fernsicht (LOD) reicht, in Chunks -- sie zeichnet hinter der Render-Distance vereinfacht weiter, was das Modul Chunk-Saver gespeichert hat (wie Voxy). Aus: keine Fernsicht. Ohne eingeschaltetes Modul kommt nichts Neues dazu, schon Gespeichertes wird trotzdem gezeichnet. Im Shader-Renderpfad noch ohne Wirkung.";
 const LOD_DETAIL_TOOLTIP: &str = "Wie fein die Fernsicht unterteilt wird: so groß (in Pixeln²) darf ein Fernsicht-Block auf dem Bildschirm höchstens werden, bevor eine feinere Stufe geladen wird. Kleiner = schärfer, kostet mehr Speicher und GPU-Zeit. Standard 4.";
@@ -2903,7 +2957,7 @@ const FOV_THIRD_FRONT_TOOLTIP: &str =
     "Sichtfeld der Frontansicht (F5, zweite Stufe -- Kamera vor dem Spieler, blickt ihn an). Die an den Server gesendete Blickrichtung bleibt dabei die des Spielers, nur die Kamera dreht sich.";
 // Schadens-Faerbung, Abschnitt Treffer des Video-Tabs: eine Zeile mit dem Farbfeld; die
 // Regler stecken im Farbfenster (s. ColorPopup).
-const DAMAGE_TINT_FIRST_ROW: usize = GLINT_STRENGTH_ROW + 1;
+const DAMAGE_TINT_FIRST_ROW: usize = ARMOR_TRIMS_ROW + 1;
 // Direkt unter dem Farbfeld: nur der Skin oder alles, und wie lange der Blitz haelt.
 const DAMAGE_TINT_SKIN_ONLY_ROW: usize = DAMAGE_TINT_FIRST_ROW + 1;
 const DAMAGE_TINT_TICKS_ROW: usize = DAMAGE_TINT_FIRST_ROW + 2;
@@ -2912,6 +2966,18 @@ const DAMAGE_TINT_TICKS_ROW: usize = DAMAGE_TINT_FIRST_ROW + 2;
 const CRIT_COLOR_ROW: usize = DAMAGE_TINT_TICKS_ROW + 1;
 // Abschnitt Spielerliste: ihre Groesse in Prozent der GUI-Skala (Settings::player_list_scale).
 const PLAYER_LIST_SCALE_ROW: usize = CRIT_COLOR_ROW + 1;
+// Abschnitt Hurt-Cam: an/aus und Staerke (Settings::hurt_cam/_strength).
+const HURT_CAM_ROW: usize = PLAYER_LIST_SCALE_ROW + 1;
+const HURT_CAM_STRENGTH_ROW: usize = HURT_CAM_ROW + 1;
+// Abschnitt Feuer: Modus, darunter je nach Modus die Hoehe oder die Fadenkreuzfarbe.
+const FIRE_MODE_ROW: usize = HURT_CAM_STRENGTH_ROW + 1;
+const FIRE_DETAIL_ROW: usize = FIRE_MODE_ROW + 1;
+// Hurt-Cam: Ausschlag bei 100 % in Grad (Vanillas bobHurt).
+const HURT_CAM_MAX_DEGREES: f32 = 14.0;
+// Feuer vor den Augen (Settings::fire_mode).
+const FIRE_MODE_VANILLA: u8 = 0;
+const FIRE_MODE_CROSSHAIR: u8 = 1;
+const FIRE_MODE_NAMES: [&str; 2] = ["Vanilla", "Fadenkreuz"];
 const PLAYER_LIST_SCALE_TOOLTIP: &str = "Größe der Spielerliste (Tab) in Prozent. 100 % = wie Vanilla, sie folgt dann nur der GUI-Skala wie die Hotbar. Zahl anklicken für einen eigenen Wert.";
 // Vanillas hurtTime: 10 Ticks. Nach oben bis 2 s, darueber verschwimmen Treffer ineinander.
 const DAMAGE_TINT_TICKS_DEFAULT: u32 = 10;
@@ -3313,10 +3379,22 @@ fn hud_config_rows(element: HudElement, set: &Settings) -> usize {
         // Name (mit Farbe), Timer, Timer-Farbe und Blinken.
         HudElement::Effects if set.effects_detailed => EFFECTS_BLINK_ROW + 1,
         HudElement::Effects => EFFECTS_STYLE_ROW + 1,
-        HudElement::Perf | HudElement::Scoreboard | HudElement::ShieldCooldown | HudElement::Arrows => 0,
+        HudElement::Perf => 0,
+        // Groesse.
+        HudElement::Scoreboard => 1,
+        // Farbe des Countdowns (Countdown oder Kreis waehlt das Schilde-Modul).
+        HudElement::ShieldCooldown => 1,
+        // Groesse, Nur Zahl, Deckkraft, Zahl-Farbe.
+        HudElement::Arrows => 4,
         HudElement::ActionBar => 1,
         // Groesse.
         HudElement::BossBar => 1,
+        // Groesse.
+        HudElement::HeldName => 1,
+        // Groesse, Ausrichtung, Ruecken, Abstand, Zahlgroesse, Zahl x und y.
+        HudElement::Armor => 7,
+        // Groesse, Deckkraft.
+        HudElement::Keystrokes => 2,
         // Die Chat-Einstellungen (s. CHAT_TOOLTIPS): Groesse, Breite, Hintergrund, Abdunkeln,
         // Zeilen im Spiel und beim Tippen, Ausblenden.
         HudElement::Chat => CHAT_TOOLTIPS.len(),
@@ -3845,6 +3923,10 @@ struct InventoryDrag {
     slots: Vec<(usize, Option<protocol::item::ItemStack>)>,
     // Der Stapel am Zeiger, als das Ziehen begann.
     cursor_before: Option<protocol::item::ItemStack>,
+    // War "Stapel verschieben" beim DRUECKEN gehalten? Das Loslassen fuehrt den Klick aus, der
+    // beim Druecken schon angezeigt wurde -- erst danach gedrueckt hob es sonst das eben
+    // abgelegte Item wieder auf.
+    move_stack: bool,
 }
 
 // Fokussiertes Eingabefeld im Server-Formular -- hebt sich vom unfokussierten ab, ohne wie
@@ -4029,8 +4111,19 @@ const TEARING_BAR_COLORS: [[f32; 4]; 5] =
     [[1.0, 0.15, 0.15, 1.0], [1.0, 0.6, 0.1, 1.0], [1.0, 1.0, 0.2, 1.0], [0.2, 1.0, 0.3, 1.0], [0.3, 0.6, 1.0, 1.0]];
 
 
+// Masse des Ruestungs-HUD, s. App::armor_hud_metrics.
+struct ArmorHudMetrics {
+    size: f32,
+    px: f32,
+    text_scale: f32,
+    gap: f32,
+    rand: [f32; 4],
+}
+
 // Weiss fuer Text im Spiel (Chat, HUD, Schilder) -- haengt bewusst nicht am Theme der Menues.
 const COLOR_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+// Haltbarkeitszahl im Ruestungs-HUD, wenn das Teil bald bricht (Vanillas Gold, §6).
+const COLOR_ARMOR_LOW: [f32; 4] = [1.0, 170.0 / 255.0, 0.0, 1.0];
 
 const VERTS_PER_QUAD: usize = 6;
 // Reichlich: der offene Chat bringt Unterstriche fuer Links mit, die Textauswahl eine
@@ -5307,9 +5400,11 @@ enum ShadowArea {
     Nametags,
     // Text auf Schildern in der Welt (s. build_sign_texts).
     Signs,
+    // Die Haltbarkeitszahlen des Ruestungs-HUD (s. push_armor_hud).
+    ArmorHud,
 }
 
-const TEXT_AREA_COUNT: usize = 13;
+const TEXT_AREA_COUNT: usize = 14;
 
 // Schildtext je Bild hoechstens (Vertices, mit Kontur 9 Vierecke je Zeichen).
 const MAX_SIGN_TEXT_VERTICES: usize = 65_536;
@@ -5331,6 +5426,7 @@ impl ShadowArea {
         ShadowArea::Effects,
         ShadowArea::Nametags,
         ShadowArea::Signs,
+        ShadowArea::ArmorHud,
     ];
 
     // Schild-Countdown und Pfeil-Zahl haben statt eines Randes ihre eigene Faerbung (s.
@@ -5364,6 +5460,7 @@ impl ShadowArea {
             ShadowArea::Effects => "Effekte",
             ShadowArea::Nametags => "Nametags",
             ShadowArea::Signs => "Schilder",
+            ShadowArea::ArmorHud => "Rüstungs-HUD",
         }
     }
 
@@ -5382,6 +5479,7 @@ impl ShadowArea {
             ShadowArea::Effects => "shadow_effects",
             ShadowArea::Nametags => "shadow_nametags",
             ShadowArea::Signs => "shadow_signs",
+            ShadowArea::ArmorHud => "shadow_armor_hud",
         }
     }
 
@@ -5401,6 +5499,7 @@ impl ShadowArea {
             ShadowArea::Effects => "font_effects",
             ShadowArea::Nametags => "font_nametags",
             ShadowArea::Signs => "font_signs",
+            ShadowArea::ArmorHud => "font_armor_hud",
         }
     }
 }
@@ -5786,6 +5885,10 @@ struct GpuState {
     layout_font: std::cell::Cell<Option<FontKind>>,
     // Gerade ruhiger Text (s. push_plain_numbers_marker): Messen ohne reservierten Platz.
     plain_numbers: std::cell::Cell<bool>,
+    // Wie viele Sprites am Anfang der HUD-Liste UNTER allen Flaechen liegen (das Feuer vor
+    // den Augen, s. App::build_fire_overlay) -- sonst verdeckte es Chat-Hintergrund und
+    // Keystrokes. Von build_hud gesetzt, von render_world verbraucht.
+    under_sprites: std::cell::Cell<usize>,
     // Allgemeiner Textrand (Settings::global_text_shadow), s. shape_text.
     text_shadow_style: TextShadow,
     // Staerke des allgemeinen Rands (s. Settings::shadow_strength).
@@ -5826,6 +5929,12 @@ struct GpuState {
     // dort Treppchen.
     wallpaper: Option<(wgpu::BindGroup, (u32, u32))>,
     wallpaper_sampler: wgpu::Sampler,
+    // Letzter Weltblick (s. last_view.rs): Hintergrund des HUD-Editors ohne Verbindung.
+    last_view: Option<(wgpu::BindGroup, (u32, u32))>,
+    // Steht in offscreen_texture gerade ein Weltbild OHNE HUD (hinter einem Menue gezeichnet)?
+    // Nur so eins taugt als letzter Weltblick -- wer mitten im Spiel getrennt wird, haette sonst
+    // Hotbar und Herzen im Hintergrund des HUD-Editors.
+    offscreen_world_only: bool,
     // Server-Icons der Server-Liste: ein Atlas mit SERVER_ICON_GRID^2 Plaetzen zu 64x64,
     // angelegt beim ersten Icon (s. upload_server_icon).
     server_icons: Option<(wgpu::Texture, wgpu::BindGroup)>,
@@ -6989,6 +7098,7 @@ impl GpuState {
             pack_glyphs,
             layout_font: Default::default(),
             plain_numbers: Default::default(),
+            under_sprites: Default::default(),
             text_shadow_style: TextShadow::Outline,
             text_shadow_strength: 1.0,
             text_runs: Default::default(),
@@ -7009,6 +7119,8 @@ impl GpuState {
             block_atlas_sprite_bind_group,
             entity_atlas_sprite_bind_group,
             wallpaper: None,
+            last_view: None,
+            offscreen_world_only: false,
             server_icons: None,
             pack_icons: None,
             logos: None,
@@ -7106,6 +7218,7 @@ impl GpuState {
         self.offscreen_texture = offscreen_texture;
         self.offscreen_view = offscreen_view;
         self.world_backdrop = None;
+        self.offscreen_world_only = false;
         // Der Crosshair-Bind-Group haengt an der alten offscreen_view-Identitaet -- neu
         // erzeugen, sonst zeigt er nach einem Resize auf eine bereits zerstoerte Textur.
         self.crosshair_bind_group = create_crosshair_bind_group(
@@ -7194,6 +7307,14 @@ impl GpuState {
 
     // Zeilenhoehe bei gegebenem Faktor -- damit sich Layout-Werte aus dem Font ergeben,
     // statt irgendwo als Zahl zu stehen, die zur Font passen muss.
+    // Breite in Vanilla-Einheiten (Minecraft-Schrift, Fett ein Pixel mehr je Zeichen), egal in
+    // welcher Schrift gezeichnet wird.
+    fn vanilla_width(&self, text: &str, style: u8) -> f32 {
+        let atlas = self.layout_atlas();
+        let fett = if style & protocol::nbt::STYLE_BOLD != 0 { 1.0 } else { 0.0 };
+        text.chars().map(|c| atlas.vanilla_advance(c) + fett).sum()
+    }
+
     fn text_height(&self, scale: f32) -> f32 {
         self.layout_atlas().cell_height_px() * scale
     }
@@ -7640,35 +7761,96 @@ impl GpuState {
     }
 
     fn set_wallpaper(&mut self, bild: Option<&wallpaper::Decoded>) {
-        self.wallpaper = bild.map(|b| {
-            let extent = wgpu::Extent3d { width: b.width, height: b.height, depth_or_array_layers: 1 };
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("wallpaper"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            self.queue.write_texture(
-                wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                &b.rgba,
-                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(b.width * 4), rows_per_image: Some(b.height) },
-                extent,
-            );
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("wallpaper bind group"),
-                layout: &self.sprite_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.wallpaper_sampler) },
-                ],
-            });
-            (bind_group, (b.width, b.height))
+        self.wallpaper = bild.map(|b| self.upload_background("wallpaper", b, wgpu::TextureFormat::Rgba8UnormSrgb));
+    }
+
+    // Ein ganzes Bild als eigene Sprite-Textur (Hintergrundbild, letzter Weltblick).
+    fn upload_background(&self, label: &str, b: &wallpaper::Decoded, format: wgpu::TextureFormat) -> (wgpu::BindGroup, (u32, u32)) {
+        let extent = wgpu::Extent3d { width: b.width, height: b.height, depth_or_array_layers: 1 };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         });
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &b.rgba,
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(b.width * 4), rows_per_image: Some(b.height) },
+            extent,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.sprite_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.wallpaper_sampler) },
+            ],
+        });
+        (bind_group, (b.width, b.height))
+    }
+
+    // Letzten Weltblick hochladen (s. last_view.rs). Die Bytes stammen roh aus offscreen_texture,
+    // also dieselbe sRGB-Deutung wie dort -- sonst saehe das Bild heller oder dunkler aus als die
+    // Welt hinter dem Pausemenue.
+    fn set_last_view(&mut self, b: &wallpaper::Decoded) {
+        let format = if self.config.format.is_srgb() { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
+        self.last_view = Some(self.upload_background("last view", b, format));
+    }
+
+    // Das gerade in offscreen_texture stehende Weltbild in den Speicher lesen, falls es eins ohne
+    // HUD ist (s. offscreen_world_only). Wartet auf die GPU -- laeuft nur beim Verlassen einer
+    // Welt, nie im Frame.
+    fn read_world_view(&self) -> Option<wallpaper::Decoded> {
+        if !self.offscreen_world_only {
+            return None;
+        }
+        let bgra = match self.config.format {
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+            _ => return None,
+        };
+        let (w, h) = (self.offscreen_texture.width(), self.offscreen_texture.height());
+        let zeile = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let puffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("last view readback"),
+            size: zeile as u64 * h as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("last view readback") });
+        encoder.copy_texture_to_buffer(
+            self.offscreen_texture.as_image_copy(),
+            wgpu::ImageCopyBuffer { buffer: &puffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(zeile), rows_per_image: Some(h) } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        puffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = self.device.poll(wgpu::Maintain::Wait);
+        rx.recv().ok()?.ok()?;
+        let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+        {
+            let daten = puffer.slice(..).get_mapped_range();
+            for y in 0..h as usize {
+                let z = &daten[y * zeile as usize..][..w as usize * 4];
+                for p in z.chunks_exact(4) {
+                    // Alpha fest auf deckend: was im Alphakanal des Weltbilds steht, ist kein
+                    // Bildinhalt.
+                    let px = if bgra { [p[2], p[1], p[0], 255] } else { [p[0], p[1], p[2], 255] };
+                    rgba.extend_from_slice(&px);
+                }
+            }
+        }
+        puffer.unmap();
+        Some(wallpaper::Decoded { rgba, width: w, height: h })
     }
 
     // Glint-Textur des GUI-Glints (neu nach einem Pack-Wechsel).
@@ -8010,6 +8192,8 @@ impl GpuState {
         // Das Weltbild dahinter mit dieser Helligkeit (verbunden, s. App::world_backdrop_visible),
         // None = keins.
         show_world: Option<f32>,
+        // Den letzten Weltblick zeichnen (HUD-Editor ohne Verbindung, s. App::last_view_visible).
+        show_last_view: bool,
         // Aus acquire_frame -- das Bild wird VOR dem Aufbau des Frames geholt, s. dort.
         acquired: (wgpu::SurfaceTexture, f32),
     ) -> Option<FrameTiming> {
@@ -8052,7 +8236,12 @@ impl GpuState {
         let hintergrund: Option<(&wgpu::BindGroup, [f32; 4], [f32; 4])> = match (self.wallpaper.as_ref().filter(|_| show_wallpaper), self.world_backdrop.as_ref().zip(show_world)) {
             (Some((bind_group, groesse)), _) => Some((bind_group, wallpaper::cover_uv(*groesse, screen_px), [1.0; 4])),
             (None, Some((bind_group, hell))) => Some((bind_group, [0.0, 0.0, 1.0, 1.0], [hell, hell, hell, 1.0])),
-            _ => None,
+            // Unabgedunkelt: im HUD-Editor soll man sehen, wie das HUD im Spiel wirkt.
+            _ => self
+                .last_view
+                .as_ref()
+                .filter(|_| show_last_view)
+                .map(|(bind_group, groesse)| (bind_group, wallpaper::cover_uv(*groesse, screen_px), [1.0; 4])),
         };
         if let Some((_, [u0, v0, u1, v1], farbe)) = hintergrund {
             let (w, h) = screen_px;
@@ -8372,7 +8561,10 @@ impl GpuState {
         // (Item-Symbole, der Stapel an der Maus) danach. shape_sprites haengt beide Male an
         // denselben Vertexpuffer an und rechnet mit absoluten Offsets, die Laeufe passen also
         // ohne Umrechnung zusammen.
-        let doll_split = doll_split.filter(|_| self.block_renderer.has_doll()).map(|k| k.min(sprites.len()));
+        let unter = self.under_sprites.replace(0).min(sprites.len());
+        let unter_runs = Self::shape_sprites(&sprites[..unter], screen_px, &mut sprite_data);
+        let sprites = &sprites[unter..];
+        let doll_split = doll_split.filter(|_| self.block_renderer.has_doll()).map(|k| k.saturating_sub(unter).min(sprites.len()));
         let (sprite_runs, sprite_runs_after) = match doll_split {
             Some(k) => {
                 let vorher = Self::shape_sprites(&sprites[..k], screen_px, &mut sprite_data);
@@ -8408,7 +8600,7 @@ impl GpuState {
                 let view = self.offscreen_texture.create_view(&wgpu::TextureViewDescriptor { format: Some(raw), ..Default::default() });
                 let gamma = |c: f64| if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
                 let clear = if raw != self.config.format { wgpu::Color { r: gamma(sky.r), g: gamma(sky.g), b: gamma(sky.b), a: sky.a } } else { sky };
-                let rotation = glam::Mat4::look_to_rh(glam::Vec3::ZERO, camera.view_forward(), glam::Vec3::Y);
+                let rotation = camera.view_rotation();
                 let view_proj = camera.proj_matrix(aspect) * rotation;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("custom sky pass"),
@@ -8426,7 +8618,7 @@ impl GpuState {
             // Verlaufshimmel (Modul Himmel): statt der Loeschfarbe, ebenfalls vor allem anderen.
             let verlauf = self.sky_gradient.filter(|_| !himmel);
             if let Some(frame) = &verlauf {
-                let rotation = glam::Mat4::look_to_rh(glam::Vec3::ZERO, camera.view_forward(), glam::Vec3::Y);
+                let rotation = camera.view_rotation();
                 let view_proj = camera.proj_matrix(aspect) * rotation;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("gradient sky pass"),
@@ -8550,6 +8742,11 @@ impl GpuState {
                 pass.set_bind_group(0, &self.hud_font(sign_kind).bind_group, &[]);
                 pass.draw(0..sign_len, 0..1);
             }
+            if !unter_runs.is_empty() {
+                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_vertex_buffer(0, self.sprite_vertex_buffer.slice(..));
+                self.draw_sprite_runs(&mut pass, &unter_runs);
+            }
             if quad_split > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
                 pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
@@ -8620,6 +8817,7 @@ impl GpuState {
             // Hintergrund fuers Menue: abschicken, das Bild holt render_menu gleich selbst.
             self.queue.submit(std::iter::once(encoder.finish()));
             self.keep_world_backdrop();
+            self.offscreen_world_only = true;
             return None;
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -8761,6 +8959,7 @@ impl GpuState {
         // Das fertige Weltbild bleibt in offscreen_view stehen -- es dient den Menues als
         // Hintergrund, sobald man Esc drueckt (s. world_backdrop).
         self.keep_world_backdrop();
+        self.offscreen_world_only = false;
         Some(self.submit_and_present(encoder, frame, wait_ms, work_started))
     }
 }
@@ -9263,7 +9462,7 @@ enum MenuScreen {
     // die 3D-Ansicht (das Overlay dort zeigt die Connect-Phase, s. build_connecting_overlay).
     Connect,
     // Konto-Verwaltung (eigener Screen statt eingequetscht auf dem Connect-Screen): Microsoft-
-    // Login, Client-ID, manuelles Token, Import aus einem Launcher (Prism), Abmelden.
+    // Login, Refresh-Token, manuelles Token, Abmelden.
     Account,
     // Settings ist die Kategorie-Auswahl (nur Kacheln, s. build_settings_hub) -- die
     // eigentlichen Zeilen stecken in den Unterscreens darunter. SettingsGeneral traegt die
@@ -9310,6 +9509,9 @@ enum MenuScreen {
     // Partikel-Anpassung: je Partikelart an/aus, Dauer, Deckkraft, Tempo. Unterscreen von
     // SettingsVideo (Knopf neben der Partikel-Stufe).
     SettingsParticles,
+    // Sonstiges: was zu keiner anderen Seite passt (bisher: Schliessen durch den Server
+    // ignorieren, s. Settings::no_ui_close_s2c).
+    SettingsMisc,
     // Einrichtung: ganz unten in der Kategorienleiste, erste Seite beim allerersten Oeffnen der
     // Einstellungen. Hier kommt der Tastenbelegungs-Assistent hin.
     SettingsSetup,
@@ -9354,6 +9556,7 @@ impl MenuScreen {
             MenuScreen::SettingsLanguage => "language",
             MenuScreen::SettingsModules => "modules",
             MenuScreen::SettingsConfigs => "configs",
+            MenuScreen::SettingsMisc => "misc",
             _ => "setup",
         }
     }
@@ -9372,11 +9575,12 @@ impl MenuScreen {
             }),
             MenuScreen::SettingsVideo => Some(SettingsPage {
                 rows: VIDEO_ROW_COUNT,
-                sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW)],
+                sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Feuer", FIRE_MODE_ROW)],
             }),
             MenuScreen::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
             // Zeilen 4..6 = Trank-Buchstaben.
             MenuScreen::SettingsInventory => Some(SettingsPage { rows: 7, sections: &[("Allgemein", 0), ("Tränke", 4)] }),
+            MenuScreen::SettingsMisc => Some(SettingsPage { rows: 1, sections: &[] }),
             MenuScreen::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
             MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_PITCH_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
@@ -9435,11 +9639,17 @@ enum HudElement {
     Effects,
     // Die Bossbars (BossBarHud), alle zusammen als ein Block.
     BossBar,
+    // Der Name des gewaehlten Items ueber der Hotbar (s. build_held_name).
+    HeldName,
+    // Das Ruestungs-HUD (Modul "Ruestung", s. build_armor_hud).
+    Armor,
+    // Die Keystrokes (Modul, s. push_keystrokes).
+    Keystrokes,
 }
 
 impl HudElement {
     #[cfg(test)]
-    const ALL: [HudElement; 12] = [
+    const ALL: [HudElement; 15] = [
         HudElement::Perf,
         HudElement::Crosshair,
         HudElement::Title,
@@ -9452,6 +9662,9 @@ impl HudElement {
         HudElement::ShieldCooldown,
         HudElement::Arrows,
         HudElement::BossBar,
+        HudElement::HeldName,
+        HudElement::Armor,
+        HudElement::Keystrokes,
     ];
 
     fn label(self) -> &'static str {
@@ -9468,6 +9681,9 @@ impl HudElement {
             HudElement::Subtitle => "Untertitel",
             HudElement::Effects => "Effekte",
             HudElement::BossBar => "Bossbar",
+            HudElement::HeldName => "Itemname",
+            HudElement::Armor => "Rüstung",
+            HudElement::Keystrokes => "Keystrokes",
         }
     }
 }
@@ -9526,6 +9742,8 @@ enum ColorTarget {
     DamageTint,
     Crit,
     Crosshair,
+    // Fadenkreuzfarbe beim Brennen (Feuer-Modus "Fadenkreuz").
+    FireCrosshair,
 }
 
 // Das offene Farbfenster: wofuer, unter welchem Farbfeld (Bildschirmkoordinaten), der Stand
@@ -11171,6 +11389,15 @@ struct Settings {
     hud_actionbar_y: f32,
     hud_scoreboard_x: f32,
     hud_scoreboard_y: f32,
+    // Schriftgroesse der Seitenleiste in Prozent (HUD-Editor).
+    hud_scoreboard_scale: u32,
+    // Groesse der Pfeil-Anzeige in Prozent eines Hotbar-Slots (HUD-Editor).
+    hud_arrows_scale: u32,
+    // Itemname ueber der Hotbar: Mitte und Oberkante normiert; y < 0 heisst "an der Hotbar wie
+    // in Vanilla" (Standard, s. hud_held_name_rect). Groesse in Prozent der Hotbar-Schrift.
+    hud_held_name_x: f32,
+    hud_held_name_y: f32,
+    hud_held_name_scale: u32,
     // Titel + Untertitel: Ankerpunkt normiert (x je nach Ausrichtung linke Kante, Mitte oder
     // rechte Kante, y Oberkante). Ausrichtung 0 links, 1 mittig, 2 rechts -- wie in Word:
     // der Text waechst vom Anker aus nach rechts, nach beiden Seiten oder nach links.
@@ -11555,6 +11782,42 @@ struct Settings {
     damage_tint_ticks: u32,
     // Pfeil-Modul (s. ModuleId::Arrows): Munitionsanzeige und Flugbahnen.
     module_arrows: bool,
+    // Ruestungs-HUD (s. ModuleId::ArmorHud, armor_hud.rs): obere linke Ecke normiert, Groesse in
+    // Prozent, Ausrichtung (armor_hud::LAYOUT_*) und wohin die Teile ruecken, wenn eins fehlt
+    // (0 = oben/links, 1 = unten/rechts) -- je eigener Wert fuer hochkant und flach.
+    module_armor_hud: bool,
+    hud_armor_x: f32,
+    hud_armor_y: f32,
+    hud_armor_scale: u32,
+    armor_hud_layout: u8,
+    // Abstand zwischen den Teilen in Bildpixeln, Groesse der Zahl in Prozent und wo sie steht
+    // als Verschiebung gegen die Bildmitte in Bildpixeln (x, y; s. armor_hud::number_origin).
+    armor_hud_gap: i32,
+    armor_hud_number_scale: u32,
+    armor_hud_number_x: i32,
+    armor_hud_number_y: i32,
+    armor_hud_sort_vertical: u8,
+    armor_hud_sort_flat: u8,
+    // Keystrokes (s. ModuleId::Keystrokes, keystrokes.rs): obere linke Ecke normiert, Groesse
+    // in Prozent und Deckkraft der nicht gedrueckten Tasten.
+    module_keystrokes: bool,
+    // Hurt-Cam (Video-Tab): Rollen bei eigenem Schaden, abwechselnd links und rechts, und wie
+    // stark in Prozent von Vanillas Ausschlag (HURT_CAM_MAX_DEGREES).
+    hurt_cam: bool,
+    hurt_cam_strength: u32,
+    // Trims auf getragener Ruestung zeichnen (Video, Darstellung).
+    armor_trims: bool,
+    // Feuer vor den Augen (Video-Tab, FIRE_MODE_*): Vanillas Bild mit eigener Hoehe in Prozent,
+    // oder statt des Bilds ein Fadenkreuz in eigener Farbe (HSV, wie crosshair_*).
+    fire_mode: u8,
+    fire_height: u32,
+    fire_crosshair_hue: u32,
+    fire_crosshair_saturation: u32,
+    fire_crosshair_value: u32,
+    hud_keys_x: f32,
+    hud_keys_y: f32,
+    hud_keys_scale: u32,
+    keys_opacity: u32,
     // Rueckmeldung, wenn man ohne Munition den Bogen/die Armbrust zu spannen versucht (Vanilla:
     // es passiert schlicht nichts). Index in ARROW_EMPTY_FEEDBACK_NAMES.
     arrow_empty_feedback: u8,
@@ -11591,6 +11854,9 @@ struct Settings {
     // Vanillas Option "Operator-Items-Reiter": im Kreativmodus mit Operator-Rechten den Reiter
     // mit Befehlsbloecken & Co. zeigen.
     creative_op_tab: bool,
+    // Sonstiges: ClientboundContainerClose ignorieren -- der Server kann kein Fenster mehr
+    // schliessen (s. ClientEvent::CloseScreen).
+    no_ui_close_s2c: bool,
     // Buchstaben auf Traenken im Inventar (s. world::potion::variant_mark), je einzeln:
     // S = verstaerkt, L = verlaengert, W = schwache Heilung/Schaden.
     potion_mark_strong: bool,
@@ -11736,13 +12002,9 @@ struct Settings {
     settings_category: String,
     // Scrollstand je Einstellungsseite (s. App::scroll_slots), als scroll_<name>=Zeile.
     settings_scrolls: std::collections::BTreeMap<String, usize>,
-    // Online-Mode-Login (s. auth-Crate). Alle drei bewusst freie Strings (kein Index):
-    // azure_client_id ist die Application-(Client-)ID einer Azure-App mit aktiviertem
-    // Device-Code-/Public-Client-Flow -- ohne die kann der Microsoft-Login nicht starten
-    // (das manuelle Token-Feld funktioniert trotzdem). msa_refresh_token haelt die Anmeldung
-    // ueber Neustarts (wird beim Start gegen frische Tokens getauscht). account_name ist nur
-    // fuer die Anzeige "Angemeldet als ..." zwischengespeichert.
-    azure_client_id: String,
+    // Online-Mode-Login (s. auth-Crate). msa_refresh_token haelt die Anmeldung ueber Neustarts
+    // (wird beim Start gegen frische Tokens getauscht). account_name ist nur fuer die Anzeige
+    // "Angemeldet als ..." zwischengespeichert.
     msa_refresh_token: String,
     account_name: String,
     // Minecraft-Access-Token + Profil-UUID (Hex ohne Bindestriche) der letzten Anmeldung --
@@ -11755,13 +12017,9 @@ struct Settings {
 
 // Azure-Application-(Client-)ID der eigenen App dieses Clients (App-Registrierung "coral-client",
 // nur persoenliche Microsoft-Konten, oeffentliche Clientflows fuer den Device-Code-Flow). Die
-// Minecraft-Anmeldung (login_with_xbox) nimmt eine ID erst an, wenn Mojang sie freigegeben hat;
-// vorher scheitert sie mit "Invalid app registration". In settings.conf laesst sich eine andere
-// ID eintragen.
-const DEFAULT_AZURE_CLIENT_ID: &str = "4e36a581-063a-4bbf-98bb-77b91766d32c";
-// Fruehere Standard-IDs, die nicht (mehr) funktionieren -- beim Laden auf die eigene umstellen,
-// damit eine gespeicherte settings.conf nicht an ihnen haengt.
-const LEGACY_AZURE_CLIENT_IDS: [&str; 2] = ["00000000402b5328", "389b1b32-b5d5-43b2-bddc-84ce938d6737"];
+// Minecraft-Anmeldung (login_with_xbox) nimmt sie an, seit Mojang sie freigegeben hat. Jede
+// neue Anmeldung laeuft ueber diese ID; gespeicherte Konten behalten die ihres Refresh-Tokens.
+const AZURE_CLIENT_ID: &str = "4e36a581-063a-4bbf-98bb-77b91766d32c";
 
 // Name der Config, mit der dieser Client laeuft -- beim Start in main() festgelegt (--config
 // vom Launcher, sonst die zuletzt gewaehlte, s. assets::startup_config), danach im Spiel
@@ -11856,15 +12114,14 @@ fn save_chat_history(verlauf: &[String]) -> std::io::Result<()> {
 }
 
 // Gespeicherte Konten laden. Gibt es noch keine Liste, kommt das bisher angemeldete Konto
-// hinein, damit es mit der Umstellung nicht verschwindet; die Prism-Konten immer dazu.
+// hinein, damit es mit der Umstellung nicht verschwindet.
 fn load_account_store(settings: &Settings) -> accounts::Store {
     let mut store = accounts::load().unwrap_or_default();
     if store.list.is_empty() && !settings.mc_access_token.is_empty() && !settings.account_uuid.is_empty() {
         let creds = auth::Credentials { access_token: settings.mc_access_token.clone(), profile_id: settings.account_uuid.clone(), username: settings.account_name.clone() };
-        let msa = (!settings.msa_refresh_token.is_empty()).then(|| (settings.msa_refresh_token.clone(), settings.azure_client_id.clone()));
+        let msa = (!settings.msa_refresh_token.is_empty()).then(|| (settings.msa_refresh_token.clone(), AZURE_CLIENT_ID.to_string()));
         store.upsert(&creds, msa, accounts::Source::Token);
     }
-    store.merge_prism(&auth::launcher_accounts(), false, accounts::now_unix());
     store
 }
 
@@ -12744,6 +13001,15 @@ impl Settings {
     }
 
     // Feste Kreuzfarbe (Modus Einfarbig).
+    fn fire_crosshair_rgb(&self) -> [f32; 3] {
+        hsv_to_rgb(self.fire_crosshair_hue as f32, self.fire_crosshair_saturation as f32 / 100.0, self.fire_crosshair_value as f32 / 100.0)
+    }
+
+    fn fire_crosshair_rgba(&self) -> [f32; 4] {
+        let [r, g, b] = self.fire_crosshair_rgb();
+        [r, g, b, 1.0]
+    }
+
     fn crosshair_rgb(&self) -> [f32; 3] {
         hsv_to_rgb(self.crosshair_hue as f32, self.crosshair_saturation as f32 / 100.0, self.crosshair_value as f32 / 100.0)
     }
@@ -13090,13 +13356,18 @@ impl Settings {
                         }
                     }
                 }
-                "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" => {
+                "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" | "hud_scoreboard_scale" | "hud_arrows_scale" | "hud_held_name_scale" | "hud_armor_scale" | "hud_keys_scale" => {
                     if let Ok(v) = value.parse::<u32>() {
                         let v = v.clamp(HUD_SCALE_PCT_MIN, HUD_SCALE_PCT_MAX);
                         match key {
                             "hud_title_scale" => settings.hud_title_scale = v,
                             "hud_subtitle_scale" => settings.hud_subtitle_scale = v,
                             "hud_bossbar_scale" => settings.hud_bossbar_scale = v,
+                            "hud_scoreboard_scale" => settings.hud_scoreboard_scale = v,
+                            "hud_arrows_scale" => settings.hud_arrows_scale = v,
+                            "hud_held_name_scale" => settings.hud_held_name_scale = v,
+                            "hud_armor_scale" => settings.hud_armor_scale = v,
+                            "hud_keys_scale" => settings.hud_keys_scale = v,
                             _ => settings.hud_effects_scale = v,
                         }
                     }
@@ -13104,6 +13375,16 @@ impl Settings {
                 "hud_actionbar_y" => {
                     if let Ok(v) = value.parse::<f32>() {
                         settings.hud_actionbar_y = v.clamp(0.0, 1.0);
+                    }
+                }
+                "hud_held_name_x" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        settings.hud_held_name_x = v.clamp(0.0, 1.0);
+                    }
+                }
+                "hud_held_name_y" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        settings.hud_held_name_y = if v < 0.0 { -1.0 } else { v.min(1.0) };
                     }
                 }
                 "hud_scoreboard_x" => {
@@ -13629,6 +13910,70 @@ impl Settings {
                 "damage_tint_skin_only" => settings.damage_tint_skin_only = value == "true",
                 "module_shields" => settings.module_shields = value == "true",
                 "module_arrows" => settings.module_arrows = value == "true",
+                "module_armor_hud" => settings.module_armor_hud = value == "true",
+                "hud_armor_x" | "hud_armor_y" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        let v = v.clamp(0.0, 1.0);
+                        if key == "hud_armor_x" {
+                            settings.hud_armor_x = v;
+                        } else {
+                            settings.hud_armor_y = v;
+                        }
+                    }
+                }
+                "armor_hud_layout" => settings.armor_hud_layout = value.parse::<u8>().unwrap_or(0).min(armor_hud::LAYOUT_FLAT_HELMET_LEFT),
+                "armor_hud_gap" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        settings.armor_hud_gap = v.clamp(armor_hud::GAP_MIN, armor_hud::GAP_MAX);
+                    }
+                }
+                "armor_hud_number_scale" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.armor_hud_number_scale = v.clamp(armor_hud::NUMBER_SCALE_MIN, armor_hud::NUMBER_SCALE_MAX);
+                    }
+                }
+                "armor_hud_number_x" | "armor_hud_number_y" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        let v = v.clamp(armor_hud::NUMBER_OFFSET_MIN, armor_hud::NUMBER_OFFSET_MAX);
+                        if key == "armor_hud_number_x" {
+                            settings.armor_hud_number_x = v;
+                        } else {
+                            settings.armor_hud_number_y = v;
+                        }
+                    }
+                }
+                "armor_hud_sort_vertical" => settings.armor_hud_sort_vertical = value.parse::<u8>().unwrap_or(0).min(1),
+                "armor_hud_sort_flat" => settings.armor_hud_sort_flat = value.parse::<u8>().unwrap_or(0).min(1),
+                "module_keystrokes" => settings.module_keystrokes = value == "true",
+                "hurt_cam" => settings.hurt_cam = value == "true",
+                "armor_trims" => settings.armor_trims = value == "true",
+                "fire_mode" => settings.fire_mode = value.parse::<u8>().unwrap_or(0).min(FIRE_MODE_CROSSHAIR),
+                "hurt_cam_strength" | "fire_height" | "fire_crosshair_saturation" | "fire_crosshair_value" | "fire_crosshair_hue" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        match key {
+                            "hurt_cam_strength" => settings.hurt_cam_strength = v.min(100),
+                            "fire_height" => settings.fire_height = v.min(100),
+                            "fire_crosshair_saturation" => settings.fire_crosshair_saturation = v.min(100),
+                            "fire_crosshair_value" => settings.fire_crosshair_value = v.min(100),
+                            _ => settings.fire_crosshair_hue = v % 360,
+                        }
+                    }
+                }
+                "hud_keys_x" | "hud_keys_y" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        let v = v.clamp(0.0, 1.0);
+                        if key == "hud_keys_x" {
+                            settings.hud_keys_x = v;
+                        } else {
+                            settings.hud_keys_y = v;
+                        }
+                    }
+                }
+                "keys_opacity" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.keys_opacity = v.min(100);
+                    }
+                }
                 // Das fruehere Trails-Modul lebt jetzt als Schalter im Pfeil-Modul.
                 "module_trails" | "arrow_trail" => settings.arrow_trail = value == "true",
                 "arrow_indicator" => settings.arrow_indicator = value == "true",
@@ -13754,6 +14099,7 @@ impl Settings {
                 "chunk_saver_render" => alt_zeichnen = value == "true",
                 "chunk_saver_render_saved" => settings.chunk_saver_render_saved = value == "true",
                 "creative_op_tab" => settings.creative_op_tab = value == "true",
+                "no_ui_close_s2c" => settings.no_ui_close_s2c = value == "true",
                 "potion_mark_strong" => settings.potion_mark_strong = value != "false",
                 "potion_mark_long" => settings.potion_mark_long = value != "false",
                 "potion_mark_weak" => settings.potion_mark_weak = value != "false",
@@ -13893,11 +14239,6 @@ impl Settings {
                         }
                     }
                 }
-                // Den alten, von Microsoft abgelehnten Default beim Laden auf den neuen heben.
-                "azure_client_id" => {
-                    settings.azure_client_id =
-                        if LEGACY_AZURE_CLIENT_IDS.contains(&value) { DEFAULT_AZURE_CLIENT_ID.to_string() } else { value.to_string() }
-                }
                 "msa_refresh_token" => settings.msa_refresh_token = value.to_string(),
                 "account_name" => settings.account_name = value.to_string(),
                 "mc_access_token" => settings.mc_access_token = value.to_string(),
@@ -14006,7 +14347,7 @@ impl Settings {
              module_block_outline={}\nblock_outline_hue={}\nblock_outline_saturation={}\nblock_outline_value={}\nblock_outline_alpha={}\nblock_outline_width_px={}\nblock_outline_hide_mining={}\nblock_outline_complementary={}\n\
              module_sky_color_enabled={}\nmodule_sky_color_hue={}\nmodule_sky_color_saturation={}\nmodule_sky_color_value={}\n\
              block_rng_rotation={}\nsmooth_lighting_percent={}\njump_cooldown_enabled={}\nsneak_edge_protection_enabled={}\nsnap_tap_enabled={}\nhold_use_repeat={}\nhold_use_repeat_rockets={}\nuse_while_mining={}\nactive_skin={}\nlang_ui={}\nlang_items={}\nlang_effects={}\nlang_chat={}\nlatin_macrons={}\n\
-             azure_client_id={}\nmsa_refresh_token={}\naccount_name={}\nmc_access_token={}\naccount_uuid={}\n\
+             msa_refresh_token={}\naccount_name={}\nmc_access_token={}\naccount_uuid={}\n\
 ",
             self.show_tearing_test,
             self.show_hud,
@@ -14147,7 +14488,6 @@ impl Settings {
             self.lang_effects,
             self.lang_chat,
             self.latin_macrons,
-            self.azure_client_id,
             self.msa_refresh_token,
             self.account_name,
             self.mc_access_token,
@@ -14303,6 +14643,40 @@ impl Settings {
             self.effects_timer_blink
         ));
         body.push_str(&format!("sens_calc_mc_percent={}\nsens_calc_dpi={}\n", self.sens_calc_mc_percent, self.sens_calc_dpi));
+        body.push_str(&format!("hud_scoreboard_scale={}\nhud_arrows_scale={}\n", self.hud_scoreboard_scale, self.hud_arrows_scale));
+        body.push_str(&format!(
+            "module_armor_hud={}\nhud_armor_x={}\nhud_armor_y={}\nhud_armor_scale={}\narmor_hud_layout={}\narmor_hud_sort_vertical={}\narmor_hud_sort_flat={}\narmor_hud_gap={}\narmor_hud_number_scale={}\narmor_hud_number_x={}\narmor_hud_number_y={}\n",
+            self.module_armor_hud,
+            self.hud_armor_x,
+            self.hud_armor_y,
+            self.hud_armor_scale,
+            self.armor_hud_layout,
+            self.armor_hud_sort_vertical,
+            self.armor_hud_sort_flat,
+            self.armor_hud_gap,
+            self.armor_hud_number_scale,
+            self.armor_hud_number_x,
+            self.armor_hud_number_y
+        ));
+        body.push_str(&format!(
+            "module_keystrokes={}\nhud_keys_x={}\nhud_keys_y={}\nhud_keys_scale={}\nkeys_opacity={}\n",
+            self.module_keystrokes, self.hud_keys_x, self.hud_keys_y, self.hud_keys_scale, self.keys_opacity
+        ));
+        body.push_str(&format!(
+            "armor_trims={}\nhurt_cam={}\nhurt_cam_strength={}\nfire_mode={}\nfire_height={}\nfire_crosshair_hue={}\nfire_crosshair_saturation={}\nfire_crosshair_value={}\n",
+            self.armor_trims,
+            self.hurt_cam,
+            self.hurt_cam_strength,
+            self.fire_mode,
+            self.fire_height,
+            self.fire_crosshair_hue,
+            self.fire_crosshair_saturation,
+            self.fire_crosshair_value
+        ));
+        body.push_str(&format!(
+            "hud_held_name_x={}\nhud_held_name_y={}\nhud_held_name_scale={}\n",
+            self.hud_held_name_x, self.hud_held_name_y, self.hud_held_name_scale
+        ));
         body.push_str(&format!(
             "shield_cd_alpha={}\nshield_cd_mark={}\nshield_hold_mark={}\nshield_cd_self_mode={}\nshield_cd_text_style={}\narrow_text_style={}\n",
             self.shield_cd_alpha, self.shield_cd_mark, self.shield_hold_mark, self.shield_cd_self_mode, self.shield_cd_text_style, self.arrow_text_style
@@ -14337,6 +14711,7 @@ impl Settings {
         body.push_str(&format!("sprint_on_start={}\n", self.sprint_on_start));
         body.push_str(&format!("caps_lock_blocked={}\n", self.caps_lock_blocked));
         body.push_str(&format!("creative_op_tab={}\n", self.creative_op_tab));
+        body.push_str(&format!("no_ui_close_s2c={}\n", self.no_ui_close_s2c));
         body.push_str(&format!(
             "potion_mark_strong={}\npotion_mark_long={}\npotion_mark_weak={}\n",
             self.potion_mark_strong, self.potion_mark_long, self.potion_mark_weak
@@ -14416,6 +14791,11 @@ impl Default for Settings {
             hud_actionbar_y: 0.82,
             hud_scoreboard_x: 0.995,
             hud_scoreboard_y: 0.28,
+            hud_scoreboard_scale: 100,
+            hud_arrows_scale: 100,
+            hud_held_name_x: 0.5,
+            hud_held_name_y: -1.0,
+            hud_held_name_scale: 100,
             hud_bossbar_x: 0.5,
             hud_bossbar_y: 0.0,
             hud_bossbar_scale: 100,
@@ -14593,6 +14973,31 @@ impl Default for Settings {
             hud_shield_cd_x: 0.5,
             hud_shield_cd_y: 0.53,
             module_arrows: false,
+            module_armor_hud: false,
+            hud_armor_x: 0.005,
+            hud_armor_y: 0.4,
+            hud_armor_scale: 100,
+            armor_hud_layout: armor_hud::LAYOUT_VERTICAL,
+            armor_hud_sort_vertical: 0,
+            armor_hud_sort_flat: 0,
+            // Zahl ueber dem Bild, mit Platz dafuer zwischen den Teilen.
+            armor_hud_gap: 10,
+            armor_hud_number_scale: 100,
+            armor_hud_number_x: 0,
+            armor_hud_number_y: -13,
+            module_keystrokes: false,
+            hurt_cam: true,
+            hurt_cam_strength: 100,
+            armor_trims: true,
+            fire_mode: FIRE_MODE_VANILLA,
+            fire_height: 100,
+            fire_crosshair_hue: 25,
+            fire_crosshair_saturation: 100,
+            fire_crosshair_value: 100,
+            hud_keys_x: 0.005,
+            hud_keys_y: 0.15,
+            hud_keys_scale: 100,
+            keys_opacity: 70,
             arrow_indicator: true,
             arrow_number_only: false,
             // Wie bisher: weiss (jetzt mit Kontur, damit sie auf hellem Grund lesbar bleibt).
@@ -14633,6 +15038,7 @@ impl Default for Settings {
             chunk_saver_threshold: lod::THRESHOLD_DEFAULT,
             chunk_saver_render_saved: true,
             creative_op_tab: false,
+            no_ui_close_s2c: false,
             potion_mark_strong: true,
             potion_mark_long: true,
             potion_mark_weak: true,
@@ -14691,7 +15097,6 @@ impl Default for Settings {
             custom_themes: Vec::new(),
             settings_category: String::new(),
             settings_scrolls: std::collections::BTreeMap::new(),
-            azure_client_id: DEFAULT_AZURE_CLIENT_ID.to_string(),
             msa_refresh_token: String::new(),
             account_name: String::new(),
             mc_access_token: String::new(),
@@ -14714,8 +15119,6 @@ enum InputKind {
     // Microsoft-Refresh-Token: wird gegen frische Tokens getauscht wie beim gespeicherten Login
     // und bleibt danach gespeichert -- die Anmeldung haelt also ueber Neustarts.
     RefreshToken,
-    // Eigene Azure-Application-(Client-)ID fuer den Microsoft-Device-Code-Login.
-    ClientId,
     // Name einer Config (Configs-Seite der Einstellungen).
     ConfigName(ConfigEdit),
 }
@@ -15158,7 +15561,7 @@ enum ButtonAction {
     Connect,
     Disconnect,
     // Online-Mode-Login (Connect-Screen): Microsoft-Device-Code starten, ein Eingabefeld
-    // (Token bzw. Azure-Client-ID) auf-/zuklappen, das Eingegebene uebernehmen, abmelden.
+    // (Token bzw. Refresh-Token) auf-/zuklappen, das Eingegebene uebernehmen, abmelden.
     MicrosoftLogin,
     OpenInputField(InputKind),
     SubmitInputField,
@@ -15167,9 +15570,6 @@ enum ButtonAction {
     // verbindet; "Neuer Eintrag" (Leiste unten) oeffnet das Fenster fuer einen neuen Eintrag.
     ConnectToServer(usize),
     NewServer,
-    // Launcher-Konten (Prism/PolyMC) neu einlesen bzw. eines davon per Klick uebernehmen.
-    ImportLauncherAccounts,
-    UseLauncherAccount(usize),
     // Gespeichertes Konto (Index in App::accounts.list) anklicken: damit anmelden.
     UseAccount(usize),
     ToggleTearing,
@@ -15314,6 +15714,7 @@ enum ButtonAction {
     InventoryTransparencyPrev,
     ToggleInventoryCursorToSlot,
     ToggleCreativeOpTab,
+    ToggleNoUiCloseS2c,
     TogglePotionMarkStrong,
     TogglePotionMarkLong,
     TogglePotionMarkWeak,
@@ -15346,6 +15747,8 @@ enum ButtonAction {
     // Groesse eines HUD-Elements (Titel, Untertitel, Spielerliste) um einen Schritt.
     HudScaleStep(HudElement, bool),
     ResetHudElement,
+    // HUD-Editor oeffnen, gleich mit dem Fenster dieses Elements (Link aus einem Modul).
+    OpenHudConfig(HudElement),
     ToggleTearFree,
     ToggleBlockRngRotation,
     ToggleJumpCooldown,
@@ -15403,6 +15806,31 @@ enum ButtonAction {
     ToggleDamageTintSkinOnly,
     ToggleModuleShields,
     ToggleModuleArrows,
+    ToggleModuleArmorHud,
+    ToggleModuleKeystrokes,
+    // Video-Tab: Hurt-Cam und Feuer.
+    ToggleHurtCam,
+    ToggleArmorTrims,
+    HurtCamStrengthPrev,
+    HurtCamStrengthNext,
+    FireMode(u8),
+    FireHeightPrev,
+    FireHeightNext,
+    // Deckkraft der nicht gedrueckten Keystrokes-Tasten.
+    KeysOpacityPrev,
+    KeysOpacityNext,
+    // Ruestungs-HUD: Ausrichtung (armor_hud::LAYOUT_*) und Ruckrichtung (0 = oben/links,
+    // 1 = unten/rechts) fuer die gerade gewaehlte Ausrichtung.
+    ArmorHudLayout(u8),
+    ArmorHudSort(u8),
+    ArmorHudGapPrev,
+    ArmorHudGapNext,
+    ArmorHudNumberScalePrev,
+    ArmorHudNumberScaleNext,
+    ArmorHudNumberXPrev,
+    ArmorHudNumberXNext,
+    ArmorHudNumberYPrev,
+    ArmorHudNumberYNext,
     ToggleArrowIndicator,
     ToggleArrowNumberOnly,
     ToggleArrowWhite,
@@ -15518,6 +15946,8 @@ enum ModuleId {
     BotcheckPass,
     Shields,
     Arrows,
+    ArmorHud,
+    Keystrokes,
     DynamicFire,
     Zoom,
     VoiceChat,
@@ -15532,7 +15962,7 @@ enum ModuleId {
     ChunkSaver,
 }
 
-const MODULE_IDS: [ModuleId; 28] = [
+const MODULE_IDS: [ModuleId; 30] = [
     ModuleId::Totem,
     ModuleId::TotemWarning,
     ModuleId::TotemSlots,
@@ -15549,6 +15979,8 @@ const MODULE_IDS: [ModuleId; 28] = [
     ModuleId::Shields,
     ModuleId::UseTimer,
     ModuleId::Arrows,
+    ModuleId::ArmorHud,
+    ModuleId::Keystrokes,
     ModuleId::DynamicFire,
     ModuleId::Zoom,
     ModuleId::VoiceChat,
@@ -15582,6 +16014,8 @@ impl ModuleId {
             ModuleId::BotcheckPass => "Botcheck-Pass",
             ModuleId::Shields => "Schilde",
             ModuleId::Arrows => "Pfeile",
+            ModuleId::ArmorHud => "Rüstung",
+            ModuleId::Keystrokes => "Keystrokes",
             ModuleId::DynamicFire => "Dynamisches Feuer",
             ModuleId::Zoom => "Zoom",
             ModuleId::VoiceChat => "Sprachchat",
@@ -15617,6 +16051,8 @@ impl ModuleId {
             ModuleId::BotcheckPass => settings.module_botcheck_pass,
             ModuleId::Shields => settings.module_shields,
             ModuleId::Arrows => settings.module_arrows,
+            ModuleId::ArmorHud => settings.module_armor_hud,
+            ModuleId::Keystrokes => settings.module_keystrokes,
             ModuleId::DynamicFire => settings.module_dynamic_fire,
             ModuleId::Zoom => settings.module_zoom,
             ModuleId::VoiceChat => settings.module_voice_chat,
@@ -15650,6 +16086,8 @@ impl ModuleId {
             ModuleId::BotcheckPass => ButtonAction::ToggleModuleBotcheckPass,
             ModuleId::Shields => ButtonAction::ToggleModuleShields,
             ModuleId::Arrows => ButtonAction::ToggleModuleArrows,
+            ModuleId::ArmorHud => ButtonAction::ToggleModuleArmorHud,
+            ModuleId::Keystrokes => ButtonAction::ToggleModuleKeystrokes,
             ModuleId::DynamicFire => ButtonAction::ToggleModuleDynamicFire,
             ModuleId::Zoom => ButtonAction::ToggleModuleZoom,
             ModuleId::VoiceChat => ButtonAction::ToggleModuleVoiceChat,
@@ -15684,6 +16122,8 @@ impl ModuleId {
             ModuleId::BotcheckPass => "Beim Betreten wie Vanilla erst die Welt laden, dann loslaufen (langsamer)",
             ModuleId::Shields => "Schild-Cooldown (eigener und fremder) und gehobene Schilde anderer Spieler",
             ModuleId::Arrows => "Munitionsanzeige bei Bogen/Armbrust und weiße Flugbahnen hinter Pfeilen",
+            ModuleId::ArmorHud => "Getragene Rüstung mit Haltbarkeit -- verschieben im HUD-Editor",
+            ModuleId::Keystrokes => "Bewegungstasten, Springen und Maustasten -- verschieben im HUD-Editor",
             ModuleId::DynamicFire => "Mit Feuerresistenz blenden Feuerblöcke in einer Sekunde aus, danach wieder ein",
             ModuleId::Zoom => "Verengt das Sichtfeld, solange die Zoom-Taste (Steuerung) aktiv ist",
             ModuleId::VoiceChat => "Sprachchat wie Simple Voice Chat: Spieler in der Nähe hören, sprechen mit der Sprechtaste (Steuerung)",
@@ -15742,6 +16182,8 @@ impl ModuleId {
             | ModuleId::Shields
             | ModuleId::UseTimer
             | ModuleId::Arrows
+            | ModuleId::ArmorHud
+            | ModuleId::Keystrokes
             | ModuleId::DynamicFire
             | ModuleId::BlockOutline
             | ModuleId::Color
@@ -16324,6 +16766,9 @@ struct App {
     // zuletzt nachgesehen wurde, ob sich der Desktop-Hintergrund geaendert hat.
     wallpaper_loader: wallpaper::Loader,
     wallpaper_checked_at: Instant,
+    // Laden des gespeicherten letzten Weltblicks (s. poll_last_view).
+    last_view_requested: bool,
+    last_view_rx: Option<Receiver<Option<wallpaper::Decoded>>>,
     // No Tool Break: wann zuletzt benachrichtigt wurde (s. block_mining_guarded).
     tool_break_notified_at: Option<Instant>,
     server_address: String,
@@ -16346,7 +16791,7 @@ struct App {
     // Der Microsoft-Login, der auf die Anmeldung im Browser wartet (Browser-Login bis zu 10 min,
     // Device-Code bis zu ~15 min). Ein neuer Anmeldeversuch bricht ihn ab, s. cancel_device_login.
     device_login: Option<tokio::task::JoinHandle<()>>,
-    // Eingabefeld auf dem Account-Screen (Token ODER Azure-Client-ID): Some = Feld
+    // Eingabefeld auf dem Account-Screen (Token ODER Refresh-Token): Some = Feld
     // sichtbar+fokussiert (dann gehen Tastatur/Einfuegen dorthin statt in die Adresse),
     // None = ausgeblendet. Immer nur eines gleichzeitig offen.
     input_field: Option<(InputKind, String)>,
@@ -16370,6 +16815,9 @@ struct App {
     // eigenen (Index in custom_themes, per Rechtsklick).
     theme_name_dialog: Option<ThemeNameDialog>,
     theme_delete: Option<usize>,
+    // Meldung, mit der der Server uns rausgeworfen hat (oder warum die Verbindung abriss) --
+    // als Fenster ueber der Server-Liste, bis man es schliesst. Beim eigenen Disconnect None.
+    disconnect_popup: Option<String>,
     quick_field: text_field::TextField,
     quick_dragging: bool,
     quick_last_press: Option<(Instant, (f32, f32))>,
@@ -16387,9 +16835,6 @@ struct App {
     // Offenes Fenster "Neuer Eintrag"/"Eintrag bearbeiten" (s. build_server_dialog). Some
     // liegt ueber der Seite und uebernimmt die Tastatureingabe.
     server_edit: Option<ServerEdit>,
-    // Beim Betreten des Account-Screens aus dem Launcher (Prism/PolyMC) eingelesene Konten --
-    // pro Eintrag ein Button zum Ein-Klick-Import. Leer = keiner gefunden.
-    launcher_accounts: Vec<auth::LauncherAccount>,
     // Gespeicherte Konten des Acc-Managers (s. accounts.rs), dazu je Konto (Schluessel:
     // accounts::key) das Ergebnis der letzten Pruefung und wann sie begann bzw. endete.
     accounts: accounts::Store,
@@ -16575,6 +17020,10 @@ struct App {
     attack_broke_block: bool,
     // Eigener Spielmodus (GameMode-Index: 0 Survival, 1 Creative, 2 Adventure, 3 Spectator).
     game_mode: u8,
+    // Gui.toolHighlightTimer: wie lange der Name des gewaehlten Items noch ueber der Hotbar
+    // steht (Ticks), und woran der letzte erkannt wird (Item und Name), s. tick_held_name.
+    held_name_timer: i32,
+    held_name_last: Option<String>,
     // Zuschauer sehen durch die Augen dieses Entity (SetCamera-Paket); None = die eigenen.
     camera_entity: Option<i32>,
     // Laufender Klick-Teleport des Zuschauers: Ziel der Fuesse (s. spectator.rs).
@@ -16913,6 +17362,11 @@ struct App {
     own_hurt_by_crit: bool,
     // Entity.FLAGS Bit 0 des eigenen Spielers: brennt (Feuer um die Figur in der 3. Person).
     own_on_fire: bool,
+    // Richtung, in die die Hurt-Cam beim naechsten Treffer rollt -- wechselt mit jedem.
+    hurt_cam_side: f32,
+    // Stapel-Wurf (s. inventory_throw_sweep): der zuletzt betretene Slot, solange der Zeiger
+    // noch darauf steht.
+    throw_sweep_slot: Option<usize>,
     // Eigene Trank-Wirbel (LivingEntity.POTION_SWIRLS/_AMBIENT) und Unsichtbarkeit -- wir
     // stehen nicht in `entities`, s. tick_potion_swirls.
     own_potion_swirls: Vec<u32>,
@@ -17295,6 +17749,9 @@ struct App {
     // Ausschnitt bleibt stehen, waehrend unten weiter Zeilen dazukommen.
     log_scroll: usize,
     conn_status: ConnStatus,
+    // Wohin die laufende Verbindung wirklich geht (s. net::ClientEvent::Route), Ueberschrift des
+    // Verbindungsbildschirms. None, bis die TCP-Verbindung steht.
+    conn_route: Option<String>,
     events_tx: Sender<net::ClientEvent>,
     events_rx: Receiver<net::ClientEvent>,
     // Kanal fuer Bewegungspakete (Move Player Pos+Rot) an den Netzwerk-Task, s.
@@ -18017,6 +18474,8 @@ impl App {
             input_log,
             wallpaper_loader: wallpaper::Loader::default(),
             wallpaper_checked_at: Instant::now(),
+            last_view_requested: false,
+            last_view_rx: None,
             tool_break_notified_at: None,
             server_address: "127.0.0.1:25565".to_string(),
             // Gespeicherte Anmeldung wiederherstellen (bleibt ueber Neustarts erhalten). Ist das
@@ -18040,6 +18499,7 @@ impl App {
             quick_connect_open: false,
             theme_name_dialog: None,
             theme_delete: None,
+            disconnect_popup: None,
             quick_field: text_field::TextField::new("", MAX_ADDRESS_LEN),
             quick_dragging: false,
             quick_last_press: None,
@@ -18051,7 +18511,6 @@ impl App {
             next_icon_slot: 0,
             unknown_server_icon: false,
             server_edit: None,
-            launcher_accounts: Vec::new(),
             accounts: load_account_store(&settings),
             account_checks: std::collections::HashMap::new(),
             account_context: None,
@@ -18134,6 +18593,8 @@ impl App {
             block_breaking_cooldown: 0,
             attack_broke_block: false,
             game_mode: 0,
+            held_name_timer: 0,
+            held_name_last: None,
             camera_entity: None,
             op_level: 0,
             spectator_flight: None,
@@ -18259,6 +18720,8 @@ impl App {
             sky_world_pending: None,
             own_hurt_by_crit: false,
             own_on_fire: false,
+            hurt_cam_side: 1.0,
+            throw_sweep_slot: None,
             own_potion_swirls: Vec::new(),
             own_potion_swirls_ambient: false,
             own_invisible: false,
@@ -18401,6 +18864,7 @@ impl App {
             log_lines: Vec::new(),
             log_scroll: 0,
             conn_status: ConnStatus::Disconnected,
+            conn_route: None,
             events_tx,
             events_rx,
             outgoing_tx: None,
@@ -19129,7 +19593,13 @@ impl App {
     // Screen eine Ebene zurueck; auf Main entweder ins Spiel zurueck (verbunden) oder
     // nichts (Startbildschirm, es gibt kein "dahinter").
     fn on_escape(&mut self) {
-        if self.theme_delete.take().is_some() || self.theme_name_dialog.take().is_some() {
+        // Beim Verbinden bricht Esc sofort ab (wie "Abbrechen" in Vanillas ConnectScreen).
+        if self.connecting_view() && self.conn_task.is_some() {
+            self.play_ui_sound(ui_sound::UiSound::Close);
+            self.disconnect();
+            return;
+        }
+        if self.disconnect_popup.take().is_some() || self.theme_delete.take().is_some() || self.theme_name_dialog.take().is_some() {
             self.play_ui_sound(ui_sound::UiSound::Close);
             return;
         }
@@ -19250,6 +19720,7 @@ impl App {
                 | MenuScreen::SettingsAudio
                 | MenuScreen::SettingsSkin
                 | MenuScreen::SettingsInventory
+                | MenuScreen::SettingsMisc
                 | MenuScreen::SettingsFont
                 | MenuScreen::SettingsDesign
                 | MenuScreen::SettingsLanguage
@@ -19301,6 +19772,7 @@ impl App {
             | MenuScreen::SettingsAudio
             | MenuScreen::SettingsSkin
             | MenuScreen::SettingsInventory
+            | MenuScreen::SettingsMisc
             | MenuScreen::SettingsFont
             | MenuScreen::SettingsDesign
             | MenuScreen::SettingsLanguage
@@ -19506,6 +19978,10 @@ impl App {
         if pressed && !was_down {
             self.keybind_press_counter += 1;
             self.keybind_press_order[idx] = self.keybind_press_counter;
+            // Stapel-Wurf: "Stapel verschieben" neu gedrueckt, waehrend Wegwerfen gehalten ist.
+            if action == KeyBindAction::InventoryMoveStack {
+                self.inventory_throw_sweep(true);
+            }
             // Rechtsklick zaehlt JEDEN Druck, obwohl er zugleich einen Haltezustand fuehrt:
             // sonst verschmelzen zwei Klicks in einem Tick zu einem (s. use_queue).
             if action == KeyBindAction::Use {
@@ -19575,6 +20051,7 @@ impl App {
     // Schliessen meldet dem Server das Schliessen des Containers (sonst haelt er ihn offen
     // und wirft z.B. den Cursor-Stack nicht zurueck ins Inventar).
     fn close_inventory(&mut self) {
+        self.stash_cursor_in_offhand();
         let sync_id = self.inventory.open.as_ref().map(|c| c.sync_id).unwrap_or(0);
         if let Some(tx) = &self.outgoing_tx {
             let _ = tx.send(protocol::packets::close_container_payload(sync_id));
@@ -19593,6 +20070,73 @@ impl App {
         // Sonst verschluckt auch das Schliessen des Inventars ein gehaltenes W: beim Oeffnen wurde
         // losgelassen, beim Schliessen nie wieder uebernommen (s. restore_held_controls).
         self.restore_held_controls();
+    }
+
+    // Schliessen mit einem Stapel am Zeiger, fuer den das Inventar keinen Platz mehr hat: der
+    // Server wuerde ihn wegwerfen (AbstractContainerMenu.removed legt zurueck, was passt, und
+    // wirft den Rest). Stattdessen kommt er in die leere Zweithand. Im eigenen Inventar ist das
+    // ein Klick auf sie; in einem Container hat sie keinen Slot, dort geht es ueber einen Platz
+    // des Spielerteils: Stapel dort ablegen (das Item von dort kommt an den Zeiger), den Platz
+    // mit der Zweithand tauschen, das Item zurueck auf seinen Platz.
+    fn stash_cursor_in_offhand(&mut self) {
+        if !self.inventory.screen_open || self.creative_shown() {
+            return;
+        }
+        let Some(stapel) = self.inventory.cursor.clone() else { return };
+        let zweithand_frei = self.inventory.player.get(inventory::PLAYER_OFFHAND).is_some_and(|s| s.is_none());
+        if !zweithand_frei || self.inventory_room_for(&stapel) {
+            return;
+        }
+        use protocol::packets::{CLICK_MODE_PICKUP, CLICK_MODE_SWAP};
+        let Some(anzahl) = self.inventory.open.as_ref().map(|c| c.slots.len()) else {
+            self.send_container_click(inventory::PLAYER_OFFHAND as i16, 0, CLICK_MODE_PICKUP);
+            return;
+        };
+        // Ein Platz mit einem ANDEREN Item -- mit gleichem wuerde abgelegt statt getauscht.
+        let Some(platz) = (anzahl.saturating_sub(36)..anzahl).find(|&i| self.inventory.slot_at_index(i).is_some_and(|s| !s.stackable_with(&stapel))) else {
+            return;
+        };
+        self.send_container_click(platz as i16, 0, CLICK_MODE_PICKUP);
+        // Den Tausch mit der Zweithand sagt predict_click im Container nicht voraus (sie hat
+        // dort keinen Slot) -- das Ergebnis steht aber fest: der Platz wird leer.
+        let vorhersage = inventory::Prediction { modified: vec![(platz as i16, None)], cursor: self.inventory.cursor.clone(), hashable: true };
+        let (sync_id, revision, _) = self.inventory.active();
+        if let Some(tx) = &self.outgoing_tx {
+            let _ = tx.send(protocol::packets::click_container_payload(
+                sync_id,
+                revision,
+                platz as i16,
+                inventory::OFFHAND_SWAP_BUTTON,
+                CLICK_MODE_SWAP,
+                &vorhersage.modified,
+                vorhersage.cursor.as_ref(),
+            ));
+        }
+        self.inventory.apply_prediction(&vorhersage);
+        if let Some(zweithand) = self.inventory.player.get_mut(inventory::PLAYER_OFFHAND) {
+            *zweithand = Some(stapel);
+        }
+        self.send_container_click(platz as i16, 0, CLICK_MODE_PICKUP);
+    }
+
+    // Passt `stapel` beim Schliessen ganz ins Spielerinventar (Hauptteil und Hotbar, auf freie
+    // Plaetze und angebrochene gleiche Stapel)?
+    fn inventory_room_for(&self, stapel: &protocol::item::ItemStack) -> bool {
+        let (_, _, slots) = self.inventory.active();
+        let spielerteil = match &self.inventory.open {
+            Some(_) => &slots[slots.len().saturating_sub(36)..],
+            None => slots.get(inventory::PLAYER_MAIN_START..inventory::PLAYER_OFFHAND).unwrap_or(&[]),
+        };
+        let max = world::item_components::max_stack(stapel);
+        let platz: i32 = spielerteil
+            .iter()
+            .map(|s| match s {
+                None => max,
+                Some(s) if s.stackable_with(stapel) => (max - s.count).max(0),
+                Some(_) => 0,
+            })
+            .sum();
+        platz >= stapel.count
     }
 
     // Das gehaltene Item wegwerfen (im SPIEL, nicht im Inventar -- dort ist es
@@ -19789,6 +20333,17 @@ impl App {
                 }
                 (slot as i16, protocol::packets::CLICK_MODE_PICKUP_ALL)
             }
+            // Stapel verschieben mit einem Item am Zeiger auf dasselbe Item: alle Stapel dieser
+            // Sorte wandern hinueber, schon beim ersten Klick -- Vanilla braucht dafuer einen
+            // Doppelklick. Der Stapel am Zeiger bleibt dort.
+            Some(slot)
+                if move_stack
+                    && button == 0
+                    && self.inventory.cursor.as_ref().is_some_and(|c| self.inventory.slot_at_index(slot).is_some_and(|s| s.stackable_with(c))) =>
+            {
+                self.quick_move_all(slot);
+                return;
+            }
             // Voller Zeiger: Vanilla legt hier NICHT sofort ab, sondern beginnt ein
             // moegliches Verteilen-Ziehen (HandledScreen.mouseClicked, Zweig `else {
             // cursorDragging = true }`) und entscheidet erst beim Loslassen, was daraus wurde
@@ -19809,7 +20364,7 @@ impl App {
             // Sonst wartet das Ablegen sichtbar, bis man die Maus loslaesst.
             Some(_) | None if self.inventory.cursor.is_some() && (button == 0 || button == 1) => {
                 let cursor_before = self.inventory.cursor.clone();
-                let mut drag = InventoryDrag { button, slots: Vec::new(), cursor_before };
+                let mut drag = InventoryDrag { button, slots: Vec::new(), cursor_before, move_stack };
                 if let Some(slot) = hovered {
                     drag.slots.push((slot, self.inventory.slot_at_index(slot).cloned()));
                 }
@@ -19849,10 +20404,13 @@ impl App {
         // Server schickt den neuen Zustand nach.
         let prediction = self.predict_inventory_click(slot, button, mode);
         let (modified, cursor) = match &prediction {
-            Some(p) if p.hashable => (p.modified.clone(), p.cursor.clone()),
-            // Nicht hashbar: keine Hash-Felder, aber weiter unten trotzdem lokal anwenden
-            // (s. inventory::Prediction::hashable).
-            Some(_) => (Vec::new(), self.inventory.cursor.clone()),
+            // Auch nicht hashbare Stapel (eigener Name, Verzauberung ...) gehen mit: der Hash
+            // weicht dann absichtlich ab (s. packets::write_item_stack_hash), der Server sieht
+            // den Unterschied und schickt seinen Stand. Frueher gingen hier leere Felder und
+            // der alte Cursor raus, waehrend lokal schon die Vorhersage galt -- der Server
+            // hielt den Client fuer unveraendert und korrigierte nichts: eine Glasscheibe aus
+            // einem Server-Menue blieb am Zeiger haengen, statt sofort zurueckzuspringen.
+            Some(p) => (p.modified.clone(), p.cursor.clone()),
             // Ohne Vorhersage wird der Cursor gesendet, wie er JETZT ist -- nicht "leer".
             // Das ist immer die sichere Angabe: aendert der Klick den Cursor nicht (Quick-
             // Move, Tauschen), stimmt sie; aendert er ihn doch, weicht sie ab und der Server
@@ -19928,7 +20486,7 @@ impl App {
         let Some(gpu) = self.gpu.as_ref() else { return };
         let layout = inventory::screen_layout(&self.inventory, gpu.size(), self.inventory_scale(gpu.size()));
         let (cx, cy) = self.cursor_pos;
-        let move_stack = self.action_active(KeyBindAction::InventoryMoveStack);
+        let move_stack = drag.move_stack;
         match layout.slot_at(cx, cy) {
             Some(slot) => {
                 let mode = if move_stack { protocol::packets::CLICK_MODE_QUICK_MOVE } else { protocol::packets::CLICK_MODE_PICKUP };
@@ -20092,11 +20650,8 @@ impl App {
         }
         let prediction = self.predict_inventory_click(slot, button, mode);
         let (modified, cursor) = match &prediction {
-            // Nicht hashbar (Stapel mit Components, z.B. verzaubert): leere Felder schicken
-            // und den Cursor melden, wie er JETZT ist -- die lokale Anzeige greift trotzdem
-            // vor (s. inventory::Prediction::hashable).
-            Some(p) if p.hashable => (p.modified.clone(), p.cursor.clone()),
-            Some(_) => (Vec::new(), self.inventory.cursor.clone()),
+            // Nicht hashbar: trotzdem mitschicken, s. inventory_click.
+            Some(p) => (p.modified.clone(), p.cursor.clone()),
             None => (Vec::new(), self.inventory.cursor.clone()),
         };
         if let Some(tx) = &self.outgoing_tx {
@@ -20231,20 +20786,63 @@ impl App {
     // Button 0 wirft EIN Stueck, Button 1 den ganzen Stapel -- deshalb liegt der ganze
     // Stapel auf Strg. Nur mit LEEREM Zeiger: haelt man etwas, ist Vanillas Wurf der Klick
     // ins Leere (s. inventory_click), nicht diese Aktion.
+    //
+    // Anders als Vanilla zaehlt ein Stapel am Zeiger als der Stapel unter dem Zeiger: er wird
+    // geworfen (ein Stueck, mit "Stapel verschieben" ganz) -- ueber den Wurf-Slot -999.
     fn inventory_throw(&mut self) {
         if self.creative_shown() {
             self.creative_throw();
             return;
         }
-        if !self.inventory.screen_open || self.inventory.cursor.is_some() {
+        if !self.inventory.screen_open {
+            return;
+        }
+        if self.drop_whole_stack_held() {
+            self.inventory_throw_sweep(true);
+            return;
+        }
+        if self.inventory.cursor.is_some() {
+            self.send_container_click(inventory::DROP_SLOT, 1, protocol::packets::CLICK_MODE_PICKUP);
             return;
         }
         let Some(gpu) = self.gpu.as_ref() else { return };
         let layout = inventory::screen_layout(&self.inventory, gpu.size(), self.inventory_scale(gpu.size()));
         let (cx, cy) = self.cursor_pos;
         let Some(slot) = layout.slot_at(cx, cy) else { return };
-        let ganzer_stapel = self.drop_whole_stack_held();
-        self.send_container_click(slot as i16, i8::from(ganzer_stapel), protocol::packets::CLICK_MODE_THROW);
+        self.send_container_click(slot as i16, 0, protocol::packets::CLICK_MODE_THROW);
+    }
+
+    // Stapel-Wurf: solange Wegwerfen und "Stapel verschieben" beide gehalten sind, fliegt jeder
+    // Stapel, ueber den der Zeiger faehrt, sofort ganz raus -- je Betreten eines Slots einmal.
+    // Fuellt sich der Slot unter dem Zeiger neu, bleibt das liegen, bis der Zeiger ihn verlaesst
+    // und wieder betritt oder eine der beiden Tasten neu gedrueckt wird (`neu`). Der Stapel am
+    // Zeiger zaehlt als immer ueberfahren: er fliegt beim Druck mit.
+    fn inventory_throw_sweep(&mut self, neu: bool) {
+        if !self.inventory.screen_open || self.creative_shown() {
+            return;
+        }
+        let gehalten = self.keybind_physical_down[KeyBindAction::InventoryDropItem.index()] && self.drop_whole_stack_held();
+        if !gehalten {
+            self.throw_sweep_slot = None;
+            return;
+        }
+        if neu {
+            self.throw_sweep_slot = None;
+            if self.inventory.cursor.is_some() {
+                self.send_container_click(inventory::DROP_SLOT, 0, protocol::packets::CLICK_MODE_PICKUP);
+            }
+        }
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let layout = inventory::screen_layout(&self.inventory, gpu.size(), self.inventory_scale(gpu.size()));
+        let (cx, cy) = self.cursor_pos;
+        let slot = layout.slot_at(cx, cy);
+        if slot == self.throw_sweep_slot {
+            return;
+        }
+        self.throw_sweep_slot = slot;
+        if let Some(slot) = slot.filter(|&s| self.inventory.slot_at_index(s).is_some()) {
+            self.send_container_click(slot as i16, 1, protocol::packets::CLICK_MODE_THROW);
+        }
     }
 
     // Stapel-Verschieben per Doppelklick: ALLE Stapel derselben Sorte wandern hinueber.
@@ -20279,20 +20877,40 @@ impl App {
             self.creative_swap(hotbar_index);
             return;
         }
+        // Mit einem Stapel am Zeiger tut Vanilla hier nichts. Bei uns kommt er auf den
+        // Hotbar-Platz, und was dort lag, an den Zeiger -- ein gewoehnlicher Klick auf den Platz.
+        if self.inventory.cursor.is_some() {
+            if let Some(ziel) = self.inventory.hotbar_screen_slot(hotbar_index) {
+                self.send_container_click(ziel as i16, 0, protocol::packets::CLICK_MODE_PICKUP);
+            }
+            return;
+        }
         let Some(gpu) = self.gpu.as_ref() else { return };
         let layout = inventory::screen_layout(&self.inventory, gpu.size(), self.inventory_scale(gpu.size()));
         let (cx, cy) = self.cursor_pos;
         let Some(slot) = layout.slot_at(cx, cy) else { return };
+        // Craft-Ergebnis auf einen belegten Platz: Vanillas Tausch scheitert, weil ins
+        // Ergebnisfeld nichts hinein darf. Stattdessen erst das Item vom Platz an den Zeiger
+        // nehmen, dann das Ergebnis per Tausch auf den nun leeren Platz.
+        let ergebnisfeld = slot == 0 && (self.inventory.open.is_none() || self.open_menu_type() == Some(inventory::MENU_CRAFTING));
+        if ergebnisfeld && self.inventory.slot_at_index(0).is_some() {
+            if let Some(ziel) = self.inventory.hotbar_screen_slot(hotbar_index).filter(|&z| self.inventory.slot_at_index(z).is_some()) {
+                self.send_container_click(ziel as i16, 0, protocol::packets::CLICK_MODE_PICKUP);
+                self.send_container_click(0, hotbar_index as i8, protocol::packets::CLICK_MODE_SWAP);
+                return;
+            }
+        }
         let (sync_id, revision, _) = self.inventory.active();
         // Wie bei jedem anderen Klick erst vorhersagen, dann senden, dann lokal anwenden --
         // vorher ging hier NUR das Paket raus und die Anzeige stand still, bis der Server
         // antwortete, und Hotbar-Swaps mit der Taste wirkten langsam.
         let prediction = self.predict_inventory_click(slot as i16, hotbar_index as i8, protocol::packets::CLICK_MODE_SWAP);
         let (modified, cursor) = match &prediction {
-            Some(p) if p.hashable => (p.modified.clone(), p.cursor.clone()),
+            // Nicht hashbar: trotzdem mitschicken, s. inventory_click.
+            Some(p) => (p.modified.clone(), p.cursor.clone()),
             // Tauschen laesst den Cursor unveraendert -- den koennen wir also immer exakt
             // melden, die getauschten Slots ohne Vorhersage nicht.
-            _ => (Vec::new(), self.inventory.cursor.clone()),
+            None => (Vec::new(), self.inventory.cursor.clone()),
         };
         if let Some(tx) = &self.outgoing_tx {
             let _ = tx.send(protocol::packets::click_container_payload(
@@ -20468,6 +21086,11 @@ impl App {
     }
 
     fn apply_bind(&mut self, bind: Bind, pressed: bool) {
+        // Beim Verbinden gibt es noch nichts zu steuern; Loslassen kommt durch, damit nichts
+        // haengen bleibt.
+        if pressed && self.connecting_view() {
+            return;
+        }
         let kb = self.settings.keybinds;
         for action in KeyBindAction::ALL {
             if kb.binds(action).any(|b| b == bind) {
@@ -20772,6 +21395,7 @@ impl App {
                     }
                 }
                 net::ClientEvent::Disconnected(reason) => {
+                    self.keep_last_view();
                     self.conn_status = ConnStatus::Disconnected;
                     // Der Task hat sich selbst beendet; der Handle ist nur noch Altlast.
                     self.conn_task = None;
@@ -20781,6 +21405,7 @@ impl App {
                     // Aus World/Death/Pause zurueck auf die Server-Liste.
                     self.mode = AppMode::Menu;
                     self.screen = MenuScreen::Connect;
+                    self.disconnect_popup = Some(disconnect_popup_text(&reason).to_string());
                     self.push_log(format!("getrennt: {reason}"));
                 }
                 net::ClientEvent::ResourcePackPush(push) => self.server_pack_offered(push),
@@ -20805,7 +21430,9 @@ impl App {
                     self.reset_world();
                     self.inventory.reset();
                 }
+                net::ClientEvent::Route(ziel) => self.conn_route = Some(ziel),
                 net::ClientEvent::Transferring { host, port } => {
+                    self.conn_route = None;
                     // Der Server schickt uns weiter (Transfer), der Netz-Task verbindet schon
                     // neu. Alles von der alten Verbindung muss weg wie beim Trennen -- nur
                     // NICHT zurueck ins Menue (Verbindungs-Overlay wie bei der
@@ -21755,6 +22382,8 @@ impl App {
                 net::ClientEvent::RecipeBookAdd(add) => self.recipe_book.apply_add(add),
                 net::ClientEvent::RecipeBookRemove(ids) => self.recipe_book.apply_remove(&ids),
                 net::ClientEvent::ItemTags(tags) => self.recipe_book.tags = tags,
+                // Sonstiges > No UI close S2C: der Server schliesst nichts.
+                net::ClientEvent::CloseScreen(_) if self.settings.no_ui_close_s2c => {}
                 net::ClientEvent::CloseScreen(_sync_id) => {
                     // Vanilla schliesst bei Container Close jeden offenen Screen, ohne auf die
                     // ID zu schauen -- auch den Schild-Editor, der dabei seinen Text als Sign
@@ -22003,6 +22632,7 @@ impl App {
                     // Paket, sonst zaehlt der Anfangswert als Treffer.
                     if self.own_health_initialized && health < self.health {
                         self.own_hurt_ticks = world::MAX_HURT_TIME;
+                        self.hurt_cam_side = -self.hurt_cam_side;
                         self.own_ticks_since_hurt = 0;
                         self.own_hurt_by_crit = self.own_crit_grace > 0;
                     }
@@ -22449,6 +23079,7 @@ impl App {
             self.push_log("== reconnect ==");
         }
         self.conn_status = ConnStatus::Connecting;
+        self.conn_route = None;
         self.reset_world();
         self.server_packs.clear();
         self.sky_time_pending = true;
@@ -22537,11 +23168,20 @@ impl App {
         if self.login_busy {
             return;
         }
-        let client_id = self.settings.azure_client_id.trim().to_string();
-        if client_id.is_empty() {
-            self.push_log("Kein Azure-Client-ID gesetzt -- Microsoft-Login nicht möglich (Token-Feld nutzen).");
-            return;
-        }
+        let client_id = AZURE_CLIENT_ID.to_string();
+        // Die Seite nach der Rueckleitung in den Farben des Themes.
+        let seite = {
+            use theme::{srgb, Slot};
+            auth::PageTheme {
+                background: srgb(Slot::BgApp),
+                panel: srgb(Slot::BgPanel),
+                border: srgb(Slot::Border1),
+                text: srgb(Slot::Text1),
+                text_2: srgb(Slot::Text2),
+                success: srgb(Slot::Success),
+                danger: srgb(Slot::Danger),
+            }
+        };
         self.login_busy = true;
         self.push_log("Microsoft-Anmeldung wird vorbereitet ...");
         let tx = self.auth_tx.clone();
@@ -22549,7 +23189,7 @@ impl App {
             let msa = match auth::start_browser_login(&client_id).await {
                 Ok(login) => {
                     let _ = tx.send(AuthEvent::BrowserLogin { url: login.url.clone() });
-                    auth::finish_browser_login(login).await
+                    auth::finish_browser_login(login, seite).await
                 }
                 Err(e) => {
                     let _ = tx.send(AuthEvent::Status(format!("{e} -- weiter mit der Code-Anmeldung")));
@@ -22618,9 +23258,9 @@ impl App {
 
     // Login mit einem eingefuegten Microsoft-Refresh-Token: derselbe Tausch wie beim gespeicherten
     // Login (try_refresh_login), nur mit dem eingegebenen Token. Microsoft nimmt ein Refresh-Token
-    // ausschliesslich zusammen mit der Client-ID an, fuer die es ausgestellt wurde -- stammt es
-    // von einer anderen App, muss deren ID vorher unter "Client-ID" stehen. Das neue
-    // Refresh-Token aus der Antwort wird gespeichert, die Anmeldung erneuert sich danach selbst.
+    // ausschliesslich zusammen mit der Client-ID an, fuer die es ausgestellt wurde -- es muss
+    // also von Coral Client stammen (z.B. "Refresh-Token exportieren"). Das neue Refresh-Token
+    // aus der Antwort wird gespeichert, die Anmeldung erneuert sich danach selbst.
     fn submit_refresh_token_login(&mut self, token: String) {
         let refresh_token = token.trim().to_string();
         if refresh_token.is_empty() {
@@ -22630,12 +23270,7 @@ impl App {
         if self.login_busy {
             return;
         }
-        let client_id = self.settings.azure_client_id.trim().to_string();
-        if client_id.is_empty() {
-            self.push_log("Keine Client-ID gesetzt -- ein Refresh-Token braucht die ID der App, die es ausgestellt hat.");
-            return;
-        }
-        self.redeem_refresh_token(refresh_token, client_id);
+        self.redeem_refresh_token(refresh_token, AZURE_CLIENT_ID.to_string());
     }
 
     // Refresh-Token gegen frische Tokens tauschen und damit anmelden (eingefuegtes Token oder
@@ -22651,7 +23286,7 @@ impl App {
             let msa = match auth::refresh_msa(&client_id, &refresh_token).await {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = tx.send(AuthEvent::Failed(format!("{e} -- passt die Client-ID zum Token?")));
+                    let _ = tx.send(AuthEvent::Failed(format!("{e} -- stammt das Token von Coral Client?")));
                     return;
                 }
             };
@@ -22680,9 +23315,9 @@ impl App {
             .find(&self.settings.account_uuid)
             .map(|i| self.accounts.list[i].client_id.trim().to_string())
             .filter(|c| !c.is_empty())
-            .unwrap_or_else(|| self.settings.azure_client_id.trim().to_string());
+            .unwrap_or_else(|| AZURE_CLIENT_ID.to_string());
         let refresh_token = self.settings.msa_refresh_token.trim().to_string();
-        if client_id.is_empty() || refresh_token.is_empty() {
+        if refresh_token.is_empty() {
             return;
         }
         self.login_busy = true;
@@ -22734,21 +23369,8 @@ impl App {
         self.credentials.as_ref().is_some_and(|c| accounts::key(&c.profile_id) == accounts::key(&a.uuid))
     }
 
-    // Beim Oeffnen der Kontenliste und des Acc-Managers: Prism neu einlesen, Koepfe laden und
-    // alle Konten pruefen. `import` = Knopf "Aus Prism importieren" (holt auch vergessene).
-    fn refresh_account_list(&mut self, import: bool) {
-        self.launcher_accounts = auth::launcher_accounts();
-        let neu = self.accounts.merge_prism(&self.launcher_accounts, import, accounts::now_unix());
-        if neu > 0 || import {
-            self.persist_accounts();
-        }
-        if import {
-            if self.launcher_accounts.is_empty() {
-                self.push_log("Keine Launcher-Konten gefunden (Prism/PolyMC). Ist ein Konto angemeldet?");
-            } else {
-                self.push_log(format!("{} Konto(en) in Prism, davon {neu} neu.", self.launcher_accounts.len()));
-            }
-        }
+    // Beim Oeffnen der Kontenliste und des Acc-Managers: Koepfe laden und alle Konten pruefen.
+    fn refresh_account_list(&mut self) {
         self.request_account_heads();
         self.check_accounts();
     }
@@ -22815,8 +23437,8 @@ impl App {
         }
     }
 
-    // Rechtsklick-Menue "Account vergessen": aus der Liste nehmen (ein Prism-Konto kommt erst
-    // mit "Aus Prism importieren" wieder); war es angemeldet, auch abmelden.
+    // Rechtsklick-Menue "Account vergessen": aus der Liste nehmen; war es angemeldet, auch
+    // abmelden.
     fn forget_account(&mut self, i: usize) {
         let aktiv = self.accounts.list.get(i).is_some_and(|a| self.is_active_account(a));
         let Some(a) = self.accounts.forget(i) else { return };
@@ -22939,6 +23561,7 @@ impl App {
             return;
         };
         task.abort();
+        self.keep_last_view();
         // Der abgebrochene Task kommt nicht mehr dazu, ein Disconnected-Event zu senden --
         // den Status setzen wir daher hier selbst.
         self.conn_status = ConnStatus::Disconnected;
@@ -23505,7 +24128,7 @@ impl App {
                     // Angemeldet: nur abmelden.
                     out.push(Self::nav_button(ButtonAction::Logout, account_row_rect(0), "Abmelden", UI_SCALE_SMALL));
                 } else {
-                    // Zeile 0: Microsoft-Login. Zeile 1: Token- + Client-ID-Feld oeffnen.
+                    // Zeile 0: Microsoft-Login + Refresh-Token. Zeile 1: Token-Feld oeffnen.
                     out.push(Self::nav_button(ButtonAction::MicrosoftLogin, account_row_rect(0), "Mit Microsoft anmelden", UI_SCALE_SMALL));
                     out.push(Self::nav_button(
                         ButtonAction::OpenInputField(InputKind::RefreshToken),
@@ -23519,30 +24142,9 @@ impl App {
                         "Token eingeben",
                         UI_SCALE_SMALL,
                     ));
-                    out.push(Self::nav_button(
-                        ButtonAction::OpenInputField(InputKind::ClientId),
-                        account_row_rect_col2(1),
-                        "Client-ID",
-                        UI_SCALE_SMALL,
-                    ));
                     // Zeile 2: OK, wenn ein Eingabefeld offen ist.
                     if self.input_field.is_some() {
                         out.push(Self::nav_button(ButtonAction::SubmitInputField, ACCOUNT_INPUT_OK, "OK", UI_SCALE_SMALL));
-                    }
-                    // Zeile 3: Import aus Launcher; Zeilen 4+: je gefundenes Konto ein Button.
-                    out.push(Self::nav_button(
-                        ButtonAction::ImportLauncherAccounts,
-                        account_row_rect(3),
-                        "Aus Prism importieren",
-                        UI_SCALE_SMALL,
-                    ));
-                    for (i, acc) in self.launcher_accounts.iter().enumerate() {
-                        out.push(Self::nav_button(
-                            ButtonAction::UseLauncherAccount(i),
-                            account_row_rect(4 + i),
-                            &format!("→ {}", acc.name),
-                            UI_SCALE_SMALL,
-                        ));
                     }
                 }
             }
@@ -23719,6 +24321,7 @@ impl App {
                     set.entity_render_distance < ENTITY_DISTANCE_MAX,
                 ));
                 out.push(Self::toggle(ButtonAction::ToggleBlockRngRotation, BLOCK_ROTATION_ROW, set.block_rng_rotation));
+                out.push(Self::toggle(ButtonAction::ToggleArmorTrims, ARMOR_TRIMS_ROW, set.armor_trims));
                 out.extend(Self::stepper(
                     ButtonAction::MaxRenderDistanceDown,
                     ButtonAction::MaxRenderDistanceUp,
@@ -23730,6 +24333,31 @@ impl App {
                 out.push(Self::step_slider(ButtonAction::ChunkSaverThresholdPrev, ButtonAction::ChunkSaverThresholdNext, stepper_value_rect(LOD_DETAIL_ROW), set.chunk_saver_threshold as f64, lod::THRESHOLD_MIN as f64, lod::THRESHOLD_MAX as f64, true));
                 // Crit-Farbe: Schalter, rechts daneben das Farbfeld (dieselben vier Achsen wie
                 // die Schadens-Faerbung).
+                out.push(Self::toggle(ButtonAction::ToggleHurtCam, HURT_CAM_ROW, set.hurt_cam));
+                out.push(Self::step_slider(
+                    ButtonAction::HurtCamStrengthPrev,
+                    ButtonAction::HurtCamStrengthNext,
+                    stepper_value_rect(HURT_CAM_STRENGTH_ROW),
+                    set.hurt_cam_strength as f64,
+                    0.0,
+                    100.0,
+                    set.hurt_cam,
+                ));
+                let modi: Vec<_> = FIRE_MODE_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::FireMode(i as u8), set.fire_mode == i as u8)).collect();
+                out.extend(pick_buttons(settings_wide_rect(FIRE_MODE_ROW), &modi, true));
+                if set.fire_mode == FIRE_MODE_CROSSHAIR {
+                    out.push(Self::swatch(ColorTarget::FireCrosshair, settings_ctrl_rect(FIRE_DETAIL_ROW), set.fire_crosshair_rgba()));
+                } else {
+                    out.push(Self::step_slider(
+                        ButtonAction::FireHeightPrev,
+                        ButtonAction::FireHeightNext,
+                        stepper_value_rect(FIRE_DETAIL_ROW),
+                        set.fire_height as f64,
+                        0.0,
+                        100.0,
+                        true,
+                    ));
+                }
                 out.push(Self::toggle(ButtonAction::ToggleModuleCritColor, CRIT_COLOR_ROW, set.module_crit_color_enabled));
                 if set.module_crit_color_enabled {
                     out.push(Self::swatch(ColorTarget::Crit, swatch_after_toggle_rect(CRIT_COLOR_ROW), set.crit_color_rgba()));
@@ -23898,6 +24526,10 @@ impl App {
                 out.push(Self::toggle(ButtonAction::TogglePotionMarkStrong, 4, self.settings.potion_mark_strong));
                 out.push(Self::toggle(ButtonAction::TogglePotionMarkLong, 5, self.settings.potion_mark_long));
                 out.push(Self::toggle(ButtonAction::TogglePotionMarkWeak, 6, self.settings.potion_mark_weak));
+            }
+            MenuScreen::SettingsMisc => {
+                out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
+                out.push(Self::toggle(ButtonAction::ToggleNoUiCloseS2c, 0, self.settings.no_ui_close_s2c));
             }
             MenuScreen::SettingsAudio => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
@@ -24298,8 +24930,145 @@ impl App {
                                     });
                                 }
                             }
+                            HudElement::Keystrokes => {
+                                let set = &self.settings;
+                                out.push(Self::step_slider(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    stepper_value_rect(0),
+                                    set.hud_keys_scale as f64,
+                                    HUD_SCALE_PCT_MIN as f64,
+                                    HUD_SCALE_PCT_MAX as f64,
+                                    true,
+                                ));
+                                out.push(Self::step_slider(
+                                    ButtonAction::KeysOpacityPrev,
+                                    ButtonAction::KeysOpacityNext,
+                                    stepper_value_rect(1),
+                                    set.keys_opacity as f64,
+                                    0.0,
+                                    100.0,
+                                    true,
+                                ));
+                            }
+                            HudElement::Armor => {
+                                let set = &self.settings;
+                                out.push(Self::step_slider(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    stepper_value_rect(0),
+                                    set.hud_armor_scale as f64,
+                                    HUD_SCALE_PCT_MIN as f64,
+                                    HUD_SCALE_PCT_MAX as f64,
+                                    true,
+                                ));
+                                let lagen: Vec<_> = armor_hud::LAYOUT_NAMES
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, &name)| (name, ButtonAction::ArmorHudLayout(i as u8), set.armor_hud_layout == i as u8))
+                                    .collect();
+                                out.extend(pick_buttons(hud_config_pick_rect(1), &lagen, true));
+                                let (namen, gewaehlt) = if armor_hud::is_vertical(set.armor_hud_layout) {
+                                    (armor_hud::SORT_VERTICAL_NAMES, set.armor_hud_sort_vertical)
+                                } else {
+                                    (armor_hud::SORT_FLAT_NAMES, set.armor_hud_sort_flat)
+                                };
+                                let wahl: Vec<_> = namen.iter().enumerate().map(|(i, &name)| (name, ButtonAction::ArmorHudSort(i as u8), gewaehlt == i as u8)).collect();
+                                out.extend(pick_buttons(hud_config_pick_rect(2), &wahl, true));
+                                out.push(Self::step_slider(
+                                    ButtonAction::ArmorHudGapPrev,
+                                    ButtonAction::ArmorHudGapNext,
+                                    stepper_value_rect(3),
+                                    set.armor_hud_gap as f64,
+                                    armor_hud::GAP_MIN as f64,
+                                    armor_hud::GAP_MAX as f64,
+                                    true,
+                                ));
+                                out.push(Self::step_slider(
+                                    ButtonAction::ArmorHudNumberScalePrev,
+                                    ButtonAction::ArmorHudNumberScaleNext,
+                                    stepper_value_rect(4),
+                                    set.armor_hud_number_scale as f64,
+                                    armor_hud::NUMBER_SCALE_MIN as f64,
+                                    armor_hud::NUMBER_SCALE_MAX as f64,
+                                    true,
+                                ));
+                                for (row, wert, (weniger, mehr)) in [
+                                    (5, set.armor_hud_number_x, (ButtonAction::ArmorHudNumberXPrev, ButtonAction::ArmorHudNumberXNext)),
+                                    (6, set.armor_hud_number_y, (ButtonAction::ArmorHudNumberYPrev, ButtonAction::ArmorHudNumberYNext)),
+                                ] {
+                                    out.push(Self::step_slider(
+                                        weniger,
+                                        mehr,
+                                        stepper_value_rect(row),
+                                        wert as f64,
+                                        armor_hud::NUMBER_OFFSET_MIN as f64,
+                                        armor_hud::NUMBER_OFFSET_MAX as f64,
+                                        true,
+                                    ));
+                                }
+                            }
+                            HudElement::HeldName => {
+                                let pct = self.settings.hud_held_name_scale;
+                                out.extend(Self::stepper(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    0,
+                                    pct > HUD_SCALE_PCT_MIN,
+                                    pct < HUD_SCALE_PCT_MAX,
+                                ));
+                            }
+                            HudElement::Scoreboard => {
+                                let pct = self.settings.hud_scoreboard_scale;
+                                out.extend(Self::stepper(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    0,
+                                    pct > HUD_SCALE_PCT_MIN,
+                                    pct < HUD_SCALE_PCT_MAX,
+                                ));
+                            }
+                            HudElement::ShieldCooldown => {
+                                let stil = self.settings.shield_cd_text_style;
+                                let aktion = ButtonAction::CycleShieldCdTextStyle;
+                                out.extend(pick_buttons(
+                                    settings_wide_rect(0),
+                                    &[(HUD_TEXT_STYLE_NAMES[0], aktion, stil == 0), (HUD_TEXT_STYLE_NAMES[1], aktion, stil == 1)],
+                                    true,
+                                ));
+                            }
+                            HudElement::Arrows => {
+                                let set = &self.settings;
+                                let pct = set.hud_arrows_scale;
+                                out.push(Self::step_slider(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    stepper_value_rect(0),
+                                    pct as f64,
+                                    HUD_SCALE_PCT_MIN as f64,
+                                    HUD_SCALE_PCT_MAX as f64,
+                                    true,
+                                ));
+                                out.push(Self::toggle(ButtonAction::ToggleArrowNumberOnly, 1, set.arrow_number_only));
+                                out.push(Self::step_slider(
+                                    ButtonAction::ArrowOpacityPrev,
+                                    ButtonAction::ArrowOpacityNext,
+                                    stepper_value_rect(2),
+                                    set.arrow_opacity as f64,
+                                    ARROW_OPACITY_MIN as f64,
+                                    100.0,
+                                    true,
+                                ));
+                                let stil = set.arrow_text_style;
+                                let aktion = ButtonAction::CycleArrowTextStyle;
+                                out.extend(pick_buttons(
+                                    settings_wide_rect(3),
+                                    &[(HUD_TEXT_STYLE_NAMES[0], aktion, stil == 0), (HUD_TEXT_STYLE_NAMES[1], aktion, stil == 1)],
+                                    true,
+                                ));
+                            }
                             // Nur Position, keine weiteren Bedienelemente (nur Reset unten).
-                            HudElement::Perf | HudElement::Scoreboard | HudElement::ShieldCooldown | HudElement::Arrows => {}
+                            HudElement::Perf => {}
                         }
                         out.push(Self::nav_button(
                             ButtonAction::ResetHudElement,
@@ -24318,9 +25087,6 @@ impl App {
         out
     }
 
-    // Bildschirm-Rechteck des Kreuz-Elements im HUD-Editor, um den (normierten)
-    // Mittelpunkt herum -- anders als hud_perf_rect (linke obere Ecke), weil der Crosshair
-    // selbst ueber seinen Mittelpunkt positioniert wird (s. crosshair_vertices).
     // Rechteck der Schild-Cooldown-Zahl, bemessen an einem Beispielwert ("5.0").
     fn hud_shield_cd_rect(&self, gpu: &GpuState) -> Rect {
         let (sw, sh) = gpu.size();
@@ -24330,6 +25096,9 @@ impl App {
         Rect { x: (cx - w / 2.0).round(), y: (cy - h / 2.0).round(), w, h }
     }
 
+    // Bildschirm-Rechteck des Kreuz-Elements im HUD-Editor, um den (normierten)
+    // Mittelpunkt herum -- anders als hud_perf_rect (linke obere Ecke), weil der Crosshair
+    // selbst ueber seinen Mittelpunkt positioniert wird (s. crosshair_vertices).
     fn hud_crosshair_rect(&self, gpu: &GpuState) -> Rect {
         let (sw, sh) = gpu.size();
         let cx = (self.settings.hud_crosshair_x * sw).round();
@@ -24393,22 +25162,28 @@ impl App {
     // Masse der Scoreboard-Seitenleiste aus dem Inhalt; ohne Inhalt (z.B. im HUD-Editor ohne
     // Serververbindung) ein fester Platzhalter, damit man das Element trotzdem positionieren kann.
     fn hud_scoreboard_size(&self, gpu: &GpuState) -> (f32, f32) {
-        let line_h = gpu.text_height(UI_SCALE_SMALL) + 3.0;
-        let title_h = gpu.text_height(UI_SCALE_SMALL) + 6.0;
-        let pad = 8.0;
+        let (scale, line_h, title_h, pad) = self.scoreboard_metrics(gpu);
         match self.scoreboard_lines() {
             Some((title, lines)) => {
                 // Die ganze Zeile auf einmal messen: nur so zaehlt der Platz, den eine
                 // wechselnde Zahl darin reserviert hat (s. build_server_hud).
                 let breite = |spans: &[protocol::nbt::TextSpan], scale: f32| -> f32 { stable_row_width(gpu, spans, scale) };
-                let mut max_w = breite(&title, UI_SCALE_SMALL);
+                let mut max_w = breite(&title, scale);
                 for t in &lines {
-                    max_w = max_w.max(breite(t, UI_SCALE_SMALL));
+                    max_w = max_w.max(breite(t, scale));
                 }
                 (max_w + pad * 2.0, title_h + lines.len() as f32 * line_h + pad)
             }
-            None => (gpu.measure_text("Scoreboard", UI_SCALE_SMALL) + pad * 2.0, title_h + 3.0 * line_h + pad),
+            None => (gpu.measure_text("Scoreboard", scale) + pad * 2.0, title_h + 3.0 * line_h + pad),
         }
+    }
+
+    // Schriftfaktor der Seitenleiste (Prozent aus dem HUD-Editor, auf Viertel gerundet wie
+    // title_scale), Zeilen- und Titelhoehe und Rand -- Abstaende wachsen mit der Schrift.
+    fn scoreboard_metrics(&self, gpu: &GpuState) -> (f32, f32, f32, f32) {
+        let scale = ((UI_SCALE_SMALL * self.settings.hud_scoreboard_scale as f32 / 100.0) * 4.0).round().max(1.0) / 4.0;
+        let f = scale / UI_SCALE_SMALL;
+        (scale, gpu.text_height(scale) + (3.0 * f).round(), gpu.text_height(scale) + (6.0 * f).round(), (8.0 * f).round())
     }
 
     // Griff-/Zeichen-Rechteck der Seitenleiste: obere linke Ecke normiert (hud_scoreboard_x/y),
@@ -24537,17 +25312,23 @@ impl App {
             HudElement::Subtitle => self.hud_subtitle_rect(gpu),
             HudElement::Effects => self.hud_effects_rect(gpu, true),
             HudElement::BossBar => self.hud_bossbar_rect(gpu),
+            HudElement::HeldName => self.hud_held_name_rect(gpu),
+            HudElement::Armor => self.hud_armor_rect(gpu),
+            HudElement::Keystrokes => self.hud_keys_rect(gpu),
         }
     }
 
     // Steht das Element im HUD-Editor? Nur, was im Spiel auch eingeschaltet ist -- die
-    // Schalter dafuer sitzen in den Modulen (Schilde, Pfeile, Debug > FPS-Anzeige).
+    // Schalter dafuer sitzen in den Modulen (Schilde, Pfeile, Debug > FPS-Anzeige). Der
+    // Schild-Cooldown als Kreis gehoert zum Fadenkreuz und steht nicht extra da.
     fn hud_element_shown(&self, element: HudElement) -> bool {
         let set = &self.settings;
         match element {
             HudElement::Perf => set.show_hud,
             HudElement::ShieldCooldown => set.module_shields && set.shield_cd_self && set.shield_cd_self_mode == 0,
             HudElement::Arrows => set.module_arrows && set.arrow_indicator,
+            HudElement::Armor => set.module_armor_hud,
+            HudElement::Keystrokes => set.module_keystrokes,
             _ => true,
         }
     }
@@ -24566,10 +25347,16 @@ impl App {
             Some(HudElement::ShieldCooldown)
         } else if self.hud_element_shown(HudElement::Arrows) && hits(self.hud_arrows_rect(gpu)) {
             Some(HudElement::Arrows)
+        } else if self.hud_element_shown(HudElement::Armor) && hits(self.hud_armor_rect(gpu)) {
+            Some(HudElement::Armor)
+        } else if self.hud_element_shown(HudElement::Keystrokes) && hits(self.hud_keys_rect(gpu)) {
+            Some(HudElement::Keystrokes)
         } else if self.hud_element_shown(HudElement::Perf) && hits(self.hud_perf_rect(gpu)) {
             Some(HudElement::Perf)
         } else if hits(self.hud_scoreboard_rect(gpu)) {
             Some(HudElement::Scoreboard)
+        } else if hits(self.hud_held_name_rect(gpu)) {
+            Some(HudElement::HeldName)
         } else if hits(self.hud_bossbar_rect(gpu)) {
             Some(HudElement::BossBar)
         } else if hits(self.hud_title_rect(gpu)) {
@@ -24663,9 +25450,15 @@ impl App {
                 self.settings.hud_bossbar_y = defaults.hud_bossbar_y;
                 self.settings.hud_bossbar_scale = defaults.hud_bossbar_scale;
             }
+            HudElement::HeldName => {
+                self.settings.hud_held_name_x = defaults.hud_held_name_x;
+                self.settings.hud_held_name_y = defaults.hud_held_name_y;
+                self.settings.hud_held_name_scale = defaults.hud_held_name_scale;
+            }
             HudElement::Scoreboard => {
                 self.settings.hud_scoreboard_x = defaults.hud_scoreboard_x;
                 self.settings.hud_scoreboard_y = defaults.hud_scoreboard_y;
+                self.settings.hud_scoreboard_scale = defaults.hud_scoreboard_scale;
             }
             HudElement::Hotbar => {
                 self.settings.hud_hotbar_x = defaults.hud_hotbar_x;
@@ -24689,10 +25482,33 @@ impl App {
             HudElement::ShieldCooldown => {
                 self.settings.hud_shield_cd_x = defaults.hud_shield_cd_x;
                 self.settings.hud_shield_cd_y = defaults.hud_shield_cd_y;
+                self.settings.shield_cd_text_style = defaults.shield_cd_text_style;
+            }
+            HudElement::Keystrokes => {
+                self.settings.hud_keys_x = defaults.hud_keys_x;
+                self.settings.hud_keys_y = defaults.hud_keys_y;
+                self.settings.hud_keys_scale = defaults.hud_keys_scale;
+                self.settings.keys_opacity = defaults.keys_opacity;
+            }
+            HudElement::Armor => {
+                self.settings.hud_armor_x = defaults.hud_armor_x;
+                self.settings.hud_armor_y = defaults.hud_armor_y;
+                self.settings.hud_armor_scale = defaults.hud_armor_scale;
+                self.settings.armor_hud_layout = defaults.armor_hud_layout;
+                self.settings.armor_hud_sort_vertical = defaults.armor_hud_sort_vertical;
+                self.settings.armor_hud_sort_flat = defaults.armor_hud_sort_flat;
+                self.settings.armor_hud_gap = defaults.armor_hud_gap;
+                self.settings.armor_hud_number_scale = defaults.armor_hud_number_scale;
+                self.settings.armor_hud_number_x = defaults.armor_hud_number_x;
+                self.settings.armor_hud_number_y = defaults.armor_hud_number_y;
             }
             HudElement::Arrows => {
                 self.settings.hud_arrows_x = defaults.hud_arrows_x;
                 self.settings.hud_arrows_y = defaults.hud_arrows_y;
+                self.settings.hud_arrows_scale = defaults.hud_arrows_scale;
+                self.settings.arrow_number_only = defaults.arrow_number_only;
+                self.settings.arrow_opacity = defaults.arrow_opacity;
+                self.settings.arrow_text_style = defaults.arrow_text_style;
             }
         }
     }
@@ -24751,6 +25567,12 @@ impl App {
                 self.settings.hud_actionbar_x = (align_anchor(cx - ox, w, self.settings.hud_actionbar_align) / sw).clamp(0.0, 1.0);
                 self.settings.hud_actionbar_y = ((cy - oy) / sh).clamp(0.0, 1.0);
             }
+            HudElement::HeldName => {
+                // Gespeichert werden Mitte und Oberkante -- ab dem ersten Ziehen fest, nicht
+                // mehr an der Hotbar.
+                self.settings.hud_held_name_x = ((cx - ox + w / 2.0) / sw).clamp(0.0, 1.0);
+                self.settings.hud_held_name_y = ((cy - oy) / sh).clamp(0.0, 1.0);
+            }
             HudElement::Scoreboard => {
                 self.settings.hud_scoreboard_x = ((cx - ox) / sw).clamp(0.0, 1.0);
                 self.settings.hud_scoreboard_y = ((cy - oy) / sh).clamp(0.0, 1.0);
@@ -24778,6 +25600,14 @@ impl App {
                 let rect = self.hud_shield_cd_rect(gpu);
                 self.settings.hud_shield_cd_x = ((cx - ox + rect.w / 2.0) / sw).clamp(0.0, 1.0);
                 self.settings.hud_shield_cd_y = ((cy - oy + rect.h / 2.0) / sh).clamp(0.0, 1.0);
+            }
+            HudElement::Keystrokes => {
+                self.settings.hud_keys_x = ((cx - ox) / sw).clamp(0.0, 1.0);
+                self.settings.hud_keys_y = ((cy - oy) / sh).clamp(0.0, 1.0);
+            }
+            HudElement::Armor => {
+                self.settings.hud_armor_x = ((cx - ox) / sw).clamp(0.0, 1.0);
+                self.settings.hud_armor_y = ((cy - oy) / sh).clamp(0.0, 1.0);
             }
             HudElement::Arrows => {
                 // Gespeichert wird die MITTE (s. hud_arrows_rect).
@@ -25067,11 +25897,10 @@ impl App {
             | ButtonAction::SetBlockOutlineComplementary(_)
             | ButtonAction::ToggleModuleShields
             | ButtonAction::ToggleModuleArrows
+            | ButtonAction::ToggleModuleArmorHud
+            | ButtonAction::ToggleModuleKeystrokes
             | ButtonAction::ToggleArrowIndicator
-            | ButtonAction::ToggleArrowNumberOnly
             | ButtonAction::ToggleArrowWhite
-            | ButtonAction::ArrowOpacityPrev
-            | ButtonAction::ArrowOpacityNext
             | ButtonAction::ToggleArrowTrail
             | ButtonAction::TrailHoldPrev
             | ButtonAction::TrailHoldNext
@@ -25082,9 +25911,6 @@ impl App {
             | ButtonAction::ToggleShieldHoldPlayers
             | ButtonAction::ShieldColorEditor(_)
             | ButtonAction::CycleShieldMark(_)
-            | ButtonAction::CycleShieldSelfMode
-            | ButtonAction::CycleShieldCdTextStyle
-            | ButtonAction::CycleArrowTextStyle
             | ButtonAction::CycleArrowEmptyFeedback
             | ButtonAction::ToggleModuleShowMarkers
             | ButtonAction::ToggleModuleSoundDebug
@@ -25152,7 +25978,7 @@ impl App {
                     self.account_menu_open = true;
                 }
                 // Koepfe laden und alle Tokens pruefen, sobald die Liste aufgeht.
-                self.refresh_account_list(false);
+                self.refresh_account_list();
             }
             ButtonAction::ToggleNotificationPanel => {
                 self.set_notification_panel(!self.notification_panel_open);
@@ -25171,11 +25997,6 @@ impl App {
                 if target == MenuScreen::Connect || target == MenuScreen::Account {
                     self.try_refresh_login();
                 }
-                // Account-Screen: Launcher-Konten frisch einlesen (Prism koennte inzwischen
-                // ein anderes Konto/Token haben).
-                if target == MenuScreen::Account {
-                    self.launcher_accounts = auth::launcher_accounts();
-                }
             }
             ButtonAction::Back => self.navigate_back(),
             ButtonAction::Connect => self.go_connect(),
@@ -25186,9 +26007,7 @@ impl App {
                 self.input_field = match &self.input_field {
                     Some((k, _)) if *k == kind => None,
                     _ => {
-                        // Client-ID-Feld mit dem aktuellen Wert vorbelegen (bequemes Editieren).
                         let prefill = match kind {
-                            InputKind::ClientId => self.settings.azure_client_id.clone(),
                             InputKind::Token | InputKind::RefreshToken => String::new(),
                             InputKind::ConfigName(ConfigEdit::Rename) => active_config(),
                             InputKind::ConfigName(_) => String::new(),
@@ -25231,15 +26050,7 @@ impl App {
                 }
             }
             ButtonAction::Logout => self.logout(),
-            ButtonAction::ImportLauncherAccounts => self.refresh_account_list(true),
             ButtonAction::UseAccount(i) => self.use_account(i),
-            ButtonAction::UseLauncherAccount(i) => {
-                if let Some(acc) = self.launcher_accounts.get(i) {
-                    // Token validieren (credentials_from_token holt Name/UUID frisch); bei
-                    // abgelaufenem Token kommt ein klarer Fehler -> Launcher einmal starten.
-                    self.submit_token_login(acc.token.clone(), accounts::Source::Prism);
-                }
-            }
             // --- Server-Liste (Connect-Screen) ---
             // Klick auf eine Karte verbindet sofort.
             ButtonAction::ConnectToServer(i) => {
@@ -25403,6 +26214,7 @@ impl App {
             ButtonAction::InventoryScaleNext => set.inventory_scale = (set.inventory_scale + 1).min(4),
             ButtonAction::ToggleInventoryCursorToSlot => set.inventory_cursor_to_slot = !set.inventory_cursor_to_slot,
             ButtonAction::ToggleCreativeOpTab => set.creative_op_tab = !set.creative_op_tab,
+            ButtonAction::ToggleNoUiCloseS2c => set.no_ui_close_s2c = !set.no_ui_close_s2c,
             ButtonAction::TogglePotionMarkStrong => set.potion_mark_strong = !set.potion_mark_strong,
             ButtonAction::TogglePotionMarkLong => set.potion_mark_long = !set.potion_mark_long,
             ButtonAction::TogglePotionMarkWeak => set.potion_mark_weak = !set.potion_mark_weak,
@@ -25584,12 +26396,60 @@ impl App {
                 }
             }
             ButtonAction::HudDeselect => self.hud_selected = None,
+            ButtonAction::ArmorHudLayout(l) => self.settings.armor_hud_layout = l,
+            ButtonAction::ArmorHudGapPrev => self.settings.armor_hud_gap = (self.settings.armor_hud_gap - 1).max(armor_hud::GAP_MIN),
+            ButtonAction::ArmorHudGapNext => self.settings.armor_hud_gap = (self.settings.armor_hud_gap + 1).min(armor_hud::GAP_MAX),
+            ButtonAction::ArmorHudNumberScalePrev | ButtonAction::ArmorHudNumberScaleNext => {
+                let wert = &mut self.settings.armor_hud_number_scale;
+                *wert = if action == ButtonAction::ArmorHudNumberScaleNext { *wert + armor_hud::NUMBER_SCALE_STEP } else { wert.saturating_sub(armor_hud::NUMBER_SCALE_STEP) }
+                    .clamp(armor_hud::NUMBER_SCALE_MIN, armor_hud::NUMBER_SCALE_MAX);
+            }
+            ButtonAction::ArmorHudNumberXPrev | ButtonAction::ArmorHudNumberXNext | ButtonAction::ArmorHudNumberYPrev | ButtonAction::ArmorHudNumberYNext => {
+                let set = &mut self.settings;
+                let (wert, schritt) = match action {
+                    ButtonAction::ArmorHudNumberXPrev => (&mut set.armor_hud_number_x, -1),
+                    ButtonAction::ArmorHudNumberXNext => (&mut set.armor_hud_number_x, 1),
+                    ButtonAction::ArmorHudNumberYPrev => (&mut set.armor_hud_number_y, -1),
+                    _ => (&mut set.armor_hud_number_y, 1),
+                };
+                *wert = (*wert + schritt).clamp(armor_hud::NUMBER_OFFSET_MIN, armor_hud::NUMBER_OFFSET_MAX);
+            }
+            ButtonAction::ToggleHurtCam => self.settings.hurt_cam = !self.settings.hurt_cam,
+            ButtonAction::ToggleArmorTrims => self.settings.armor_trims = !self.settings.armor_trims,
+            ButtonAction::HurtCamStrengthPrev => self.settings.hurt_cam_strength = self.settings.hurt_cam_strength.saturating_sub(5),
+            ButtonAction::HurtCamStrengthNext => self.settings.hurt_cam_strength = (self.settings.hurt_cam_strength + 5).min(100),
+            ButtonAction::FireMode(m) => self.settings.fire_mode = m,
+            ButtonAction::FireHeightPrev => self.settings.fire_height = self.settings.fire_height.saturating_sub(5),
+            ButtonAction::FireHeightNext => self.settings.fire_height = (self.settings.fire_height + 5).min(100),
+            ButtonAction::KeysOpacityPrev => self.settings.keys_opacity = self.settings.keys_opacity.saturating_sub(10),
+            ButtonAction::KeysOpacityNext => self.settings.keys_opacity = (self.settings.keys_opacity + 10).min(100),
+            ButtonAction::ArmorHudSort(r) => {
+                if armor_hud::is_vertical(self.settings.armor_hud_layout) {
+                    self.settings.armor_hud_sort_vertical = r;
+                } else {
+                    self.settings.armor_hud_sort_flat = r;
+                }
+            }
+            // Aussehen von Schild-Cooldown und Pfeil-Anzeige: im Fenster des HUD-Editors, die
+            // Werte gehoeren aber zu den Modulen.
+            ButtonAction::ToggleArrowNumberOnly
+            | ButtonAction::ArrowOpacityPrev
+            | ButtonAction::ArrowOpacityNext
+            | ButtonAction::CycleArrowTextStyle
+            | ButtonAction::CycleShieldCdTextStyle
+            | ButtonAction::CycleShieldSelfMode
+            | ButtonAction::OpenHudConfig(_) => self.apply_module_action(action),
             ButtonAction::HudScaleStep(element, groesser) => {
                 let wert = match element {
                     HudElement::Title => &mut self.settings.hud_title_scale,
                     HudElement::Subtitle => &mut self.settings.hud_subtitle_scale,
                     HudElement::Effects => &mut self.settings.hud_effects_scale,
                     HudElement::BossBar => &mut self.settings.hud_bossbar_scale,
+                    HudElement::Scoreboard => &mut self.settings.hud_scoreboard_scale,
+                    HudElement::Arrows => &mut self.settings.hud_arrows_scale,
+                    HudElement::HeldName => &mut self.settings.hud_held_name_scale,
+                    HudElement::Armor => &mut self.settings.hud_armor_scale,
+                    HudElement::Keystrokes => &mut self.settings.hud_keys_scale,
                     _ => return,
                 };
                 *wert = if groesser { *wert + HUD_SCALE_PCT_STEP } else { wert.saturating_sub(HUD_SCALE_PCT_STEP) }
@@ -26252,7 +27112,7 @@ impl App {
 
     fn color_axes(&self, t: ColorTarget) -> usize {
         match t {
-            ColorTarget::Theme(_) | ColorTarget::Hitbox(_) | ColorTarget::Sky | ColorTarget::Crosshair => 3,
+            ColorTarget::Theme(_) | ColorTarget::Hitbox(_) | ColorTarget::Sky | ColorTarget::Crosshair | ColorTarget::FireCrosshair => 3,
             ColorTarget::Shield(farbe) => ShieldColor::axes(self.settings.shield_mark(farbe)).len(),
             ColorTarget::BlockOutline | ColorTarget::DamageTint | ColorTarget::Crit | ColorTarget::HitboxKind(_) => 4,
         }
@@ -26271,6 +27131,7 @@ impl App {
             ColorTarget::DamageTint => "Schadens-Färbung".to_string(),
             ColorTarget::Crit => "Crit-Farbe".to_string(),
             ColorTarget::Crosshair => "Kreuz-Farbe".to_string(),
+            ColorTarget::FireCrosshair => "Kreuz beim Brennen".to_string(),
         }
     }
 
@@ -26294,6 +27155,7 @@ impl App {
                 [st.hue as f32, st.saturation as f32, st.value as f32, st.alpha as f32]
             }
             ColorTarget::Crosshair => [s.crosshair_hue as f32, s.crosshair_saturation as f32, s.crosshair_value as f32, 100.0],
+            ColorTarget::FireCrosshair => [s.fire_crosshair_hue as f32, s.fire_crosshair_saturation as f32, s.fire_crosshair_value as f32, 100.0],
             ColorTarget::Sky => [
                 s.sky_color_of(SkyColorAxis::Hue) as f32,
                 s.sky_color_of(SkyColorAxis::Saturation) as f32,
@@ -26340,6 +27202,9 @@ impl App {
             }
             ColorTarget::Crosshair => {
                 (set.crosshair_hue, set.crosshair_saturation, set.crosshair_value) = (h, u(1).min(100), u(2).min(100));
+            }
+            ColorTarget::FireCrosshair => {
+                (set.fire_crosshair_hue, set.fire_crosshair_saturation, set.fire_crosshair_value) = (h, u(1).min(100), u(2).min(100));
             }
             ColorTarget::Sky => {
                 *set.sky_color_mut(SkyColorAxis::Hue) = h;
@@ -26670,11 +27535,6 @@ impl App {
         match kind {
             InputKind::Token => self.submit_token_login(text, accounts::Source::Token),
             InputKind::RefreshToken => self.submit_refresh_token_login(text),
-            InputKind::ClientId => {
-                self.settings.azure_client_id = text.trim().to_string();
-                self.persist_settings();
-                self.push_log("Azure-Client-ID gespeichert. Jetzt 'Mit Microsoft anmelden'.");
-            }
             InputKind::ConfigName(edit) => {
                 // Vorher speichern: Duplizieren kopiert die Datei, und die soll den Stand von
                 // jetzt tragen.
@@ -26899,7 +27759,7 @@ impl App {
             if !world::entity::is_item_frame(e.entity_type) {
                 continue;
             }
-            let karte = e.item.and_then(|h| world::item_components::resolve(h.stack)).is_some_and(|s| s.map_id.is_some());
+            let karte = e.item.is_some_and(|h| h.map_id.is_some());
             if let Some(item) = e.item.filter(|_| !karte) {
                 gebraucht.push((item.model_id, item.potion_color));
             }
@@ -26978,7 +27838,7 @@ impl App {
         let mut gebraucht: Vec<(i32, bool)> = Vec::new();
         for (_, e) in self.entities.iter() {
             if world::entity::is_item_frame(e.entity_type) {
-                if let Some(id) = e.item.and_then(|h| world::item_components::resolve(h.stack)).and_then(|s| s.map_id) {
+                if let Some(id) = e.item.and_then(|h| h.map_id) {
                     gebraucht.push((id, true));
                 }
             }
@@ -27066,8 +27926,7 @@ impl App {
             .then(Affine::translation(schritt.map(|s| s * 0.46875)))
             .then(rotation_x_deg(x_rot))
             .then(Affine::rotation_y_deg(y_rot));
-        let stapel = e.item.and_then(|h| world::item_components::resolve(h.stack));
-        let karte = stapel.as_ref().and_then(|s| s.map_id);
+        let karte = e.item.and_then(|h| h.map_id);
         if !e.invisible {
             let modell = format!("block/{}{}", if leuchtend { "glow_item_frame" } else { "item_frame" }, if karte.is_some() { "_map" } else { "" });
             self.held_items.emit_model_raw(&modell, basis.then(Affine::translation([-0.5, -0.5, -0.5])), ENTITY_BRIGHTNESS, out);
@@ -27163,6 +28022,7 @@ impl App {
     fn emit_armor(
         &self,
         armor: &[Option<world::HeldItem>; 4],
+        models: &[world::Model; 4],
         pose: &world::Pose,
         base: world::entity_model::Affine,
         out: &mut Vec<world::BlockVertex>,
@@ -27174,7 +28034,7 @@ impl App {
             // -1.1875), translate(-0.5, 0, -0.5), dann das Kopfmodell wie in der Hand.
             if slot == world::armor::ArmorSlot::Head {
                 if let Some((tex, hut)) = self.held_skull_texture(&item) {
-                    let kopf = world::entity_model::part_transform(&self.player_wide, pose, base, "head");
+                    let kopf = world::entity_model::part_transform(&models[slot.index()], pose, base, "head");
                     if let Some(kopf) = kopf {
                         let b = kopf
                             .then(world::entity_model::Affine::scale([1.1875, -1.1875, -1.1875]))
@@ -27189,7 +28049,7 @@ impl App {
             // Stiefel gezeichnet (Vanilla prueft dasselbe: `component.slot() == slot`).
             let Some(asset) = world::armor::worn_asset(name, item.equip, slot) else { continue };
             let Some(equipment) = self.equipment_models.get(&asset).and_then(Option::as_ref) else { continue };
-            let model = &self.armor_models[slot.index()];
+            let model = &models[slot.index()];
             // Die Ebenen in Dateireihenfolge (EquipmentLayerRenderer.renderLayers). Eine
             // faerbbare Ebene nimmt die Farbe des Items, sonst ihre Ersatzfarbe; ist beides 0,
             // faellt sie weg -- Vanillas getColorForLayer.
@@ -27229,6 +28089,9 @@ impl App {
     // Material nennt fuer dieses Equipment-Asset (Pfad ohne Namespace, "iron") eine Ausnahme
     // (Eisen-Trim auf Eisenruestung -> iron_darker, sonst verschwaende er darin).
     fn trim_key(&self, item: &world::HeldItem, slot: world::armor::ArmorSlot, asset: &str) -> Option<String> {
+        if !self.settings.armor_trims {
+            return None;
+        }
         let (material, muster) = item.trim?;
         let (palette, ausnahmen) = self.trim_registries.materials.get(usize::try_from(material).ok()?)?;
         let muster = self.trim_registries.patterns.get(usize::try_from(muster).ok()?)?;
@@ -28183,7 +29046,7 @@ impl App {
                 feuer.push((rel(feet), physics::PLAYER_WIDTH, self.physics.current_height() as f32));
             }
             let own_armor = self.own_armor();
-            self.emit_armor(&own_armor, &pose, base, &mut out);
+            self.emit_armor(&own_armor, &self.armor_models, &pose, base, &mut out);
             let stich = if is_spear_item(own_main) { self.own_hand_swing(tick_progress) } else { 0.0 };
             self.emit_held_items(self.own_hand_items(), (block_right, block_left), (stich, true), model, &pose, base, &mut out);
             let own_cape = self.own_uuid.and_then(|uuid| self.cape_texture(&uuid));
@@ -28282,7 +29145,9 @@ impl App {
             // Unsichtbare SPIELER laufen trotzdem in ihren Zweig: Vanilla blendet nur den
             // Koerper (und den Umhang) aus, Ruestung, Elytra und gehaltene Items bleiben
             // sichtbar (die Feature-Renderer pruefen die Unsichtbarkeit nicht).
-            else if e.invisible && !is_player_like(e.entity_type) && !world::entity::is_item_frame(e.entity_type) {
+            else if world::entity_type_name(e.entity_type) == Some("armor_stand") {
+                self.emit_armor_stand(e, feet, body_yaw, &mut out, &mut haut);
+            } else if e.invisible && !is_player_like(e.entity_type) && !world::entity::is_item_frame(e.entity_type) {
                 // nichts zeichnen (ein unsichtbarer Rahmen zeigt seinen Inhalt weiter)
             } else if matches!(world::entity_type_name(e.entity_type), Some("interaction" | "marker" | "area_effect_cloud")) {
                 // Unsichtbar auch in Vanilla (kein Modell, nur Klickflaeche bzw. Datentraeger).
@@ -28356,7 +29221,7 @@ impl App {
                     world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut nur_umriss);
                     nur_umriss_farbe.resize(nur_umriss_farbe.len() + nur_umriss.len() - vorher, self.entity_glow_color(e));
                 }
-                self.emit_armor(&e.armor, &pose, base, &mut out);
+                self.emit_armor(&e.armor, &self.armor_models, &pose, base, &mut out);
                 // Gestochen wird mit der Haupthand -- an ihrem Arm.
                 let haupthand_schwingt = swing_right_arm != e.left_handed;
                 let stich = if e.main_hand_spear() && haupthand_schwingt { hand_swing } else { 0.0 };
@@ -28445,7 +29310,7 @@ impl App {
                         // nicht, die armor_model erwartet -- ein Ruestungshelm ueber einem
                         // Spinnenkopf waere falsch, nicht bloss unschoen.
                         if matches!(kind, ModelKind::Biped) {
-                            self.emit_armor(&e.armor, &pose, base, &mut out);
+                            self.emit_armor(&e.armor, &self.armor_models, &pose, base, &mut out);
                         }
                         // Auch Mobs tragen etwas (Zombie mit Schaufel, Skelett mit Bogen). Die
                         // Modelle ohne Arme (Spinne, Schleim, ...) haben schlicht kein
@@ -29374,8 +30239,8 @@ impl App {
         if boxes.is_empty() {
             return Vec::new();
         }
-        // Zufallsversatz (Gras, Blumen, Bambus, Tropfstein) wie beim Zielen (s. physics).
-        let (odx, odz) = world::block_name(state).map(|n| world::block_xz_offset(n, pos.0, pos.2)).unwrap_or((0.0, 0.0));
+        // Zufallsversatz des Umrisses (Blumen, Bambus, Tropfstein) wie beim Zielen (s. physics).
+        let (odx, odz) = world::block_name(state).map(|n| world::outline_xz_offset(n, pos.0, pos.2)).unwrap_or((0.0, 0.0));
         for b in &mut boxes {
             b.min[0] += odx;
             b.max[0] += odx;
@@ -29519,7 +30384,7 @@ impl App {
 
         let mut out = Vec::with_capacity(512);
         world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
-        self.emit_armor(&self.own_armor(), &pose, base, &mut out);
+        self.emit_armor(&self.own_armor(), &self.armor_models, &pose, base, &mut out);
         self.emit_held_items((main, off), blocking_arms(self.own_using_item_right_arm(), (main, off)), (0.0, true), model, &pose, base, &mut out);
         if let Some(cape_tex) = self.own_uuid.and_then(|uuid| self.cape_texture(&uuid)) {
             // Der Umhang haengt in Ruhe gerade nach unten -- alle drei Winkel null.
@@ -30100,6 +30965,9 @@ impl App {
         let mut rects = Vec::new();
         let mut hud_lines = Vec::new();
         let mut texts = Vec::new();
+        // Das Feuer vor den Augen zuerst: es liegt unter allem anderen (s. under_sprites).
+        self.build_fire_overlay(gpu, &mut sprites);
+        gpu.under_sprites.set(sprites.len());
         // Tearing-Test im Spiel, ganz hinten ueber der Welt. Nur im World-Modus: im Menue ruft
         // build_menu_ui diese Funktion selbst auf und hat die Balken schon gezeichnet.
         if self.mode == AppMode::World {
@@ -30111,8 +30979,9 @@ impl App {
         // noch kein Chunk da ist, sitzt man vor einer leeren Welt. Dieses Overlay zeigt bis
         // dahin die Connect-Phase (aus dem Log). Unabhaengig von show_hud -- es ist keine
         // Performance-Anzeige, sondern eine Zustandsmeldung.
-        if self.mode == AppMode::World && self.chunks_received == 0 {
-            self.build_connecting_overlay(gpu, &mut texts);
+        if self.connecting_view() {
+            self.build_connecting_overlay(gpu, &mut rects, &mut texts);
+            return (rects, hud_lines, texts, sprites, None);
         }
         // Was zur WELT gehoert (Namensschilder, Chat, Scoreboard, Hotbar, Totem-Anzeige),
         // verschwindet hinter einem Bildschirm-Overlay -- es wird gar nicht erst gebaut.
@@ -30152,6 +31021,12 @@ impl App {
                 self.build_hotbar(gpu, &mut sprites, &mut texts);
                 Self::end_text_area(gpu, &mut texts);
                 self.build_arrow_hud(gpu, &mut sprites, &mut texts);
+                self.begin_text_area(gpu, &mut texts, ShadowArea::Hotbar);
+                self.build_armor_hud(gpu, &mut sprites, &mut texts);
+                Self::end_text_area(gpu, &mut texts);
+                if self.settings.module_keystrokes && self.conn_status == ConnStatus::Connected {
+                    self.push_keystrokes(gpu, &mut rects, &mut texts);
+                }
                 self.build_toteming_hud(gpu, &mut rects, &mut hud_lines, &mut sprites, &mut texts);
                 self.build_gamemode_wheel(gpu, &mut hud_lines, &mut sprites, &mut texts);
                 // Gui.renderHotbarAndDecorations: Herzen, Ruestung, Hunger und Luft nur, wenn
@@ -30160,6 +31035,9 @@ impl App {
                 if !matches!(self.game_mode, GAME_MODE_CREATIVE | GAME_MODE_SPECTATOR) {
                     self.build_status_bars(gpu, &mut sprites, &mut texts);
                 }
+                self.begin_text_area(gpu, &mut texts, ShadowArea::Hotbar);
+                self.build_held_name(gpu, &mut rects, &mut texts);
+                Self::end_text_area(gpu, &mut texts);
                 self.build_boss_bars(gpu, &self.boss_bars, &mut sprites, &mut texts);
                 self.build_voice_hud(gpu, &mut texts);
                 if self.settings.show_effects_hud && self.conn_status == ConnStatus::Connected {
@@ -30233,14 +31111,21 @@ impl App {
     fn crosshair_visible(&self) -> bool {
         // Bei offener Chat-Eingabe ebenfalls unsichtbar: die Eingabezeile sitzt jetzt genau
         // an der Fadenkreuz-Position (s. chat_input_rect) -- beides gleichzeitig saehe aus,
-        // als stuende das Kreuz mitten im Text.
-        //
-        // Anders als in Vanilla auch als Zuschauer immer: damit zielt man den Klick-Teleport.
+        // als stuende das Kreuz mitten im Text. Als Zuschauer gar nicht.
         self.mode == AppMode::World
+            && self.game_mode != GAME_MODE_SPECTATOR
             && self.perspective.is_first_person()
             && !self.screen_overlay_open()
             && self.chat_input.is_none()
             && !self.hud_hidden
+            && !self.connecting_view()
+    }
+
+    // Verbindungsbildschirm: im Spiel, aber noch ohne einen Chunk vom Server. Dahinter steht
+    // die zuletzt gespeicherte Welt dieses Servers (s. lod_preview_saved) wie ein Standbild --
+    // abgedunkelt, ohne HUD, die Kamera fest; Esc bricht ab.
+    fn connecting_view(&self) -> bool {
+        self.mode == AppMode::World && self.chunks_received == 0
     }
 
     // --- Hotbar und Inventar ------------------------------------------------------------
@@ -30269,6 +31154,91 @@ impl App {
     // man die Hotbar im Kampf gern klein haelt, das Inventar zum Sortieren aber gross.
     fn inventory_scale(&self, screen: (f32, f32)) -> f32 {
         Self::gui_scale_of(self.settings.inventory_scale, screen)
+    }
+
+    // Gui.tick fuer den Itemnamen ueber der Hotbar: ein anderes Item oder ein anderer Name
+    // setzt ihn auf zwei Sekunden, sonst zaehlt er herunter. Anders als in Vanilla nur fuer
+    // Items, die einen Tooltip haetten (s. item_needs_tooltip) -- welches gewoehnliche Item man
+    // haelt, zeigt schon die Hotbar.
+    fn tick_held_name(&mut self) {
+        let schluessel = self
+            .own_hand_stack(protocol::packets::HAND_MAIN)
+            .filter(|s| !s.tooltip_hidden && item_shows_held_name(s))
+            .map(|s| {
+                let name: String = self.held_name_spans(s).iter().map(|t| t.text.as_str()).collect();
+                format!("{}:{name}", s.item_id)
+            });
+        match schluessel {
+            None => self.held_name_timer = 0,
+            Some(ref k) if self.held_name_last.as_ref() != Some(k) => self.held_name_timer = HELD_NAME_TICKS,
+            Some(_) => self.held_name_timer = (self.held_name_timer - 1).max(0),
+        }
+        self.held_name_last = schluessel;
+    }
+
+    // Der Name eines Items, wie ihn der Tooltip in seiner ersten Zeile zeigt (eigener Name,
+    // Seltenheitsfarbe, Buchtitel ...).
+    fn held_name_spans(&self, stack: &protocol::item::ItemStack) -> Vec<protocol::nbt::TextSpan> {
+        protocol::nbt::with_lang_area(protocol::nbt::LangArea::Items, || self.item_tooltip_lines_in_area(stack)).into_iter().next().unwrap_or_default()
+    }
+
+    // Gui.renderSelectedItemName: mittig ueber der Hotbar, im Kreativmodus tiefer (dort fehlen
+    // Herzen und Ruestung), in den letzten zehn Ticks ausblendend.
+    fn build_held_name(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        if self.held_name_timer <= 0 || self.conn_status != ConnStatus::Connected {
+            return;
+        }
+        let Some(stack) = self.own_hand_stack(protocol::packets::HAND_MAIN) else { return };
+        let spans = self.held_name_spans(stack);
+        if spans.is_empty() {
+            return;
+        }
+        let alpha = (self.held_name_timer as f32 * 256.0 / 10.0).min(255.0) / 255.0;
+        let g = self.held_name_scale(gpu);
+        let Rect { x, y, .. } = self.held_name_rect_for(gpu, span_row_width(gpu, &spans, g));
+        let vorher = texts.len();
+        push_styled_row(gpu, &spans, x, y, COLOR_WHITE, g, texts, &mut |r, mut c| {
+            c[3] *= alpha;
+            rects.push(UiRect { rect: r, color: c, ..UiRect::FLAT });
+        });
+        // Marker tragen ihren Code in einer negativen Deckkraft und bleiben unberuehrt.
+        for t in texts[vorher..].iter_mut().filter(|t| t.color[3] > 0.0) {
+            t.color[3] *= alpha;
+        }
+    }
+
+    // Schriftfaktor des Itemnamens: Hotbar-Skala mal eigener Prozentwert, auf Viertel gerundet
+    // (wie title_scale).
+    fn held_name_scale(&self, gpu: &GpuState) -> f32 {
+        let g = self.hotbar_scale(gpu.size()) * self.settings.hud_held_name_scale as f32 / 100.0;
+        (g * 4.0).round().max(1.0) / 4.0
+    }
+
+    // Wo ein Itemname der Breite `w` steht. Ungezogen an der Hotbar wie in Vanilla (mittig, 37
+    // ueber ihrer Oberkante, im Kreativmodus tiefer), sonst um die gespeicherte Mitte.
+    fn held_name_rect_for(&self, gpu: &GpuState, w: f32) -> Rect {
+        let (sw, sh) = gpu.size();
+        let h = gpu.text_height(self.held_name_scale(gpu));
+        let set = &self.settings;
+        let (x, y) = if set.hud_held_name_y < 0.0 {
+            let hotbar = self.hud_hotbar_rect(gpu);
+            let g = self.hotbar_scale(gpu.size());
+            let ueber = if matches!(self.game_mode, GAME_MODE_CREATIVE | GAME_MODE_SPECTATOR) { HELD_NAME_ABOVE_HOTBAR - 14.0 } else { HELD_NAME_ABOVE_HOTBAR };
+            (hotbar.x + (hotbar.w - w) / 2.0, hotbar.y - ueber * g)
+        } else {
+            (set.hud_held_name_x * sw - w / 2.0, set.hud_held_name_y * sh)
+        };
+        Rect { x: x.clamp(0.0, (sw - w).max(0.0)).round(), y: y.clamp(0.0, (sh - h).max(0.0)).round(), w, h }
+    }
+
+    // Griff im HUD-Editor: der Name des gehaltenen Items, ohne einen ein Platzhalter.
+    fn hud_held_name_rect(&self, gpu: &GpuState) -> Rect {
+        let g = self.held_name_scale(gpu);
+        let w = match self.own_hand_stack(protocol::packets::HAND_MAIN) {
+            Some(stack) => span_row_width(gpu, &self.held_name_spans(stack), g),
+            None => gpu.measure_text("Itemname", g),
+        };
+        self.held_name_rect_for(gpu, w.max(gpu.measure_text("Itemname", g)))
     }
 
     fn hotbar_scale(&self, screen: (f32, f32)) -> f32 {
@@ -31192,7 +32162,10 @@ impl App {
         // Timer: waehrend man spannt oder isst, gehoert der Kreis ihm -- auch ueber dem
         // Schild-Cooldown (gewuenscht).
         let timer = self.use_timer_ring();
-        if let Some(anteil) = timer.filter(|a| *a > 0.0) {
+        // Der Kreis gehoert zum Fadenkreuz: bei offenem Chat oder einem anderen Fenster
+        // verschwindet er mit ihm.
+        let ring_frei = self.chat_input.is_none() && !self.screen_overlay_open();
+        if let Some(anteil) = timer.filter(|a| *a > 0.0 && ring_frei) {
             extras.ring = Some(((set.hud_crosshair_x, set.hud_crosshair_y), anteil));
         }
         if let Some((rest, anteil)) = self.own_shield_cooldown() {
@@ -31200,7 +32173,9 @@ impl App {
             } else if set.shield_cd_self_mode == 1 {
                 // Der Kreis FUELLT sich: leer im Moment des Bruchs, voll, wenn der Schild wieder
                 // geladen ist (gewuenscht) -- `anteil` ist der verbleibende Rest, also umgedreht.
-                extras.ring = Some(((set.hud_crosshair_x, set.hud_crosshair_y), 1.0 - anteil));
+                if ring_frei {
+                    extras.ring = Some(((set.hud_crosshair_x, set.hud_crosshair_y), 1.0 - anteil));
+                }
             } else {
                 let font = set.effective_font(ShadowArea::ShieldCountdown);
                 extras.texts.push(CrosshairText {
@@ -31909,14 +32884,13 @@ impl App {
         let innen = w - 2.0 * pad;
         let mut el = Vec::new();
         let mut y = 20.0 + gpu.text_height(UI_SCALE_NORMAL) + 12.0 + gpu.text_height(UI_SCALE_SMALL) + 24.0;
-        // Drei Gruppen mit eigener Ueberschrift, leere fallen weg: echte Konten (erneuern sich
-        // selbst), eingefuegte Tokens (laufen ab) und die aus Prism (Tokens, die Prism
-        // erneuert und wir bei jedem Oeffnen neu lesen). Ein Klick meldet an, ein Rechtsklick
+        // Zwei Gruppen mit eigener Ueberschrift, leere fallen weg: echte Konten (erneuern sich
+        // selbst) und eingefuegte Tokens (laufen ab). Ein Klick meldet an, ein Rechtsklick
         // oeffnet "Ausloggen"/"Account vergessen".
         let ordnung = self.account_order();
         let fremd = self.credentials.as_ref().filter(|c| self.accounts.find(&c.profile_id).is_none());
         let mut erste = true;
-        for (quelle, titel) in [(accounts::Source::Microsoft, "KONTEN"), (accounts::Source::Token, "TOKENS"), (accounts::Source::Prism, "PRISM-KONTEN")] {
+        for (quelle, titel) in [(accounts::Source::Microsoft, "KONTEN"), (accounts::Source::Token, "TOKENS")] {
             let zeilen: Vec<usize> = ordnung.iter().copied().filter(|&i| self.accounts.list[i].source == quelle).collect();
             let konten = quelle == accounts::Source::Microsoft;
             // Ohne jedes Konto steht "Konten" mit dem Hinweis da.
@@ -31942,25 +32916,21 @@ impl App {
                 y += 52.0;
             }
             if konten && leer {
-                el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 40.0 }, action: None, label: "Noch kein Konto. Mit Microsoft anmelden oder aus Prism importieren.".into(), kind: AccKind::Hint });
+                el.push(AccElem { rect: Rect { x: pad, y, w: innen, h: 40.0 }, action: None, label: "Noch kein Konto. Mit Microsoft anmelden.".into(), kind: AccKind::Hint });
                 y += 44.0;
             }
         }
         y += 16.0;
-        // Anmelden: Microsoft neben seiner Client-ID, die beiden Token-Wege nebeneinander,
-        // darunter Prism.
+        // Anmelden: Microsoft ueber die ganze Breite, darunter die beiden Token-Wege nebeneinander.
         let halb = (innen - 12.0) / 2.0;
-        let knopf = |x: f32, y: f32, action, label: &str, kind| AccElem { rect: Rect { x, y, w: halb, h: 40.0 }, action: Some(action), label: label.into(), kind };
-        el.push(knopf(pad, y, ButtonAction::MicrosoftLogin, "Mit Microsoft anmelden", AccKind::Primary));
-        el.push(knopf(pad + halb + 12.0, y, ButtonAction::OpenInputField(InputKind::ClientId), "Client-ID", AccKind::Button));
+        let knopf = |x: f32, y: f32, w: f32, action, label: &str, kind| AccElem { rect: Rect { x, y, w, h: 40.0 }, action: Some(action), label: label.into(), kind };
+        el.push(knopf(pad, y, innen, ButtonAction::MicrosoftLogin, "Mit Microsoft anmelden", AccKind::Primary));
         y += 48.0;
-        el.push(knopf(pad, y, ButtonAction::OpenInputField(InputKind::RefreshToken), "Refresh-Token", AccKind::Button));
-        el.push(knopf(pad + halb + 12.0, y, ButtonAction::OpenInputField(InputKind::Token), "Token eingeben", AccKind::Button));
+        el.push(knopf(pad, y, halb, ButtonAction::OpenInputField(InputKind::RefreshToken), "Refresh-Token", AccKind::Button));
+        el.push(knopf(pad + halb + 12.0, y, halb, ButtonAction::OpenInputField(InputKind::Token), "Token eingeben", AccKind::Button));
         y += 48.0;
-        el.push(knopf(pad, y, ButtonAction::ImportLauncherAccounts, "Aus Prism importieren", AccKind::Button));
-        y += 48.0;
-        // Offenes Eingabefeld (Token, Refresh-Token oder Client-ID) mit OK.
-        if matches!(self.input_field, Some((InputKind::Token | InputKind::RefreshToken | InputKind::ClientId, _))) {
+        // Offenes Eingabefeld (Token oder Refresh-Token) mit OK.
+        if matches!(self.input_field, Some((InputKind::Token | InputKind::RefreshToken, _))) {
             y += gpu.text_height(TOPBAR_SUB_SCALE) + 8.0;
             el.push(AccElem { rect: Rect { x: pad, y, w: innen - 100.0, h: 40.0 }, action: None, label: String::new(), kind: AccKind::Field });
             el.push(AccElem { rect: Rect { x: pad + innen - 88.0, y, w: 88.0, h: 40.0 }, action: Some(ButtonAction::SubmitInputField), label: "OK".into(), kind: AccKind::Primary });
@@ -32028,8 +32998,7 @@ impl App {
                     let Some((kind, wert)) = &self.input_field else { continue };
                     let label = match kind {
                         InputKind::Token => "MINECRAFT-TOKEN (STRG+V)",
-                        InputKind::RefreshToken => "MICROSOFT-REFRESH-TOKEN (STRG+V)",
-                        _ => "AZURE-CLIENT-ID",
+                        _ => "MICROSOFT-REFRESH-TOKEN (STRG+V)",
                     };
                     texts.push(UiText { text: label.into(), x: e.rect.x, y: e.rect.y - gpu.text_height(TOPBAR_SUB_SCALE) - 8.0, color: theme::text_3(), scale: TOPBAR_SUB_SCALE });
                     rects.push(UiRect::framed(e.rect, g(Slot::SurfaceSunken), 6.0, 1.0, g(Slot::Accent)));
@@ -32726,7 +33695,7 @@ impl App {
                 break;
             }
             let karte = Rect { x: karte_x, y: ty, w: karte_w, h };
-            let akzent = art.accent().map(world::sky::srgb_to_linear);
+            let akzent = notification_accent(*art);
             rects.push(UiRect::framed(karte, g(Slot::Surface1), 6.0, 1.0, g(Slot::Border1)));
             rects.push(UiRect::rounded(Rect { x: karte_x + innen - 4.0, y: ty + innen, w: 3.0, h: h - 2.0 * innen }, [akzent[0], akzent[1], akzent[2], 1.0], 1.5));
             let mut zy = ty + innen;
@@ -32955,22 +33924,8 @@ impl App {
             }
             ModuleId::Arrows => {
                 let zehntel = |t: u32| format!("{}.{} s", t / 10, t % 10);
+                // Wie die Anzeige aussieht, stellt ihr Fenster im HUD-Editor ein.
                 rows.push(ModuleRow::Toggle { label: "Anzeige".to_string(), action: ButtonAction::ToggleArrowIndicator, on: set.arrow_indicator });
-                rows.push(ModuleRow::Toggle {
-                    label: "  Nur Zahl".to_string(),
-                    action: ButtonAction::ToggleArrowNumberOnly,
-                    on: set.arrow_number_only,
-                });
-                rows.push(ModuleRow::Stepper {
-                    label: "  Deckkraft".to_string(),
-                    prev: ButtonAction::ArrowOpacityPrev,
-                    next: ButtonAction::ArrowOpacityNext,
-                    text: format!("{} %", set.arrow_opacity),
-                    can_prev: set.arrow_opacity > ARROW_OPACITY_MIN,
-                    can_next: set.arrow_opacity < 100,
-                    slider: Some((set.arrow_opacity as f64, ARROW_OPACITY_MIN as f64, 100.0)),
-                });
-                rows.push(pick_two("  Zahl-Farbe", ButtonAction::CycleArrowTextStyle, HUD_TEXT_STYLE_NAMES, set.arrow_text_style as usize));
                 rows.push(ModuleRow::Choice {
                     label: "Ohne Pfeile".to_string(),
                     action: ButtonAction::CycleArrowEmptyFeedback,
@@ -32997,12 +33952,19 @@ impl App {
                     slider: Some((set.trail_fade_tenths as f64, 0.0, TRAIL_FADE_MAX_TENTHS as f64)),
                 });
             }
+            ModuleId::ArmorHud => {
+                rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Armor), text: "Im HUD-Editor".to_string() });
+            }
+            ModuleId::Keystrokes => {
+                rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Keystrokes), text: "Im HUD-Editor".to_string() });
+            }
             ModuleId::Shields => {
+                // Wie Countdown bzw. Kreis aussehen, stellt der HUD-Editor ein: der Countdown
+                // hat dort ein eigenes Fenster, der Kreis gehoert zum Fadenkreuz.
                 rows.push(ModuleRow::Toggle { label: "Cooldown: eigener".to_string(), action: ButtonAction::ToggleShieldCdSelf, on: set.shield_cd_self });
                 rows.push(pick_two("  Anzeige", ButtonAction::CycleShieldSelfMode, SHIELD_SELF_MODE_NAMES, set.shield_cd_self_mode as usize));
-                if set.shield_cd_self_mode == 0 {
-                    rows.push(pick_two("  Farbe", ButtonAction::CycleShieldCdTextStyle, HUD_TEXT_STYLE_NAMES, set.shield_cd_text_style as usize));
-                }
+                let ziel = if set.shield_cd_self_mode == 0 { HudElement::ShieldCooldown } else { HudElement::Crosshair };
+                rows.push(ModuleRow::Choice { label: "  Aussehen".to_string(), action: ButtonAction::OpenHudConfig(ziel), text: "Im HUD-Editor".to_string() });
                 for (farbe, label, action, on) in [
                     (ShieldColor::Cooldown, "Cooldown: Spieler", ButtonAction::ToggleShieldCdPlayers, set.shield_cd_players),
                     (ShieldColor::Hold, "Hochhalten: Spieler", ButtonAction::ToggleShieldHoldPlayers, set.shield_hold_players),
@@ -34614,6 +35576,8 @@ impl App {
                 }
             }
             ButtonAction::ToggleModuleArrows => self.settings.module_arrows = !self.settings.module_arrows,
+            ButtonAction::ToggleModuleArmorHud => self.settings.module_armor_hud = !self.settings.module_armor_hud,
+            ButtonAction::ToggleModuleKeystrokes => self.settings.module_keystrokes = !self.settings.module_keystrokes,
             ButtonAction::ToggleArrowIndicator => self.settings.arrow_indicator = !self.settings.arrow_indicator,
             ButtonAction::ToggleArrowNumberOnly => self.settings.arrow_number_only = !self.settings.arrow_number_only,
             ButtonAction::ToggleArrowWhite => self.settings.arrow_white = !self.settings.arrow_white,
@@ -34748,6 +35712,20 @@ impl App {
             ButtonAction::ToggleBlockOutlineHideMining => self.settings.block_outline_hide_mining = !self.settings.block_outline_hide_mining,
             ButtonAction::SetBlockOutlineComplementary(an) => self.settings.block_outline_complementary = an,
             ButtonAction::CloseModuleMenu => self.module_menu_open = false,
+            ButtonAction::OpenHudConfig(element) => {
+                // Aus dem Spiel (Modul-Menue ueber der Welt) erst ins Menue, wie mit Esc.
+                if self.mode == AppMode::World {
+                    self.module_menu_open = false;
+                    self.mode = AppMode::Menu;
+                    self.screen = MenuScreen::Main;
+                    self.clear_controls();
+                }
+                self.hud_editor_return = self.screen;
+                self.screen = MenuScreen::HudEditor;
+                self.hud_selected = Some(element);
+                self.hud_drag_offset = None;
+                self.crosshair_painter = None;
+            }
             _ => {}
         }
     }
@@ -36119,10 +37097,154 @@ impl App {
         (seit * std::f32::consts::TAU * 12.0).sin() * 3.0 * px * abklingen
     }
 
-    // Wo die Pfeil-Anzeige sitzt: ein Slot-grosses Quadrat um die gespeicherte Mitte.
+    // Groesse einer HUD-Einheit der Keystrokes in Bildschirmpixeln.
+    fn keys_unit(&self, gpu: &GpuState) -> f32 {
+        let u = self.hud_scale(gpu.size()) * self.settings.hud_keys_scale as f32 / 100.0;
+        (u * 4.0).round().max(2.0) / 4.0
+    }
+
+    fn hud_keys_rect(&self, gpu: &GpuState) -> Rect {
+        let (sw, sh) = gpu.size();
+        let u = self.keys_unit(gpu);
+        let (w, h) = ((keystrokes::WIDTH * u).round(), (keystrokes::HEIGHT * u).round());
+        let x = (self.settings.hud_keys_x * sw).clamp(0.0, (sw - w).max(0.0)).round();
+        let y = (self.settings.hud_keys_y * sh).clamp(0.0, (sh - h).max(0.0)).round();
+        Rect { x, y, w, h }
+    }
+
+    // Die Keystrokes: jede Taste eine abgerundete Flaeche in der Panel-Farbe des Themes mit
+    // ihrer Belegung darauf, gedrueckt in der Akzentfarbe. Gedrueckt heisst PHYSISCH unten
+    // (binds_down) -- eine umgeschaltete Sprint- oder Schleichtaste leuchtet also nicht dauernd.
+    // Beim Tippen im Chat und unter Fenstern bleibt alles dunkel.
+    fn push_keystrokes(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        let rect = self.hud_keys_rect(gpu);
+        let u = self.keys_unit(gpu);
+        let kb = self.settings.keybinds;
+        let eingabe_frei = self.mode == AppMode::World && self.chat_input.is_none() && !self.screen_overlay_open();
+        let flaeche = theme::get(theme::Slot::BgPanel);
+        let alpha = self.settings.keys_opacity as f32 / 100.0;
+        let scale = (u * 4.0).round().max(4.0) / 4.0;
+        for (taste, [x, y, w, h]) in keystrokes::layout() {
+            let aktion = match taste {
+                keystrokes::Key::Forward => KeyBindAction::Forward,
+                keystrokes::Key::Left => KeyBindAction::Left,
+                keystrokes::Key::Backward => KeyBindAction::Backward,
+                keystrokes::Key::Right => KeyBindAction::Right,
+                keystrokes::Key::Jump => KeyBindAction::Jump,
+                keystrokes::Key::Attack => KeyBindAction::Attack,
+                keystrokes::Key::Use => KeyBindAction::Use,
+            };
+            let unten = eingabe_frei && kb.binds(aktion).any(|b| self.binds_down.contains(&b));
+            let r = Rect { x: (rect.x + x * u).round(), y: (rect.y + y * u).round(), w: (w * u).round(), h: (h * u).round() };
+            let (grund, schrift) = if unten {
+                (theme::get(theme::Slot::Accent), theme::get(theme::Slot::TextOnAccent))
+            } else {
+                ([flaeche[0], flaeche[1], flaeche[2], flaeche[3] * alpha], theme::text())
+            };
+            rects.push(UiRect { rect: r, color: grund, radius: 2.0 * u, ..UiRect::FLAT });
+            if taste == keystrokes::Key::Jump {
+                // Die Leertaste traegt statt eines Namens einen Strich.
+                let (sw, sh) = ((8.0 * u).round(), u.round().max(1.0));
+                rects.push(UiRect { rect: Rect { x: (r.x + (r.w - sw) / 2.0).round(), y: (r.y + (r.h - sh) / 2.0).round(), w: sw, h: sh }, color: schrift, ..UiRect::FLAT });
+                continue;
+            }
+            let text = match kb.binds(aktion).next() {
+                Some(Bind::Mouse(BindMouse::Left)) => "LMB".to_string(),
+                Some(Bind::Mouse(BindMouse::Right)) => "RMB".to_string(),
+                Some(bind) => bind_display(bind),
+                None => "-".to_string(),
+            };
+            // Lange Namen so weit verkleinern, dass sie auf die Taste passen.
+            let mut g = scale;
+            while g > 1.0 && gpu.measure_text(&text, g) > r.w - 2.0 * u {
+                g -= 0.25;
+            }
+            texts.push(gpu.centered_text(r, text, schrift, g));
+        }
+    }
+
+    // Ruestungs-HUD im Spiel: nur mit Verbindung, nicht als Zuschauer und nur, wenn man
+    // ueberhaupt etwas traegt.
+    fn build_armor_hud(&self, gpu: &GpuState, sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
+        if !self.settings.module_armor_hud || self.conn_status != ConnStatus::Connected || self.game_mode == GAME_MODE_SPECTATOR {
+            return;
+        }
+        let teile = self.worn_armor();
+        if teile.iter().all(Option::is_none) {
+            return;
+        }
+        self.push_armor_hud(gpu, teile, sprites, texts);
+    }
+
+    // Helm, Brust, Hose und Schuhe aus dem eigenen Inventar, None fuer leere Slots.
+    fn worn_armor(&self) -> [Option<&protocol::item::ItemStack>; 4] {
+        std::array::from_fn(|i| {
+            self.inventory.player.get(inventory::PLAYER_ARMOR_START + i).and_then(|s| s.as_ref()).filter(|s| s.item_id != 0 && s.count > 0)
+        })
+    }
+
+    // Masse des Ruestungs-HUD: Kantenlaenge eines Item-Bilds, ein Bildpixel, Textfaktor der Zahl,
+    // Abstand zwischen zwei Bildern und der Rand, um den die Zahl ("000") ueber ein Bild
+    // hinausragt (links, oben, rechts, unten). Gemessen in der Schrift des Bereichs
+    // Ruestungs-HUD.
+    fn armor_hud_metrics(&self, gpu: &GpuState) -> ArmorHudMetrics {
+        let set = &self.settings;
+        let _schrift = self.area_font_scope(gpu, ShadowArea::ArmorHud);
+        let size = (16.0 * self.hud_scale(gpu.size()) * set.hud_armor_scale as f32 / 100.0).round().max(8.0);
+        let px = (size / 16.0).round().max(1.0);
+        let text_scale = (px * set.armor_hud_number_scale as f32 / 100.0).max(0.5);
+        let text = (gpu.measure_text("000", text_scale), gpu.text_height(text_scale));
+        let (nx, ny) = armor_hud::number_origin((0.0, 0.0), size, px, (set.armor_hud_number_x, set.armor_hud_number_y), text);
+        let rand = [(-nx).max(0.0), (-ny).max(0.0), (nx + text.0 - size).max(0.0), (ny + text.1 - size).max(0.0)].map(f32::ceil);
+        ArmorHudMetrics { size, px, text_scale, gap: set.armor_hud_gap as f32 * px, rand }
+    }
+
+    // Die vier Bilder samt Rand fuer die Zahl, ab der gespeicherten oberen linken Ecke -- gleich
+    // gross, egal wie viele Teile man traegt, damit das Element beim An- und Ausziehen nicht
+    // springt.
+    fn hud_armor_rect(&self, gpu: &GpuState) -> Rect {
+        let (sw, sh) = gpu.size();
+        let m = self.armor_hud_metrics(gpu);
+        let reihe = (4.0 * m.size + 3.0 * m.gap).max(m.size);
+        let (w, h) = if armor_hud::is_vertical(self.settings.armor_hud_layout) { (m.size, reihe) } else { (reihe, m.size) };
+        let (w, h) = (w + m.rand[0] + m.rand[2], h + m.rand[1] + m.rand[3]);
+        let x = (self.settings.hud_armor_x * sw).clamp(0.0, (sw - w).max(0.0)).round();
+        let y = (self.settings.hud_armor_y * sh).clamp(0.0, (sh - h).max(0.0)).round();
+        Rect { x, y, w, h }
+    }
+
+    // Die Teile an ihren Plaetzen (s. armor_hud::cells), je mit der Haltbarkeit an der
+    // eingestellten Stelle -- im Spiel und als Vorschau im HUD-Editor.
+    fn push_armor_hud(&self, gpu: &GpuState, teile: [Option<&protocol::item::ItemStack>; 4], sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
+        let set = &self.settings;
+        let rect = self.hud_armor_rect(gpu);
+        let m = self.armor_hud_metrics(gpu);
+        let schritt = m.size + m.gap;
+        let hochkant = armor_hud::is_vertical(set.armor_hud_layout);
+        let ans_ende = if hochkant { set.armor_hud_sort_vertical == 1 } else { set.armor_hud_sort_flat == 1 };
+        let zellen = armor_hud::cells(teile.map(|t| t.is_some()), set.armor_hud_layout, ans_ende);
+        let (x0, y0) = (rect.x + m.rand[0], rect.y + m.rand[1]);
+        self.begin_text_area(gpu, texts, ShadowArea::ArmorHud);
+        let text_h = gpu.text_height(m.text_scale);
+        for (stack, zelle) in teile.into_iter().zip(zellen) {
+            let (Some(stack), Some(zelle)) = (stack, zelle) else { continue };
+            let bild = if hochkant { (x0, y0 + zelle as f32 * schritt) } else { (x0 + zelle as f32 * schritt, y0) };
+            self.push_item_icon_only(sprites, stack, bild.0.round(), bild.1.round(), m.size);
+            let Some(rest) = world::item_registry::item_name(stack.item_id).and_then(|name| durability_points(stack, name)) else { continue };
+            let text = rest.to_string();
+            let tw = gpu.measure_text(&text, m.text_scale);
+            let (x, y) = armor_hud::number_origin(bild, m.size, m.px, (set.armor_hud_number_x, set.armor_hud_number_y), (tw, text_h));
+            let color = if rest < armor_hud::LOW_DURABILITY { COLOR_ARMOR_LOW } else { COLOR_WHITE };
+            texts.push(UiText { text, x: x.round(), y: y.round(), color, scale: m.text_scale });
+        }
+        Self::end_text_area(gpu, texts);
+    }
+
+    // Wo die Pfeil-Anzeige sitzt: ein Quadrat um die gespeicherte Mitte, so gross wie ein
+    // Hotbar-Slot mal der eigenen Groesse aus dem HUD-Editor.
     fn hud_arrows_rect(&self, gpu: &GpuState) -> Rect {
         let (sw, sh) = gpu.size();
-        let size = 16.0 * self.hud_scale(gpu.size());
+        let size = (16.0 * self.hud_scale(gpu.size()) * self.settings.hud_arrows_scale as f32 / 100.0).round();
         let cx = self.settings.hud_arrows_x * sw;
         let cy = self.settings.hud_arrows_y * sh;
         Rect { x: (cx - size / 2.0).round(), y: (cy - size / 2.0).round(), w: size, h: size }
@@ -38621,9 +39743,7 @@ impl App {
         if let Some((title, lines)) = self.scoreboard_lines() {
             self.begin_text_area(gpu, texts, ShadowArea::Scoreboard);
             let rect = self.hud_scoreboard_rect(gpu);
-            let line_h = gpu.text_height(UI_SCALE_SMALL) + 3.0;
-            let title_h = gpu.text_height(UI_SCALE_SMALL) + 6.0;
-            let pad = 8.0;
+            let (scale, line_h, title_h, pad) = self.scoreboard_metrics(gpu);
             rects.push(UiRect { rect, color: COLOR_SCOREBOARD_BG, ..UiRect::FLAT });
             // Ein UiText je Abschnitt (eine Zeile kennt nur eine Farbe) -- dieselbe
             // Aufteilung wie im Chat.
@@ -38632,12 +39752,12 @@ impl App {
             // was hinter ihm rutschen wuerde.
             let voll = |spans: &[protocol::nbt::TextSpan]| spans.iter().map(|s| s.text.as_str()).collect::<String>();
             gpu.observe_numbers(std::iter::once(voll(&title)).chain(lines.iter().map(|z| voll(z))).collect::<Vec<_>>().iter().map(|s| s.as_str()));
-            let tw = stable_row_width(gpu, &title, UI_SCALE_SMALL);
+            let tw = stable_row_width(gpu, &title, scale);
             let tx = (rect.x + (rect.w - tw) / 2.0).round();
-            push_stable_spans(gpu, &title, tx, (rect.y + 3.0).round(), COLOR_HUD, UI_SCALE_SMALL, texts, rects);
+            push_stable_spans(gpu, &title, tx, (rect.y + (title_h - gpu.text_height(scale)) / 2.0).round(), COLOR_HUD, scale, texts, rects);
             let mut y = rect.y + title_h;
             for zeile in lines {
-                push_stable_spans(gpu, &zeile, (rect.x + pad).round(), y.round(), COLOR_WHITE, UI_SCALE_SMALL, texts, rects);
+                push_stable_spans(gpu, &zeile, (rect.x + pad).round(), y.round(), COLOR_WHITE, scale, texts, rects);
                 y += line_h;
             }
             Self::end_text_area(gpu, texts);
@@ -39716,15 +40836,19 @@ impl App {
 
     // Verbindungs-Overlay (World-Modus, bevor der erste Chunk da ist): Titel + Status +
     // die letzten Log-Zeilen, mittig, als Phasen-Anzeige. Verschwindet mit dem ersten Chunk.
-    fn build_connecting_overlay(&self, gpu: &GpuState, texts: &mut Vec<UiText>) {
+    fn build_connecting_overlay(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         let (sw, sh) = gpu.size();
+        // Abgedunkelt wie die Welt hinter dem Pausemenue.
+        let dunkel = self.settings.menu_backdrop_opacity.min(100) as f32 / 100.0;
+        rects.push(UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: [0.0, 0.0, 0.0, dunkel], ..UiRect::FLAT });
         let top = (sh * 0.32).round();
-        texts.push(gpu.centered_text(
-            Rect { x: 0.0, y: top, w: sw, h: 44.0 },
-            format!("Verbinde mit {} ...", self.server_address),
-            theme::text(),
-            UI_SCALE_NORMAL,
-        ));
+        // Ueberschrift wie bei LiquidBounce: wohin die Verbindung wirklich geht (SRV-Ziel, IP,
+        // Port). Bis die TCP-Verbindung steht, die eingegebene Adresse.
+        let titel = match &self.conn_route {
+            Some(ziel) => ziel.clone(),
+            None => format!("Verbinde mit {} ...", self.server_address),
+        };
+        texts.push(gpu.centered_text(Rect { x: 0.0, y: top, w: sw, h: 44.0 }, titel, theme::text(), UI_SCALE_NORMAL));
         texts.push(gpu.centered_text(
             Rect { x: 0.0, y: top + 48.0, w: sw, h: 28.0 },
             format!("Status: {}", self.conn_status.label()),
@@ -39739,10 +40863,16 @@ impl App {
             texts.push(gpu.centered_text(
                 Rect { x: 0.0, y: base_y + row as f32 * LOG_LINE_HEIGHT, w: sw, h: LOG_LINE_HEIGHT },
                 line.clone(),
-                [0.7, 0.7, 0.7, 1.0],
+                theme::text(),
                 UI_SCALE_SMALL,
             ));
         }
+        texts.push(gpu.centered_text(
+            Rect { x: 0.0, y: base_y + OVERLAY_LOG_LINES as f32 * LOG_LINE_HEIGHT + 24.0, w: sw, h: LOG_LINE_HEIGHT },
+            "Esc: abbrechen".to_string(),
+            theme::text_2(),
+            UI_SCALE_SMALL,
+        ));
     }
 
     // Tearing-Test-Balken (s. Settings::show_tearing_test), falls eingeschaltet. Im Menue UND im
@@ -39970,6 +41100,10 @@ impl App {
             MenuScreen::SettingsSkin => self.build_settings_skin_tab(gpu, rects, texts, sprites),
             MenuScreen::SettingsControls => self.build_settings_controls_tab(gpu, rects, texts),
             MenuScreen::SettingsInventory => self.build_settings_inventory_tab(gpu, rects, texts),
+            MenuScreen::SettingsMisc => {
+                let y = (settings_row_y(0) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                texts.push(UiText { text: "No UI close S2C".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+            }
             MenuScreen::SettingsFont => self.build_settings_font_tab(gpu, rects, texts),
             MenuScreen::SettingsDesign => self.build_settings_design_tab(gpu, rects, texts),
             MenuScreen::SettingsLanguage => self.build_settings_language_tab(gpu, texts),
@@ -40260,6 +41394,8 @@ impl App {
                     Some(PLAYER_LIST_SCALE_TOOLTIP)
                 } else if settings_row_hover_rect(BLOCK_ROTATION_ROW).contains(cx, cy) {
                     Some(BLOCK_ROTATION_TOOLTIP)
+                } else if settings_row_hover_rect(ARMOR_TRIMS_ROW).contains(cx, cy) {
+                    Some(ARMOR_TRIMS_TOOLTIP)
                 } else if settings_row_hover_rect(RENDER_DISTANCE_ROW).contains(cx, cy) {
                     Some(RENDER_DISTANCE_TOOLTIP)
                 } else if settings_row_hover_rect(ENTITY_DISTANCE_ROW).contains(cx, cy) {
@@ -40297,6 +41433,9 @@ impl App {
             }
             // Ohne Erklaerungsrand (s. side_strip_w).
             MenuScreen::SettingsDesign => None,
+            MenuScreen::SettingsMisc => settings_row_hover_rect(0).contains(cx, cy).then_some(
+                "Schließt der Server ein offenes Fenster (Truhe, Inventar, Schild-Editor ...), bleibt es trotzdem offen. Kein Vanilla-Verhalten: Klicks in einen Container, den der Server schon geschlossen hat, nimmt er nicht mehr an.",
+            ),
             MenuScreen::SettingsLanguage => {
                 if settings_row_hover_rect(LATIN_MACRONS_ROW).contains(cx, cy) {
                     Some(LATIN_MACRONS_TOOLTIP)
@@ -40656,8 +41795,54 @@ impl App {
                     texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 }
             }
-            // Scoreboard & Co. haben keine eigenen Werte.
-            HudElement::Perf | HudElement::Scoreboard | HudElement::ShieldCooldown | HudElement::Arrows => {}
+            HudElement::Scoreboard | HudElement::HeldName => {
+                texts.push(UiText { text: "Größe".to_string(), x: HUD_CONFIG_LABEL_X, y: row0_y, color: theme::text(), scale: UI_SCALE_SMALL });
+                let value_rect = stepper_value_rect(0);
+                rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                let pct = if element == HudElement::Scoreboard { self.settings.hud_scoreboard_scale } else { self.settings.hud_held_name_scale };
+                texts.push(gpu.centered_text(value_rect, format!("{pct} %"), theme::text(), UI_SCALE_SMALL));
+            }
+            HudElement::ShieldCooldown | HudElement::Arrows => {
+                let zeilen: &[&str] = if element == HudElement::Arrows {
+                    &["Größe", "Nur Zahl", "Deckkraft", "Zahl-Farbe"]
+                } else {
+                    &["Farbe"]
+                };
+                for (row, text) in zeilen.iter().enumerate() {
+                    let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
+                if element == HudElement::Arrows {
+                    for (row, wert) in [(0, self.settings.hud_arrows_scale), (2, self.settings.arrow_opacity)] {
+                        let value_rect = stepper_value_rect(row);
+                        rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                        texts.push(gpu.centered_text(value_rect, format!("{wert} %"), theme::text(), UI_SCALE_SMALL));
+                    }
+                }
+            }
+            HudElement::Keystrokes => {
+                for (row, (text, wert)) in [("Größe", self.settings.hud_keys_scale), ("Deckkraft", self.settings.keys_opacity)].into_iter().enumerate() {
+                    let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                    let value_rect = stepper_value_rect(row);
+                    rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                    texts.push(gpu.centered_text(value_rect, format!("{wert} %"), theme::text(), UI_SCALE_SMALL));
+                }
+            }
+            HudElement::Armor => {
+                for (row, text) in ["Größe", "Ausrichtung", "Rücken nach", "Abstand", "Zahl-Größe", "Zahl X", "Zahl Y"].into_iter().enumerate() {
+                    let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
+                let set = &self.settings;
+                for (row, wert) in [(0, format!("{} %", set.hud_armor_scale)), (3, format!("{} px", set.armor_hud_gap)), (4, format!("{} %", set.armor_hud_number_scale)), (5, format!("{} px", set.armor_hud_number_x)), (6, format!("{} px", set.armor_hud_number_y))] {
+                    let value_rect = stepper_value_rect(row);
+                    rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                    texts.push(gpu.centered_text(value_rect, wert, theme::text(), UI_SCALE_SMALL));
+                }
+            }
+            // Die Performance-Anzeige hat keine eigenen Werte.
+            HudElement::Perf => {}
         }
     }
 
@@ -40731,13 +41916,14 @@ impl App {
                 .map(|(t, _)| t.iter().map(|s| s.text.as_str()).collect::<String>())
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| "Scoreboard".to_string());
-            let tw = gpu.measure_text(&title, UI_SCALE_SMALL);
+            let (scale, _, title_h, _) = self.scoreboard_metrics(gpu);
+            let tw = gpu.measure_text(&title, scale);
             texts.push(UiText {
                 text: title,
                 x: (rect.x + (rect.w - tw) / 2.0).round(),
-                y: (rect.y + 3.0).round(),
+                y: (rect.y + (title_h - gpu.text_height(scale)) / 2.0).round(),
                 color: COLOR_HUD,
-                scale: UI_SCALE_SMALL,
+                scale,
             });
         }
 
@@ -40768,6 +41954,45 @@ impl App {
             if let Some(pfeil) = world::item_registry::item_id_by_name("arrow") {
                 self.push_arrow_indicator(gpu, &protocol::item::ItemStack::new(pfeil, 64), sprites, texts, true);
             }
+        }
+
+        // Ruestung: Griff-Rahmen um alle vier Zellen und die getragene Ruestung, ohne welche ein
+        // Beispielsatz (einmal mit wenig Haltbarkeit, damit man die orange Zahl sieht).
+        if self.hud_element_shown(HudElement::Armor) {
+            let rect = self.hud_armor_rect(gpu);
+            let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
+            rects.push(UiRect {
+                rect: frame,
+                color: if dragging == Some(HudElement::Armor) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE },
+                ..UiRect::FLAT
+            });
+            let getragen = self.worn_armor();
+            let teile = if getragen.iter().any(Option::is_some) {
+                getragen.map(|t| t.cloned())
+            } else {
+                ["diamond_helmet", "diamond_chestplate", "diamond_leggings", "diamond_boots"].map(|name| {
+                    let mut stack = protocol::item::ItemStack::new(world::item_registry::item_id_by_name(name)?, 1);
+                    if name == "diamond_chestplate" {
+                        stack.damage = Some(490);
+                    }
+                    Some(stack)
+                })
+            };
+            self.begin_text_area(gpu, texts, ShadowArea::Hotbar);
+            self.push_armor_hud(gpu, [teile[0].as_ref(), teile[1].as_ref(), teile[2].as_ref(), teile[3].as_ref()], sprites, texts);
+            Self::end_text_area(gpu, texts);
+        }
+
+        // Keystrokes: Griff-Rahmen und die Tasten selbst, wie im Spiel.
+        if self.hud_element_shown(HudElement::Keystrokes) {
+            let rect = self.hud_keys_rect(gpu);
+            let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
+            rects.push(UiRect {
+                rect: frame,
+                color: if dragging == Some(HudElement::Keystrokes) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE },
+                ..UiRect::FLAT
+            });
+            self.push_keystrokes(gpu, rects, texts);
         }
 
         // Actionbar: Griff-Rahmen + Text-Vorschau (echter Text nur bei Verbindung).
@@ -40807,6 +42032,25 @@ impl App {
             let tw = gpu.measure_text(&text, scale);
             let x = align_left(align_anchor(rect.x, rect.w, a), tw, a).round();
             texts.push(UiText { text, x, y: rect.y, color: COLOR_HUD, scale });
+        }
+
+        // Itemname: Griff-Rahmen und der Name des gehaltenen Items bzw. ein Platzhalter.
+        {
+            let rect = self.hud_held_name_rect(gpu);
+            let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
+            rects.push(UiRect {
+                rect: frame,
+                color: if dragging == Some(HudElement::HeldName) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE },
+                ..UiRect::FLAT
+            });
+            let g = self.held_name_scale(gpu);
+            let text: String = match self.own_hand_stack(protocol::packets::HAND_MAIN) {
+                Some(stack) => self.held_name_spans(stack).iter().map(|s| s.text.as_str()).collect(),
+                None => "Itemname".to_string(),
+            };
+            let text = if text.is_empty() { "Itemname".to_string() } else { text };
+            let tw = gpu.measure_text(&text, g);
+            texts.push(UiText { text, x: (rect.x + (rect.w - tw) / 2.0).round(), y: rect.y, color: COLOR_HUD, scale: g });
         }
 
         // Bossbars: Griff-Rahmen und die echten Bars, ohne Verbindung eine Beispiel-Bar.
@@ -41122,6 +42366,7 @@ impl App {
         left.push((SMOOTH_LIGHTING_ROW, "Weiche Beleuchtung"));
         left.push((BLOCK_ROTATION_ROW, "Block-Rotation"));
         left.push((PARTICLES_ROW, "Partikel"));
+        left.push((ARMOR_TRIMS_ROW, "Rüstungsbesatz"));
         for (row, label) in left {
             let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
@@ -41530,6 +42775,81 @@ impl App {
         }
         let (qx, qy) = self.pointer();
         (0..self.settings.custom_themes.len()).find(|&j| theme_tile_rect(theme::PRESETS.len() + j).contains(qx, qy))
+    }
+
+    // Disconnect-Fenster: Ueberschrift mittig, darunter die Meldung (umbrochen, jede Zeile
+    // mittig), ganz unten mittig "Schliessen". Die Hoehe waechst mit der Meldung.
+    // (Fenster, Schliessen, Zeilen)
+    fn disconnect_popup_layout(&self) -> Option<(Rect, Rect, Vec<String>)> {
+        let (gpu, meldung) = self.gpu.as_ref().zip(self.disconnect_popup.as_ref())?;
+        let (sw, sh) = ui_screen();
+        let w = 560.0_f32.min(sw - 32.0);
+        let zeile_h = gpu.text_height(UI_SCALE_SMALL) + 6.0;
+        let titel_h = gpu.text_height(UI_SCALE_NORMAL);
+        // Hoechstens so viele Zeilen, wie aufs Fenster passen; der Rest steht im Log.
+        let max_zeilen = (((sh - 32.0 - 24.0 - titel_h - 20.0 - 24.0 - 40.0 - 24.0) / zeile_h).floor() as usize).max(1);
+        let mut zeilen: Vec<String> = meldung.lines().flat_map(|absatz| wrap_measured(|t| gpu.measure_raw(t, UI_SCALE_SMALL), absatz, w - 48.0)).collect();
+        if zeilen.len() > max_zeilen {
+            zeilen.truncate(max_zeilen);
+            if let Some(letzte) = zeilen.last_mut() {
+                letzte.push_str(" …");
+            }
+        }
+        let h = 24.0 + titel_h + 20.0 + zeilen.len() as f32 * zeile_h + 24.0 + 40.0 + 24.0;
+        let p = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
+        let schliessen = Rect { x: (p.x + (p.w - 140.0) / 2.0).round(), y: p.y + p.h - 24.0 - 40.0, w: 140.0, h: 40.0 };
+        Some((p, schliessen, zeilen))
+    }
+
+    fn build_disconnect_popup(&self, overlay: &mut UiOverlay) {
+        if self.mode != AppMode::Menu {
+            return;
+        }
+        let (Some(gpu), Some((p, schliessen, zeilen))) = (self.gpu.as_ref(), self.disconnect_popup_layout()) else { return };
+        use theme::Slot;
+        let g = theme::get;
+        let (sw, sh) = gpu.size();
+        let (cx, cy) = self.cursor_pos;
+        let mut rects = vec![
+            UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: dialog_dim(), ..UiRect::FLAT },
+            UiRect::shadow(p, 8.0, 12.0, 32.0, 0.6),
+            UiRect::framed(p, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
+        ];
+        let titel_h = gpu.text_height(UI_SCALE_NORMAL);
+        let titel = Rect { x: p.x, y: p.y + 24.0, w: p.w, h: titel_h };
+        let mut texts = vec![gpu.centered_text(titel, "Disconnected".to_string(), theme::text(), UI_SCALE_NORMAL)];
+        // Die Meldung kommt vom Server: nicht uebersetzen, keine Zahlen "lernen".
+        push_typed_marker(&mut texts);
+        let zeile_h = gpu.text_height(UI_SCALE_SMALL) + 6.0;
+        let mut y = titel.y + titel_h + 20.0;
+        for z in zeilen {
+            let breite = gpu.measure_raw(&z, UI_SCALE_SMALL);
+            texts.push(UiText { text: z, x: (p.x + (p.w - breite) / 2.0).round(), y, color: theme::text_2(), scale: UI_SCALE_SMALL });
+            y += zeile_h;
+        }
+        let b = Button {
+            slider: None,
+            action: ButtonAction::Nothing,
+            rect: schliessen,
+            label: String::new(),
+            enabled: true,
+            color: g(Slot::Accent),
+            scale: UI_SCALE_SMALL,
+        };
+        let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, schliessen.contains(cx, cy)));
+        rects.push(flaeche);
+        texts.push(gpu.centered_text(schliessen, "Schließen".to_string(), farbe, UI_SCALE_SMALL));
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
+    }
+
+    // Linke Taste bei offenem Disconnect-Fenster: der Knopf oder ein Klick daneben schliesst es.
+    fn disconnect_popup_press(&mut self) {
+        let Some((p, schliessen, _)) = self.disconnect_popup_layout() else { return };
+        let (cx, cy) = self.cursor_pos;
+        if schliessen.contains(cx, cy) || !p.contains(cx, cy) {
+            self.play_ui_sound(ui_sound::UiSound::Close);
+            self.disconnect_popup = None;
+        }
     }
 
     // Rueckfrage vor dem Loeschen: (Fenster, Loeschen, Abbrechen).
@@ -41993,6 +43313,21 @@ impl App {
         }
 
         texts.push(UiText { text: "Eigene Crit-Farbe".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(CRIT_COLOR_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
+
+        let set = &self.settings;
+        let detail = if set.fire_mode == FIRE_MODE_CROSSHAIR { "Farbe" } else { "Höhe" };
+        for (row, label) in [(HURT_CAM_ROW, "Hurt-Cam"), (HURT_CAM_STRENGTH_ROW, "Stärke"), (FIRE_MODE_ROW, "Modus"), (FIRE_DETAIL_ROW, detail)] {
+            texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
+        }
+        let mut werte = vec![(HURT_CAM_STRENGTH_ROW, set.hurt_cam_strength)];
+        if set.fire_mode != FIRE_MODE_CROSSHAIR {
+            werte.push((FIRE_DETAIL_ROW, set.fire_height));
+        }
+        for (row, wert) in werte {
+            let value_rect = stepper_value_rect(row);
+            rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+            texts.push(gpu.centered_text(value_rect, format!("{wert} %"), theme::text(), UI_SCALE_SMALL));
+        }
     }
 
     fn build_settings_configs(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
@@ -42882,9 +44217,20 @@ impl App {
                         motd.extend(z.iter().cloned());
                     }
                 }
-                let klein = gpu.text_height(UI_SCALE_SMALL);
-                let zeilen: Vec<Vec<protocol::nbt::TextSpan>> =
-                    wrap_spans(&motd, breite, |t| gpu.measure_text(t, UI_SCALE_SMALL), 0.0).into_iter().map(|l| l.spans).filter(|z| !z.is_empty()).collect();
+                // Ohne Namen ist die MOTD das Einzige in der Karte: umbrochen wie in Vanilla (an
+                // derselben Stelle, gemessen in Vanillas Breiten -- Server richten ihre MOTD
+                // darauf aus), hoechstens zwei Zeilen, so gross wie sonst der Name, wenn beide
+                // so passen, sonst klein. Unter einem Namen bleibt sie klein.
+                let vanilla: Vec<Vec<protocol::nbt::TextSpan>> =
+                    wrap_spans_styled(&motd, MOTD_VANILLA_WIDTH, |t, stil| gpu.vanilla_width(t, stil), 0.0).into_iter().map(|l| l.spans).filter(|z| !z.is_empty()).take(2).collect();
+                let passt_bei = |scale: f32| vanilla.iter().all(|z| span_row_width(gpu, z, scale) <= breite);
+                let motd_scale = if entry.name.is_empty() && passt_bei(UI_SCALE_NORMAL) { UI_SCALE_NORMAL } else { UI_SCALE_SMALL };
+                let klein = gpu.text_height(motd_scale);
+                let zeilen: Vec<Vec<protocol::nbt::TextSpan>> = if entry.name.is_empty() && passt_bei(motd_scale) {
+                    vanilla
+                } else {
+                    wrap_spans(&motd, breite, |t| gpu.measure_text(t, motd_scale), 0.0).into_iter().map(|l| l.spans).filter(|z| !z.is_empty()).collect()
+                };
                 let mut setzen: Vec<(f32, Vec<protocol::nbt::TextSpan>)> = Vec::new();
                 if !entry.name.is_empty() {
                     if passt(zeile1, gpu.text_height(UI_SCALE_NORMAL)) {
@@ -42906,20 +44252,15 @@ impl App {
                     let n = zeilen.len().min(2);
                     let abstand = 6.0;
                     let y0 = karte.y + (karte.h - n as f32 * klein - (n - 1) as f32 * abstand) / 2.0;
+                    // Wie Vanilla: was nach der zweiten Zeile kommt, faellt weg.
                     for (k, z) in zeilen.iter().take(n).enumerate() {
-                        let mut z = z.clone();
-                        // Mehr als zwei Zeilen: die zweite endet mit "...".
-                        if k == 1 && zeilen.len() > 2 {
-                            z.push(protocol::nbt::TextSpan { text: " ".to_string(), ..Default::default() });
-                            z.extend(zeilen[2].iter().cloned());
-                        }
-                        setzen.push(((y0 + k as f32 * (klein + abstand)).round(), z));
+                        setzen.push(((y0 + k as f32 * (klein + abstand)).round(), z.clone()));
                     }
                 }
                 for (y, z) in setzen {
                     if passt(y, klein) {
-                        let z = ellipsize_spans(gpu, &z, UI_SCALE_SMALL, breite);
-                        push_styled_row(gpu, &z, tx, y, theme::text_2(), UI_SCALE_SMALL, texts, &mut |r, c| rects.push(UiRect { rect: r, color: c, ..UiRect::FLAT }));
+                        let z = ellipsize_spans(gpu, &z, motd_scale, breite);
+                        push_styled_row(gpu, &z, tx, y, theme::text_2(), motd_scale, texts, &mut |r, c| rects.push(UiRect { rect: r, color: c, ..UiRect::FLAT }));
                     }
                 }
             }
@@ -42981,12 +44322,11 @@ impl App {
             return;
         }
 
-        // Eingabefeld (Token bzw. Client-ID), nur wenn aufgeklappt.
+        // Eingabefeld (Token bzw. Refresh-Token), nur wenn aufgeklappt.
         if let Some((kind, value)) = &self.input_field {
             let label = match kind {
                 InputKind::Token => "Minecraft-Token einfügen (Strg+V), dann OK/Enter:",
                 InputKind::RefreshToken => "Microsoft-Refresh-Token einfügen (Strg+V), dann OK/Enter:",
-                InputKind::ClientId => "Azure-Client-ID einfügen, dann OK/Enter:",
                 // Gehoert zur Configs-Seite (s. build_settings_configs).
                 InputKind::ConfigName(_) => return,
             };
@@ -43006,26 +44346,16 @@ impl App {
             let caret_x = tx + gpu.measure_raw(&shown, UI_SCALE_SMALL);
             self.push_caret(rects, Rect { x: caret_x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
         }
-
-        // Hinweis zur Launcher-Konten-Zeile.
-        let hint = if self.launcher_accounts.is_empty() {
-            "Kein Prism-Konto gefunden -- in Prism anmelden und importieren.".to_string()
-        } else {
-            format!("{} Konto(en) aus Prism gefunden -- anklicken zum Anmelden:", self.launcher_accounts.len())
-        };
-        texts.push(UiText {
-            text: hint,
-            x: 40.0,
-            y: (account_row_rect(3).y + account_row_rect(3).h + 6.0).round(),
-            color: [0.6, 0.6, 0.6, 1.0],
-            scale: UI_SCALE_SMALL,
-        });
     }
 
     // Rohe Maus-Deltas: im Menu-Modus 2D-Cursor, im World-Modus Kamera-Blickrichtung.
     fn handle_mouse_delta(&mut self, delta: (f64, f64)) {
         if !self.owns_mouse() {
             return; // Maus gehoert gerade dem Desktop (Alt-Tab / kein Fullscreen)
+        }
+        // Beim Verbinden ist die Welt ein Standbild.
+        if self.connecting_view() {
+            return;
         }
         match self.mode {
             AppMode::Menu => {
@@ -43040,6 +44370,7 @@ impl App {
                 self.move_cursor(delta);
                 // Laeuft ein Verteilen-Ziehen, gehoert jeder ueberfahrene Slot dazu.
                 self.inventory_drag_collect();
+                self.inventory_throw_sweep(false);
                 // Am Schieber der Handelsliste gezogen: die Liste folgt. Ebenso im Kreativinventar.
                 self.merchant_drag();
                 self.creative_drag();
@@ -43538,8 +44869,103 @@ impl App {
         self.emit_held_items(e.arm_items(), self.entity_blocking_arms(e), (0.0, true), model, &pose, base, out);
     }
 
+    // Ein Armorstand (ArmorStandRenderer): der Koerper in seinen sechs Gelenkwinkeln, Ruestung
+    // und Gehaltenes in denselben Winkeln. Unsichtbar faellt nur der Koerper weg -- Koepfe und
+    // Ruestung auf unsichtbaren Staendern bleiben stehen, wie in Vanilla.
+    fn emit_armor_stand(
+        &self,
+        e: &world::Entity,
+        feet: [f32; 3],
+        body_yaw: f32,
+        out: &mut Vec<world::BlockVertex>,
+        haut: &mut Vec<std::ops::Range<usize>>,
+    ) {
+        use protocol::packets::{ARMOR_STAND_FLAG_NO_BASEPLATE, ARMOR_STAND_FLAG_SHOW_ARMS, ARMOR_STAND_FLAG_SMALL};
+        let flags = e.armor_stand_flags();
+        let small = flags & ARMOR_STAND_FLAG_SMALL != 0;
+        let [kopf, rumpf, linker_arm, rechter_arm, linkes_bein, rechtes_bein] = e.armor_stand_poses.map(|r| r.map(f32::to_radians));
+        let mut pose = world::Pose::new();
+        pose.rotate("head", kopf);
+        // Die Staebe am Rumpf folgen dem Rumpf (ArmorStandModel.setupAnim).
+        for teil in ["body", "right_body_stick", "left_body_stick", "shoulder_stick"] {
+            pose.rotate(teil, rumpf);
+        }
+        pose.rotate("left_arm", linker_arm);
+        pose.rotate("right_arm", rechter_arm);
+        pose.rotate("left_leg", linkes_bein);
+        pose.rotate("right_leg", rechtes_bein);
+        // Die Bodenplatte dreht gegen den Stand und bleibt so am Blockraster ausgerichtet.
+        pose.rotate("base_plate", [0.0, -body_yaw.to_radians(), 0.0]);
+        let base = world::entity_transform(feet, body_yaw, 1.0, 1.0);
+        let layer = if small { "armor_stand_small#main" } else { "armor_stand#main" };
+        let textur = world::mob_catalog::mob_look("armor_stand").and_then(|look| self.entity_atlas.rect(look.texture));
+        if let (false, Some(model), Some(tex)) = (e.invisible, world::model_data::layer_model(layer), textur) {
+            let mut koerper = pose.clone();
+            let mut verstecken = |teil: &'static str| {
+                let mut p = koerper.get(teil);
+                p.hidden = true;
+                koerper.set(teil, p);
+            };
+            if flags & ARMOR_STAND_FLAG_SHOW_ARMS == 0 {
+                verstecken("left_arm");
+                verstecken("right_arm");
+            }
+            if flags & ARMOR_STAND_FLAG_NO_BASEPLATE != 0 {
+                verstecken("base_plate");
+            }
+            let start = out.len();
+            world::emit_entity_model(model, &koerper, base, tex, ENTITY_BRIGHTNESS, out);
+            haut.push(start..out.len());
+        }
+        let models = world::entity_model::armor_stand_armor_models(small);
+        self.emit_armor(&e.armor, models, &pose, base, out);
+        // Items sitzen auch ohne sichtbare Arme in der Hand (ArmorStandModel.translateToHand);
+        // die Brust-Ebene hat beide Arme in den Winkeln des Standes.
+        let arme = &models[world::armor::ArmorSlot::Chest.index()];
+        self.emit_held_items(e.arm_items(), (false, false), (0.0, true), arme, &pose, base, out);
+    }
+
     fn wallpaper_visible(&self) -> bool {
         self.mode == AppMode::Menu && self.screen == MenuScreen::Main && self.conn_status == ConnStatus::Disconnected
+    }
+
+    // HUD-Editor ohne Welt dahinter: der letzte Weltblick (s. last_view.rs) statt Schwarz.
+    fn last_view_visible(&self) -> bool {
+        self.mode == AppMode::Menu && self.screen == MenuScreen::HudEditor && self.conn_status != ConnStatus::Connected
+    }
+
+    // Beim Verlassen einer Welt das letzte Weltbild als letzten Weltblick behalten und speichern.
+    // VOR reset_world, solange offscreen_texture noch die Welt zeigt.
+    fn keep_last_view(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let Some(bild) = gpu.read_world_view() else { return };
+        gpu.set_last_view(&bild);
+        if let Some(dir) = shared_config_dir() {
+            last_view::save(last_view::path(&dir), bild);
+        }
+    }
+
+    // Den gespeicherten letzten Weltblick einmal nach dem Start laden und hochladen.
+    fn poll_last_view(&mut self) {
+        if !self.last_view_requested && self.gpu.is_some() {
+            self.last_view_requested = true;
+            self.last_view_rx = shared_config_dir().map(|dir| last_view::load(last_view::path(&dir)));
+        }
+        let Some(rx) = &self.last_view_rx else { return };
+        match rx.try_recv() {
+            Ok(bild) => {
+                self.last_view_rx = None;
+                // Schon ein frischerer da (Welt verlassen, waehrend noch geladen wurde)? Dann
+                // bleibt der.
+                if let (Some(bild), Some(gpu)) = (bild, self.gpu.as_mut()) {
+                    if gpu.last_view.is_none() {
+                        gpu.set_last_view(&bild);
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.last_view_rx = None,
+        }
     }
 
     // Ein Weltbild zeichnen: Vertices bauen, hochladen, GpuState::render_world. Mit
@@ -43668,8 +45094,11 @@ impl App {
         let wackeln = self.arrow_empty_shake_px() / self.gpu.as_ref().map_or(1920.0, |g| g.size().0);
         let crosshair_center = (with_hud && self.crosshair_visible())
             .then_some((self.settings.hud_crosshair_x + wackeln, self.settings.hud_crosshair_y));
-        let crosshair_mode = self.settings.crosshair_color_mode as u32;
-        let crosshair_rgb = self.settings.crosshair_rgb();
+        // Feuer-Modus "Fadenkreuz": beim Brennen steht das Kreuz in der eigenen Farbe -- auch
+        // anstelle der Komplementaerfarbe.
+        let brennt = self.settings.fire_mode == FIRE_MODE_CROSSHAIR && self.own_on_fire && self.game_mode != GAME_MODE_SPECTATOR;
+        let crosshair_mode = if brennt { 1 } else { self.settings.crosshair_color_mode as u32 };
+        let crosshair_rgb = if brennt { self.settings.fire_crosshair_rgb() } else { self.settings.crosshair_rgb() };
         let crosshair_outline = self.settings.crosshair_outline;
         let crosshair_extras = if with_hud { self.crosshair_extras() } else { CrosshairExtras::default() };
         // Nur der Komplementaer-Modus kann aufgehellt werden -- eine fest gewaehlte Farbe
@@ -43931,9 +45360,8 @@ impl App {
             }
             let layout = notification_layout(gpu, card.note);
             let mit_alpha = |c: [f32; 4], f: f32| [c[0], c[1], c[2], c[3] * a * f];
-            let akzent = card.note.kind.accent().map(world::sky::srgb_to_linear);
-            let akzent = [akzent[0], akzent[1], akzent[2], 1.0];
-            let grund = if card.hovered { COLOR_NOTIFICATION_BG_HOVER } else { COLOR_NOTIFICATION_BG };
+            let akzent = notification_accent(card.note.kind);
+            let grund = theme::get(if card.hovered { theme::Slot::Surface2 } else { theme::Slot::Surface1 });
             // Gerade stehend auf ganze Pixel: der Bitmap-Font soll scharf bleiben, auch
             // waehrend die Karte gleitet. Gekippt ist das egal -- dann liegt ohnehin kein
             // Texel mehr auf einem Pixel, und Runden liesse sie nur ruckeln.
@@ -43941,24 +45369,27 @@ impl App {
             let px = |v: f32| if gerade { v.round() } else { v };
             let (x, y, w, h) = (px(card.x), px(card.y), card.w, card.h);
             let mut g = UiOverlayGroup { rects: Vec::new(), texts: Vec::new(), sprites: Vec::new(), pivot: card.pivot, angle: card.angle };
-            g.rects.push(UiRect { rect: Rect { x, y, w, h }, color: mit_alpha(grund, 1.0), ..UiRect::FLAT });
-            g.rects.push(UiRect { rect: Rect { x, y, w: NOTIFICATION_ACCENT_W, h }, color: mit_alpha(akzent, 1.0), ..UiRect::FLAT });
+            // Wie die Karten im Benachrichtigungs-Panel: Flaeche mit Rahmen, Streifen innen.
+            let karte = Rect { x, y, w, h };
+            g.rects.push(UiRect::shadow(karte, 6.0, 4.0, 16.0, 0.45 * a));
+            g.rects.push(UiRect::framed(karte, mit_alpha(grund, 1.0), 6.0, 1.0, mit_alpha(theme::get(theme::Slot::Border1), 1.0)));
+            g.rects.push(UiRect::rounded(Rect { x: x + 6.0, y: y + 8.0, w: 3.0, h: h - 16.0 }, mit_alpha(akzent, 1.0), 1.5));
             // Restliche Standzeit als duenne Leiste am unteren Rand.
-            let innen = w - NOTIFICATION_ACCENT_W;
-            g.rects.push(UiRect {
-                rect: Rect { x: x + NOTIFICATION_ACCENT_W, y: y + h - NOTIFICATION_TIMER_H, w: innen * card.remaining, h: NOTIFICATION_TIMER_H },
-                color: mit_alpha(akzent, 0.5),
-                ..UiRect::FLAT
-            });
+            let innen = w - 12.0;
+            g.rects.push(UiRect::rounded(
+                Rect { x: x + 6.0, y: y + h - 4.0 - NOTIFICATION_TIMER_H, w: innen * card.remaining, h: NOTIFICATION_TIMER_H },
+                mit_alpha(akzent, 0.5),
+                1.0,
+            ));
             let tx = x + NOTIFICATION_ACCENT_W + NOTIFICATION_PADDING;
             let mut ty = y + NOTIFICATION_PADDING;
             for line in layout.title {
-                g.texts.push(UiText { text: line, x: tx, y: ty, color: mit_alpha(COLOR_WHITE, 1.0), scale: UI_SCALE_SMALL });
+                g.texts.push(UiText { text: line, x: tx, y: ty, color: mit_alpha(theme::text(), 1.0), scale: UI_SCALE_SMALL });
                 ty += notification_line_h(gpu);
             }
             ty += NOTIFICATION_BODY_GAP - 4.0;
             for line in layout.body {
-                g.texts.push(UiText { text: line, x: tx, y: ty, color: mit_alpha(COLOR_NOTIFICATION_BODY, 1.0), scale: UI_SCALE_SMALL });
+                g.texts.push(UiText { text: line, x: tx, y: ty, color: mit_alpha(theme::text_2(), 1.0), scale: UI_SCALE_SMALL });
                 ty += notification_line_h(gpu);
             }
             overlay.groups.push(g);
@@ -44397,6 +45828,7 @@ impl App {
             // Wie bei fremden Entities: ein Tick, ein Schritt (s. world::Entity::tick).
             self.own_hurt_ticks = self.own_hurt_ticks.saturating_sub(1);
             self.tick_shield_cooldowns();
+            self.tick_held_name();
             self.tick_block_lids();
             self.tick_enchant_book();
             self.tick_trails();
@@ -44611,12 +46043,71 @@ impl App {
         self.update_perspective_offset();
     }
 
+    // Feuer vor den Augen, Modus Vanilla (ScreenEffectRenderer.submitFire): zwei Bilder der
+    // Feuertextur in den unteren Ecken, je eine Einheit gross, eine halbe Einheit vor dem Auge,
+    // 0,24 zur Seite, 0,3 nach unten und um 10 Grad zur Mitte gedreht -- gesehen mit 70 Grad
+    // Sichtfeld wie die Hand. "Hoehe" schiebt beide nach unten, bei 0 % ganz aus dem Bild.
+    // In Streifen zerlegt, weil die Sprites ihre UVs linear ueber zwei Dreiecke legen und das
+    // schraeg stehende Bild sonst einen Knick in der Diagonale bekaeme.
+    fn build_fire_overlay(&self, gpu: &GpuState, sprites: &mut Vec<UiSprite>) {
+        if self.mode != AppMode::World
+            || !self.own_on_fire
+            || self.game_mode == GAME_MODE_SPECTATOR
+            || !self.perspective.is_first_person()
+            || self.settings.fire_mode != FIRE_MODE_VANILLA
+            || self.settings.fire_height == 0
+        {
+            return;
+        }
+        let Some(feuer) = self.ui_atlas.rect(&format!("tex/{}", assets::FIRE_OVERLAY)) else { return };
+        let (sw, sh) = gpu.size();
+        let tan = 35f32.to_radians().tan();
+        let aspect = sw / sh.max(1.0);
+        let senken = (1.0 - self.settings.fire_height as f32 / 100.0) * 0.55;
+        let [u0, v0, u1, v1] = feuer.uv;
+        const STREIFEN: usize = 8;
+        for (seite, winkel) in [(0.24f32, -10f32), (-0.24, 10.0)] {
+            let (sin, cos) = winkel.to_radians().sin_cos();
+            let bild = |lx: f32, ly: f32| {
+                let (x, z) = (lx * cos - 0.5 * sin + seite, -lx * sin - 0.5 * cos);
+                let y = ly - 0.3 - senken;
+                let (nx, ny) = (x / (-z * tan * aspect), y / (-z * tan));
+                [(nx + 1.0) / 2.0 * sw, (1.0 - ny) / 2.0 * sh]
+            };
+            for i in 0..STREIFEN {
+                let (a, b) = (i as f32 / STREIFEN as f32, (i + 1) as f32 / STREIFEN as f32);
+                let (xa, xb) = (a - 0.5, b - 0.5);
+                // Links im Bild liegt das rechte Ende der Textur (gespiegelt wie in Vanilla).
+                let (ua, ub) = (u1 + (u0 - u1) * a, u1 + (u0 - u1) * b);
+                sprites.push(UiSprite {
+                    corners: [bild(xa, 0.5), bild(xb, 0.5), bild(xb, -0.5), bild(xa, -0.5)],
+                    uv: [ua, v0, ub, v1],
+                    color: [1.0, 1.0, 1.0, 0.9],
+                    atlas: SpriteAtlas::Ui,
+                });
+            }
+        }
+    }
+
+    // Hurt-Cam: Vanillas Verlauf (GameRenderer.bobHurt) -- schnell hin und weich zurueck ueber
+    // die zehn Ticks nach dem Treffer --, aber als reines Rollen um die Blickachse und mit
+    // jedem Treffer zur anderen Seite.
+    fn hurt_cam_roll(&self) -> f32 {
+        if !self.settings.hurt_cam || self.own_hurt_ticks == 0 || self.game_mode == GAME_MODE_SPECTATOR {
+            return 0.0;
+        }
+        let t = ((self.own_hurt_ticks as f32 - self.tick_progress()) / world::MAX_HURT_TIME as f32).clamp(0.0, 1.0);
+        let verlauf = (t.powi(4) * std::f32::consts::PI).sin();
+        self.hurt_cam_side * verlauf * HURT_CAM_MAX_DEGREES * self.settings.hurt_cam_strength as f32 / 100.0
+    }
+
     // Kameraversatz der aktuellen Perspektive (Vanillas Camera.update()-Zweig fuer
     // thirdPerson): in der Frontansicht erst die Blickrichtung umdrehen, dann in BEIDEN
     // 3.-Person-Ansichten um THIRD_PERSON_DISTANCE nach hinten weg -- weshalb die Kamera
     // vorn vor dem Spieler landet und ihn anschaut. Die Distanz wird an Waenden verkuerzt
     // (s. physics::clip_camera_distance), sonst steckte man in der Wand und saehe ins Leere.
     fn update_perspective_offset(&mut self) {
+        self.camera.roll_degrees = self.hurt_cam_roll();
         self.camera.view_inverted = self.perspective.is_front_view();
         if self.perspective.is_first_person() {
             self.camera.view_offset = glam::Vec3::ZERO;
@@ -48108,6 +49599,7 @@ impl App {
         // ein Zeichen tippen UND vorwaerts laufen.
         self.tick_volume_keys();
         self.poll_wallpaper();
+        self.poll_last_view();
         // Nur bei offenem Skin-Tab (Einstellungen > Skin): dort sieht man das Ergebnis, und
         // sonst liest niemand jede Sekunde den Ordner.
         let skin_tab = matches!(self.mode, AppMode::Menu) && self.screen == MenuScreen::SettingsSkin;
@@ -48654,6 +50146,13 @@ impl ApplicationHandler for App {
                         self.account_manager_press();
                     } else {
                         self.account_context_open();
+                    }
+                    return;
+                }
+                // Das Disconnect-Fenster liegt ueber allem und schluckt jeden Druck.
+                if state == ElementState::Pressed && self.mode == AppMode::Menu && self.disconnect_popup.is_some() {
+                    if button == MouseButton::Left {
+                        self.disconnect_popup_press();
                     }
                     return;
                 }
@@ -49282,6 +50781,14 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Disconnect-Fenster: Enter schliesst es wie der Knopf (Esc ueber on_escape).
+                if self.disconnect_popup.is_some() && self.mode == AppMode::Menu {
+                    if key_event.state == ElementState::Pressed && matches!(key_event.logical_key, Key::Named(NamedKey::Enter | NamedKey::Space)) {
+                        self.play_ui_sound(ui_sound::UiSound::Close);
+                        self.disconnect_popup = None;
+                    }
+                    return;
+                }
                 // Server-Formular bzw. Quick Connect: dieselben Tasten fuer beide Felder (s.
                 // active_text_field), das Formular hat Vorrang.
                 if self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
@@ -49507,6 +51014,7 @@ impl ApplicationHandler for App {
                         self.build_account_menu(&mut overlay);
                         self.build_account_manager(&mut overlay);
                         self.build_account_context(&mut overlay);
+                        self.build_disconnect_popup(&mut overlay);
                         let (rects, texts, sprites, cursor, hud_fenster) = self.build_menu_ui();
                         // Unter Benachrichtigungen, Farbfenster & Co., aber ueber dem Editor.
                         if let Some(g) = hud_fenster {
@@ -49521,11 +51029,12 @@ impl ApplicationHandler for App {
                         let show_wallpaper = self.wallpaper_visible();
                         let show_world =
                             self.world_backdrop_visible().then(|| 1.0 - self.settings.menu_backdrop_opacity.min(100) as f32 / 100.0);
+                        let show_last_view = self.last_view_visible();
                         let ui_ms = ui_started.elapsed().as_secs_f32() * 1000.0;
                         self.profiler.add_ms(Phase::Menu, ui_ms);
-                        self.gpu
-                            .as_mut()
-                            .and_then(|gpu| gpu.render_menu(&rects, &texts, &sprites, &overlay, cursor, cursor_fx, show_wallpaper, show_world, acquired))
+                        self.gpu.as_mut().and_then(|gpu| {
+                            gpu.render_menu(&rects, &texts, &sprites, &overlay, cursor, cursor_fx, show_wallpaper, show_world, show_last_view, acquired)
+                        })
                     }
                 };
                 if let Some(timing) = timing {
@@ -49720,6 +51229,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleCapsLockBlocked => umschalten(settings.caps_lock_blocked),
         ButtonAction::ToggleInventoryCursorToSlot => umschalten(settings.inventory_cursor_to_slot),
         ButtonAction::ToggleCreativeOpTab => umschalten(settings.creative_op_tab),
+        ButtonAction::ToggleNoUiCloseS2c => umschalten(settings.no_ui_close_s2c),
         ButtonAction::TogglePotionMarkStrong => umschalten(settings.potion_mark_strong),
         ButtonAction::TogglePotionMarkLong => umschalten(settings.potion_mark_long),
         ButtonAction::TogglePotionMarkWeak => umschalten(settings.potion_mark_weak),
@@ -49767,6 +51277,20 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleVoiceChat => umschalten(settings.module_voice_chat),
         ButtonAction::ToggleModuleShields => umschalten(settings.module_shields),
         ButtonAction::ToggleModuleArrows => umschalten(settings.module_arrows),
+        ButtonAction::ToggleModuleArmorHud => umschalten(settings.module_armor_hud),
+        ButtonAction::ToggleModuleKeystrokes => umschalten(settings.module_keystrokes),
+        ButtonAction::KeysOpacityPrev | ButtonAction::KeysOpacityNext => UiSound::Step,
+        ButtonAction::ArmorHudGapPrev
+        | ButtonAction::ArmorHudGapNext
+        | ButtonAction::ArmorHudNumberScalePrev
+        | ButtonAction::ArmorHudNumberScaleNext
+        | ButtonAction::ArmorHudNumberXPrev
+        | ButtonAction::ArmorHudNumberXNext
+        | ButtonAction::ArmorHudNumberYPrev
+        | ButtonAction::ArmorHudNumberYNext => UiSound::Step,
+        ButtonAction::ToggleHurtCam => umschalten(settings.hurt_cam),
+        ButtonAction::ToggleArmorTrims => umschalten(settings.armor_trims),
+        ButtonAction::HurtCamStrengthPrev | ButtonAction::HurtCamStrengthNext | ButtonAction::FireHeightPrev | ButtonAction::FireHeightNext => UiSound::Step,
         ButtonAction::ToggleModuleShowMarkers => umschalten(settings.module_show_markers),
         ButtonAction::ToggleModuleSoundDebug => umschalten(settings.module_sound_debug),
         ButtonAction::ToggleModuleDiscordStatus => umschalten(settings.module_discord_status),
@@ -52427,6 +53951,55 @@ mod tests {
 
     fn standard_timing() -> i32 {
         Settings::parse("show_hud=true\n").tear_timing_us
+    }
+
+    // Ruestungs-HUD, Keystrokes, Hurt-Cam und Feuer ueberleben eine Speicherrunde.
+    #[test]
+    fn hud_module_und_video_werte_werden_gespeichert() {
+        let mut s = Settings::parse("show_hud=true\n");
+        assert!(!s.module_armor_hud && !s.module_keystrokes && s.hurt_cam && s.armor_trims);
+        s.armor_trims = false;
+        s.module_armor_hud = true;
+        s.armor_hud_layout = armor_hud::LAYOUT_FLAT_HELMET_RIGHT;
+        s.armor_hud_sort_flat = 1;
+        s.hud_armor_scale = 150;
+        s.armor_hud_gap = -5;
+        s.armor_hud_number_scale = 150;
+        s.armor_hud_number_x = 4;
+        s.armor_hud_number_y = -20;
+        s.module_keystrokes = true;
+        s.keys_opacity = 40;
+        s.hurt_cam = false;
+        s.hurt_cam_strength = 35;
+        s.fire_mode = FIRE_MODE_CROSSHAIR;
+        s.fire_height = 45;
+        s.fire_crosshair_hue = 200;
+        let g = Settings::parse(&s.serialize());
+        assert!(g.module_armor_hud && g.module_keystrokes && !g.hurt_cam && !g.armor_trims);
+        assert_eq!((g.armor_hud_layout, g.armor_hud_sort_flat, g.hud_armor_scale), (armor_hud::LAYOUT_FLAT_HELMET_RIGHT, 1, 150));
+        assert_eq!((g.armor_hud_gap, g.armor_hud_number_scale, g.armor_hud_number_x, g.armor_hud_number_y), (-5, 150, 4, -20));
+        assert_eq!((g.keys_opacity, g.hurt_cam_strength, g.fire_mode, g.fire_height, g.fire_crosshair_hue), (40, 35, FIRE_MODE_CROSSHAIR, 45, 200));
+    }
+
+    // Der Name ueber der Hotbar erscheint nur bei umbenannten Items oder solchen mit Lore, nicht
+    // schon bei Verzauberung oder Trim.
+    #[test]
+    fn disconnect_fenster_zeigt_nur_die_servermeldung() {
+        assert_eq!(disconnect_popup_text("Protokoll-Fehler: Server-Disconnect im Play-State: Du wurdest gekickt"), "Du wurdest gekickt");
+        assert_eq!(disconnect_popup_text("Protokoll-Fehler: Server hat Login abgelehnt: You are already online!"), "You are already online!");
+        assert_eq!(disconnect_popup_text("Timed out (30s keine Daten vom Server)"), "Timed out (30s keine Daten vom Server)");
+    }
+
+    #[test]
+    fn hotbar_name_nur_bei_eigenem_namen_oder_lore() {
+        let mut stack = protocol::item::ItemStack::new(1, 1);
+        stack.trim = Some((0, 0));
+        assert!(!item_shows_held_name(&stack));
+        stack.lore = vec![Vec::new()];
+        assert!(item_shows_held_name(&stack));
+        stack.lore.clear();
+        stack.custom_name = Some("Klinge".to_string());
+        assert!(item_shows_held_name(&stack));
     }
 
     // Riss-Position und Dynamisches Feuer ueberleben eine Speicherrunde; Unsinn faellt auf "Aus".

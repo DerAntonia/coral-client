@@ -366,14 +366,12 @@ fn bundle_click(slot: i16, button: i8, cursor: Option<ItemStack>, in_slot: Optio
 pub struct Prediction {
     pub modified: Vec<(i16, Option<ItemStack>)>,
     pub cursor: Option<ItemStack>,
-    // Laesst sich das Ergebnis dem Server byte-genau BESCHREIBEN? Nur dann duerfen die
-    // Hash-Felder des Pakets gefuellt werden (s. ItemStack::hashable).
-    //
-    // Getrennt vom Rest, weil beides frueher aneinanderhing: ein Stapel mit Components
-    // (verzaubertes Schwert, benannter Block) war nicht hashbar, also gab es GAR KEINE
-    // Vorhersage -- und damit wartete auch die ANZEIGE auf die Serverantwort. Dabei ist das
-    // eine eine Frage der Paket-Felder und das andere eine der Darstellung: lokal vorgreifen
-    // duerfen wir immer, schlimmstenfalls korrigiert der Server gleich darauf.
+    // Laesst sich das Ergebnis dem Server byte-genau BESCHREIBEN (s. ItemStack::hashable)?
+    // Gesendet wird die Vorhersage so oder so: ohne exakten Hash weicht er absichtlich ab und
+    // der Server schickt seinen Stand (s. packets::write_item_stack_hash). Leere Felder
+    // statt dessen liessen ihn glauben, beim Client habe sich nichts geaendert -- dann kam
+    // keine Korrektur. Bleibt als Angabe fuer die Tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub hashable: bool,
 }
 
@@ -430,7 +428,7 @@ impl Inventory {
     // Der Bildschirm-Slot, hinter dem Hotbar-Platz 0..8 steckt. Bei offenem Container haengen
     // die 36 Spielerslots hinten dran (27 Hauptteil, dann 9 Hotbar), sonst ist es das
     // Spielerinventar selbst.
-    fn hotbar_screen_slot(&self, index: usize) -> Option<usize> {
+    pub fn hotbar_screen_slot(&self, index: usize) -> Option<usize> {
         // 40 = die Zweithand (Vanillas Tausch per Offhand-Taste, s. OFFHAND_SWAP_BUTTON). Nur im
         // eigenen Inventar ein Bildschirm-Platz -- in einem Container gibt es sie dort nicht,
         // dann bleibt es ohne Vorhersage beim Serverwort.
@@ -1603,7 +1601,7 @@ mod tests {
         enchanted.has_added_components = true;
         inv.player[PLAYER_MAIN_START] = Some(enchanted);
         let p = inv.predict_click(PLAYER_MAIN_START as i16, 0, protocol::packets::CLICK_MODE_PICKUP).expect("lokal vorhersagbar");
-        assert!(!p.hashable, "ohne exakten Hash dürfen keine Hash-Felder ins Paket");
+        assert!(!p.hashable, "kein exakter Hash -- der Server bekommt absichtlich einen abweichenden");
         assert_eq!(p.cursor.as_ref().map(|s| s.item_id), Some(936), "aufgenommen wird trotzdem sofort");
     }
 

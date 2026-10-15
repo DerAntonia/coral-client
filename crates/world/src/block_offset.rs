@@ -103,9 +103,30 @@ pub fn block_xz_offset(block_name: &str, x: i32, z: i32) -> (f32, f32) {
     (dx.clamp(-m, m), dz.clamp(-m, m))
 }
 
+// Der Versatz des UMRISSES (Zielen, Blockrahmen) -- nicht dasselbe wie der des Modells. Nur
+// manche Bloecke verschieben in getShape ihre Form mit (Blumen, Bambus, Mangroven-Keimling,
+// Tropfstein); Gras, Farn, toter Busch und Nether-Wurzeln stehen versetzt, ihr Umriss bleibt
+// aber mittig in der Zelle. Mit verschobenem Umriss lag der Trefferpunkt bis zu 1/8 Block
+// AUSSERHALB der Zelle, und genau das prueft Grims FabricatedPlace (Trefferpunkt je Achse
+// 0..1): beim Platzieren auf Gras flaggte jeder solche Klick.
+pub fn outline_xz_offset(block_name: &str, x: i32, z: i32) -> (f32, f32) {
+    if matches!(block_name, "short_grass" | "fern" | "dead_bush" | "crimson_roots" | "warped_roots") {
+        return (0.0, 0.0);
+    }
+    block_xz_offset(block_name, x, z)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gras_umriss_bleibt_in_der_zelle() {
+        // Irgendeine Stelle mit deutlichem Versatz suchen: das Modell wandert, der Umriss nicht.
+        let (x, z) = (0..64).flat_map(|x| (0..64).map(move |z| (x, z))).find(|&(x, z)| block_xz_offset("short_grass", x, z).0.abs() > 0.2).unwrap();
+        assert_eq!(outline_xz_offset("short_grass", x, z), (0.0, 0.0));
+        assert_eq!(outline_xz_offset("poppy", x, z), block_xz_offset("poppy", x, z));
+    }
 
     #[test]
     fn offset_ist_deterministisch_und_unabhaengig_von_y() {

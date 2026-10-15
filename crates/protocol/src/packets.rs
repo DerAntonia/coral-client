@@ -2552,6 +2552,13 @@ pub const ARMOR_STAND_FLAG_MARKER: u8 = 16;
 // festgeschrieben, damit ein Versionswechsel, der einen der beiden verschiebt, den Bau
 // abbricht -- statt still das falsche Feld zu fuellen.
 const _: () = assert!(ARMOR_STAND_INDEX_FLAGS == DISPLAY_INDEX_BILLBOARD);
+pub const ARMOR_STAND_FLAG_SHOW_ARMS: u8 = 4;
+pub const ARMOR_STAND_FLAG_NO_BASEPLATE: u8 = 8;
+// Die sechs Gelenkwinkel (Rotations, Grad) danach: Kopf, Rumpf, linker Arm, rechter Arm, linkes
+// Bein, rechtes Bein (ArmorStand.DATA_HEAD_POSE .. DATA_RIGHT_LEG_POSE). Andere Typen fuehren an
+// diesen Indizes andere Serializer -- ROTATION gibt es nur beim Armorstand.
+const ARMOR_STAND_INDEX_HEAD_POSE: u8 = 16;
+const ARMOR_STAND_POSE_COUNT: u8 = 6;
 
 // --- DisplayEntity (1.21.11 yarn, net/minecraft/entity/decoration/DisplayEntity.class) -----
 //
@@ -2592,9 +2599,14 @@ const DISPLAY_INDEX_CONTENT: u8 = 23;
 const ITEM_DISPLAY_INDEX_MODE: u8 = 24;
 // Der getragene Stack an Index 8: ItemEntity.STACK, ThrownItemEntity.ITEM (Ei, Schneeball,
 // Enderperle, Traenke, Erfahrungsflasche), EyeOfEnderEntity.ITEM, AbstractFireballEntity.ITEM
-// und FireworkRocketEntity.ITEM. Bei anderen Typen mit einem Stack an 8 (Rahmen) liest der
-// Empfaenger ihn einfach nicht.
+// und FireworkRocketEntity.ITEM.
 const ENTITY_INDEX_ITEM: u8 = 8;
+// Gegenstandsrahmen: HangingEntity belegt 8 mit DATA_DIRECTION (seit 1.21.2), ItemFrame setzt
+// mit DATA_ITEM (9) und DATA_ROTATION (10) dahinter auf. Frueher hier als 8 und 9 gelesen --
+// dann kam bei keinem Rahmen je ein Inhalt an.
+const HANGING_INDEX_DIRECTION: u8 = 8;
+const ITEM_FRAME_INDEX_ITEM: u8 = 9;
+const ITEM_FRAME_INDEX_ROTATION: u8 = 10;
 const TEXT_DISPLAY_INDEX_LINE_WIDTH: u8 = 24;
 const TEXT_DISPLAY_INDEX_BACKGROUND: u8 = 25;
 const TEXT_DISPLAY_INDEX_TEXT_OPACITY: u8 = 26;
@@ -2748,6 +2760,9 @@ pub struct EntityDataUpdate {
     pub absorption: Option<f32>,
     // Dasselbe Byte wie `display_billboard` (s. ARMOR_STAND_INDEX_FLAGS).
     pub armor_stand_flags: Option<u8>,
+    // Gelenkwinkel eines Armorstands (s. ARMOR_STAND_INDEX_HEAD_POSE), je Gelenk nur, wenn er im
+    // Paket stand.
+    pub armor_stand_poses: [Option<[f32; 3]>; 6],
     // --- DisplayEntity ---------------------------------------------------------------
     pub display_translation: Option<[f32; 3]>,
     pub display_scale: Option<[f32; 3]>,
@@ -2784,8 +2799,11 @@ pub struct EntityDataUpdate {
     pub display_item: Option<Option<ItemStack>>,
     // Der Stack an Index 8 (s. ENTITY_INDEX_ITEM): aussen "stand nicht im Paket", innen leer.
     pub item_stack: Option<Option<ItemStack>>,
-    // Index 9 als Int: beim Gegenstandsrahmen die Drehung des Inhalts (0..7).
+    // Gegenstandsrahmen: Inhalt (Index 9, wie item_stack doppelt), Drehung des Inhalts (Index 10,
+    // 0..7) und die Wand, an der er haengt (Index 8, Direction-Ordinal wie im Spawn-Paket).
+    pub frame_item: Option<Option<ItemStack>>,
     pub frame_rotation: Option<i32>,
+    pub hanging_direction: Option<u8>,
     pub display_block_state: Option<u32>,
     // FireworkRocketEntity.SHOOTER_ENTITY_ID, doppelt wie custom_name: aussen "stand nicht im
     // Paket", innen "kein Schuetze". Welcher Typ gemeint ist, weiss erst der Empfaenger.
@@ -2865,10 +2883,8 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                         out.display_interp_start = Some(v);
                         out.orb_value = Some(v);
                     }
-                    DISPLAY_INDEX_INTERPOLATION_DURATION => {
-                        out.display_interp_duration = Some(v);
-                        out.frame_rotation = Some(v);
-                    }
+                    DISPLAY_INDEX_INTERPOLATION_DURATION => out.display_interp_duration = Some(v),
+                    ITEM_FRAME_INDEX_ROTATION => out.frame_rotation = Some(v),
                     TEXT_DISPLAY_INDEX_LINE_WIDTH => out.text_line_width = Some(v),
                     TEXT_DISPLAY_INDEX_BACKGROUND => out.text_background = Some(v),
                     _ => {}
@@ -2952,7 +2968,10 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                 }
             }
             DATA_TYPE_FACING => {
-                r.read_varint()?;
+                let v = r.read_varint()?;
+                if index == HANGING_INDEX_DIRECTION {
+                    out.hanging_direction = u8::try_from(v).ok();
+                }
             }
             DATA_TYPE_ARM => {
                 let v = r.read_varint()?;
@@ -3036,6 +3055,8 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                     out.display_item = Some(stack);
                 } else if index == ENTITY_INDEX_ITEM {
                     out.item_stack = Some(stack);
+                } else if index == ITEM_FRAME_INDEX_ITEM {
+                    out.frame_item = Some(stack);
                 }
             }
             DATA_TYPE_OPTIONAL_BLOCK_POS => {
@@ -3049,9 +3070,10 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                 r.read_i64()?;
             }
             DATA_TYPE_ROTATION => {
-                r.read_f32()?;
-                r.read_f32()?;
-                r.read_f32()?;
+                let v = [r.read_f32()?, r.read_f32()?, r.read_f32()?];
+                if let Some(i) = index.checked_sub(ARMOR_STAND_INDEX_HEAD_POSE).filter(|&i| i < ARMOR_STAND_POSE_COUNT) {
+                    out.armor_stand_poses[i as usize] = Some(v);
+                }
             }
             DATA_TYPE_STRING => {
                 r.read_string()?;
@@ -3935,6 +3957,24 @@ mod chat_signing_tests {
     }
 
     #[test]
+    fn set_entity_data_liest_den_rahmen_hinter_der_haengerichtung() {
+        // Wie ein Gegenstandsrahmen mit Karte: Wand (8), Inhalt (9), Drehung (10).
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_SET_ENTITY_DATA).write_varint(5);
+        w.write_u8(HANGING_INDEX_DIRECTION).write_varint(DATA_TYPE_FACING).write_varint(4);
+        // Stapel: Anzahl 1, Item, eine Component (map_id = 44) mit Wert 7, keine entfernt.
+        w.write_u8(ITEM_FRAME_INDEX_ITEM).write_varint(DATA_TYPE_ITEM_STACK);
+        w.write_varint(1).write_varint(900).write_varint(1).write_varint(0).write_varint(44).write_varint(7);
+        w.write_u8(ITEM_FRAME_INDEX_ROTATION).write_varint(DATA_TYPE_INT).write_varint(3);
+        w.write_u8(0xFF);
+        let update = read_set_entity_data(&w.into_bytes()).unwrap();
+        assert_eq!(update.hanging_direction, Some(4));
+        assert_eq!(update.frame_item.flatten().and_then(|s| s.map_id), Some(7));
+        assert_eq!(update.frame_rotation, Some(3));
+        assert!(update.item_stack.is_none());
+    }
+
+    #[test]
     fn set_entity_data_liest_die_schlafposition() {
         let mut w = PacketWriter::new();
         w.write_varint(CB_PLAY_SET_ENTITY_DATA).write_varint(42);
@@ -4052,6 +4092,23 @@ mod chat_signing_tests {
         for b in text.as_bytes() {
             w.write_u8(*b);
         }
+    }
+
+    // Gelenkwinkel eines Armorstands: Rotations an 16..21 landen beim passenden Gelenk, ein
+    // Rotations-Feld an anderem Index nirgends.
+    #[test]
+    fn set_entity_data_liest_armorstand_posen() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_SET_ENTITY_DATA).write_varint(7);
+        for (index, v) in [(16u8, [10.0f32, 20.0, 30.0]), (19, [-90.0, 0.0, 5.0]), (22, [1.0, 1.0, 1.0])] {
+            w.write_u8(index).write_varint(DATA_TYPE_ROTATION);
+            for f in v {
+                w.write_f32(f);
+            }
+        }
+        w.write_u8(0xFF);
+        let update = read_set_entity_data(&w.into_bytes()).unwrap();
+        assert_eq!(update.armor_stand_poses, [Some([10.0, 20.0, 30.0]), None, None, Some([-90.0, 0.0, 5.0]), None, None]);
     }
 
     // Das klassische Hologramm: unsichtbarer Armorstand mit dauerhaft eingeblendetem Namen.

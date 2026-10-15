@@ -602,7 +602,15 @@ pub struct Entity {
     // ArmorStandEntity.ARMOR_STAND_FLAGS, nur bei Armorstaenden gefuellt. Entscheidet ueber
     // die Hoehe (s. armor_stand_height) und damit darueber, wo das Namensschild sitzt.
     armor_stand_flags: u8,
+    // Gelenkwinkel in Grad, s. ARMOR_STAND_DEFAULT_POSES.
+    pub armor_stand_poses: [[f32; 3]; 6],
 }
+
+// Grundhaltung eines Armorstands, solange der Server nichts anderes schickt (ArmorStand.
+// DEFAULT_*_POSE): Kopf, Rumpf, linker Arm, rechter Arm, linkes Bein, rechtes Bein, je
+// (x, y, z) in Grad.
+pub const ARMOR_STAND_DEFAULT_POSES: [[f32; 3]; 6] =
+    [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-10.0, 0.0, -10.0], [-15.0, 0.0, 10.0], [-1.0, 0.0, -1.0], [1.0, 0.0, 1.0]];
 
 // Wie Vanilla ein Entity mit getragenem Gegenstand zeichnet.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -665,6 +673,10 @@ pub struct HeldItem {
     pub equip: crate::armor::Equip,
     // Der ganze Stapel fuer die Item-Modelle (s. item_components::StackRef).
     pub stack: crate::item_components::StackRef,
+    // Gefuellte Karte: ihre map_id. Eigens hier und nicht nur im Stapel -- dessen Ring ist auf
+    // einem vollen Server irgendwann ueberschrieben, und die Karte im Rahmen fiele dann aufs
+    // gewoehnliche Item-Modell zurueck.
+    pub map_id: Option<i32>,
 }
 
 // Das Banner eines Schildes, in Copy-Form fuer die Entity-Tabelle: Grundfarbe und bis zu acht
@@ -711,6 +723,7 @@ impl HeldItem {
             banner: ShieldBanner::from_stack(s),
             equip: crate::armor::Equip::from_stack(s),
             stack: crate::item_components::intern(s),
+            map_id: s.map_id,
         }
     }
 
@@ -726,6 +739,7 @@ impl HeldItem {
             banner: None,
             equip: crate::armor::Equip::Default,
             stack: crate::item_components::StackRef::NONE,
+            map_id: None,
         }
     }
 }
@@ -1651,6 +1665,10 @@ impl Entity {
     // 0x0, SMALL_DIMENSIONS = die halbe Normalgroesse, sonst EntityType.ARMOR_STAND mit
     // 0.5 x 1.975). Nur fuer den Ankerpunkt des Namensschildes gedacht -- der Aufrufer prueft
     // vorher, dass es sich ueberhaupt um einen Armorstand handelt.
+    pub fn armor_stand_flags(&self) -> u8 {
+        self.armor_stand_flags
+    }
+
     pub fn armor_stand_height(&self) -> f64 {
         const ARMOR_STAND_HEIGHT: f64 = 1.975;
         if self.armor_stand_flags & protocol::packets::ARMOR_STAND_FLAG_MARKER != 0 {
@@ -1967,6 +1985,7 @@ impl Entities {
                     })
                 }),
                 armor_stand_flags: 0,
+                armor_stand_poses: ARMOR_STAND_DEFAULT_POSES,
             },
         );
     }
@@ -2000,11 +2019,14 @@ impl Entities {
             }
         }
         if is_item_frame(e.entity_type) {
-            if let Some(stack) = &update.item_stack {
+            if let Some(stack) = &update.frame_item {
                 e.item = stack.as_ref().map(HeldItem::from_stack);
             }
             if let Some(r) = update.frame_rotation {
                 e.frame_rotation = r;
+            }
+            if let Some(d) = update.hanging_direction.filter(|d| *d < 6) {
+                e.frame_facing = d;
             }
         }
         if entity_type_name(e.entity_type) == Some("experience_orb") {
@@ -2095,6 +2117,11 @@ impl Entities {
         if entity_type_name(e.entity_type) == Some("armor_stand") {
             if let Some(flags) = update.armor_stand_flags {
                 e.armor_stand_flags = flags;
+            }
+            for (pose, neu) in e.armor_stand_poses.iter_mut().zip(update.armor_stand_poses) {
+                if let Some(neu) = neu {
+                    *pose = neu;
+                }
             }
         }
         let Some(kind) = display_kind(e.entity_type) else { return };

@@ -46,6 +46,9 @@ pub struct Camera {
     // die Frontansicht yaw/pitch selbst drehen, wuerde sich der Spieler mitdrehen.
     pub view_offset: Vec3,
     pub view_inverted: bool,
+    // Rollen um die Blickachse in Grad (Hurt-Cam). Reines Rollen um die Achse durch die
+    // Bildmitte: das Fadenkreuz zeigt weiter genau dorthin, wohin man schaut.
+    pub roll_degrees: f32,
 }
 
 // Obergrenze fuer den Cull-Kegel. Eine Perspektivmatrix ist ueber tan(fov/2) definiert --
@@ -55,7 +58,7 @@ pub const CULL_FOV_MAX_DEGREES: f32 = 175.0;
 
 impl Camera {
     pub fn new(position: DVec3) -> Self {
-        Self { position, yaw: 0.0, pitch: 0.0, fov_degrees: 70.0, projection: 0, view_offset: Vec3::ZERO, view_inverted: false }
+        Self { position, yaw: 0.0, pitch: 0.0, fov_degrees: 70.0, projection: 0, view_offset: Vec3::ZERO, view_inverted: false, roll_degrees: 0.0 }
     }
 
     // Das Minus bei x ist der Kern der Konvention: ohne es dreht steigender Yaw nach +X,
@@ -122,7 +125,21 @@ impl Camera {
     // kamerarelatives Rendern (Geometrie vor der f32-Wandlung um die Kameraposition
     // versetzen), was ein deutlich groesserer Umbau waere.
     pub fn view_matrix(&self) -> Mat4 {
-        Mat4::look_to_rh(self.render_view_position(), self.view_forward(), Vec3::Y)
+        self.roll() * Mat4::look_to_rh(self.render_view_position(), self.view_forward(), Vec3::Y)
+    }
+
+    // Nur die Drehung der Ansicht, ohne Versatz -- fuer den Himmel, der um das Auge liegt.
+    pub fn view_rotation(&self) -> Mat4 {
+        self.roll() * Mat4::look_to_rh(Vec3::ZERO, self.view_forward(), Vec3::Y)
+    }
+
+    // Im Blickraum zeigt Z aus dem Bild heraus -- eine Drehung um Z rollt das Bild um seine Mitte.
+    fn roll(&self) -> Mat4 {
+        if self.roll_degrees == 0.0 {
+            Mat4::IDENTITY
+        } else {
+            Mat4::from_rotation_z(self.roll_degrees.to_radians())
+        }
     }
 
     pub fn proj_matrix(&self, aspect: f32) -> Mat4 {

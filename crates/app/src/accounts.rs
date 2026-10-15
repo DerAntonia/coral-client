@@ -1,11 +1,9 @@
 // Gespeicherte Konten des Acc-Managers: jedes Konto, mit dem man sich einmal angemeldet hat
-// (Microsoft, Refresh-Token, eingefuegtes Minecraft-Token), dazu die Konten aus Prism. Liegt
+// (Microsoft, Refresh-Token, eingefuegtes Minecraft-Token). Liegt
 // fuer alle Configs gemeinsam in accounts.conf -- ein Konto gehoert dem Rechner, nicht einer
 // Config. Welches gerade angemeldet ist, steht weiter in den Settings (account_uuid).
 //
 // Die Datei enthaelt Tokens, deshalb (unter Unix) nur fuer den Besitzer lesbar.
-
-use std::collections::HashSet;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Source {
@@ -13,8 +11,6 @@ pub enum Source {
     Microsoft,
     // Eingefuegtes Minecraft-Token: gilt bis zu seinem Ablauf (~24 h), danach ist Schluss.
     Token,
-    // Aus Prism uebernommen: Prism erneuert das Token, wir lesen es bei jedem Oeffnen neu.
-    Prism,
 }
 
 impl Source {
@@ -22,7 +18,6 @@ impl Source {
         match self {
             Source::Microsoft => "microsoft",
             Source::Token => "token",
-            Source::Prism => "prism",
         }
     }
 
@@ -30,7 +25,7 @@ impl Source {
         match key {
             "microsoft" => Some(Source::Microsoft),
             "token" => Some(Source::Token),
-            "prism" => Some(Source::Prism),
+            // Frueher gab es Konten aus Prism ("prism") -- die fallen beim Laden weg.
             _ => None,
         }
     }
@@ -68,12 +63,9 @@ pub enum Check {
 #[derive(Default)]
 pub struct Store {
     pub list: Vec<Account>,
-    // Vergessene Prism-Konten: tauchen beim naechsten Einlesen nicht wieder auf, erst nach
-    // "Aus Prism importieren".
-    pub forgotten: HashSet<String>,
 }
 
-// Vergleichsschluessel einer UUID: klein, ohne Bindestriche (Prism schreibt sie mit).
+// Vergleichsschluessel einer UUID: klein, ohne Bindestriche.
 pub fn key(uuid: &str) -> String {
     uuid.replace('-', "").to_lowercase()
 }
@@ -84,7 +76,7 @@ fn same_uuid(a: &str, b: &str) -> bool {
 
 impl Store {
     // Format: eine Zeile je Konto "konto<TAB>quelle<TAB>name<TAB>uuid<TAB>token<TAB>refresh<TAB>
-    // client-id", dazu "vergessen<TAB>uuid". Tokens und Namen enthalten keine Tabs.
+    // client-id". Tokens und Namen enthalten keine Tabs.
     pub fn parse(text: &str) -> Store {
         let mut store = Store::default();
         for line in text.lines() {
@@ -103,9 +95,6 @@ impl Store {
                         refresh_token: refresh.to_string(),
                         client_id: client_id.to_string(),
                     });
-                }
-                ["vergessen", uuid] => {
-                    store.forgotten.insert(key(uuid));
                 }
                 _ => {}
             }
@@ -127,11 +116,6 @@ impl Store {
                 feld(&a.client_id)
             ));
         }
-        let mut vergessen: Vec<&String> = self.forgotten.iter().collect();
-        vergessen.sort();
-        for uuid in vergessen {
-            out.push_str(&format!("vergessen\t{uuid}\n"));
-        }
         out
     }
 
@@ -143,7 +127,6 @@ impl Store {
     // Mit Refresh-Token wird es ein Microsoft-Konto; ohne behaelt ein vorhandenes seine Quelle
     // und sein Refresh-Token.
     pub fn upsert(&mut self, creds: &auth::Credentials, msa: Option<(String, String)>, source_without_msa: Source) {
-        self.forgotten.remove(&key(&creds.profile_id));
         let neu = match self.find(&creds.profile_id) {
             Some(i) => &mut self.list[i],
             None => {
@@ -168,51 +151,7 @@ impl Store {
     }
 
     pub fn forget(&mut self, i: usize) -> Option<Account> {
-        if i >= self.list.len() {
-            return None;
-        }
-        let a = self.list.remove(i);
-        if a.source == Source::Prism {
-            self.forgotten.insert(key(&a.uuid));
-        }
-        Some(a)
-    }
-
-    // Prism-Konten einarbeiten. Neue kommen hinten dazu (ausser vergessene, es sei denn
-    // `explicit` -- der Knopf "Aus Prism importieren" holt auch die zurueck). Bei einem
-    // bekannten Konto ohne eigenes Refresh-Token gewinnt das laenger gueltige Token: Prism
-    // erneuert seins, ein eingefuegtes Token laeuft irgendwann ab. Gibt die Zahl neuer
-    // Konten zurueck.
-    pub fn merge_prism(&mut self, prism: &[auth::LauncherAccount], explicit: bool, now: u64) -> usize {
-        let mut neu = 0;
-        for p in prism {
-            let k = key(&p.uuid);
-            if explicit {
-                self.forgotten.remove(&k);
-            }
-            match self.find(&p.uuid) {
-                Some(i) => {
-                    let a = &mut self.list[i];
-                    if a.source != Source::Microsoft && a.access_token != p.token && expiry(&p.token).unwrap_or(now) >= expiry(&a.access_token).unwrap_or(0) {
-                        a.access_token = p.token.clone();
-                        a.name = p.name.clone();
-                    }
-                }
-                None if self.forgotten.contains(&k) => {}
-                None => {
-                    self.list.push(Account {
-                        name: p.name.clone(),
-                        uuid: p.uuid.replace('-', ""),
-                        source: Source::Prism,
-                        access_token: p.token.clone(),
-                        refresh_token: String::new(),
-                        client_id: String::new(),
-                    });
-                    neu += 1;
-                }
-            }
-        }
-        neu
+        (i < self.list.len()).then(|| self.list.remove(i))
     }
 }
 
@@ -298,10 +237,6 @@ mod tests {
         auth::Credentials { access_token: token.into(), profile_id: uuid.into(), username: name.into() }
     }
 
-    fn prism(name: &str, uuid: &str, token: &str) -> auth::LauncherAccount {
-        auth::LauncherAccount { name: name.into(), uuid: uuid.into(), token: token.into() }
-    }
-
     #[test]
     fn ablauf_aus_dem_jwt() {
         assert_eq!(expiry(&jwt(1_800_000_000)), Some(1_800_000_000));
@@ -318,10 +253,8 @@ mod tests {
         let mut s = Store::default();
         s.upsert(&creds("DerAntonia", "aa", "t1"), Some(("r1".into(), "cid".into())), Source::Token);
         s.upsert(&creds("uhze", "bb", "t2"), None, Source::Token);
-        s.forgotten.insert("cc".into());
         let t = Store::parse(&s.serialize());
         assert_eq!(t.list, s.list);
-        assert_eq!(t.forgotten, s.forgotten);
         assert_eq!(t.list[0].source, Source::Microsoft);
         assert_eq!(t.list[1].source, Source::Token);
     }
@@ -338,29 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn prism_konten_kommen_dazu_vergessene_nur_beim_import() {
-        let mut s = Store::default();
-        let p = [prism("uhze", "11112222-3333-4444-5555-666677778888", &jwt(2000))];
-        assert_eq!(s.merge_prism(&p, false, 1000), 1);
-        assert_eq!(s.list[0].uuid, "11112222333344445555666677778888");
-        assert_eq!(s.merge_prism(&p, false, 1000), 0, "kein Doppel");
-        s.forget(0);
-        assert_eq!(s.merge_prism(&p, false, 1000), 0, "vergessen bleibt vergessen");
-        assert_eq!(s.merge_prism(&p, true, 1000), 1, "Import holt es zurueck");
-    }
-
-    #[test]
-    fn das_laenger_gueltige_token_gewinnt() {
-        let mut s = Store::default();
-        s.upsert(&creds("uhze", "aa", &jwt(5000)), None, Source::Token);
-        s.merge_prism(&[prism("uhze", "aa", &jwt(3000))], false, 1000);
-        assert_eq!(expiry(&s.list[0].access_token), Some(5000));
-        s.merge_prism(&[prism("uhze", "aa", &jwt(9000))], false, 1000);
-        assert_eq!(expiry(&s.list[0].access_token), Some(9000));
-        // Ein Microsoft-Konto erneuert sich selbst, Prism ueberschreibt es nicht.
-        s.upsert(&creds("uhze", "aa", "eigenes"), Some(("r".into(), "c".into())), Source::Token);
-        s.merge_prism(&[prism("uhze", "aa", &jwt(99_000))], false, 1000);
-        assert_eq!(s.list[0].access_token, "eigenes");
+    fn alte_prism_konten_fallen_weg() {
+        let t = Store::parse("konto\tprism\tuhze\taa\tt\t\t\nvergessen\tbb\nkonto\ttoken\tx\tcc\tt\t\t\n");
+        assert_eq!(t.list.len(), 1);
+        assert_eq!(t.list[0].uuid, "cc");
     }
 
     #[test]

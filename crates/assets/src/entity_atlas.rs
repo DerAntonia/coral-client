@@ -64,9 +64,11 @@ pub const TRIM_WIDTH: u32 = 64;
 pub const TRIM_HEIGHT: u32 = 32;
 
 // Plaetze fuer Kartenbilder (128x128, s. world::map): Karten in Rahmen und in der Hand werden
-// wie die Items im Entity-Durchgang gezeichnet. 16 gleichzeitig (262k Pixel) -- eine Wand aus
-// mehr Karten verdraengt die am laengsten nicht gesehenen.
-pub const MAP_SLOTS: usize = 16;
+// wie die Items im Entity-Durchgang gezeichnet. 96 gleichzeitig (1,6M Pixel): Kartenwaende in
+// Lobbys bestehen oft aus Dutzenden Karten, mit den frueheren 16 blieb der Rest leer. Der Atlas
+// war vorher erst bis Zeile ~870 belegt; eine Wand aus noch mehr Karten verdraengt die am
+// laengsten nicht gesehenen.
+pub const MAP_SLOTS: usize = 96;
 pub const MAP_SLOT_SIZE: u32 = 128;
 
 // Plaetze nur fuer das GESICHT eines Spielers (8x8 Gesicht + 8x8 Hutlage nebeneinander), fuer
