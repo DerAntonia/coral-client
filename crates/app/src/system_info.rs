@@ -17,10 +17,50 @@ pub fn memory() -> Option<Memory> {
     {
         parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        windows_memory()
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         None
     }
+}
+
+// Windows kennt keinen Swap wie Linux, nur die Auslagerungsdatei: der Commit-Rahmen
+// (TotalPageFile) ist RAM plus Auslagerungsdatei, der Swap also der Teil darueber.
+#[cfg(windows)]
+fn windows_memory() -> Option<Memory> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: MEMORYSTATUSEX ist ein reines Datenstruct, dwLength wird wie verlangt gesetzt.
+    let mut s: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    s.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    if unsafe { GlobalMemoryStatusEx(&mut s) } == 0 {
+        return None;
+    }
+    let ram_used = s.ullTotalPhys.saturating_sub(s.ullAvailPhys);
+    let swap_total = s.ullTotalPageFile.saturating_sub(s.ullTotalPhys);
+    let commit_used = s.ullTotalPageFile.saturating_sub(s.ullAvailPageFile);
+    let swap_used = commit_used.saturating_sub(ram_used).min(swap_total);
+    Some(Memory { ram_used, ram_total: s.ullTotalPhys, swap_used, swap_total })
+}
+
+// "AMD Ryzen 7 9800X3D 8-Core Processor" aus der Registry -- PROCESSOR_IDENTIFIER nennt nur
+// Familie/Modell/Stepping.
+#[cfg(windows)]
+fn windows_cpu_name() -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (key, value) = (wide(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"), wide("ProcessorNameString"));
+    let mut buf = [0u16; 256];
+    let mut len = std::mem::size_of_val(&buf) as u32;
+    // SAFETY: Schluessel und Wertname sind nullterminiert, buf/len beschreiben einen gueltigen Puffer.
+    let r = unsafe { RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len) };
+    if r != 0 {
+        return None;
+    }
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..n]).split_whitespace().collect::<Vec<_>>().join(" ")).filter(|s| !s.is_empty())
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -44,7 +84,9 @@ pub fn cpu_name() -> Option<String> {
         let text = std::fs::read_to_string("/proc/cpuinfo").ok()?;
         text.lines().find(|z| z.starts_with("model name"))?.split_once(':')?.1.split_whitespace().collect::<Vec<_>>().join(" ")
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    let name = windows_cpu_name().or_else(|| std::env::var("PROCESSOR_IDENTIFIER").ok())?;
+    #[cfg(not(any(target_os = "linux", windows)))]
     let name = std::env::var("PROCESSOR_IDENTIFIER").ok()?;
     Some(if threads > 0 { format!("{name} ({threads} Threads)") } else { name })
 }
@@ -263,6 +305,16 @@ pub fn format_used(used: u64, total: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_liefert_cpu_und_speicher() {
+        let name = cpu_name().unwrap();
+        assert!(!name.contains("Family"), "{name}");
+        let m = memory().unwrap();
+        assert!(m.ram_total > 0 && m.ram_used <= m.ram_total && m.swap_used <= m.swap_total, "{m:?}");
+        eprintln!("{name} | RAM {} | Swap {}", format_used(m.ram_used, m.ram_total), format_used(m.swap_used, m.swap_total));
+    }
 
     #[test]
     fn meminfo_wird_gelesen() {

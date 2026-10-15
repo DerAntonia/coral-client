@@ -41,6 +41,10 @@ x11rb = { version = "0.13", features = ["xkb", "composite", "present", "dri3"] }
 libc = "0.2"
 evdev = "0.12"
 
+# CPU-Name aus der Registry und Arbeitsspeicher fuer den System-Abschnitt (s. system_info.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_SystemInformation"] }
+
 [dev-dependencies]
 # Nur zum Pruefen der WGSL-Dateien im Test (s. tests/shaders.rs) -- dieselbe Version, die
 # wgpu ohnehin zieht, also kein zusaetzlicher Download.
