@@ -121,6 +121,8 @@ pub struct CursorFx {
     tail: (f32, f32),
     /// Wie viele Tasten gerade unten sind -- osu! federt erst zurueck, wenn KEINE mehr haelt.
     buttons_down: u32,
+    /// Welche Tasten (Bit je Taste) unten sind, s. `button`.
+    held: u32,
 }
 
 impl CursorFx {
@@ -132,6 +134,7 @@ impl CursorFx {
             drag: DragState::NotDragging,
             tail: (0.0, 0.0),
             buttons_down: 0,
+            held: 0,
         }
     }
 
@@ -169,12 +172,44 @@ impl CursorFx {
         }
     }
 
+    /// Taste `id` ging runter oder hoch. Anders als press/release zaehlt jede Taste nur
+    /// einmal: geht ein Loslassen verloren (unter Windows beim Alt-Tab zurueck ins Spiel),
+    /// heilt der naechste Klick derselben Taste den Zustand, statt dass der Zeiger fuer immer
+    /// gedrueckt bleibt.
+    pub fn button(&mut self, now: Instant, pos: (f32, f32), id: u32, down: bool) {
+        let bit = 1u32 << id.min(31);
+        if down == (self.held & bit != 0) {
+            return;
+        }
+        self.held ^= bit;
+        if down {
+            self.press(now, pos);
+        } else {
+            self.release(now);
+        }
+    }
+
+    /// Alle Tasten los, z.B. bei Fokusverlust: ein Loslassen ausserhalb des Fensters kommt
+    /// nie an.
+    pub fn release_all(&mut self, now: Instant) {
+        if self.buttons_down == 0 && self.held == 0 {
+            return;
+        }
+        self.held = 0;
+        self.buttons_down = 0;
+        self.spring_back(now);
+    }
+
     /// Eine Maustaste ging hoch.
     pub fn release(&mut self, now: Instant) {
         self.buttons_down = self.buttons_down.saturating_sub(1);
         if self.buttons_down > 0 {
             return;
         }
+        self.spring_back(now);
+    }
+
+    fn spring_back(&mut self, now: Instant) {
         self.scale.retarget(now, 1.0, RELEASE_SCALE_MS, Easing::OutElastic);
         self.additive.retarget(now, 0.0, RELEASE_FADE_MS, Easing::OutQuint);
         if self.drag != DragState::NotDragging {
@@ -297,6 +332,24 @@ mod tests {
         assert!((fx.scale(nach(t0, 900)) - PRESS_SCALE).abs() < 1e-3, "eine Taste hält noch");
         fx.release(nach(t0, 900));
         assert!(fx.scale(nach(t0, 1400)) > 0.99, "jetzt muss er zurueck sein");
+    }
+
+    #[test]
+    // Verlorenes Loslassen: der naechste Klick derselben Taste loest den Zeiger wieder, und
+    // Fokusverlust laesst alles los.
+    fn verlorenes_loslassen_haengt_nicht_fest() {
+        let t0 = Instant::now();
+        let mut fx = CursorFx::new(t0);
+        fx.button(t0, (0.0, 0.0), 0, true);
+        fx.button(nach(t0, 100), (0.0, 0.0), 0, true);
+        fx.button(nach(t0, 200), (0.0, 0.0), 0, false);
+        assert!(fx.additive_alpha(nach(t0, 800)) < 1e-2, "ein Klick muss reichen");
+
+        fx.button(nach(t0, 1000), (0.0, 0.0), 1, true);
+        fx.release_all(nach(t0, 1100));
+        assert!(fx.scale(nach(t0, 1700)) > 0.99 && fx.additive_alpha(nach(t0, 1700)) < 1e-2);
+        fx.button(nach(t0, 1800), (0.0, 0.0), 1, false);
+        assert!(fx.additive_alpha(nach(t0, 1800)) < 1e-2, "Loslassen nach release_all aendert nichts");
     }
 
     #[test]

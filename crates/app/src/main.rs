@@ -50149,6 +50149,7 @@ impl ApplicationHandler for App {
                 // das release der noch gedrueckten Taste sonst nie an (evdev laeuft weiter,
                 // aber wir wenden es nicht mehr an) -- der Spieler wuerde ewig weiterlaufen.
                 if !focused {
+                    self.cursor_fx.release_all(Instant::now());
                     self.clear_controls();
                     // Loslassen ausserhalb des Fensters bekommen wir nicht mit.
                     self.binds_down.clear();
@@ -50353,11 +50354,16 @@ impl ApplicationHandler for App {
                         self.track_bind(Bind::Mouse(mouse), state == ElementState::Pressed);
                     }
                 }
+                let taste = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Right => 1,
+                    MouseButton::Middle => 2,
+                    MouseButton::Back => 3,
+                    MouseButton::Forward => 4,
+                    MouseButton::Other(n) => 5 + u32::from(n),
+                };
                 let jetzt = Instant::now();
-                match state {
-                    ElementState::Pressed => self.cursor_fx.press(jetzt, self.cursor_pos),
-                    ElementState::Released => self.cursor_fx.release(jetzt),
-                }
+                self.cursor_fx.button(jetzt, self.cursor_pos, taste, state == ElementState::Pressed);
                 // Offene Kontenliste: Klick darin waehlt ein Konto, daneben schliesst sie.
                 if button == MouseButton::Left && state == ElementState::Pressed && self.account_menu_open && self.account_menu_press() {
                     return;
