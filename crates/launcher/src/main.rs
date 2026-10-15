@@ -952,6 +952,7 @@ const DEBUG_FLAGS: &[(&str, &str, &str)] = &[
     ("CORAL_WATER_DEBUG", "Wasser-Bewegung", "Bewegung im Wasser je Tick loggen (Sprint-Schwimmen)."),
     ("CORAL_SOUND_DEBUG", "Klaenge", "Abgespielte Server-Klaenge loggen."),
     ("CORAL_PACKET_SCAN", "Login-Paket", "Das erste Play-Paket (Login) mit seinen ersten Bytes loggen."),
+    ("CORAL_SCREENSHOT", "Screenshot", "F2 kopiert das gerade gezeigte Bild in die Zwischenablage (auch im Exclusive-Fullscreen)."),
     ("CORAL_PERFORMANCE", "Hohe Prioritaet", "Den Client mit erhoehter Prozess-Prioritaet starten (fuer Latenzmessungen)."),
     ("CORAL_SOUNDLOG", "Klang-Mitschnitt", "Jeden abgespielten Klang (vom Server und vom Client selbst) mit Zeit, Verursacher und Abstand in soundlog.txt neben dem Client-Log mitschreiben."),
     ("CORAL_PKTLOG", "Paket-Mitschnitt", "Jedes Paket in pktlog.txt neben dem Client-Log mitschreiben (wird gross)."),

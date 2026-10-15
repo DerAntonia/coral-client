@@ -47,6 +47,7 @@ mod recipe_book;
 mod server_packs;
 mod skin_tab;
 mod skin_zips;
+mod screenshot;
 mod custom_sky;
 mod precipitation;
 mod sound_log;
@@ -5963,6 +5964,10 @@ struct GpuState {
     // zu verlassen, den wgpu bei 0 ohnehin auf einen hoeheren Wert clamped (s.
     // wgpu-types-Dokumentation zu desired_maximum_frame_latency).
     last_submission: Option<wgpu::SubmissionIndex>,
+    // Debug-Flag CORAL_SCREENSHOT (s. screenshot.rs): ob die Swapchain lesbar ist, und ob der
+    // naechste Frame kopiert werden soll (F2).
+    screenshot_supported: bool,
+    screenshot_requested: bool,
     // Ob der Zero-Modus gerade aktiv ist (settings.frame_latency == 0), s. set_frame_latency.
     fence_wait_zero: bool,
     // Fuer den Frame-Profiler: Zeit in render_world fuer Kamera, Zeichenreihenfolge,
@@ -6253,12 +6258,20 @@ impl GpuState {
             .unwrap_or(wgpu::PresentMode::Fifo);
         println!("[gpu] Present-Modi laut Treiber: {present_modes:?}, nehme {present_mode:?}");
 
+        // CORAL_SCREENSHOT: die Swapchain zusaetzlich lesbar machen, sonst nicht (s. screenshot.rs).
+        let screenshot_supported = screenshot::enabled() && surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
+        if screenshot::enabled() {
+            println!("[screenshot] F2 kopiert das Bild in die Zwischenablage: {}", if screenshot_supported { "bereit" } else { "Swapchain nicht lesbar, aus" });
+        }
+
         let config = wgpu::SurfaceConfiguration {
             // COPY_DST zusaetzlich zu RENDER_ATTACHMENT: der letzte Schritt jedes Frames
             // kopiert das fertige Bild aus offscreen_texture in die Swapchain-Textur (s.
             // dortigen Kommentar), statt direkt hineinzuzeichnen -- braucht Schreibzugriff
             // per Kopie.
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST
+                | if screenshot_supported { wgpu::TextureUsages::COPY_SRC } else { wgpu::TextureUsages::empty() },
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -7133,6 +7146,8 @@ impl GpuState {
             block_renderer,
             adapter_info,
             last_submission: None,
+            screenshot_supported,
+            screenshot_requested: false,
             fence_wait_zero: false,
             last_sort_ms: 0.0,
             measure_gpu_done: false,
@@ -8141,6 +8156,8 @@ impl GpuState {
         if let Some(timer) = self.gpu_timer.as_mut() {
             timer.end_frame(&mut encoder);
         }
+        let screenshot = std::mem::take(&mut self.screenshot_requested)
+            .then(|| screenshot::copy(&self.device, &mut encoder, &frame.texture, self.config.format));
         let encode_ms = work_started.elapsed().as_secs_f32() * 1000.0;
         let t = Instant::now();
         self.last_submission = Some(self.queue.submit(Some(encoder.finish())));
@@ -8165,6 +8182,9 @@ impl GpuState {
         let present_ns = vblank::monotonic_ns();
         frame.present();
         let present_ms = t.elapsed().as_secs_f32() * 1000.0;
+        if let Some(pending) = screenshot {
+            screenshot::finish(&self.device, pending);
+        }
         // Present ist Warten auf Treiber und Compositor, keine eigene Arbeit -- wie das Warten
         // in get_current_texture(). Haelt das System den Bildschirm an (Screenshot-Werkzeug),
         // stand das sonst als Arbeitsspitze in der Leistungsanzeige (25 statt 2,5 ms).
@@ -50572,6 +50592,18 @@ impl ApplicationHandler for App {
                     && self.copy_selection()
                 {
                     return;
+                }
+                // Debug-Flag CORAL_SCREENSHOT: F2 legt das naechste Bild in die Zwischenablage.
+                if self.awaiting_keybind.is_none()
+                    && key_event.state == ElementState::Pressed
+                    && !key_event.repeat
+                    && key_event.physical_key == PhysicalKey::Code(KeyCode::F2)
+                {
+                    if let Some(gpu) = self.gpu.as_mut().filter(|g| g.screenshot_supported) {
+                        gpu.screenshot_requested = true;
+                        self.push_log("Screenshot in die Zwischenablage kopiert");
+                        return;
+                    }
                 }
                 // Strg+D mit Markierung: aufheben.
                 if self.awaiting_keybind.is_none()
