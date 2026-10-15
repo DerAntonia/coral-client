@@ -427,6 +427,8 @@ struct Aktiv {
     source: d3dkmt::Source,
     sichtbar: u32,
     gesamt: u32,
+    // Zaehlerstand der obersten sichtbaren Zeile (s. start).
+    erste: u32,
     periode_ns: f64,
 }
 #[cfg(windows)]
@@ -445,10 +447,10 @@ const PRESENT_RING: usize = 240;
 #[cfg(windows)]
 pub fn note_present() {
     let Some(a) = AKTIV.lock().ok().and_then(|a| *a) else { return };
-    let Some((zeile, in_luecke)) = d3dkmt::scanline(a.source) else { return };
-    // Treiber, die in der Luecke 0 melden: Beginn der Luecke annehmen.
-    let zeile = if in_luecke && zeile < a.sichtbar { a.sichtbar } else { zeile };
-    let ns = zeile as f64 * a.periode_ns / a.gesamt as f64;
+    let Some((zeile, _)) = d3dkmt::scanline(a.source) else { return };
+    // Ab der obersten sichtbaren Zeile gezaehlt, die Luecke liegt dann hinten.
+    let lage = (zeile + a.gesamt - a.erste) % a.gesamt;
+    let ns = lage as f64 * a.periode_ns / a.gesamt as f64;
     let Ok(mut ring) = PRESENTS.lock() else { return };
     ring.push_back(ns);
     if ring.len() > PRESENT_RING {
@@ -509,16 +511,27 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
     }
     let h = gewaehlt.h;
     let period0 = 1e9 / gewaehlt.refresh_hz.max(1) as f64;
-    // vtotal: zwei Bilder lang die hoechste Zeile suchen. Treiber, die in der Luecke 0 melden,
-    // liefern nichts ueber h -- dann bleibt es bei der Schaetzung in tear_target_phase.
+    // vtotal und die oberste sichtbare Zeile: zwei Bilder lang mitlesen. Der Zaehler beginnt
+    // nicht unbedingt mit der obersten sichtbaren Zeile -- bei AMD liegt ein Teil der Luecke
+    // am Anfang (gemessen an einer RX 9060 XT, 1080p: sichtbar 43..1122, Luecke 1122..1124 und
+    // 0..42). Oberste Zeile = die erste ausserhalb der Luecke nach einer Luecke. Treiber, die in
+    // der Luecke 0 melden, liefern nichts ueber h -- dann bleibt es bei der Schaetzung in
+    // tear_target_phase.
     let anfang = monotonic_ns();
     let mut hoechste = 0;
+    let mut erste_sichtbar = None;
+    let mut war_luecke = false;
     while ((monotonic_ns() - anfang) as f64) < 2.0 * period0 {
-        if let Some((zeile, _)) = d3dkmt::scanline(source) {
+        if let Some((zeile, luecke)) = d3dkmt::scanline(source) {
             hoechste = hoechste.max(zeile);
+            if war_luecke && !luecke && erste_sichtbar.is_none() {
+                erste_sichtbar = Some(zeile);
+            }
+            war_luecke = luecke;
         }
     }
     let lines = (hoechste >= h).then_some((h, hoechste + 1));
+    let erste = erste_sichtbar.filter(|_| lines.is_some()).unwrap_or(0);
     let monitor = Arc::new(VblankMonitor {
         inner: Mutex::new(Inner::default()),
         source: format!(
@@ -530,7 +543,7 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
             gewaehlt.y,
             gewaehlt.refresh_hz,
             match lines {
-                Some((_, gesamt)) => format!("{gesamt} Zeilen"),
+                Some((_, gesamt)) => format!("{gesamt} Zeilen, sichtbar ab Zaehlerstand {erste}"),
                 None => "Zeilen geschaetzt".into(),
             }
         ),
@@ -538,7 +551,7 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
     });
     if let Ok(mut a) = AKTIV.lock() {
         let (sichtbar, gesamt) = lines.unwrap_or((h, h + 45));
-        *a = Some(Aktiv { source, sichtbar, gesamt, periode_ns: period0 });
+        *a = Some(Aktiv { source, sichtbar, gesamt, erste, periode_ns: period0 });
     }
     let weak = Arc::downgrade(&monitor);
     std::thread::Builder::new()
@@ -553,11 +566,13 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
                 let periode = monitor.latest().map_or(period0, |(_, p)| p);
                 let (sichtbar, gesamt) = lines.unwrap_or((h, h + 45));
                 let zeile_ns = periode / gesamt as f64;
-                // Beginn des Auslesens von Zeile 0, das auf diese Luecke folgt.
+                // Beginn des Auslesens der obersten sichtbaren Zeile, das auf diese Luecke folgt.
                 let ts_ns = match d3dkmt::scanline(source) {
-                    Some((zeile, true)) if zeile >= sichtbar => jetzt + ((gesamt - zeile) as f64 * zeile_ns) as i64,
-                    Some((zeile, _)) if zeile < sichtbar => jetzt - (zeile as f64 * zeile_ns) as i64,
-                    _ => jetzt + ((gesamt - sichtbar) as f64 * zeile_ns) as i64,
+                    Some((zeile, _)) => match (zeile + gesamt - erste) % gesamt {
+                        lage if lage < sichtbar => jetzt - (lage as f64 * zeile_ns) as i64,
+                        lage => jetzt + ((gesamt - lage) as f64 * zeile_ns) as i64,
+                    },
+                    None => jetzt + ((gesamt - sichtbar) as f64 * zeile_ns) as i64,
                 };
                 // Verpasste VBlanks (Thread kam spaet dran) im Zaehler nachtragen.
                 let seq = match letzter {
@@ -615,6 +630,38 @@ mod tests {
         let ohne_lage = Target { x: 0, y: 0, w: 1920, h: 1080, refresh_mhz: Some(120_000) };
         assert_eq!(pick_output(&[links, rechts], Some(ohne_lage)).unwrap().pipe, 1);
         assert_eq!(pick_output(&[links, rechts], None).unwrap().pipe, 0);
+    }
+
+    // Windows, echte Hardware: was meldet der Zeilenzaehler direkt nach dem VBlank-Ereignis, und
+    // wie laeuft er ueber ein Bild? Zeigt, ob Zeile 0 wirklich die oberste sichtbare Zeile ist.
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn zeilenzaehler_um_den_vblank() {
+        let displays = d3dkmt::displays();
+        let source = d3dkmt::open(&displays[0]).unwrap();
+        for _ in 0..5 {
+            assert!(d3dkmt::wait(source));
+            let t0 = monotonic_ns();
+            let mut verlauf = Vec::new();
+            while monotonic_ns() - t0 < 9_000_000 {
+                let t = monotonic_ns() - t0;
+                if let Some(z) = d3dkmt::scanline(source) {
+                    if verlauf.last().is_none_or(|(_, l, b)| *l != z.0 || *b != z.1) {
+                        verlauf.push((t, z.0, z.1));
+                    }
+                }
+            }
+            // Erste Werte, Sprungstellen (Zeile faellt) und Wechsel der Luecken-Flagge.
+            let mut s = String::new();
+            for (i, (t, l, b)) in verlauf.iter().enumerate() {
+                let vorher = i.checked_sub(1).map(|j| verlauf[j]);
+                if i < 3 || vorher.is_some_and(|(_, pl, pb)| *l < pl || *b != pb) {
+                    s += &format!(" [{:.3} ms: Zeile {l}{}]", *t as f64 / 1e6, if *b { " Luecke" } else { "" });
+                }
+            }
+            println!("nach VBlank-Ereignis:{s}");
+        }
     }
 
     // Echte Hardware: misst eine Sekunde lang die Monitorfrequenz.
