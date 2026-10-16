@@ -115,6 +115,12 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 
 // Textur (linear, aus dem sRGB-Atlas) mal Vanilla-Vertexfarbe, gerechnet wie in Vanilla.
 fn tint_srgb(tex_linear: vec3<f32>, color: vec3<f32>) -> vec3<f32> {
+    // Kennzeichen "weiss ueberblenden" (blinkendes TNT, s. BlockVertex::with_white_flash):
+    // Farbe c steht als c + 2. Vanillas weisses Overlay mischt zu 75 % Weiss bei.
+    if (color.r > 1.5) {
+        let t = linear_to_srgb(tex_linear) * (color - vec3<f32>(2.0));
+        return srgb_to_linear(mix(t, vec3<f32>(1.0), 0.75));
+    }
     return srgb_to_linear(linear_to_srgb(tex_linear) * color);
 }
 

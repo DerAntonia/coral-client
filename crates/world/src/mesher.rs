@@ -77,6 +77,13 @@ pub struct BlockVertex {
 }
 
 impl BlockVertex {
+    // Kennzeichen "weiss ueberblenden" (blinkendes TNT, TntRenderer): Farbe c wird als c + 2
+    // gespeichert, der Shader (tint_srgb) erkennt es an Werten ueber 1,5.
+    pub fn with_white_flash(mut self) -> Self {
+        self.color = self.color.map(|c| c + 2.0);
+        self
+    }
+
     // Kennzeichen "hart abschneiden" (Feuer im durchscheinenden Pass, s. fs_main_translucent):
     // Farbe c wird als -1 - c gespeichert, also immer unter -0,5. Linear interpoliert bleibt
     // das ueber das ganze Viereck erhalten, und der Shader holt c mit -1 - x zurueck.

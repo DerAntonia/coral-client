@@ -2593,6 +2593,7 @@ const PLAYER_INDEX_ABSORPTION: u8 = 17;
 //   ItemDisplayEntity:  ITEM(23), ITEM_DISPLAY(24)
 //   BlockDisplayEntity: BLOCK_STATE(23)
 const DISPLAY_INDEX_CONTENT: u8 = 23;
+const TNT_INDEX_BLOCK_STATE: u8 = 9;
 // ItemDisplayEntity.ITEM_DISPLAY: der ItemDisplayContext als Byte (0 NONE, 1/2 dritte Person
 // links/rechts, 3/4 Ego links/rechts, 5 HEAD, 6 GUI, 7 GROUND, 8 FIXED, 9 ON_SHELF). An
 // Index 24 steht beim Text-Display die Zeilenbreite -- ein INT, also unverwechselbar.
@@ -2790,6 +2791,7 @@ pub struct EntityDataUpdate {
     // Interpolation einer Transformations-Aenderung: Verzoegerung und Dauer in Ticks.
     pub display_interp_start: Option<i32>,
     // ExperienceOrb.DATA_VALUE (ebenfalls Index 8, Int) -- nur bei einer XP-Kugel gemeint.
+    // Bei gezuendetem TNT steht hier die Zuendzeit (PrimedTnt.DATA_FUSE_ID).
     pub orb_value: Option<i32>,
     pub display_interp_duration: Option<i32>,
     pub item_display_mode: Option<u8>,
@@ -2805,6 +2807,8 @@ pub struct EntityDataUpdate {
     pub frame_rotation: Option<i32>,
     pub hanging_direction: Option<u8>,
     pub display_block_state: Option<u32>,
+    // PrimedTnt.DATA_BLOCK_STATE_ID (Index 9): welcher Block da brennt (Vorgabe: TNT).
+    pub tnt_block_state: Option<u32>,
     // FireworkRocketEntity.SHOOTER_ENTITY_ID, doppelt wie custom_name: aussen "stand nicht im
     // Paket", innen "kein Schuetze". Welcher Typ gemeint ist, weiss erst der Empfaenger.
     pub firework_shooter: Option<Option<i32>>,
@@ -2954,6 +2958,9 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                 let v = r.read_varint()?;
                 if index == DISPLAY_INDEX_CONTENT {
                     out.display_block_state = Some(v.max(0) as u32);
+                }
+                if index == TNT_INDEX_BLOCK_STATE {
+                    out.tnt_block_state = Some(v.max(0) as u32);
                 }
             }
             // PacketCodecs.optional(BLOCK_STATE): 0 = leer, sonst StateId + 1.
@@ -5557,7 +5564,7 @@ pub fn read_named_registry(payload: &[u8]) -> Result<Option<(String, Vec<(String
     let mut r = PacketReader::new(payload);
     let _id = r.read_varint()?;
     let registry = r.read_string()?;
-    if !matches!(registry.as_str(), "minecraft:trim_material" | "minecraft:trim_pattern" | "minecraft:banner_pattern" | "minecraft:jukebox_song" | "minecraft:cat_variant" | "minecraft:painting_variant") {
+    if !matches!(registry.as_str(), "minecraft:trim_material" | "minecraft:trim_pattern" | "minecraft:banner_pattern" | "minecraft:jukebox_song" | "minecraft:cat_variant" | "minecraft:painting_variant" | "minecraft:dialog") {
         return Ok(None);
     }
     let count = r.read_varint()?.max(0) as usize;
@@ -6688,5 +6695,206 @@ mod resource_pack_tests {
         let mut w = PacketWriter::new();
         w.write_varint(CB_PLAY_RESOURCE_PACK_POP).write_bool(false);
         assert_eq!(read_resource_pack_pop(&w.into_bytes()).unwrap(), None);
+    }
+}
+
+// --- Dialoge, Server-Links, Verhaltenskodex und der Rest des Configuration-State -----------
+//
+// IDs aus der Registrierungsreihenfolge von ConfigurationProtocols bzw. GameProtocols
+// (1.21.11). Ein Teil davon kommt in beiden States vor (Server-Links, Dialoge,
+// Report-Details), mit eigener ID je State.
+
+pub const CB_CONFIG_RESET_CHAT: i32 = 0x06;
+pub const CB_CONFIG_UPDATE_ENABLED_FEATURES: i32 = 0x0C;
+pub const CB_CONFIG_CUSTOM_REPORT_DETAILS: i32 = 0x0F;
+pub const CB_CONFIG_SERVER_LINKS: i32 = 0x10;
+pub const CB_CONFIG_CLEAR_DIALOG: i32 = 0x11;
+pub const CB_CONFIG_SHOW_DIALOG: i32 = 0x12;
+pub const CB_CONFIG_CODE_OF_CONDUCT: i32 = 0x13;
+pub const SB_CONFIG_CUSTOM_CLICK_ACTION: i32 = 0x08;
+pub const SB_CONFIG_ACCEPT_CODE_OF_CONDUCT: i32 = 0x09;
+
+pub const CB_PLAY_CUSTOM_REPORT_DETAILS: i32 = 0x86;
+pub const CB_PLAY_SERVER_LINKS: i32 = 0x87;
+pub const CB_PLAY_CLEAR_DIALOG: i32 = 0x89;
+pub const CB_PLAY_SHOW_DIALOG: i32 = 0x8A;
+pub const SB_PLAY_CUSTOM_CLICK_ACTION: i32 = 0x41;
+
+// Beschriftung eines Server-Links: einer der festen Typen (KnownLinkType, Index 0..9) oder
+// ein eigener Text-Component.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ServerLinkLabel {
+    Known(i32),
+    Custom(nbt::NbtValue),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerLink {
+    pub label: ServerLinkLabel,
+    pub url: String,
+}
+
+// Die Namen der festen Typen, in Reihenfolge ihrer IDs (Sprachschluessel
+// "known_server_link.<name>").
+pub const KNOWN_SERVER_LINKS: [&str; 10] =
+    ["report_bug", "community_guidelines", "support", "status", "feedback", "community", "website", "forums", "news", "announcements"];
+
+// Server Links (Config 0x10 / Play 0x87): Liste aus (Either<Typ, Component>, URL). Either
+// steht als Bool davor, true = links (fester Typ).
+pub fn read_server_links(payload: &[u8]) -> Result<Vec<ServerLink>, ReadError> {
+    let mut r = PacketReader::new(payload);
+    r.read_varint()?;
+    let count = r.read_varint()?.max(0) as usize;
+    let mut out = Vec::with_capacity(count.min(64));
+    for _ in 0..count {
+        let label = if r.read_bool()? {
+            ServerLinkLabel::Known(r.read_varint()?)
+        } else {
+            ServerLinkLabel::Custom(nbt::read_root(&mut r)?.ok_or(ReadError)?)
+        };
+        let url = r.read_string()?;
+        out.push(ServerLink { label, url });
+    }
+    Ok(out)
+}
+
+// Ein Dialog, wie ihn der Server schickt: direkt als NBT, oder (nur im Play-State) als
+// Verweis in die Dialog-Registry aus der Konfiguration.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DialogRef {
+    Inline(nbt::NbtValue),
+    Registry(i32),
+}
+
+// Show Dialog im Configuration-State: dort gibt es noch keine Registries, der Dialog steht
+// immer direkt als NBT da (Dialog.CONTEXT_FREE_STREAM_CODEC).
+pub fn read_show_dialog_config(payload: &[u8]) -> Result<DialogRef, ReadError> {
+    let mut r = PacketReader::new(payload);
+    r.read_varint()?;
+    Ok(DialogRef::Inline(nbt::read_root(&mut r)?.ok_or(ReadError)?))
+}
+
+// Show Dialog im Play-State: ByteBufCodecs.holder -- VarInt 0 = direkt (NBT folgt), sonst
+// Registry-Index + 1.
+pub fn read_show_dialog_play(payload: &[u8]) -> Result<DialogRef, ReadError> {
+    let mut r = PacketReader::new(payload);
+    r.read_varint()?;
+    match r.read_varint()? {
+        0 => Ok(DialogRef::Inline(nbt::read_root(&mut r)?.ok_or(ReadError)?)),
+        n => Ok(DialogRef::Registry(n - 1)),
+    }
+}
+
+// Code of Conduct (Config 0x13): ein einziger String, der Text des Kodex.
+pub fn read_code_of_conduct(payload: &[u8]) -> Result<String, ReadError> {
+    let mut r = PacketReader::new(payload);
+    r.read_varint()?;
+    r.read_string()
+}
+
+// Update Enabled Features (Config 0x0C): Liste von Feature-Flag-IDs ("minecraft:vanilla").
+pub fn read_enabled_features(payload: &[u8]) -> Result<Vec<String>, ReadError> {
+    let mut r = PacketReader::new(payload);
+    r.read_varint()?;
+    let count = r.read_varint()?.max(0) as usize;
+    let mut out = Vec::with_capacity(count.min(64));
+    for _ in 0..count {
+        out.push(r.read_string()?);
+    }
+    Ok(out)
+}
+
+// Accept Code of Conduct (Config 0x09): ohne Inhalt.
+pub fn accept_code_of_conduct_payload() -> Vec<u8> {
+    let mut w = PacketWriter::new();
+    w.write_varint(SB_CONFIG_ACCEPT_CODE_OF_CONDUCT);
+    w.into_bytes()
+}
+
+// Custom Click Action (Play 0x41, Config 0x08): Identifier, dann die Nutzlast als optionales
+// NBT-Tag (TAG_End = keine), das Ganze mit VarInt-Laenge davor (lengthPrefixed(65536)).
+// Geschrieben wird immer mit der Play-ID; im Configuration-State tauscht
+// config_outgoing_payload sie aus.
+pub fn custom_click_action_payload(id: &str, payload: Option<&nbt::NbtValue>) -> Vec<u8> {
+    let mut tag = PacketWriter::new();
+    match payload {
+        Some(v) => nbt::write_root(&mut tag, v),
+        None => {
+            tag.write_u8(0);
+        }
+    }
+    let mut w = PacketWriter::new();
+    w.write_varint(SB_PLAY_CUSTOM_CLICK_ACTION).write_string(id).write_bytes(&tag.into_bytes());
+    w.into_bytes()
+}
+
+// Was die App waehrend der Konfiguration schicken darf, in Config-IDs: Resourcepack-Status
+// und Klick-Aktionen kommen mit ihrer Play-ID und werden umgeschrieben, die Annahme des
+// Verhaltenskodex gibt es nur hier und kommt schon fertig. Alles andere: None.
+pub fn config_outgoing_payload(play_payload: &[u8]) -> Option<Vec<u8>> {
+    if let Some(status) = config_resource_pack_status(play_payload) {
+        return Some(status);
+    }
+    if play_payload == accept_code_of_conduct_payload().as_slice() {
+        return Some(play_payload.to_vec());
+    }
+    let mut r = PacketReader::new(play_payload);
+    if r.read_varint().ok()? == SB_PLAY_CUSTOM_CLICK_ACTION {
+        let mut w = PacketWriter::new();
+        w.write_varint(SB_CONFIG_CUSTOM_CLICK_ACTION).write_raw_bytes(r.remaining());
+        return Some(w.into_bytes());
+    }
+    None
+}
+
+#[cfg(test)]
+mod dialog_packet_tests {
+    use super::*;
+
+    #[test]
+    fn server_links_fester_typ_und_eigener_text() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_SERVER_LINKS).write_varint(2);
+        w.write_bool(true).write_varint(6).write_string("https://example.org");
+        w.write_bool(false);
+        nbt::write_root(&mut w, &nbt::NbtValue::String("Shop".into()));
+        w.write_string("https://shop.example.org");
+        let links = read_server_links(&w.into_bytes()).unwrap();
+        assert_eq!(links[0], ServerLink { label: ServerLinkLabel::Known(6), url: "https://example.org".into() });
+        assert_eq!(links[1].label, ServerLinkLabel::Custom(nbt::NbtValue::String("Shop".into())));
+    }
+
+    #[test]
+    fn dialog_im_spiel_direkt_oder_als_verweis() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_SHOW_DIALOG).write_varint(3);
+        assert_eq!(read_show_dialog_play(&w.into_bytes()).unwrap(), DialogRef::Registry(2));
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_SHOW_DIALOG).write_varint(0);
+        nbt::write_root(&mut w, &nbt::NbtValue::String("x".into()));
+        assert_eq!(read_show_dialog_play(&w.into_bytes()).unwrap(), DialogRef::Inline(nbt::NbtValue::String("x".into())));
+    }
+
+    #[test]
+    fn klick_aktion_bekommt_in_der_konfiguration_ihre_config_id() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("name".to_string(), nbt::NbtValue::String("Steve".into()));
+        let play = custom_click_action_payload("test:ok", Some(&nbt::NbtValue::Compound(map)));
+        let config = config_outgoing_payload(&play).unwrap();
+        assert_eq!(config[0] as i32, SB_CONFIG_CUSTOM_CLICK_ACTION);
+        assert_eq!(&config[1..], &play[1..]);
+        let mut r = PacketReader::new(&play);
+        r.read_varint().unwrap();
+        assert_eq!(r.read_string().unwrap(), "test:ok");
+        let laenge = r.read_varint().unwrap() as usize;
+        assert_eq!(laenge, r.remaining().len());
+        let tag = nbt::read_root(&mut r).unwrap().unwrap();
+        assert_eq!(tag.get("name").and_then(|v| v.as_str()), Some("Steve"));
+    }
+
+    #[test]
+    fn verhaltenskodex_wird_durchgereicht() {
+        assert_eq!(config_outgoing_payload(&accept_code_of_conduct_payload()), Some(vec![SB_CONFIG_ACCEPT_CODE_OF_CONDUCT as u8]));
+        assert!(config_outgoing_payload(&custom_payload("x", &[])).is_none());
     }
 }

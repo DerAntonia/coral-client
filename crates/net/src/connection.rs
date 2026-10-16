@@ -121,6 +121,16 @@ pub enum ClientEvent {
     // Himmelslicht einer Spalte hat sich geaendert (Update Light, s. protocol::chunk).
     LightUpdate { x: i32, z: i32, light: protocol::chunk::LightData },
     ResourcePackPop(Option<[u8; 16]>),
+    // Server-Links (fuer das Pausemenue und den Dialog server_links), ersetzt die bisherigen.
+    ServerLinks(Vec<packets::ServerLink>),
+    // Einen Dialog zeigen bzw. den offenen schliessen (Configuration und Play).
+    ShowDialog(packets::DialogRef),
+    ClearDialog,
+    // Verhaltenskodex des Servers (nur Configuration): die Konfiguration wartet, bis die App
+    // ihn annimmt (packets::accept_code_of_conduct_payload) oder die Verbindung trennt.
+    CodeOfConduct(String),
+    // Reset Chat (Configuration): der Chatverlauf faengt nach der Konfiguration leer an.
+    ResetChat,
     // Der Server dreht NUR unsere Blickrichtung (Player Rotation 0x47), ohne uns zu bewegen.
     // Bereits aufgeloest: beide Achsen absolut in Grad, Vanilla-Konvention. Das Aufloesen
     // passiert im Netz-Task, weil DORT auch die Bestaetigung rausgeht und beide denselben
@@ -1047,8 +1057,8 @@ async fn do_configuration(conn: &mut Connection, events: &Events, outgoing: &mut
             msg = outgoing.recv(), if !outgoing_closed => {
                 match msg {
                     Some(p) => {
-                        if let Some(status) = packets::config_resource_pack_status(&p) {
-                            conn.send(&status).await?;
+                        if let Some(config) = packets::config_outgoing_payload(&p) {
+                            conn.send(&config).await?;
                         }
                     }
                     None => outgoing_closed = true,
@@ -1105,6 +1115,39 @@ async fn do_configuration(conn: &mut Connection, events: &Events, outgoing: &mut
                 if let Ok(tags) = protocol::recipe::read_item_tags(&payload) {
                     let _ = events.send(ClientEvent::ItemTags(tags));
                 }
+            }
+            packets::CB_CONFIG_RESET_CHAT => {
+                let _ = events.send(ClientEvent::ResetChat);
+            }
+            // Schaltet in Vanilla experimentelle Inhalte frei; dieser Client kennt ohnehin
+            // nur die festen Item- und Blocklisten, braucht die Liste also nicht.
+            packets::CB_CONFIG_UPDATE_ENABLED_FEATURES => {
+                if let Ok(features) = packets::read_enabled_features(&payload) {
+                    if features.iter().any(|f| f != "minecraft:vanilla") {
+                        log(events, format!("Server schaltet Features frei: {}", features.join(", ")));
+                    }
+                }
+            }
+            // Zusaetze fuer Absturzberichte -- dieser Client schreibt keine.
+            packets::CB_CONFIG_CUSTOM_REPORT_DETAILS => {}
+            packets::CB_CONFIG_SERVER_LINKS => match packets::read_server_links(&payload) {
+                Ok(links) => {
+                    let _ = events.send(ClientEvent::ServerLinks(links));
+                }
+                Err(_) => log(events, "Server-Links nicht lesbar -- ignoriert"),
+            },
+            packets::CB_CONFIG_SHOW_DIALOG => match packets::read_show_dialog_config(&payload) {
+                Ok(dialog) => {
+                    let _ = events.send(ClientEvent::ShowDialog(dialog));
+                }
+                Err(_) => log(events, "Dialog nicht lesbar -- ignoriert"),
+            },
+            packets::CB_CONFIG_CLEAR_DIALOG => {
+                let _ = events.send(ClientEvent::ClearDialog);
+            }
+            packets::CB_CONFIG_CODE_OF_CONDUCT => {
+                let text = packets::read_code_of_conduct(&payload).map_err(|_| NetError::Protocol("Verhaltenskodex nicht lesbar".into()))?;
+                let _ = events.send(ClientEvent::CodeOfConduct(text));
             }
             packets::CB_CONFIG_REGISTRY_DATA => {
                 // Nur die gebrauchten Registries werden gelesen, der Rest (Painting, ...) wird
@@ -1591,6 +1634,24 @@ async fn handle_play_packet(
         if let Ok(id) = packets::read_resource_pack_pop(payload) {
             let _ = events.send(ClientEvent::ResourcePackPop(id));
         }
+    } else if id == packets::CB_PLAY_SERVER_LINKS {
+        match packets::read_server_links(payload) {
+            Ok(links) => {
+                let _ = events.send(ClientEvent::ServerLinks(links));
+            }
+            Err(_) => log(events, "Server-Links nicht lesbar -- ignoriert"),
+        }
+    } else if id == packets::CB_PLAY_SHOW_DIALOG {
+        match packets::read_show_dialog_play(payload) {
+            Ok(dialog) => {
+                let _ = events.send(ClientEvent::ShowDialog(dialog));
+            }
+            Err(_) => log(events, "Dialog nicht lesbar -- ignoriert"),
+        }
+    } else if id == packets::CB_PLAY_CLEAR_DIALOG {
+        let _ = events.send(ClientEvent::ClearDialog);
+    } else if id == packets::CB_PLAY_CUSTOM_REPORT_DETAILS {
+        // Zusaetze fuer Absturzberichte -- dieser Client schreibt keine.
     } else if id == packets::CB_PLAY_PING {
         let ping = packets::read_ping_id(payload).map_err(|_| NetError::Protocol("Ping".into()))?;
         interaktions_log("pong");

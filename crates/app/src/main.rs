@@ -18,6 +18,8 @@ mod chat_log;
 mod consumable_optimizer;
 mod creative;
 mod creative_screen;
+mod dialog;
+mod dialog_screen;
 mod crosshair_editor;
 mod crystal_optimizer;
 mod cursor_fx;
@@ -26,6 +28,7 @@ mod font_atlas;
 mod gpu_timer;
 mod held_item;
 mod hitbox_kinds;
+mod teams;
 mod i18n;
 mod inventory;
 mod item_cooldowns;
@@ -562,6 +565,16 @@ fn sign_projector(clip: glam::Mat4, screen: (f32, f32)) -> impl Fn(f32, f32) -> 
 }
 
 // AffineTransformation.getMatrix: translation * left_rotation * scale * right_rotation.
+// Alles, was an einem Entity einen Spielerkopf zeigen kann: beide Haende, der Kopfplatz und
+// das Item eines item_display.
+fn entity_head_items(e: &world::Entity) -> [Option<world::HeldItem>; 4] {
+    let display = match e.display.as_ref().map(|d| &d.content) {
+        Some(world::DisplayContent::Item(item)) => *item,
+        _ => None,
+    };
+    [e.main_hand, e.off_hand, e.armor[world::armor::ArmorSlot::Head.index()], display]
+}
+
 fn display_affine_matrix(d: &world::DisplayTransform) -> glam::Mat4 {
     glam::Mat4::from_translation(glam::Vec3::from(d.translation))
         * joml_quat_matrix(d.left_rotation)
@@ -3396,8 +3409,8 @@ fn hud_config_rows(element: HudElement, set: &Settings) -> usize {
         HudElement::BossBar => 1,
         // Groesse.
         HudElement::HeldName => 1,
-        // Groesse, Ausrichtung, Ruecken, Abstand, Zahlgroesse, Zahl x und y.
-        HudElement::Armor => 7,
+        // Groesse, Ausrichtung, Ruecken, Abstand, Zahlgroesse, Zahl x und y, Gruen ab 95 %.
+        HudElement::Armor => 8,
         // Groesse, Deckkraft.
         HudElement::Keystrokes => 2,
         // Die Chat-Einstellungen (s. CHAT_TOOLTIPS): Groesse, Breite, Hintergrund, Abdunkeln,
@@ -4129,6 +4142,8 @@ struct ArmorHudMetrics {
 const COLOR_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 // Haltbarkeitszahl im Ruestungs-HUD, wenn das Teil bald bricht (Vanillas Gold, §6).
 const COLOR_ARMOR_LOW: [f32; 4] = [1.0, 170.0 / 255.0, 0.0, 1.0];
+// Fast neue Ruestung (s. Settings::armor_hud_green): das Gruen von §a.
+const COLOR_ARMOR_HIGH: [f32; 4] = [85.0 / 255.0, 1.0, 85.0 / 255.0, 1.0];
 
 const VERTS_PER_QUAD: usize = 6;
 // Reichlich: der offene Chat bringt Unterstriche fuer Links mit, die Textauswahl eine
@@ -9832,6 +9847,8 @@ enum ColorTarget {
     Theme(theme::Slot),
     Hitbox(HitboxVariant),
     HitboxKind(hitbox_kinds::HitboxKind),
+    // Feste Farbe einer Seite im Teams-Modul.
+    Team(teams::Side),
     Shield(ShieldColor),
     Sky,
     BlockOutline,
@@ -11810,6 +11827,14 @@ struct Settings {
     module_hitbox_raw_value: u32,
     // Eigene Arten (s. hitbox_kinds): je Art an/aus, Farbe und Deckkraft.
     module_hitbox_styles: [hitbox_kinds::HitboxStyle; hitbox_kinds::HitboxKind::COUNT],
+    // Teams-Modul (s. teams.rs): Hitboxen von Verbuendeten und Gegnern, je Seite (Side::index).
+    module_teams: bool,
+    team_hitboxes: [teams::TeamHitbox; 2],
+    // Woran Verbuendete erkannt werden (s. teams::Matchers).
+    team_match: teams::Matchers,
+    // Eigene Teamfarbe (0xRRGGBB), None = automatisch erkennen. Nicht jeder Server zeigt den
+    // eigenen Namen richtig gefaerbt an (Seitenleiste in der falschen Farbe).
+    team_own_color: Option<u32>,
     // Schadens-Faerbung ("damage tint"): die Farbe, in der ein Lebewesen aufblitzt, wenn es
     // Schaden nimmt. Ton in Grad, Saettigung/Helligkeit/Deckkraft in Prozent.
     //
@@ -11894,6 +11919,8 @@ struct Settings {
     armor_hud_number_y: i32,
     armor_hud_sort_vertical: u8,
     armor_hud_sort_flat: u8,
+    // Haltbarkeitszahl gruen, solange ueber 95 % uebrig sind.
+    armor_hud_green: bool,
     // Keystrokes (s. ModuleId::Keystrokes, keystrokes.rs): obere linke Ecke normiert, Groesse
     // in Prozent und Deckkraft der nicht gedrueckten Tasten.
     module_keystrokes: bool,
@@ -11953,6 +11980,9 @@ struct Settings {
     // Sonstiges: ClientboundContainerClose ignorieren -- der Server kann kein Fenster mehr
     // schliessen (s. ClientEvent::CloseScreen).
     no_ui_close_s2c: bool,
+    // Sonstiges: der Server kann den Chat nicht leeren -- weder mit Reset Chat noch mit den
+    // Leerzeilen, die Clear-Chat-Plugins schicken (s. push_chat_message).
+    no_chat_clear: bool,
     // Buchstaben auf Traenken im Inventar (s. world::potion::variant_mark), je einzeln:
     // S = verstaerkt, L = verlaengert, W = schwache Heilung/Schaden.
     potion_mark_strong: bool,
@@ -13997,6 +14027,13 @@ impl Settings {
                 "module_hitbox_dotted" => settings.module_hitbox_dotted = value == "true",
                 "module_hitbox_items" => settings.module_hitbox_items = value == "true",
                 "module_hitbox_self" => settings.module_hitbox_self = value == "true",
+                "module_teams" => settings.module_teams = value == "true",
+                "teams_match" => settings.team_match = teams::Matchers::decode(value),
+                "teams_own_color" => settings.team_own_color = u32::from_str_radix(value.trim_start_matches('#'), 16).ok().map(|c| c & 0xFF_FFFF),
+                _ if teams::Side::ALL.iter().any(|s| s.key() == key) => {
+                    let seite = *teams::Side::ALL.iter().find(|s| s.key() == key).expect("eben geprueft");
+                    settings.team_hitboxes[seite.index()] = teams::TeamHitbox::decode(value, seite.default_style());
+                }
                 _ if key.strip_prefix("hitbox_").and_then(hitbox_kinds::HitboxKind::from_key).is_some() => {
                     let art = key.strip_prefix("hitbox_").and_then(hitbox_kinds::HitboxKind::from_key).expect("eben geprueft");
                     settings.module_hitbox_styles[art.index()] = hitbox_kinds::HitboxStyle::decode(value, art.default_style());
@@ -14098,6 +14135,7 @@ impl Settings {
                 }
                 "armor_hud_sort_vertical" => settings.armor_hud_sort_vertical = value.parse::<u8>().unwrap_or(0).min(1),
                 "armor_hud_sort_flat" => settings.armor_hud_sort_flat = value.parse::<u8>().unwrap_or(0).min(1),
+                "armor_hud_green" => settings.armor_hud_green = value == "true",
                 "module_keystrokes" => settings.module_keystrokes = value == "true",
                 "hurt_cam" => settings.hurt_cam = value == "true",
                 "armor_trims" => settings.armor_trims = value == "true",
@@ -14254,6 +14292,7 @@ impl Settings {
                 "chunk_saver_render_saved" => settings.chunk_saver_render_saved = value == "true",
                 "creative_op_tab" => settings.creative_op_tab = value == "true",
                 "no_ui_close_s2c" => settings.no_ui_close_s2c = value == "true",
+                "no_chat_clear" => settings.no_chat_clear = value == "true",
                 "potion_mark_strong" => settings.potion_mark_strong = value != "false",
                 "potion_mark_long" => settings.potion_mark_long = value != "false",
                 "potion_mark_weak" => settings.potion_mark_weak = value != "false",
@@ -14696,6 +14735,15 @@ impl Settings {
         for art in hitbox_kinds::HitboxKind::ALL {
             body.push_str(&format!("hitbox_{}={}\n", art.key(), self.module_hitbox_styles[art.index()].encode()));
         }
+        body.push_str(&format!(
+            "module_teams={}\nteams_match={}\nteams_own_color={}\n",
+            self.module_teams,
+            self.team_match.encode(),
+            self.team_own_color.map_or("auto".to_string(), |c| format!("{c:06X}"))
+        ));
+        for seite in teams::Side::ALL {
+            body.push_str(&format!("{}={}\n", seite.key(), self.team_hitboxes[seite.index()].encode()));
+        }
         body.push_str(&format!("module_dynamic_fire={}\n", self.module_dynamic_fire));
         body.push_str(&format!(
             "module_zoom={}\nzoom_factor_tenths={}\nzoom_sens_percent={}\n",
@@ -14803,7 +14851,7 @@ impl Settings {
         body.push_str(&format!("sens_calc_mc_percent={}\nsens_calc_dpi={}\n", self.sens_calc_mc_percent, self.sens_calc_dpi));
         body.push_str(&format!("hud_scoreboard_scale={}\nhud_arrows_scale={}\n", self.hud_scoreboard_scale, self.hud_arrows_scale));
         body.push_str(&format!(
-            "module_armor_hud={}\nhud_armor_x={}\nhud_armor_y={}\nhud_armor_scale={}\narmor_hud_layout={}\narmor_hud_sort_vertical={}\narmor_hud_sort_flat={}\narmor_hud_gap={}\narmor_hud_number_scale={}\narmor_hud_number_x={}\narmor_hud_number_y={}\n",
+            "module_armor_hud={}\nhud_armor_x={}\nhud_armor_y={}\nhud_armor_scale={}\narmor_hud_layout={}\narmor_hud_sort_vertical={}\narmor_hud_sort_flat={}\narmor_hud_gap={}\narmor_hud_number_scale={}\narmor_hud_number_x={}\narmor_hud_number_y={}\narmor_hud_green={}\n",
             self.module_armor_hud,
             self.hud_armor_x,
             self.hud_armor_y,
@@ -14814,7 +14862,8 @@ impl Settings {
             self.armor_hud_gap,
             self.armor_hud_number_scale,
             self.armor_hud_number_x,
-            self.armor_hud_number_y
+            self.armor_hud_number_y,
+            self.armor_hud_green
         ));
         body.push_str(&format!(
             "module_keystrokes={}\nhud_keys_x={}\nhud_keys_y={}\nhud_keys_scale={}\nkeys_opacity={}\n",
@@ -14870,6 +14919,7 @@ impl Settings {
         body.push_str(&format!("caps_lock_blocked={}\n", self.caps_lock_blocked));
         body.push_str(&format!("creative_op_tab={}\n", self.creative_op_tab));
         body.push_str(&format!("no_ui_close_s2c={}\n", self.no_ui_close_s2c));
+        body.push_str(&format!("no_chat_clear={}\n", self.no_chat_clear));
         body.push_str(&format!(
             "potion_mark_strong={}\npotion_mark_long={}\npotion_mark_weak={}\n",
             self.potion_mark_strong, self.potion_mark_long, self.potion_mark_weak
@@ -15115,6 +15165,10 @@ impl Settings {
             module_hitbox_raw_saturation: 85,
             module_hitbox_raw_value: 95,
             module_hitbox_styles: hitbox_kinds::default_styles(),
+            module_teams: false,
+            team_match: teams::Matchers::default(),
+            team_own_color: None,
+            team_hitboxes: teams::Side::ALL.map(teams::Side::default_style),
             // Vanilla-Rot mit Vanillas Anteil, s. Feldkommentar.
             damage_tint_hue: 0,
             damage_tint_saturation: 100,
@@ -15152,6 +15206,7 @@ impl Settings {
             armor_hud_layout: armor_hud::LAYOUT_VERTICAL,
             armor_hud_sort_vertical: 0,
             armor_hud_sort_flat: 0,
+            armor_hud_green: false,
             // Zahl ueber dem Bild, mit Platz dafuer zwischen den Teilen.
             armor_hud_gap: 10,
             armor_hud_number_scale: 100,
@@ -15211,6 +15266,7 @@ impl Settings {
             chunk_saver_render_saved: true,
             creative_op_tab: false,
             no_ui_close_s2c: false,
+            no_chat_clear: false,
             potion_mark_strong: true,
             potion_mark_long: true,
             potion_mark_weak: true,
@@ -15766,6 +15822,8 @@ enum ButtonAction {
     SelectConfig(usize),
     EditConfig(ConfigEdit),
     OpenConfigFolder,
+    // Pausemenue: die Links des Servers als Dialog.
+    ServerLinks,
     DeleteConfig,
     ScatteringPrev,
     ScatteringNext,
@@ -15888,6 +15946,7 @@ enum ButtonAction {
     ToggleInventoryCursorToSlot,
     ToggleCreativeOpTab,
     ToggleNoUiCloseS2c,
+    ToggleNoChatClear,
     TogglePotionMarkStrong,
     TogglePotionMarkLong,
     TogglePotionMarkWeak,
@@ -15980,6 +16039,18 @@ enum ButtonAction {
     ToggleModuleShields,
     ToggleModuleArrows,
     ToggleModuleArmorHud,
+    ToggleModuleTeams,
+    // Teams-Modul je Seite: Ueberschreiben, Farbe vom Namensschild (true) oder fest,
+    // Deckkraft und Dichte (true = mehr), gepunktet.
+    TeamToggle(teams::Side),
+    // Eine Erkennung an/aus (Index in teams::Matchers::LABELS).
+    TeamMatch(usize),
+    // Eigene Teamfarbe festlegen (None = automatisch).
+    TeamOwnColor(Option<u32>),
+    TeamNametag(teams::Side, bool),
+    TeamOpacity(teams::Side, bool),
+    TeamDensity(teams::Side, bool),
+    TeamDotted(teams::Side),
     ToggleModuleKeystrokes,
     // Video-Tab: Hurt-Cam und Feuer.
     ToggleHurtCam,
@@ -16006,6 +16077,7 @@ enum ButtonAction {
     ArmorHudNumberYNext,
     ToggleArrowIndicator,
     ToggleArrowNumberOnly,
+    ToggleArmorHudGreen,
     ToggleArrowWhite,
     ArrowOpacityPrev,
     ArrowOpacityNext,
@@ -16109,6 +16181,7 @@ enum ModuleId {
     PopSounds,
     PopVisuals,
     Hitbox,
+    Teams,
     SkyColor,
     Weather,
     GhostTolerance,
@@ -16135,13 +16208,14 @@ enum ModuleId {
     ChunkSaver,
 }
 
-const MODULE_IDS: [ModuleId; 30] = [
+const MODULE_IDS: [ModuleId; 31] = [
     ModuleId::Totem,
     ModuleId::TotemWarning,
     ModuleId::TotemSlots,
     ModuleId::PopSounds,
     ModuleId::PopVisuals,
     ModuleId::Hitbox,
+    ModuleId::Teams,
     ModuleId::SkyColor,
     ModuleId::Weather,
     ModuleId::GhostTolerance,
@@ -16177,6 +16251,7 @@ impl ModuleId {
             ModuleId::PopSounds => "Pop-Klänge",
             ModuleId::PopVisuals => "Pop-Optik",
             ModuleId::Hitbox => "Hitbox-Anzeige",
+            ModuleId::Teams => "Teams",
             ModuleId::SkyColor => "Himmel",
             ModuleId::Weather => "Wetter",
             ModuleId::GhostTolerance => "Ghostblock-Indikator",
@@ -16214,6 +16289,7 @@ impl ModuleId {
             ModuleId::PopSounds => settings.toteming.sounds,
             ModuleId::PopVisuals => settings.toteming.visuals,
             ModuleId::Hitbox => settings.module_hitbox_enabled,
+            ModuleId::Teams => settings.module_teams,
             ModuleId::SkyColor => settings.module_sky_color_enabled,
             ModuleId::Weather => settings.module_weather,
             ModuleId::GhostTolerance => settings.module_ghost_tolerance,
@@ -16249,6 +16325,7 @@ impl ModuleId {
             ModuleId::PopSounds => ButtonAction::Toteming(toteming::Action::ToggleSounds),
             ModuleId::PopVisuals => ButtonAction::Toteming(toteming::Action::ToggleVisuals),
             ModuleId::Hitbox => ButtonAction::ToggleModuleHitbox,
+            ModuleId::Teams => ButtonAction::ToggleModuleTeams,
             ModuleId::SkyColor => ButtonAction::ToggleModuleSkyColor,
             ModuleId::Weather => ButtonAction::ToggleModuleWeather,
             ModuleId::GhostTolerance => ButtonAction::ToggleModuleGhostTolerance,
@@ -16285,6 +16362,7 @@ impl ModuleId {
             ModuleId::PopSounds => "Klänge für Pops, Explosion und Anker -- ersetzt den Signalton",
             ModuleId::PopVisuals => "Flug-Totem und Partikelwolken beim Pop abschalten",
             ModuleId::Hitbox => "Trefferbox anderer Entities: geglättet und/oder roh",
+            ModuleId::Teams => "Eigene Hitboxen für Verbündete und Gegner -- gleiche Namensfarbe wie deine = gleiches Team",
             ModuleId::SkyColor => "Einfarbig, Verlauf mit Sonne und Mond oder der Himmel aus dem Skin, dazu eine feste Uhrzeit -- aus: Tag/Nacht wie gehabt",
             ModuleId::Weather => "Regen oder Schnee fest einstellen (oder klar) und in welcher Kugel um dich er fällt (von/bis) -- nur fürs Bild, auch wenn der Pack Wetter ausblendet",
             ModuleId::GhostTolerance => "Unbestätigte Blöcke (gesetzt, abgebaut, Anker) werden nach der Toleranz halbdurchsichtig",
@@ -16350,6 +16428,7 @@ impl ModuleId {
             | ModuleId::PopVisuals
             | ModuleId::CrystalOptimizer => ModuleCategory::CrystalPvp,
             ModuleId::Hitbox
+            | ModuleId::Teams
             | ModuleId::SkyColor
             | ModuleId::Weather
             | ModuleId::Shields
@@ -16395,6 +16474,9 @@ enum ModuleRow {
     ToggleSwatch { label: String, action: ButtonAction, on: bool, swatch: ButtonAction, rgb: [f32; 3] },
     // Zwei Schalter nebeneinander, dahinter ein Farbfeld (s. Heading::columns fuer die Koepfe).
     TwoTogglesSwatch { label: String, first: (ButtonAction, bool), second: (ButtonAction, bool), swatch: ButtonAction, rgb: [f32; 3] },
+    // Ein Knopf (z.B. "Automatisch") und dahinter Farbfelder zur Wahl -- je Farbe (Aktion,
+    // Farbe, gewaehlt?). Der gewaehlte Eintrag ist hervorgehoben.
+    ColorPicks { label: String, first: (&'static str, ButtonAction, bool), colors: Vec<(ButtonAction, [f32; 3], bool)> },
     // Unterkategorie: Trennlinie mit Namen wie zwischen den Abschnitten der Einstellungen,
     // darunter optional Spaltenkoepfe ueber den Schaltern der folgenden Zeilen.
     Heading { label: String, columns: &'static [&'static str] },
@@ -16410,6 +16492,7 @@ impl ModuleRow {
             | ModuleRow::Pick { label, .. }
             | ModuleRow::ToggleSwatch { label, .. }
             | ModuleRow::TwoTogglesSwatch { label, .. }
+            | ModuleRow::ColorPicks { label, .. }
             | ModuleRow::Heading { label, .. } => label,
         }
     }
@@ -16458,6 +16541,16 @@ impl ModuleDetailLayout {
     fn swatch_after_choice_rect(&self, n: f32) -> Rect {
         let wahl = self.choice_rect(n);
         Rect { x: wahl.x + wahl.w + STEPPER_GAP, ..self.swatch_rect(n) }
+    }
+
+    // ModuleRow::ColorPicks: der Knopf vorne, dann die Farbfelder (i ab 0) dicht dahinter.
+    fn color_picks_first_rect(&self, n: f32) -> Rect {
+        Rect { w: COLOR_PICK_FIRST_W, ..self.control_rect(n) }
+    }
+
+    fn color_pick_rect(&self, n: f32, i: usize) -> Rect {
+        let x = self.ctrl_x() + COLOR_PICK_FIRST_W + STEPPER_GAP + i as f32 * (COLOR_PICK_W + COLOR_PICK_GAP);
+        Rect { x, w: COLOR_PICK_W, ..self.control_rect(n) }
     }
 
     // Farbfeld rechts neben einem Schalter (ModuleRow::ToggleSwatch).
@@ -16509,6 +16602,13 @@ fn pick_buttons(r: Rect, options: &[(&'static str, ButtonAction, bool)], enabled
         })
         .collect()
 }
+
+// ModuleRow::ColorPicks: Breite des vorderen Knopfs, der Farbfelder und ihr Abstand. Sechs
+// Felder passen neben den Knopf in die Detailspalte.
+const COLOR_PICK_FIRST_W: f32 = 140.0;
+const COLOR_PICK_W: f32 = 44.0;
+const COLOR_PICK_GAP: f32 = 8.0;
+const COLOR_PICK_MAX: usize = 6;
 
 // Breite der Detailspalte: Beschriftung, Regler und Platz fuer die Einheit dahinter.
 const MODULE_DETAIL_PX_W: f32 = SETTINGS_CTRL_X - SETTINGS_LABEL_X + SLIDER_SPAN_W + 72.0;
@@ -16991,6 +17091,22 @@ struct App {
     // Meldung, mit der der Server uns rausgeworfen hat (oder warum die Verbindung abriss) --
     // als Fenster ueber der Server-Liste, bis man es schliesst. Beim eigenen Disconnect None.
     disconnect_popup: Option<String>,
+    // Server-Dialoge (s. dialog_screen.rs): der offene Dialog, das Warten auf die Antwort des
+    // Servers, der Verhaltenskodex aus der Konfiguration, die Links des Servers und die
+    // Dialog-Registry, auf die Show Dialog im Spiel verweisen kann.
+    dialog: Option<dialog_screen::OpenDialog>,
+    dialog_waiting: Option<Instant>,
+    code_of_conduct: Option<dialog_screen::CodeOfConduct>,
+    server_links: Vec<protocol::packets::ServerLink>,
+    dialog_registry: Vec<(String, Option<protocol::nbt::NbtValue>)>,
+    // Teams-Modul: zuletzt ins Log geschriebene Zeile je Spieler (s. update_team_facts).
+    team_color_log: std::collections::HashMap<[u8; 16], String>,
+    // Merkmale je Spieler fuers Teams-Modul, einmal pro Tick (s. update_team_facts) -- das
+    // Zeichnen der Hitboxen liest nur hier.
+    team_facts: std::collections::HashMap<[u8; 16], teams::Facts>,
+    // Zuletzt erkannte Namensfarbe je Spieler: ein Namensschild ist nicht immer zu sehen
+    // (kurz entfernt, neu gesetzt), das Team wechselt dabei nicht. Gilt bis zum Weltwechsel.
+    team_color_memory: std::collections::HashMap<[u8; 16], u32>,
     quick_field: text_field::TextField,
     quick_dragging: bool,
     quick_last_press: Option<(Instant, (f32, f32))>,
@@ -18673,6 +18789,14 @@ impl App {
             theme_name_dialog: None,
             theme_delete: None,
             disconnect_popup: None,
+            dialog: None,
+            dialog_waiting: None,
+            code_of_conduct: None,
+            server_links: Vec::new(),
+            dialog_registry: Vec::new(),
+            team_color_log: std::collections::HashMap::new(),
+            team_facts: std::collections::HashMap::new(),
+            team_color_memory: std::collections::HashMap::new(),
             quick_field: text_field::TextField::new("", MAX_ADDRESS_LEN),
             quick_dragging: false,
             quick_last_press: None,
@@ -19782,6 +19906,10 @@ impl App {
     // Screen eine Ebene zurueck; auf Main entweder ins Spiel zurueck (verbunden) oder
     // nichts (Startbildschirm, es gibt kein "dahinter").
     fn on_escape(&mut self) {
+        // Dialoge des Servers liegen ueber allem (s. dialog_escape).
+        if self.dialog_escape() {
+            return;
+        }
         // Beim Verbinden bricht Esc sofort ab (wie "Abbrechen" in Vanillas ConnectScreen).
         if self.connecting_view() && self.conn_task.is_some() {
             self.play_ui_sound(ui_sound::UiSound::Close);
@@ -21524,6 +21652,9 @@ impl App {
                 net::ClientEvent::Log(msg) => self.push_log(msg),
                 net::ClientEvent::Connected => {
                     self.conn_status = ConnStatus::Connected;
+                    // Mit dem Spiel beginnt ein neuer Bildschirm: Fenster aus der
+                    // Konfiguration sind vorbei.
+                    self.reset_dialogs();
                     self.reset_own_entity_flags();
                     chat_log::session_start(&self.server_address);
                     self.player_loaded_pending = true;
@@ -21591,6 +21722,9 @@ impl App {
                     // Server-Resourcepacks gehoeren zur Verbindung (s. server_packs).
                     self.server_packs.clear();
                     self.forget_connection_state();
+                    // Dialoge und Links gehoeren ebenso zur Verbindung.
+                    self.reset_dialogs();
+                    self.server_links.clear();
                     // Aus World/Death/Pause zurueck auf die Server-Liste.
                     self.mode = AppMode::Menu;
                     self.screen = MenuScreen::Connect;
@@ -22041,6 +22175,7 @@ impl App {
                     self.entities.set_pose(id, pose);
                 }
                 net::ClientEvent::Passengers { vehicle, passengers } => {
+                    self.sync_own_body();
                     self.entities.set_passengers(vehicle, &passengers);
                     self.update_own_ride(vehicle, &passengers);
                 }
@@ -22129,6 +22264,11 @@ impl App {
                                 self.own_use_ticks = 0;
                             }
                         }
+                    }
+                    // Kopf in einem item_display (etwa der Ball auf mcpvp.club): Profil merken wie
+                    // bei der Ausruestung, geladen wird ueber request_head_skins.
+                    if let Some(profil) = update.display_item.as_ref().and_then(|s| s.as_ref()).and_then(|s| s.profile.as_ref()) {
+                        self.note_head_profile(profil);
                     }
                     self.entities.apply_metadata(update.entity_id, &update);
                 }
@@ -22403,6 +22543,19 @@ impl App {
                 net::ClientEvent::Enchantments(entries) => {
                     self.creative_registries.enchantment = entries.iter().map(|(n, _)| n.clone()).collect();
                     self.enchantments = world::enchantment::Enchantments::from_registry(entries);
+                }
+                net::ClientEvent::NamedRegistry { registry, entries } if registry == "minecraft:dialog" => {
+                    self.dialog_registry = entries;
+                }
+                net::ClientEvent::ServerLinks(links) => self.server_links = links,
+                net::ClientEvent::ShowDialog(d) => self.show_dialog_ref(d),
+                net::ClientEvent::ClearDialog => self.clear_dialog(),
+                net::ClientEvent::CodeOfConduct(text) => self.code_of_conduct_received(text),
+                // Sonstiges > No chat clear: der Chat bleibt.
+                net::ClientEvent::ResetChat if self.settings.no_chat_clear => {}
+                net::ClientEvent::ResetChat => {
+                    self.chat_messages.clear();
+                    self.chat_times.clear();
                 }
                 net::ClientEvent::NamedRegistry { registry, entries } if registry == "minecraft:painting_variant" => {
                     self.creative_registries.painting_variant = entries.into_iter().map(|(n, _)| n).collect();
@@ -23181,6 +23334,8 @@ impl App {
     // Alles verwerfen, was zur alten Verbindung gehoert: die Welt eines Servers hat auf
     // dem naechsten nichts zu suchen.
     fn reset_world(&mut self) {
+        self.reset_dialogs();
+        self.server_links.clear();
         // Den Standort fuers naechste Verbinden merken (s. lod::App::lod_preview_saved).
         self.lod_remember_pose();
         self.reset_world_state();
@@ -23235,6 +23390,8 @@ impl App {
         self.world.clear();
         self.pistons.clear(&mut self.world);
         self.entities.clear();
+        // Neue Welt, neue Runde: die Teams koennen andere sein.
+        self.team_color_memory.clear();
         self.own_ride = None;
         self.ride_yaw_spin = (0.0, 0.0);
         // BossBarHud.clear beim Weltwechsel.
@@ -24305,6 +24462,10 @@ impl App {
                     out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::HudEditor), zeile(0), "HUD-Editor", UI_SCALE_NORMAL));
                     out.push(Self::nav_button(ButtonAction::Disconnect, zeile(1), "Disconnect", UI_SCALE_NORMAL));
                     out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::Settings), zeile(2), "Einstellungen", UI_SCALE_NORMAL));
+                    // Links des Servers (Vanillas "Server-Links..."), nur wenn er welche schickt.
+                    if !self.server_links.is_empty() {
+                        out.push(Self::nav_button(ButtonAction::ServerLinks, zeile(3), "Server-Links", UI_SCALE_NORMAL));
+                    }
                 }
             }
             MenuScreen::Connect => {
@@ -24723,6 +24884,7 @@ impl App {
             MenuScreen::SettingsMisc => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
                 out.push(Self::toggle(ButtonAction::ToggleNoUiCloseS2c, 0, self.settings.no_ui_close_s2c));
+                out.push(Self::toggle(ButtonAction::ToggleNoChatClear, 1, self.settings.no_chat_clear));
             }
             MenuScreen::SettingsAudio => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
@@ -25201,6 +25363,7 @@ impl App {
                                         true,
                                     ));
                                 }
+                                out.push(Self::toggle(ButtonAction::ToggleArmorHudGreen, 7, set.armor_hud_green));
                             }
                             HudElement::HeldName => {
                                 let pct = self.settings.hud_held_name_scale;
@@ -25691,6 +25854,7 @@ impl App {
                 self.settings.armor_hud_layout = defaults.armor_hud_layout;
                 self.settings.armor_hud_sort_vertical = defaults.armor_hud_sort_vertical;
                 self.settings.armor_hud_sort_flat = defaults.armor_hud_sort_flat;
+                self.settings.armor_hud_green = defaults.armor_hud_green;
                 self.settings.armor_hud_gap = defaults.armor_hud_gap;
                 self.settings.armor_hud_number_scale = defaults.armor_hud_number_scale;
                 self.settings.armor_hud_number_x = defaults.armor_hud_number_x;
@@ -25993,6 +26157,7 @@ impl App {
                 | ButtonAction::AudioSpatialTest
                 | ButtonAction::OpenSkinFolder
                 | ButtonAction::OpenConfigFolder
+                | ButtonAction::ServerLinks
                 // Configs speichern selbst (s. switch_config); ein Speichern danach schriebe
                 // nur dieselben Werte noch einmal.
                 | ButtonAction::SelectConfig(_)
@@ -26093,6 +26258,14 @@ impl App {
             | ButtonAction::ToggleModuleShields
             | ButtonAction::ToggleModuleArrows
             | ButtonAction::ToggleModuleArmorHud
+            | ButtonAction::ToggleModuleTeams
+            | ButtonAction::TeamToggle(_)
+            | ButtonAction::TeamMatch(_)
+            | ButtonAction::TeamOwnColor(_)
+            | ButtonAction::TeamNametag(..)
+            | ButtonAction::TeamOpacity(..)
+            | ButtonAction::TeamDensity(..)
+            | ButtonAction::TeamDotted(_)
             | ButtonAction::ToggleModuleKeystrokes
             | ButtonAction::ToggleArrowIndicator
             | ButtonAction::ToggleArrowWhite
@@ -26410,6 +26583,7 @@ impl App {
             ButtonAction::ToggleInventoryCursorToSlot => set.inventory_cursor_to_slot = !set.inventory_cursor_to_slot,
             ButtonAction::ToggleCreativeOpTab => set.creative_op_tab = !set.creative_op_tab,
             ButtonAction::ToggleNoUiCloseS2c => set.no_ui_close_s2c = !set.no_ui_close_s2c,
+            ButtonAction::ToggleNoChatClear => set.no_chat_clear = !set.no_chat_clear,
             ButtonAction::TogglePotionMarkStrong => set.potion_mark_strong = !set.potion_mark_strong,
             ButtonAction::TogglePotionMarkLong => set.potion_mark_long = !set.potion_mark_long,
             ButtonAction::TogglePotionMarkWeak => set.potion_mark_weak = !set.potion_mark_weak,
@@ -26625,6 +26799,7 @@ impl App {
                     self.settings.armor_hud_sort_flat = r;
                 }
             }
+            ButtonAction::ToggleArmorHudGreen => self.settings.armor_hud_green = !self.settings.armor_hud_green,
             // Aussehen von Schild-Cooldown und Pfeil-Anzeige: im Fenster des HUD-Editors, die
             // Werte gehoeren aber zu den Modulen.
             ButtonAction::ToggleArrowNumberOnly
@@ -26714,7 +26889,7 @@ impl App {
                 self.restore_held_controls();
             }
             // Tatsaechlich behandelt NACH dem match (braucht &mut self).
-            ButtonAction::OpenSkinFolder | ButtonAction::OpenConfigFolder => {}
+            ButtonAction::OpenSkinFolder | ButtonAction::OpenConfigFolder | ButtonAction::ServerLinks => {}
             ButtonAction::ToggleSkinAutoUnzip => set.skin_auto_unzip = !set.skin_auto_unzip,
         }
 
@@ -26723,6 +26898,9 @@ impl App {
         }
         if action == ButtonAction::OpenConfigFolder {
             self.open_configs_dir();
+        }
+        if action == ButtonAction::ServerLinks {
+            self.open_server_links();
         }
         if action == ButtonAction::CycleWallpaper {
             self.request_wallpaper(true);
@@ -27310,7 +27488,7 @@ impl App {
 
     fn color_axes(&self, t: ColorTarget) -> usize {
         match t {
-            ColorTarget::Theme(_) | ColorTarget::Hitbox(_) | ColorTarget::Sky | ColorTarget::Crosshair | ColorTarget::FireCrosshair => 3,
+            ColorTarget::Theme(_) | ColorTarget::Hitbox(_) | ColorTarget::Team(_) | ColorTarget::Sky | ColorTarget::Crosshair | ColorTarget::FireCrosshair => 3,
             ColorTarget::Shield(farbe) => ShieldColor::axes(self.settings.shield_mark(farbe)).len(),
             ColorTarget::BlockOutline | ColorTarget::DamageTint | ColorTarget::Crit | ColorTarget::HitboxKind(_) => 4,
         }
@@ -27322,6 +27500,7 @@ impl App {
             ColorTarget::Hitbox(HitboxVariant::Smoothed) => "Hitbox geglättet".to_string(),
             ColorTarget::Hitbox(HitboxVariant::Raw) => "Hitbox roh".to_string(),
             ColorTarget::HitboxKind(art) => format!("Hitbox {}", art.label()),
+            ColorTarget::Team(seite) => format!("Hitbox {}", seite.label()),
             ColorTarget::Shield(ShieldColor::Cooldown) => "Schild-Cooldown".to_string(),
             ColorTarget::Shield(ShieldColor::Hold) => "Schild gehalten".to_string(),
             ColorTarget::Sky => "Himmelsfarbe".to_string(),
@@ -27351,6 +27530,10 @@ impl App {
             ColorTarget::HitboxKind(art) => {
                 let st = s.module_hitbox_styles[art.index()];
                 [st.hue as f32, st.saturation as f32, st.value as f32, st.alpha as f32]
+            }
+            ColorTarget::Team(seite) => {
+                let st = s.team_hitboxes[seite.index()];
+                [st.hue as f32, st.saturation as f32, st.value as f32, 100.0]
             }
             ColorTarget::Crosshair => [s.crosshair_hue as f32, s.crosshair_saturation as f32, s.crosshair_value as f32, 100.0],
             ColorTarget::FireCrosshair => [s.fire_crosshair_hue as f32, s.fire_crosshair_saturation as f32, s.fire_crosshair_value as f32, 100.0],
@@ -27397,6 +27580,10 @@ impl App {
             ColorTarget::HitboxKind(art) => {
                 let st = &mut set.module_hitbox_styles[art.index()];
                 (st.hue, st.saturation, st.value, st.alpha) = (h, u(1).min(100), u(2).min(100), u(3).min(100));
+            }
+            ColorTarget::Team(seite) => {
+                let st = &mut set.team_hitboxes[seite.index()];
+                (st.hue, st.saturation, st.value) = (h, u(1).min(100), u(2).min(100));
             }
             ColorTarget::Crosshair => {
                 (set.crosshair_hue, set.crosshair_saturation, set.crosshair_value) = (h, u(1).min(100), u(2).min(100));
@@ -28837,6 +29024,35 @@ impl App {
                 vert.position = [vert.position[0] + v.x, vert.position[1] + v.y, vert.position[2] + v.z];
             }
         }
+        // Gezuendetes TNT (TntRenderer): der Block um seine Mitte, eine halbe Hoehe ueber den
+        // Fuessen. In den letzten zehn Ticks blaeht er sich bis auf 130 % auf, und alle fuenf
+        // Ticks blitzt er weiss (TntMinecartRenderer.renderWhiteSolidBlock).
+        let tnt_vorgabe = block_place::default_state_for_item("tnt");
+        for (_, e) in self.entities.iter() {
+            if world::entity_type_name(e.entity_type) != Some("tnt") || !self.entity_in_render_distance(e) {
+                continue;
+            }
+            let Some(state) = e.tnt_block.or(tnt_vorgabe).filter(|s| *s != world::STATE_AIR) else { continue };
+            let rest = e.tnt_fuse as f32 - progress + 1.0;
+            let groesse = if rest < 10.0 {
+                let f = (1.0 - rest / 10.0).clamp(0.0, 1.0);
+                1.0 + f * f * f * f * 0.3
+            } else {
+                1.0
+            };
+            let blitz = (e.tnt_fuse / 5) % 2 == 0;
+            let (x, y, z) = e.render_pos(progress);
+            let mitte = (DVec3::new(x, y + 0.5, z) - eye).as_vec3();
+            let start = out.len();
+            out.extend(world::mesher::block_display_vertices(state, &self.block_uvs, &self.block_shapes, &self.cross_blocks));
+            for vert in &mut out[start..] {
+                let p = (glam::Vec3::from(vert.position) - glam::Vec3::splat(0.5)) * groesse + mitte;
+                vert.position = p.into();
+                if blitz {
+                    *vert = vert.with_white_flash();
+                }
+            }
+        }
         // Vom Kolben bewegte Bloecke (PistonHeadRenderer): ihre Zelle zeigt moving_piston, also
         // nichts; der Block selbst faehrt hier zwischen Start- und Zielzelle.
         for m in &self.pistons.moving {
@@ -29352,7 +29568,7 @@ impl App {
                 // Sonst stehen sie (etwa auf mcpvp.club) als orange Kaesten neben den NPCs.
             } else if world::entity_type_name(e.entity_type) == Some("experience_orb") {
                 // Als Bild bei den Partikeln, s. experience_orb_vertices.
-            } else if e.falling_block.is_some() {
+            } else if e.falling_block.is_some() || world::entity_type_name(e.entity_type) == Some("tnt") {
                 // Als echter Block im Block-Atlas, s. display_block_vertices.
             } else if is_player_like(e.entity_type) {
                 // ECHTER BUG gewesen: hier stand `false` fest -- ein fremder Spieler blieb
@@ -29701,6 +29917,224 @@ impl App {
         self.entities.iter().any(|(id, e)| self.shield_mark_color(*id, e, ShieldMark::Hitbox).is_some())
     }
 
+    // Farbe des Namensschilds eines Spielers (0xRRGGBB) und woher sie stammt. Der Reihe nach:
+    //   1. die Farbe seines Scoreboard-Teams (so faerbt Vanilla den Namen),
+    //   2. der Name in der Tab-Liste (Anzeigename aus dem Spielerlisten-Paket): die Farbe
+    //      des Abschnitts, der den Spielernamen enthaelt,
+    //   3. die letzte Farbe im Team-Prefix (Server, die den Namen nur ueber den Prefix
+    //      faerben und die Teamfarbe leer lassen),
+    //   4. ein eigenes Namensschild des Servers: ein Text-Display als Passagier, dort der
+    //      Abschnitt mit dem Namen, sonst der erste farbige.
+    // None = nichts davon.
+    fn name_tag_color(&self, uuid: &[u8; 16], entity_id: Option<i32>) -> (Option<u32>, &'static str) {
+        let name = self.player_names.get(uuid);
+        let team = name.and_then(|n| self.sb_entry_team.get(n)).and_then(|t| self.sb_teams.get(t));
+        if let Some(c) = team.and_then(|t| protocol::nbt::formatting_color(t.color)) {
+            return (Some(c), "Teamfarbe");
+        }
+        let tab = self.tab_entries.get(uuid).and_then(|t| t.display_name.as_ref());
+        if let Some(c) = tab.zip(name).and_then(|(spans, n)| spans.iter().find(|s| s.text.contains(n.as_str())).and_then(|s| s.color)) {
+            return (Some(c), "Tab-Liste");
+        }
+        if let Some(c) = team.and_then(|t| protocol::nbt::legacy_to_spans(&t.prefix, None).iter().rev().find_map(|s| s.color)) {
+            return (Some(c), "Prefix");
+        }
+        // Was tatsaechlich ueber dem Kopf steht (s. head_labels): der Abschnitt mit dem Namen
+        // zaehlt, sonst der erste farbige.
+        let Some(name) = name else { return (None, "keine") };
+        let mut ersatz = None;
+        for spans in self.head_labels(uuid, entity_id) {
+            if let Some(c) = spans.iter().find(|s| s.text.contains(name.as_str())).and_then(|s| s.color) {
+                return (Some(c), "Beschriftung");
+            }
+            ersatz = ersatz.or_else(|| spans.iter().find_map(|s| s.color.filter(|c| *c != 0xFFFFFF)));
+        }
+        if let Some(c) = ersatz {
+            return (Some(c), "Beschriftung (Rest)");
+        }
+        // Die Seitenleiste: Team-Modi listen dort oft die Spieler in ihrer Teamfarbe -- fuer den
+        // EIGENEN Namen meist die einzige Quelle, denn ueber dem eigenen Kopf zeigt der Server
+        // kein Namensschild.
+        if let Some((_, zeilen)) = self.scoreboard_lines() {
+            for zeile in zeilen {
+                let text: String = zeile.iter().map(|s| s.text.as_str()).collect();
+                if !text.contains(name.as_str()) {
+                    continue;
+                }
+                let farbe = zeile
+                    .iter()
+                    .find(|s| s.text.contains(name.as_str()))
+                    .and_then(|s| s.color)
+                    .or_else(|| zeile.iter().find_map(|s| s.color.filter(|c| *c != 0xFFFFFF)));
+                if let Some(c) = farbe {
+                    return (Some(c), "Seitenleiste");
+                }
+            }
+        }
+        (None, "keine")
+    }
+
+    // Jede Beschriftung ueber dem Kopf eines Spielers, die seinen Namen enthaelt: Spielername,
+    // Text-Display, Custom Name eines Ruestungsstaenders ... -- egal woher, was zaehlt, ist was
+    // dort steht. Health-Anzeigen ("19 ❤") enthalten den Namen nicht und fallen heraus.
+    fn head_labels(&self, uuid: &[u8; 16], entity_id: Option<i32>) -> Vec<Vec<protocol::nbt::TextSpan>> {
+        let Some(name) = self.player_names.get(uuid) else { return Vec::new() };
+        // Die eigene Figur steht nicht in der Entity-Liste: ihr Fusspunkt kommt aus der Physik.
+        let fuss = if Some(*uuid) == self.own_uuid {
+            Some((self.physics.pos.x, self.physics.pos.y, self.physics.pos.z))
+        } else {
+            entity_id.and_then(|id| self.entities.get(id)).map(|e| e.pos)
+        };
+        let Some(fuss) = fuss else { return Vec::new() };
+        let mut out = Vec::new();
+        for (lid, le) in self.entities.iter() {
+            let Some(label) = self.world_label(*lid, le, 0.0) else { continue };
+            let a = label.anchor;
+            if (a.x - fuss.0).abs() > 0.8 || (a.z - fuss.2).abs() > 0.8 || a.y < fuss.1 || a.y > fuss.1 + 4.5 {
+                continue;
+            }
+            if label.spans.iter().map(|s| s.text.as_str()).collect::<String>().contains(name.as_str()) {
+                out.push(label.spans.into_owned());
+            }
+        }
+        out
+    }
+
+    // Alles, woran das Teams-Modul das Team eines Spielers erkennt (s. teams::side_of).
+    fn team_facts(&self, uuid: &[u8; 16], entity_id: Option<i32>) -> (teams::Facts, &'static str) {
+        let name = self.player_names.get(uuid);
+        let team = name.and_then(|n| self.sb_entry_team.get(n)).cloned();
+        let (color, quelle) = self.name_tag_color(uuid, entity_id);
+        // Der angezeigte Name als Klartext: Team-Prefix + Name, sonst die Tab-Liste, sonst
+        // die Beschriftung ueber dem Kopf.
+        let klartext = |spans: &[protocol::nbt::TextSpan]| spans.iter().map(|s| s.text.as_str()).collect::<String>();
+        let text = team
+            .as_ref()
+            .and_then(|t| self.sb_teams.get(t))
+            .map(|t| klartext(&protocol::nbt::legacy_to_spans(&format!("{}{}", t.prefix, name.map_or("", |n| n.as_str())), None)))
+            .or_else(|| self.tab_entries.get(uuid).and_then(|t| t.display_name.as_deref()).map(klartext))
+            .or_else(|| self.head_labels(uuid, entity_id).first().map(|l| klartext(l)));
+        let prefix = text.zip(name).and_then(|(t, n)| teams::prefix_before(&t, n));
+        let ruestung = if Some(*uuid) == self.own_uuid {
+            self.own_armor()
+        } else {
+            entity_id.and_then(|id| self.entities.get(id)).map_or([None; 4], |e| e.armor)
+        };
+        let armor = ruestung.map(|r| r.and_then(|r| r.dyed));
+        (teams::Facts { team, color, prefix, armor }, quelle)
+    }
+
+    // Die eigene Figur als moegliches Fahrzeug an die Entity-Liste melden (s.
+    // Entities::set_own_body): Namensschild-Displays auf dem eigenen Kopf laufen sonst nicht mit.
+    fn sync_own_body(&mut self) {
+        let Some(id) = self.own_entity_id else { return };
+        let p = self.physics.pos;
+        self.entities.set_own_body(id, (p.x, p.y, p.z), self.camera.yaw, self.physics.current_height());
+    }
+
+    // Vorschlaege fuer die eigene Teamfarbe: die Namensfarben der anderen Spieler, haeufigste
+    // zuerst, ohne Weiss. Eine schon gewaehlte bleibt dabei, auch wenn sie gerade niemand traegt.
+    fn team_color_suggestions(&self) -> Vec<u32> {
+        let mut zaehler: Vec<(u32, usize)> = Vec::new();
+        for (uuid, f) in &self.team_facts {
+            let Some(c) = f.color.filter(|c| *c != 0xFFFFFF) else { continue };
+            if Some(*uuid) == self.own_uuid {
+                continue;
+            }
+            match zaehler.iter_mut().find(|(z, _)| *z == c) {
+                Some(z) => z.1 += 1,
+                None => zaehler.push((c, 1)),
+            }
+        }
+        zaehler.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut out: Vec<u32> = zaehler.into_iter().map(|(c, _)| c).collect();
+        if let Some(c) = self.settings.team_own_color.filter(|c| !out.contains(c)) {
+            out.insert(0, c);
+        }
+        out.truncate(COLOR_PICK_MAX);
+        out
+    }
+
+    // Teams-Modul: die Merkmale aller Spieler einmal pro Tick (das Zeichnen liest nur
+    // team_facts), und jede Aenderung ins Log -- woran die Erkennung haengt, laesst sich nur
+    // am echten Server pruefen.
+    fn update_team_facts(&mut self) {
+        self.team_facts.clear();
+        if !self.settings.module_teams {
+            return;
+        }
+        let eigene = match self.own_uuid {
+            Some(u) => vec![(u, self.own_entity_id)],
+            None => Vec::new(),
+        };
+        let spieler: Vec<([u8; 16], Option<i32>)> = eigene
+            .into_iter()
+            .chain(self.entities.iter().filter(|(_, e)| world::is_player(e.entity_type)).map(|(id, e)| (e.uuid, Some(*id))))
+            .collect();
+        for (uuid, id) in spieler {
+            let (mut fakten, mut quelle) = self.team_facts(&uuid, id);
+            if let (true, Some(c)) = (Some(uuid) == self.own_uuid, self.settings.team_own_color) {
+                fakten.color = Some(c);
+                quelle = "eingestellt";
+            }
+            match fakten.color {
+                Some(c) => {
+                    self.team_color_memory.insert(uuid, c);
+                }
+                None => {
+                    if let Some(&c) = self.team_color_memory.get(&uuid) {
+                        fakten.color = Some(c);
+                        quelle = "gemerkt";
+                    }
+                }
+            }
+            let name = self.player_names.get(&uuid).cloned().unwrap_or_else(|| "?".to_string());
+            let eigen = if Some(uuid) == self.own_uuid { " (du)" } else { "" };
+            let hex = |c: Option<u32>| c.map_or("-".to_string(), |c| format!("#{c:06X}"));
+            let zeile = format!(
+                "[teams] {name}{eigen}: Name {} ({quelle}) | Team {} | Prefix {} | Ruestung {}",
+                hex(fakten.color),
+                fakten.team.as_deref().unwrap_or("-"),
+                fakten.prefix.as_deref().unwrap_or("-"),
+                fakten.armor.map(hex).join(" ")
+            );
+            if self.team_color_log.get(&uuid) != Some(&zeile) {
+                eprintln!("{zeile}");
+                self.team_color_log.insert(uuid, zeile);
+            }
+            self.team_facts.insert(uuid, fakten);
+        }
+    }
+
+    // Wie das Teams-Modul die Box dieses Spielers zeichnet: Farbe, Deckkraft (0..1), Dichte
+    // in Pixeln und gepunktet -- oder None, wenn seine Seite nicht ueberschrieben wird.
+    fn team_hitbox_style(&self, e: &world::Entity) -> Option<([f32; 3], f32, u32, bool)> {
+        if !world::is_player(e.entity_type) || Some(e.uuid) == self.own_uuid {
+            return None;
+        }
+        let leer = teams::Facts::default();
+        let eigene = self.own_uuid.and_then(|u| self.team_facts.get(&u)).unwrap_or(&leer);
+        let fremde = self.team_facts.get(&e.uuid).unwrap_or(&leer);
+        self.team_style_of(teams::side_of(&self.settings.team_match, eigene, fremde), fremde.display_color())
+    }
+
+    // Stil einer Seite fuer einen Spieler mit der Namensfarbe `name_color` (ohne Farbe weiss,
+    // wie ein ungefaerbter Name). None = Modul aus oder die Seite wird nicht ueberschrieben.
+    fn team_style_of(&self, seite: teams::Side, name_color: Option<u32>) -> Option<([f32; 3], f32, u32, bool)> {
+        let set = &self.settings;
+        let st = set.team_hitboxes[seite.index()];
+        if !set.module_teams || !st.on {
+            return None;
+        }
+        let farbe = if st.nametag {
+            let c = name_color.unwrap_or(0xFFFFFF);
+            [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0]
+        } else {
+            hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0)
+        };
+        Some((farbe, st.opacity as f32 / 100.0, st.density_px, st.dotted))
+    }
+
     fn build_hitbox_vertices(&self, screen_height: f32) -> Vec<render::HitboxVertex> {
         use hitbox_kinds::HitboxKind;
         let set = &self.settings;
@@ -29713,7 +30147,8 @@ impl App {
         // Ohne Hitbox-Modul nur die markierten Spieler, und nur ihre geglaettete Box.
         let (show_smoothed, show_raw) = if modul_an { (set.module_hitbox_show_smoothed, set.module_hitbox_show_raw) } else { (true, false) };
         let schild = !modul_an && !self.entities.is_empty() && self.any_shield_hitbox_mark();
-        if !(modul_an || schild || netz || wasser) {
+        let team = set.module_teams && set.team_hitboxes.iter().any(|t| t.on);
+        if !(modul_an || schild || netz || wasser || team) {
             return Vec::new();
         }
         let eye = self.camera.position;
@@ -29727,10 +30162,11 @@ impl App {
         let progress = self.tick_progress();
         // Nur Schild-Markierungen: voll deckend, sie sollen auffallen.
         let alpha = if set.module_hitbox_enabled { set.module_hitbox_opacity as f32 / 100.0 } else { 1.0 };
-        let half_width = set.module_hitbox_density_px as f32 / 2.0;
         let mut out = Vec::new();
-        // Eine Box aus ihren Ecken (augenrelativ) als zwoelf Kanten.
-        let mut push_box = |min: Vec3, max: Vec3, color: [f32; 4]| {
+        // Eine Box aus ihren Ecken (augenrelativ) als zwoelf Kanten, mit Dichte in Pixeln und
+        // ob gepunktet (das Teams-Modul hat dafuer eigene Werte).
+        let mut push_box = |min: Vec3, max: Vec3, color: [f32; 4], density_px: u32, dotted: bool| {
+            let half_width = density_px as f32 / 2.0;
             let corner = |sel: [bool; 3]| Vec3::new(if sel[0] { max.x } else { min.x }, if sel[1] { max.y } else { min.y }, if sel[2] { max.z } else { min.z });
             const EDGES: [([bool; 3], [bool; 3]); 12] = [
                 ([false, false, false], [true, false, false]),
@@ -29752,12 +30188,12 @@ impl App {
                 // Strich+Luecke-Laenge dieser KANTE, aus ihrer EIGENEN Entfernung (nicht
                 // der der ganzen Box): eine nahe Kante braucht mehr Weltlaenge fuer
                 // dasselbe Bildschirmmuster als eine ferne.
-                let dash_len = set.module_hitbox_dotted.then(|| {
+                let dash_len = dotted.then(|| {
                     let dist = ((a + b) * 0.5).length().max(0.05);
                     let px_per_world = ((screen_height * 0.5) / (dist * half_fov_tan)).max(1e-6);
                     // Das Strichmuster ist bewusst laenger als die Linie breit ist:
                     // Striche in Breite der Linie waeren Punkte, keine Striche.
-                    set.module_hitbox_density_px as f32 * HITBOX_DASH_PER_DENSITY / px_per_world
+                    density_px as f32 * HITBOX_DASH_PER_DENSITY / px_per_world
                 });
                 match dash_len {
                     Some(len) if len > 0.001 => {
@@ -29778,6 +30214,7 @@ impl App {
                 }
             }
         };
+        let (dichte, gepunktet) = (set.module_hitbox_density_px, set.module_hitbox_dotted);
         for (id, e) in self.entities.iter() {
             if !self.entity_in_render_distance(e) {
                 continue;
@@ -29791,8 +30228,16 @@ impl App {
             // Sonst die eigene Art mit ihrer Farbe und Deckkraft, und alles andere
             // Angreifbare (Mobs) in der Farbe von "Geglättet".
             let art = world::entity_type_name(e.entity_type).and_then(HitboxKind::of_entity);
+            // Teams-Modul: eigene Farbe, Deckkraft, Dichte und Strichelung fuer Verbuendete
+            // bzw. Gegner. Es zeichnet auch ohne Hitbox-Modul (dann nur die geglaettete Box).
+            let team_stil = self.team_hitbox_style(e);
+            let (dichte, gepunktet) = team_stil.map_or((dichte, gepunktet), |(_, _, d, p)| (d, p));
             let (smoothed_color, raw_color, a) = match (self.shield_mark_color(*id, e, ShieldMark::Hitbox), art) {
                 (Some([r, g, b, _]), _) => ([r, g, b], [r, g, b], alpha),
+                (None, _) if team_stil.is_some() => {
+                    let (farbe, deckkraft, _, _) = team_stil.expect("eben geprueft");
+                    (farbe, farbe, deckkraft)
+                }
                 (None, _) if !modul_an => continue,
                 (None, Some(art)) if stil(art).custom => {
                     if !stil(art).on {
@@ -29812,7 +30257,7 @@ impl App {
             let unten = e.box_y_offset();
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
                 let feet = rel(pos);
-                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a]);
+                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], dichte, gepunktet);
             };
             if show_smoothed {
                 let (x, y, z) = e.render_pos(progress);
@@ -29825,23 +30270,28 @@ impl App {
         }
         // Der eigene Spieler, nur in der 3. Person (wie Vanillas F3+B): in der Ich-Sicht sitzt
         // die Kamera in der Box. Er steht nicht in self.entities, Farbe wie die Art Spieler.
-        let eigene = match stil(HitboxKind::Player) {
-            st if st.custom => st.on.then(|| (farbe(st), alpha * st.alpha as f32 / 100.0)),
+        // Mit dem Teams-Modul gehoert sie zu den Verbuendeten -- man ist im eigenen Team.
+        let team_eigen = self.team_style_of(teams::Side::Friendly, self.own_uuid.and_then(|u| self.team_facts.get(&u)).and_then(|f| f.display_color()));
+        let eigene = match (team_eigen, stil(HitboxKind::Player)) {
+            (Some((f, a, _, _)), _) => Some((f, a)),
+            (None, st) if st.custom => st.on.then(|| (farbe(st), alpha * st.alpha as f32 / 100.0)),
             _ => HitboxKind::Player.shown_by_default(set.module_hitbox_items).then_some((smoothed_color, alpha)),
         };
+        let (eigen_dichte, eigen_gepunktet) = team_eigen.map_or((dichte, gepunktet), |(_, _, d, p)| (d, p));
+        let eigen_roh = team_eigen.map_or(raw_color, |(f, ..)| f);
         // Abschaltbar im Modul ("Eigene Hitbox").
         if let (true, true, false, Some((farbe_geglaettet, a))) = (modul_an, set.module_hitbox_self, self.perspective.is_first_person(), eigene) {
             let half_w = physics::PLAYER_WIDTH / 2.0;
             let height = self.physics.current_height() as f32;
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
                 let feet = rel(pos);
-                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a]);
+                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], eigen_dichte, eigen_gepunktet);
             };
             if show_smoothed {
                 fuesse(self.physics_render_prev.lerp(self.physics.pos, progress as f64), farbe_geglaettet);
             }
             if show_raw {
-                fuesse(self.physics.pos, raw_color);
+                fuesse(self.physics.pos, eigen_roh);
             }
         }
         // Spinnennetze im Umkreis als ganzer Block (so gross ist ihre Trefferflaeche, auch
@@ -29870,7 +30320,7 @@ impl App {
                         }
                         let ecke = DVec3::new(x as f64, y as f64, z as f64);
                         if netz && world::block_name(state) == Some("cobweb") {
-                            push_box(nah(ecke), nah(ecke + DVec3::ONE), mit_alpha(st_netz));
+                            push_box(nah(ecke), nah(ecke + DVec3::ONE), mit_alpha(st_netz), dichte, gepunktet);
                         } else if wasser && hitbox_kinds::bucket_source(state) {
                             let Some(h) = world::fluid_height_at(&self.world, x, y, z) else { continue };
                             let max = ecke + DVec3::new(1.0, h, 1.0);
@@ -29879,7 +30329,7 @@ impl App {
                             if auge.clamp(ecke, max).distance(auge) > reichweite {
                                 continue;
                             }
-                            push_box(nah(ecke), nah(max), mit_alpha(st_wasser));
+                            push_box(nah(ecke), nah(max), mit_alpha(st_wasser), dichte, gepunktet);
                         }
                     }
                 }
@@ -31294,6 +31744,11 @@ impl App {
                 // 3D-Geometrie mitten darin.
                 doll_split = None;
             }
+            // Dialoge des Servers liegen ueber allem.
+            if self.dialog_shown() || self.code_of_conduct.is_some() {
+                self.build_dialog_ui(gpu, &mut rects, &mut texts, &mut sprites);
+                doll_split = None;
+            }
         }
         self.push_selection_rects(gpu, &mut rects);
         (rects, hud_lines, texts, sprites, doll_split)
@@ -31641,7 +32096,7 @@ impl App {
         let gesehen = self
             .entities
             .iter()
-            .flat_map(|(_, e)| [e.main_hand, e.off_hand, e.armor[world::armor::ArmorSlot::Head.index()]])
+            .flat_map(|(_, e)| entity_head_items(e))
             .flatten()
             .filter_map(|h| h.head_skin)
             // Und die platzierten Koepfe in der Naehe.
@@ -31714,7 +32169,7 @@ impl App {
         let getragen = self
             .entities
             .iter()
-            .flat_map(|(_, e)| [e.main_hand, e.off_hand, e.armor[world::armor::ArmorSlot::Head.index()]])
+            .flat_map(|(_, e)| entity_head_items(e))
             .flatten()
             .filter_map(|h| h.head_skin);
         let inventar = self
@@ -32819,7 +33274,8 @@ impl App {
         Rect { x: SIDEBAR_PAD, y: screen_h - SIDEBAR_PAD - SIDEBAR_ITEM_H, w: SIDEBAR_W - 2.0 * SIDEBAR_PAD, h: SIDEBAR_ITEM_H }
     }
 
-    // Logo `i` aus SIDEBAR_LINKS: quadratisch, nebeneinander ueber der Linie vor "Setup".
+    // Logo `i` aus SIDEBAR_LINKS: quadratisch, nebeneinander direkt ueber der Linie vor
+    // "Setup"; die Version steht rechts daneben.
     fn sidebar_link_rect(i: usize, screen_h: f32) -> Rect {
         let setup = Self::sidebar_setup_rect(screen_h);
         Rect { x: SIDEBAR_PAD + i as f32 * (SIDEBAR_ITEM_H + 4.0), y: setup.y - 18.0 - SIDEBAR_ITEM_H, w: SIDEBAR_ITEM_H, h: SIDEBAR_ITEM_H }
@@ -33625,6 +34081,9 @@ impl App {
     // Das einzeilige Feld, in das gerade getippt wird: das fokussierte des Server-Fensters (hat
     // Vorrang), das Namensfeld eines neuen Themes, sonst das von Quick Connect.
     fn active_text_field(&mut self) -> Option<&mut text_field::TextField> {
+        if self.dialog.is_some() {
+            return self.dialog_text_field();
+        }
         if self.server_edit.is_some() {
             return self.server_edit.as_mut().map(ServerEdit::focused);
         }
@@ -33754,6 +34213,11 @@ impl App {
             let (x, y) = ((r.x + (r.w - LOGO_DRAW) / 2.0).round(), (r.y + (r.h - LOGO_DRAW) / 2.0).round());
             sprites.push(UiSprite::quad(x, y, LOGO_DRAW, LOGO_DRAW, logo_uv(i), farbe, SpriteAtlas::Logos));
         }
+        // Version rechts neben den Logos, mittig zu ihnen.
+        let letztes = Self::sidebar_link_rect(SIDEBAR_LINKS.len() - 1, sh);
+        let vy = (letztes.y + (letztes.h - gpu.text_height(TOPBAR_SUB_SCALE)) / 2.0).round();
+        push_typed_marker(texts);
+        texts.push(UiText { text: concat!("v", env!("CARGO_PKG_VERSION")).to_string(), x: letztes.x + letztes.w + 8.0, y: vy, color: theme::text_2(), scale: TOPBAR_SUB_SCALE });
         // Skin-Tab: Knoepfe im Rand rechts (s. skin_strip).
         if self.screen == MenuScreen::SettingsSkin {
             let (knoepfe, (lx, ly), _) = self.skin_strip(gpu);
@@ -34118,6 +34582,63 @@ impl App {
                         swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
                         rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
                     });
+                }
+            }
+            ModuleId::Teams => {
+                // Verbuendet ist, wer bei einer eingeschalteten Erkennung passt.
+                rows.push(ModuleRow::Heading { label: "Erkennung".to_string(), columns: &[] });
+                for (i, label) in teams::Matchers::LABELS.iter().enumerate() {
+                    rows.push(ModuleRow::Toggle { label: label.to_string(), action: ButtonAction::TeamMatch(i), on: set.team_match.get(i) });
+                }
+                // Die eigene Teamfarbe: automatisch oder eine der Namensfarben, die gerade
+                // jemand traegt (Hex-Werte tippt niemand ab).
+                let rgb = |c: u32| [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0];
+                rows.push(ModuleRow::ColorPicks {
+                    label: "Eigene Teamfarbe".to_string(),
+                    first: ("Automatisch", ButtonAction::TeamOwnColor(None), set.team_own_color.is_none()),
+                    colors: self
+                        .team_color_suggestions()
+                        .into_iter()
+                        .map(|c| (ButtonAction::TeamOwnColor(Some(c)), rgb(c), set.team_own_color == Some(c)))
+                        .collect(),
+                });
+                for seite in teams::Side::ALL {
+                    let st = set.team_hitboxes[seite.index()];
+                    rows.push(ModuleRow::Heading { label: format!("{}-Hitboxen", seite.label()), columns: &[] });
+                    rows.push(ModuleRow::Toggle { label: "Überschreiben".to_string(), action: ButtonAction::TeamToggle(seite), on: st.on });
+                    rows.push(ModuleRow::Pick {
+                        label: "Farbe".to_string(),
+                        options: vec![
+                            ("Namensschild", ButtonAction::TeamNametag(seite, true), st.nametag),
+                            ("Fest", ButtonAction::TeamNametag(seite, false), !st.nametag),
+                        ],
+                        // Das Farbfeld nur mit fester Farbe -- mit Namensschild gibt es nichts einzustellen.
+                        swatch: (!st.nametag).then(|| {
+                            (
+                                ButtonAction::OpenColorPicker(ColorTarget::Team(seite)),
+                                hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
+                            )
+                        }),
+                    });
+                    rows.push(ModuleRow::Stepper {
+                        label: "Deckkraft".to_string(),
+                        prev: ButtonAction::TeamOpacity(seite, false),
+                        next: ButtonAction::TeamOpacity(seite, true),
+                        text: format!("{} %", st.opacity),
+                        can_prev: st.opacity > 0,
+                        can_next: st.opacity < 100,
+                        slider: Some((st.opacity as f64, 0.0, 100.0)),
+                    });
+                    rows.push(ModuleRow::Stepper {
+                        label: "Dichte".to_string(),
+                        prev: ButtonAction::TeamDensity(seite, false),
+                        next: ButtonAction::TeamDensity(seite, true),
+                        text: format!("{} px", st.density_px),
+                        can_prev: st.density_px > HITBOX_DENSITY_MIN,
+                        can_next: st.density_px < HITBOX_DENSITY_MAX,
+                        slider: Some((st.density_px as f64, HITBOX_DENSITY_MIN as f64, HITBOX_DENSITY_MAX as f64)),
+                    });
+                    rows.push(ModuleRow::Toggle { label: "Gepunktet".to_string(), action: ButtonAction::TeamDotted(seite), on: st.dotted });
                 }
             }
             ModuleId::Arrows => {
@@ -34774,6 +35295,20 @@ impl App {
                         });
                     }
                 }
+                ModuleRow::ColorPicks { first, colors, .. } => {
+                    out.extend(pick_buttons(layout.color_picks_first_rect(n), &[first], enabled));
+                    for (i, (action, _, gewaehlt)) in colors.into_iter().enumerate() {
+                        out.push(Button {
+                            action: if gewaehlt { ButtonAction::Nothing } else { action },
+                            rect: layout.color_pick_rect(n, i),
+                            label: String::new(),
+                            enabled,
+                            color: theme::get(theme::Slot::Surface2),
+                            scale: UI_SCALE_SMALL,
+                            slider: None,
+                        });
+                    }
+                }
                 ModuleRow::ToggleSwatch { action, on, swatch, .. } => {
                     out.push(Button { rect: layout.control_rect(n), enabled, ..Self::toggle(action, 0, on) });
                     out.push(Button {
@@ -34816,6 +35351,7 @@ impl App {
             | ModuleRow::Swatch { action, .. }
             | ModuleRow::ToggleSwatch { action, .. } => *action,
             ModuleRow::Pick { options, .. } => options.first().map_or(ButtonAction::Nothing, |o| o.1),
+            ModuleRow::ColorPicks { first, .. } => first.1,
             ModuleRow::TwoTogglesSwatch { first, .. } => first.0,
             ModuleRow::Stepper { prev, .. } => *prev,
             ModuleRow::Heading { .. } => return false,
@@ -35045,6 +35581,21 @@ impl App {
                         let wirkt = options.last().is_some_and(|o| o.2);
                         let rand = if rect.contains(px, py) { theme::text_2() } else { [0.0, 0.0, 0.0, 1.0] };
                         rects.push(UiRect::framed(rect, [rgb[0], rgb[1], rgb[2], if wirkt { 1.0 } else { 0.3 }], 6.0, 2.0, rand));
+                    }
+                    // Die Farbfelder zur Wahl: der gewaehlte mit Akzentrahmen, der Rest mit
+                    // schwarzem (Hover hell).
+                    ModuleRow::ColorPicks { colors, .. } => {
+                        for (i, (_, rgb, gewaehlt)) in colors.iter().enumerate() {
+                            let rect = layout.color_pick_rect(n, i);
+                            let rand = if *gewaehlt {
+                                theme::get(theme::Slot::Accent)
+                            } else if rect.contains(px, py) {
+                                theme::text_2()
+                            } else {
+                                [0.0, 0.0, 0.0, 1.0]
+                            };
+                            rects.push(UiRect::framed(rect, [rgb[0], rgb[1], rgb[2], 1.0], 6.0, if *gewaehlt { 3.0 } else { 2.0 }, rand));
+                        }
                     }
                     ModuleRow::Toggle { .. } | ModuleRow::Choice { .. } | ModuleRow::Pick { .. } | ModuleRow::Heading { .. } => {}
                 }
@@ -35775,6 +36326,30 @@ impl App {
             }
             ButtonAction::ToggleModuleArrows => self.settings.module_arrows = !self.settings.module_arrows,
             ButtonAction::ToggleModuleArmorHud => self.settings.module_armor_hud = !self.settings.module_armor_hud,
+            ButtonAction::ToggleModuleTeams => self.settings.module_teams = !self.settings.module_teams,
+            ButtonAction::TeamToggle(seite) => {
+                let st = &mut self.settings.team_hitboxes[seite.index()];
+                st.on = !st.on;
+            }
+            ButtonAction::TeamMatch(i) => self.settings.team_match.toggle(i),
+            ButtonAction::TeamOwnColor(c) => self.settings.team_own_color = c,
+            ButtonAction::TeamNametag(seite, nametag) => self.settings.team_hitboxes[seite.index()].nametag = nametag,
+            ButtonAction::TeamOpacity(seite, mehr) => {
+                let st = &mut self.settings.team_hitboxes[seite.index()];
+                st.opacity = if mehr { (st.opacity + 5).min(100) } else { st.opacity.saturating_sub(5) };
+            }
+            ButtonAction::TeamDensity(seite, mehr) => {
+                let st = &mut self.settings.team_hitboxes[seite.index()];
+                st.density_px = if mehr {
+                    (st.density_px + HITBOX_DENSITY_STEP).min(HITBOX_DENSITY_MAX)
+                } else {
+                    st.density_px.saturating_sub(HITBOX_DENSITY_STEP).max(HITBOX_DENSITY_MIN)
+                };
+            }
+            ButtonAction::TeamDotted(seite) => {
+                let st = &mut self.settings.team_hitboxes[seite.index()];
+                st.dotted = !st.dotted;
+            }
             ButtonAction::ToggleModuleKeystrokes => self.settings.module_keystrokes = !self.settings.module_keystrokes,
             ButtonAction::ToggleArrowIndicator => self.settings.arrow_indicator = !self.settings.arrow_indicator,
             ButtonAction::ToggleArrowNumberOnly => self.settings.arrow_number_only = !self.settings.arrow_number_only,
@@ -35978,7 +36553,13 @@ impl App {
     // Fadenkreuz. Eine Quelle dafuer, damit ein neues Overlay nicht die Haelfte der Stellen
     // vergisst -- ein Overlay, das die Eingabe nur halb sperrt, laeuft Grim sofort auf.
     fn screen_overlay_open(&self) -> bool {
-        self.inventory.screen_open || self.module_menu_open || self.sign_edit.is_some() || self.book_view.is_some() || self.book_edit.is_some()
+        self.inventory.screen_open
+            || self.module_menu_open
+            || self.sign_edit.is_some()
+            || self.book_view.is_some()
+            || self.book_edit.is_some()
+            || self.dialog_shown()
+            || self.code_of_conduct.is_some()
     }
 
     // --- Buecher (Vanillas BookViewScreen, s. book.rs) ------------------------------------
@@ -36853,6 +37434,7 @@ impl App {
             world: &self.world,
             shapes: &self.block_shapes,
             biomes: &self.biome_palette,
+            player: Some(particles::NearPlayer { pos: self.physics.pos, vel_y: self.physics.vel.y }),
         };
         let entities = &self.entities;
         let own_id = self.own_entity_id;
@@ -37432,7 +38014,14 @@ impl App {
             let text = rest.to_string();
             let tw = gpu.measure_text(&text, m.text_scale);
             let (x, y) = armor_hud::number_origin(bild, m.size, m.px, (set.armor_hud_number_x, set.armor_hud_number_y), (tw, text_h));
-            let color = if rest < armor_hud::LOW_DURABILITY { COLOR_ARMOR_LOW } else { COLOR_WHITE };
+            let max = world::item_registry::item_name(stack.item_id).and_then(|name| max_damage_of(stack, name)).unwrap_or(0);
+            let color = if rest < armor_hud::LOW_DURABILITY {
+                COLOR_ARMOR_LOW
+            } else if set.armor_hud_green && max > 0 && rest as f32 > max as f32 * 0.95 {
+                COLOR_ARMOR_HIGH
+            } else {
+                COLOR_WHITE
+            };
             texts.push(UiText { text, x: x.round(), y: y.round(), color, scale: m.text_scale });
         }
         Self::end_text_area(gpu, texts);
@@ -41303,6 +41892,8 @@ impl App {
             MenuScreen::SettingsMisc => {
                 let y = (settings_row_y(0) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                 texts.push(UiText { text: "No UI close S2C".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                let y = (settings_row_y(1) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                texts.push(UiText { text: "No chat clear".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
             }
             MenuScreen::SettingsFont => self.build_settings_font_tab(gpu, rects, texts),
             MenuScreen::SettingsDesign => self.build_settings_design_tab(gpu, rects, texts),
@@ -42030,7 +42621,7 @@ impl App {
                 }
             }
             HudElement::Armor => {
-                for (row, text) in ["Größe", "Ausrichtung", "Rücken nach", "Abstand", "Zahl-Größe", "Zahl X", "Zahl Y"].into_iter().enumerate() {
+                for (row, text) in ["Größe", "Ausrichtung", "Rücken nach", "Abstand", "Zahl-Größe", "Zahl X", "Zahl Y", "Grün bei >95 %"].into_iter().enumerate() {
                     let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                     texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 }
@@ -44892,7 +45483,7 @@ impl App {
     // Hat ein Textfeld den Fokus (Amboss-Name, Kreativ-Suche)? Dann gehoeren die Tasten ihm
     // und nicht der Steuerung.
     fn text_field_focused(&self) -> bool {
-        self.anvil_typing() || self.creative_search_focused() || self.book_edit.is_some()
+        self.anvil_typing() || self.creative_search_focused() || self.book_edit.is_some() || self.dialog_shown() || self.code_of_conduct.is_some()
     }
 
     fn anvil_typing(&self) -> bool {
@@ -45675,6 +46266,7 @@ impl App {
         self.slider_drag_update();
         self.step_slider_drag();
         self.color_popup_drag();
+        self.dialog_drag();
     }
 
     // Fester Zeitschritt (physics::TICK_DT = 1/20s) statt "Geschwindigkeit * echte
@@ -46082,7 +46674,9 @@ impl App {
                 pos: (self.physics.pos.x, self.physics.pos.y, self.physics.pos.z),
                 eye_height: self.physics.eye_height() as f64,
             });
+            self.sync_own_body();
             self.entities.tick(&self.world, &self.block_shapes, eigener);
+            self.update_team_facts();
             self.seat_own_player();
             self.tick_potion_swirls();
             self.tick_area_clouds();
@@ -48926,6 +49520,11 @@ impl App {
     }
 
     fn push_chat_message(&mut self, spans: Vec<protocol::nbt::TextSpan>) {
+        // No chat clear: Clear-Chat-Plugins leeren den Chat mit Dutzenden Leerzeilen; leere
+        // Nachrichten kommen dann gar nicht erst hinein.
+        if self.settings.no_chat_clear && spans.iter().all(|s| s.text.trim().is_empty()) {
+            return;
+        }
         chat_log::append(&spans.iter().map(|s| s.text.as_str()).collect::<String>());
         self.chat_messages.push_back(linkify_chat(spans));
         self.chat_times.push_back(Instant::now());
@@ -49887,7 +50486,7 @@ impl App {
                 // wheel_scrolls_list). Beim Neubelegen faengt winit die Raste als neue Belegung
                 // ab; hier darf sie dann nicht zusaetzlich die Lautstaerke verstellen.
                 raw_input::RawMouseEvent::Wheel(rasten) => {
-                    if self.focused && self.awaiting_keybind.is_none() && !self.wheel_scrolls_list() {
+                    if self.focused && self.awaiting_keybind.is_none() && !self.wheel_scrolls_list() && !self.dialog_shown() && self.code_of_conduct.is_none() {
                         self.input_log.wheel(rasten);
                         self.wheel_rasten(rasten);
                     }
@@ -49904,7 +50503,8 @@ impl App {
                     // Offenes Modul-Menue: der Klick gehoert der Oberflaeche und wird im
                     // winit-Pfad behandelt -- hier nur sicherstellen, dass er nicht ZUSAETZLICH
                     // als Angriff durchgeht (sonst schlaegt man durch das offene Menue hindurch).
-                    if self.module_menu_open {
+                    // Ebenso bei einem Dialog des Servers (s. dialog_press).
+                    if self.module_menu_open || self.dialog_shown() || self.code_of_conduct.is_some() {
                         continue;
                     }
                     if self.inventory.screen_open {
@@ -50130,7 +50730,22 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // Tipp-Klang fuer JEDES Eingabefeld an einer Stelle: vor der Taste den Inhalt des
+        // aktiven Feldes merken, danach vergleichen (s. typing_feedback).
+        let vorher = match &event {
+            WindowEvent::KeyboardInput { event: k, .. } if k.state == ElementState::Pressed => Some(self.typing_snapshot()),
+            _ => None,
+        };
+        self.handle_window_event(event_loop, id, event);
+        if let Some(vorher) = vorher {
+            self.typing_feedback(vorher);
+        }
+    }
+}
+
+impl App {
+    fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if self.gpu.is_none() {
             return;
         }
@@ -50188,6 +50803,10 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / WHEEL_PIXELS_PER_NOTCH,
                 };
+                if self.dialog_shown() || self.code_of_conduct.is_some() {
+                    self.dialog_scroll(rasten * 40.0);
+                    return;
+                }
                 if self.awaiting_keybind.is_some() {
                     if rasten.abs() > 0.01 {
                         let Some((target, slot)) = self.awaiting_keybind.take() else { return };
@@ -50364,6 +50983,16 @@ impl ApplicationHandler for App {
                 };
                 let jetzt = Instant::now();
                 self.cursor_fx.button(jetzt, self.cursor_pos, taste, state == ElementState::Pressed);
+                // Dialoge des Servers liegen ueber allem und schlucken jeden Druck, in Menue
+                // und Welt.
+                if self.dialog_shown() || self.code_of_conduct.is_some() {
+                    match state {
+                        ElementState::Pressed if matches!(button, MouseButton::Left | MouseButton::Right) => self.dialog_press(button == MouseButton::Right),
+                        ElementState::Released => self.dialog_release(),
+                        _ => {}
+                    }
+                    return;
+                }
                 // Offene Kontenliste: Klick darin waehlt ein Konto, daneben schliesst sie.
                 if button == MouseButton::Left && state == ElementState::Pressed && self.account_menu_open && self.account_menu_press() {
                     return;
@@ -51039,7 +51668,14 @@ impl ApplicationHandler for App {
                 }
                 // Server-Formular bzw. Quick Connect: dieselben Tasten fuer beide Felder (s.
                 // active_text_field), das Formular hat Vorrang.
-                if self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
+                // Ohne Textfeld im Dialog gehen Tasten nirgends hin (Escape kam schon oben an).
+                if (self.dialog_shown() || self.code_of_conduct.is_some()) && self.dialog_text_field().is_none() {
+                    if key_event.logical_key == Key::Named(NamedKey::Tab) {
+                        self.dialog_next_field();
+                    }
+                    return;
+                }
+                if self.dialog.is_some() || self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
                     if key_event.state != ElementState::Pressed {
                         return;
                     }
@@ -51095,6 +51731,8 @@ impl ApplicationHandler for App {
                                 feld.delete_forward();
                             }
                         }
+                        Key::Named(NamedKey::Tab) if self.dialog.is_some() => self.dialog_next_field(),
+                        Key::Named(NamedKey::Enter) if self.dialog.is_some() => self.dialog_enter(),
                         Key::Named(NamedKey::Tab) => {
                             if let Some(edit) = &mut self.server_edit {
                                 edit.focus = match edit.focus {
@@ -51263,6 +51901,7 @@ impl ApplicationHandler for App {
                         self.build_account_manager(&mut overlay);
                         self.build_account_context(&mut overlay);
                         self.build_disconnect_popup(&mut overlay);
+                        self.build_dialog_overlay(&mut overlay);
                         let (rects, texts, sprites, cursor, hud_fenster) = self.build_menu_ui();
                         // Unter Benachrichtigungen, Farbfenster & Co., aber ueber dem Editor.
                         if let Some(g) = hud_fenster {
@@ -51318,6 +51957,72 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    // Der Text des Feldes, in das eine Taste gerade schreiben wuerde -- dieselbe Reihenfolge
+    // wie die Tastenbehandlung in handle_window_event. Die Kennung trennt die Felder, damit
+    // ein Feldwechsel (Tab) nicht als Tippen zaehlt. Der Chat fehlt: er spielt seine Klaenge
+    // selbst (s. chat_input_edit).
+    fn typing_snapshot(&self) -> Option<(u8, String)> {
+        if let Some((i, text)) = self.dialog_field_text() {
+            return Some((100u8.saturating_add(i.min(150) as u8), text));
+        }
+        if let Some((_, buf)) = &self.editing_step {
+            return Some((1, buf.clone()));
+        }
+        if let Some((_, buf)) = &self.editing_value {
+            return Some((2, buf.clone()));
+        }
+        if self.chat_input.is_some() {
+            return None;
+        }
+        if self.mode == AppMode::World {
+            if let Some(b) = &self.book_edit {
+                let seite = b.pages.get(b.page).map_or("", String::as_str);
+                return Some((3, format!("{}\u{0}{}", b.title, seite)));
+            }
+        }
+        if let Some(sign) = &self.sign_edit {
+            return Some((4 + sign.row as u8, sign.lines.join("\n")));
+        }
+        if self.mode == AppMode::World && self.anvil_typing() {
+            return Some((10, self.anvil_name.clone()));
+        }
+        if self.mode == AppMode::World && self.creative_search_focused() {
+            return Some((11, self.creative.search.clone()));
+        }
+        if let Some(edit) = &self.server_edit {
+            return Some(match edit.focus {
+                ServerField::Name => (12, edit.name.text().to_string()),
+                ServerField::Address => (13, edit.address.text().to_string()),
+            });
+        }
+        if self.mode == AppMode::Menu {
+            if let Some(d) = &self.theme_name_dialog {
+                return Some((14, d.field.text().to_string()));
+            }
+        }
+        if self.quick_typing() {
+            return Some((15, self.quick_field.text().to_string()));
+        }
+        if let Some((_, buf)) = &self.input_field {
+            return Some((16, buf.clone()));
+        }
+        if self.screen == MenuScreen::SettingsLightLevels {
+            return Some((17, self.light_search.clone()));
+        }
+        None
+    }
+
+    // Nach einer Taste: Text dazugekommen -> Tippen, weniger geworden -> Loeschen.
+    fn typing_feedback(&mut self, vorher: Option<(u8, String)>) {
+        let (Some((feld, alt)), Some((feld_neu, neu))) = (vorher, self.typing_snapshot()) else { return };
+        if feld != feld_neu || alt == neu {
+            return;
+        }
+        let laenge = |t: &str| t.chars().count();
+        let klang = if laenge(&neu) < laenge(&alt) { ui_sound::UiSound::Erase } else { ui_sound::UiSound::Type };
+        self.play_ui_sound(klang);
     }
 }
 
@@ -51478,6 +52183,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleInventoryCursorToSlot => umschalten(settings.inventory_cursor_to_slot),
         ButtonAction::ToggleCreativeOpTab => umschalten(settings.creative_op_tab),
         ButtonAction::ToggleNoUiCloseS2c => umschalten(settings.no_ui_close_s2c),
+        ButtonAction::ToggleNoChatClear => umschalten(settings.no_chat_clear),
         ButtonAction::TogglePotionMarkStrong => umschalten(settings.potion_mark_strong),
         ButtonAction::TogglePotionMarkLong => umschalten(settings.potion_mark_long),
         ButtonAction::TogglePotionMarkWeak => umschalten(settings.potion_mark_weak),
@@ -51526,6 +52232,13 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleShields => umschalten(settings.module_shields),
         ButtonAction::ToggleModuleArrows => umschalten(settings.module_arrows),
         ButtonAction::ToggleModuleArmorHud => umschalten(settings.module_armor_hud),
+        ButtonAction::ToggleModuleTeams => umschalten(settings.module_teams),
+        ButtonAction::TeamToggle(seite) => umschalten(settings.team_hitboxes[seite.index()].on),
+        ButtonAction::TeamDotted(seite) => umschalten(settings.team_hitboxes[seite.index()].dotted),
+        ButtonAction::TeamMatch(i) => umschalten(settings.team_match.get(i)),
+        ButtonAction::TeamOwnColor(_) => UiSound::Click,
+        ButtonAction::TeamNametag(..) => UiSound::Click,
+        ButtonAction::TeamOpacity(..) | ButtonAction::TeamDensity(..) => UiSound::Step,
         ButtonAction::ToggleModuleKeystrokes => umschalten(settings.module_keystrokes),
         ButtonAction::KeysOpacityPrev | ButtonAction::KeysOpacityNext => UiSound::Step,
         ButtonAction::ArmorHudGapPrev
@@ -51551,6 +52264,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleChunkSaverRenderSaved => umschalten(settings.chunk_saver_render_saved),
                 ButtonAction::ToggleArrowIndicator => umschalten(settings.arrow_indicator),
         ButtonAction::ToggleArrowNumberOnly => umschalten(settings.arrow_number_only),
+        ButtonAction::ToggleArmorHudGreen => umschalten(settings.armor_hud_green),
         ButtonAction::ToggleArrowWhite => umschalten(settings.arrow_white),
         ButtonAction::ToggleArrowTrail => umschalten(settings.arrow_trail),
         ButtonAction::ToggleShieldCdSelf => umschalten(settings.shield_cd_self),
@@ -51582,9 +52296,12 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
 // unten 0,5, Nord/Sued 0,8, West/Ost 0,6 -- nach der staerksten Achse der Normalen).
 fn model_face(q: &assets::ModelQuad, rect: assets::UvRect) -> world::ModelFace {
     let [u0, v0, u1, v1] = q.uv;
+    // Die Ecken laufen hier im Uhrzeigersinn, bei Vanilla (FaceInfo) gegen ihn -- dessen
+    // Verschiebung um +Drehung ist hier also eine um -Drehung. Mit +Drehung lief jeder
+    // 90-Grad-Ausschnitt falsch herum (Kolbenseiten, Falltueren aus Packs).
     let basis = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
     let uvs = std::array::from_fn(|i| {
-        let [u, v] = basis[(i + q.uv_rotation as usize) % 4];
+        let [u, v] = basis[(i + 4 - q.uv_rotation as usize % 4) % 4];
         [rect[0] + (rect[2] - rect[0]) * u / 16.0, rect[1] + (rect[3] - rect[1]) * v / 16.0]
     });
     let [nx, ny, nz] = q.normal;
@@ -51598,6 +52315,31 @@ fn model_face(q: &assets::ModelQuad, rect: assets::UvRect) -> world::ModelFace {
         0.6
     };
     world::ModelFace { corners: q.corners, uvs, shade }
+}
+
+#[cfg(test)]
+mod model_face_tests {
+    use super::*;
+
+    // Vanillas Kolben (Kopf nach Norden): die Ostseite traegt "rotation": 90, das Holzband
+    // oben in piston_side muss dann an der Nordkante (z = 0) liegen.
+    #[test]
+    fn rotation_90_dreht_im_uhrzeigersinn() {
+        let q = assets::ModelQuad {
+            corners: [[1.0, 1.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]],
+            normal: [1.0, 0.0, 0.0],
+            uv: [0.0, 0.0, 16.0, 16.0],
+            texture: "block/piston_side".into(),
+            face: 5,
+            uv_rotation: 1,
+            shade: true,
+            tint_index: None,
+        };
+        let f = model_face(&q, [0.0, 0.0, 1.0, 1.0]);
+        for (ecke, uv) in f.corners.iter().zip(f.uvs) {
+            assert_eq!(uv[1] == 0.0, ecke[2] == 0.0, "Ecke {ecke:?} hat uv {uv:?}");
+        }
+    }
 }
 
 fn main() {

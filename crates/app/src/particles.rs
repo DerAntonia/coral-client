@@ -155,8 +155,8 @@ impl SpawnKind {
 
 // Alphabetisch nach Namen -- so stehen sie auch in den Einstellungen.
 pub const KIND_BLOCK: usize = 1;
-pub const KIND_EXPLOSION: usize = 2;
-pub const KINDS: [ParticleKind; 17] = [
+pub const KIND_EXPLOSION: usize = 3;
+pub const KINDS: [ParticleKind; 20] = [
     ParticleKind {
         key: "bubbles",
         label: "Blasensäule",
@@ -164,6 +164,7 @@ pub const KINDS: [ParticleKind; 17] = [
         spawn: SpawnKind::Lingering,
     },
     ParticleKind { key: "block", label: "Blockstaub", types: &[pp::PARTICLE_BLOCK], spawn: SpawnKind::Burst },
+    ParticleKind { key: "end_rod", label: "Endstab", types: &[pp::PARTICLE_END_ROD], spawn: SpawnKind::Lingering },
     ParticleKind {
         key: "explosion",
         label: "Explosion",
@@ -171,6 +172,12 @@ pub const KINDS: [ParticleKind; 17] = [
         spawn: SpawnKind::BurstEmitter,
     },
     ParticleKind { key: "flash", label: "Feuerwerks-Blitz", types: &[pp::PARTICLE_FLASH], spawn: SpawnKind::Single },
+    ParticleKind {
+        key: "flame",
+        label: "Flammen",
+        types: &[pp::PARTICLE_FLAME, pp::PARTICLE_SOUL_FIRE_FLAME, pp::PARTICLE_SMALL_FLAME, pp::PARTICLE_COPPER_FIRE_FLAME],
+        spawn: SpawnKind::Lingering,
+    },
     ParticleKind {
         key: "item_shards",
         label: "Item-Splitter",
@@ -203,6 +210,7 @@ pub const KINDS: [ParticleKind; 17] = [
         types: &[pp::PARTICLE_GUST, pp::PARTICLE_SMALL_GUST, pp::PARTICLE_GUST_EMITTER_LARGE, pp::PARTICLE_GUST_EMITTER_SMALL],
         spawn: SpawnKind::BurstEmitter,
     },
+    ParticleKind { key: "cloud", label: "Wolke", types: &[pp::PARTICLE_CLOUD, pp::PARTICLE_SNEEZE], spawn: SpawnKind::Burst },
 ];
 
 fn kind_of(type_id: i32) -> Option<usize> {
@@ -318,6 +326,13 @@ struct Particle {
     fades_to_red: bool,
     // AnimatedParticle.tick: ab der halben Lebensdauer ausblenden.
     fades_out: bool,
+    // SimpleAnimatedParticle.setFadeColor: beim Ausblenden laeuft die Farbe je Tick um ein
+    // Fuenftel auf diese zu (Endstab: ins Gelbliche).
+    fade_color: Option<[f32; 3]>,
+    // FlameParticle.getQuadSize: schrumpft zum Ende hin auf die Haelfte (quadratisch).
+    shrinks: bool,
+    // PlayerCloudParticle.tick: sinkt zu einem Spieler unter sich in 2 Bloecken Umkreis.
+    follows_player: bool,
     // FireworkParticles.OverlayParticle (flash): Groesse und Deckkraft haengen am Alter samt
     // angebrochenem Tick, s. size und build_vertices.
     flash: bool,
@@ -367,6 +382,9 @@ impl Particle {
             grows_in: false,
             fades_to_red: false,
             fades_out: false,
+            fade_color: None,
+            shrinks: false,
+            follows_player: false,
             flash: false,
             alpha_target: None,
             needs_water: false,
@@ -432,6 +450,10 @@ impl Particle {
         if self.flash {
             // Waechst ueber die vier Ticks auf 7.1 und faellt wieder (halbe Sinuswelle).
             return 7.1 * ((self.age as f32 + tick_progress - 1.0) * 0.25 * std::f32::consts::PI).sin();
+        }
+        if self.shrinks {
+            let s = (self.age as f32 + tick_progress) / self.max_age as f32;
+            return self.scale * (1.0 - s * s * 0.5);
         }
         if self.grows_in {
             self.scale * ((self.age as f32 + tick_progress) / self.max_age as f32 * 32.0).clamp(0.0, 1.0)
@@ -553,6 +575,15 @@ pub struct SpawnContext<'a> {
     pub shapes: &'a world::BlockShapes,
     // Biomfarben fuer den Staub gefaerbter Bloecke (Gras, Laub), s. block_dust.
     pub biomes: &'a world::BiomePalette,
+    // Die eigene Figur, fuer Wolken, die einem Spieler folgen (PlayerCloudParticle). Andere
+    // Spieler zaehlen hier nicht mit.
+    pub player: Option<NearPlayer>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NearPlayer {
+    pub pos: DVec3,
+    pub vel_y: f64,
 }
 
 pub struct Particles {
@@ -843,6 +874,15 @@ impl Particles {
                 Some(p)
             }
             pp::PARTICLE_POOF => self.poof(pos, v),
+            pp::PARTICLE_FLAME | pp::PARTICLE_SOUL_FIRE_FLAME | pp::PARTICLE_COPPER_FIRE_FLAME => self.flame(t, pos, v, 1.0),
+            pp::PARTICLE_SMALL_FLAME => self.flame(t, pos, v, 0.5),
+            pp::PARTICLE_END_ROD => self.end_rod(pos, v),
+            pp::PARTICLE_CLOUD => self.cloud(t, pos, v),
+            pp::PARTICLE_SNEEZE => {
+                let mut p = self.cloud(t, pos, v)?;
+                p.color = [0.22, 1.0, 0.53, 0.4];
+                Some(p)
+            }
             pp::PARTICLE_SCULK_SOUL => self.soul(t, pos, v),
             pp::PARTICLE_FLASH => match effect.options {
                 ParticleOptions::Tinted(argb) => self.flash(pos, argb),
@@ -1007,6 +1047,73 @@ impl Particles {
         p.color = [kanal(16), kanal(8), kanal(0), kanal(24)];
         p.flash = true;
         p.sheet = Sheet::Translucent;
+        Some(p)
+    }
+
+    // FlameParticle ueber RisingParticle: wie die Seele steigt sie mit einem Hundertstel der
+    // eigenen Zufallsbewegung plus der mitgegebenen, aber mit festem Zufallsbild, ohne
+    // Kollision und kleiner werdend (s. Particle::size). small_flame ist halb so gross.
+    fn flame(&mut self, t: i32, pos: DVec3, v: DVec3, scale: f32) -> Option<Particle> {
+        let uv = self.random_sprite(t)?;
+        let rng = &mut self.rng;
+        let mut p = Particle::with_velocity(rng, pos, v).billboard(rng, uv);
+        p.velocity_multiplier = 0.96;
+        p.vel = p.vel * 0.01f32 as f64 + v;
+        let streuen = |rng: &mut JavaRandom| ((rng.next_float() - rng.next_float()) * 0.05) as f64;
+        p.pos += DVec3::new(streuen(rng), streuen(rng), streuen(rng));
+        p.last = p.pos;
+        p.max_age = (8.0 / (rng.next_float() as f64 * 0.8 + 0.2)) as i32 + 4;
+        if scale != 1.0 {
+            p = p.scaled(scale);
+        }
+        p.collides = false;
+        p.shrinks = true;
+        p.sheet = Sheet::Opaque;
+        Some(p)
+    }
+
+    // EndRodParticle (SimpleAnimatedParticle): fliegt mit der mitgegebenen Geschwindigkeit,
+    // Daempfung 0.91, sinkt ganz leicht (0.0125), 60..71 Ticks, ohne Kollision. Ab der halben
+    // Lebensdauer blendet er aus und laeuft dabei ins Cremegelbe (0xF2DEC9).
+    fn end_rod(&mut self, pos: DVec3, v: DVec3) -> Option<Particle> {
+        let t = pp::PARTICLE_END_ROD;
+        let first = self.first_sprite(t)?;
+        let rng = &mut self.rng;
+        let mut p = Particle::base(rng, pos).billboard(rng, first);
+        p.velocity_multiplier = 0.91;
+        p.gravity = 0.0125;
+        p.vel = v;
+        p.scale *= 0.75;
+        p.max_age = 60 + rng.next_int(12);
+        p.collides = false;
+        p.fades_out = true;
+        p.fade_color = Some([0xF2 as f32 / 255.0, 0xDE as f32 / 255.0, 0xC9 as f32 / 255.0]);
+        p.animated_sprites = Some(t);
+        p.sheet = Sheet::Translucent;
+        p.uv = sprite_by_age(self.sprite_list(t), p.age, p.max_age);
+        Some(p)
+    }
+
+    // PlayerCloudParticle (cloud, sneeze): die eigene Zufallsbewegung zu einem Zehntel plus
+    // die mitgegebene, Daempfung 0.96, hell, fast doppelt so gross, waechst wie Rauch ein,
+    // ohne Kollision. Laeuft die Bilder nach Alter ab und haengt sich an einen Spieler darunter.
+    fn cloud(&mut self, t: i32, pos: DVec3, v: DVec3) -> Option<Particle> {
+        let first = self.first_sprite(t)?;
+        let rng = &mut self.rng;
+        let mut p = Particle::with_velocity(rng, pos, DVec3::ZERO).billboard(rng, first);
+        p.velocity_multiplier = 0.96;
+        p.vel = p.vel * 0.1f32 as f64 + v;
+        let f = 1.0 - rng.next_float() * 0.3;
+        p.color = [f, f, f, 1.0];
+        p.scale *= 1.875;
+        let grund = (8.0 / (rng.next_float() as f64 * 0.8 + 0.3)) as i32;
+        p.max_age = (grund as f32 * 2.5).max(1.0) as i32;
+        p.collides = false;
+        p.grows_in = true;
+        p.follows_player = true;
+        p.animated_sprites = Some(t);
+        p.sheet = Sheet::Translucent;
+        p.uv = sprite_by_age(self.sprite_list(t), p.age, p.max_age);
         Some(p)
     }
 
@@ -1653,6 +1760,19 @@ impl Particles {
         }
         if p.fades_out && p.age > p.max_age / 2 {
             p.color[3] = 1.0 - (p.age as f32 - (p.max_age / 2) as f32) / p.max_age as f32;
+            if let Some(ziel) = p.fade_color {
+                for i in 0..3 {
+                    p.color[i] += (ziel[i] - p.color[i]) * 0.2;
+                }
+            }
+        }
+        if p.follows_player {
+            if let Some(spieler) = ctx.player.filter(|s| s.pos.distance_squared(p.pos) <= 4.0) {
+                if p.pos.y > spieler.pos.y {
+                    p.pos.y += (spieler.pos.y - p.pos.y) * 0.2;
+                    p.vel.y += (spieler.vel_y - p.vel.y) * 0.2;
+                }
+            }
         }
         if let Some(ziel) = p.alpha_target {
             p.color[3] += (ziel - p.color[3]) * 0.05;
@@ -1863,7 +1983,7 @@ mod tests {
 
     fn blasen_laufen_lassen(drag: bool) -> Vec<Particle> {
         let (w, shapes, _) = welt_mit_saeule(drag);
-        let ctx = SpawnContext { camera: DVec3::new(8.5, 2.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(8.5, 2.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut p = partikel_mit_bildern();
         let mut gesehen = Vec::new();
         for _ in 0..200 {
@@ -1883,7 +2003,7 @@ mod tests {
     #[test]
     fn trank_zerplatzt_in_seiner_farbe() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut p = partikel_mit_bildern();
         p.add_potion_splash((0, 5, 0), 0xFF0000, false, &ctx);
         assert_eq!(p.pending.len(), 100);
@@ -1896,7 +2016,7 @@ mod tests {
     #[test]
     fn menge_skaliert_den_schwall() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let spritzer = KINDS.iter().position(|k| k.key == "potion_splash").unwrap();
         for (menge, erwartet) in [(50, 50), (200, 200)] {
             let mut p = partikel_mit_bildern();
@@ -1924,7 +2044,7 @@ mod tests {
     #[test]
     fn kruemel_vor_dem_gesicht() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut p = partikel_mit_bildern();
         let auge = DVec3::new(0.5, 7.0, 0.5);
         p.add_item_use_particles("bread", 5, auge, 0.0, 0.0, &ctx);
@@ -1944,7 +2064,7 @@ mod tests {
     #[test]
     fn trankwolke_fuellt_ihren_kreis() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut p = partikel_mit_bildern();
         let mitte = DVec3::new(0.5, 5.0, 0.5);
         let gruen = ParticleEffect { type_id: pp::PARTICLE_ENTITY_EFFECT, options: ParticleOptions::Tinted(0xFF00_FF00) };
@@ -1965,7 +2085,7 @@ mod tests {
     #[test]
     fn effekt_wirbel_behalten_ihre_deckkraft() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut p = partikel_mit_bildern();
         let ort = DVec3::new(0.5, 5.0, 0.5);
         // Blindheit, einmal als Ambient-Effekt, einmal normal.
@@ -2060,7 +2180,7 @@ mod tests {
     // Aus: nichts entsteht, und was schon fliegt, verschwindet mit dem Ausschalten.
     fn ausgeschaltete_art_verschwindet() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut p = partikel_mit_bildern();
         p.on_packet(&krit_paket(), &ctx);
         p.tick(&|_| None, &ctx);
@@ -2079,7 +2199,7 @@ mod tests {
     // Bild gleitet dazwischen ohne Sprung weiter.
     fn dauer_und_tempo() {
         let (w, shapes, _) = welt_mit_saeule(false);
-        let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback() };
+        let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
         let mut normal = partikel_mit_bildern();
         normal.on_packet(&krit_paket(), &ctx);
         let vanilla = normal.pending[0].max_age;

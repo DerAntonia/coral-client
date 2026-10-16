@@ -217,6 +217,15 @@ pub fn is_living(type_index: i32) -> bool {
     usize::try_from(type_index).ok().and_then(|i| crate::entity_types::ENTITY_TYPE_IS_LIVING.get(i).copied()).unwrap_or(false)
 }
 
+// Hat der Typ in Vanilla einen Positions-Interpolator (Entity.getInterpolation != null)?
+// Nur Lebewesen, Boote, Loren und XP-Kugeln; Display-Entities interpolieren eigens.
+pub fn has_interpolator(type_index: i32) -> bool {
+    if is_living(type_index) {
+        return true;
+    }
+    entity_type_name(type_index).is_some_and(|n| n.ends_with("_boat") || n.ends_with("_raft") || n.ends_with("minecart") || n == "experience_orb")
+}
+
 // Vanillas LivingEntity.onDamaged: `maxHurtTime = 10; hurtTime = maxHurtTime`. Der Zaehler
 // laeuft danach in der Tick-Schleife um 1 pro Tick herunter (LivingEntity.tick), und der
 // Renderer fragt nur `hurtTime > 0` ab -- die Faerbung ist also KONSTANT und blendet nicht
@@ -580,6 +589,10 @@ pub struct Entity {
     pub item_count: i32,
     // XP-Kugel: ihr Wert (ExperienceOrb.DATA_VALUE), bestimmt das Bild.
     pub orb_value: i32,
+    // Gezuendetes TNT (PrimedTnt): verbleibende Ticks bis zur Explosion (zaehlt auch auf dem
+    // Client herunter) und der Block, der gezeichnet wird -- None = TNT.
+    pub tnt_fuse: i32,
+    pub tnt_block: Option<u32>,
     // ItemStackEntityRenderState.getSeed: Item-Id + Schaden. Streut die Kopien eines Stapels
     // immer gleich, damit sie nicht flackern.
     pub item_seed: i32,
@@ -1333,6 +1346,13 @@ impl Entity {
             self.vel.1 = 0.0;
         }
         self.vel = (self.vel.0 * 0.98, self.vel.1 * 0.98, self.vel.2 * 0.98);
+        // PrimedTnt bremst am Boden und zaehlt die Zuendzeit herunter.
+        if entity_type_name(self.entity_type) == Some("tnt") {
+            if self.on_ground {
+                self.vel = (self.vel.0 * 0.7, self.vel.1 * -0.5, self.vel.2 * 0.7);
+            }
+            self.tnt_fuse -= 1;
+        }
         self.target_pos = self.pos;
         self.interp_steps = 0;
     }
@@ -1488,16 +1508,15 @@ impl Entity {
         if self.driven {
             return;
         }
-        // Projektile werden NICHT interpoliert. Vanillas Entity.moveOrInterpolateTo greift nur
-        // dann zum Interpolator, wenn das Entity einen hat -- und den hat nur Lebendiges.
-        // Fuer alles andere setzt es hart:
-        //
-        //     optional.ifPresent(this::setPos);
-        //
-        // Genau das ist bei einem Pfeil auch richtig: zwischen den seltenen Server-Paketen
-        // fliegt er selbst (s. tick_projectile), und ein Paket ist eine KORREKTUR, kein Ziel,
-        // auf das man sich ueber mehrere Ticks zubewegt.
-        if self.projectile.is_some() || self.item_physics || self.block_physics {
+        // Vanillas Entity.moveOrInterpolateTo greift nur dann zum Interpolator, wenn das
+        // Entity einen hat (s. has_interpolator). Alles andere springt sofort auf die neue
+        // Stelle. Bei einem Pfeil ist das richtig, weil er zwischen den seltenen
+        // Server-Paketen selbst fliegt (s. tick_projectile): ein Paket ist eine KORREKTUR,
+        // kein Ziel, auf das man sich ueber mehrere Ticks zubewegt. Bei einem
+        // interaction-Entity (Baelle auf mcpvp.club) laege die Trefferbox sonst bis zu drei
+        // Ticks hinter der Stelle, die der Server kennt -- ein schneller Ball wurde dann dort
+        // geschlagen, wo er gar nicht mehr war.
+        if self.projectile.is_some() || self.item_physics || self.block_physics || (self.display.is_none() && !has_interpolator(self.entity_type)) {
             if let Some(pos) = pos {
                 self.pos = pos;
                 self.target_pos = pos;
@@ -1710,6 +1729,10 @@ pub struct Entities {
     // F3-Overlay, damit so ein Fall sichtbar ist statt still zu verschwinden.
     duplicate_uuids: u32,
     by_id: HashMap<i32, Entity>,
+    // Die eigene Figur (Id, Fusspunkt, Blickrichtung, Hoehe): sie steht nicht in by_id, kann
+    // aber Fahrzeug sein -- Server setzen ihr Namensschild-Displays auf, die mitlaufen
+    // muessen (s. set_own_body).
+    own_body: Option<(i32, (f64, f64, f64), f32, f64)>,
 }
 
 impl Entities {
@@ -1723,8 +1746,13 @@ impl Entities {
     // Wie Vanillas onEntityPassengersSet: ein unbekanntes Fahrzeug wird ignoriert, und nur
     // Passagiere, die schon existieren, steigen auf (`if (entity2 != null) startRiding`).
     // Das zaehlt, weil has_passengers ueber Namensschilder entscheidet.
+    // Wo die eigene Figur gerade steht -- jeden Tick und vor jedem Passagier-Paket.
+    pub fn set_own_body(&mut self, id: i32, pos: (f64, f64, f64), yaw_deg: f32, height: f64) {
+        self.own_body = Some((id, pos, yaw_deg, height));
+    }
+
     pub fn set_passengers(&mut self, vehicle: i32, passengers: &[i32]) {
-        if !self.by_id.contains_key(&vehicle) {
+        if !self.by_id.contains_key(&vehicle) && self.own_body.map(|o| o.0) != Some(vehicle) {
             return;
         }
         self.vehicle_of.retain(|_, (v, _)| *v != vehicle);
@@ -1740,6 +1768,10 @@ impl Entities {
 
     // Wo ein Mitfahrer auf diesem Fahrzeug sitzt (Fusspunkt), s. riding::riding_pos.
     pub fn seat_pos(&self, vehicle: i32, seat: crate::riding::Seat, passenger_type: &str) -> Option<(f64, f64, f64)> {
+        if let Some((_, pos, yaw, hoehe)) = self.own_body.filter(|o| o.0 == vehicle) {
+            let p = crate::riding::riding_pos("player", hoehe, [pos.0, pos.1, pos.2], yaw, seat, passenger_type);
+            return Some((p[0], p[1], p[2]));
+        }
         let v = self.by_id.get(&vehicle)?;
         let name = entity_type_name(v.entity_type)?;
         let hoehe = hit_box_size(v.entity_type, v.pose).1;
@@ -1797,6 +1829,10 @@ impl Entities {
 
     pub fn has_passengers(&self, vehicle: i32) -> bool {
         self.vehicle_of.values().any(|(v, _)| *v == vehicle)
+    }
+
+    pub fn passengers_of(&self, vehicle: i32) -> impl Iterator<Item = i32> + '_ {
+        self.vehicle_of.iter().filter(move |(_, (v, _))| *v == vehicle).map(|(&p, _)| p)
     }
 
     // Die Passagiere an ihr Fahrzeug setzen -- Vanillas Entity.updatePassengerPosition, mit
@@ -1895,7 +1931,9 @@ impl Entities {
                 interaction_size: (1.0, 1.0),
                 projectile: projectile_kind(entity_type),
                 item_physics: entity_type_name(entity_type) == Some("item"),
-                block_physics: entity_type_name(entity_type) == Some("falling_block"),
+                // Gezuendetes TNT fliegt wie ein fallender Block (PrimedTnt.tick), s.
+                // tick_falling_block.
+                block_physics: matches!(entity_type_name(entity_type), Some("falling_block" | "tnt")),
                 orb_physics: entity_type_name(entity_type) == Some("experience_orb"),
                 orb_target: None,
                 falling_block: None,
@@ -1967,6 +2005,8 @@ impl Entities {
                 item: None,
                 item_count: 1,
                 orb_value: 0,
+                tnt_fuse: 80,
+                tnt_block: None,
                 item_seed: 187,
                 invisible: false,
                 glowing: false,
@@ -2032,6 +2072,14 @@ impl Entities {
         if entity_type_name(e.entity_type) == Some("experience_orb") {
             if let Some(v) = update.orb_value {
                 e.orb_value = v;
+            }
+        }
+        if entity_type_name(e.entity_type) == Some("tnt") {
+            if let Some(v) = update.orb_value {
+                e.tnt_fuse = v;
+            }
+            if let Some(state) = update.tnt_block_state {
+                e.tnt_block = Some(state);
             }
         }
         if item_render_kind(e.entity_type).is_some() {
@@ -3083,6 +3131,19 @@ mod tests {
         assert_eq!(entities.pick((0.0, 66.5, 0.0), blick, 6.0), Some(9));
     }
 
+    // Ein interaction-Entity hat in Vanilla keinen Interpolator: seine Trefferbox steht
+    // sofort an der neuen Stelle, nicht erst drei Ticks spaeter. Ein Lebewesen gleitet weiter.
+    #[test]
+    fn interaction_springt_sofort_an_die_neue_stelle() {
+        let mut entities = Entities::new();
+        entities.spawn(9, [9u8; 16], typ_index("interaction"), (0.0, 64.0, 5.0), 0.0, 0.0, (0.0, 0.0, 0.0));
+        entities.spawn(10, [10u8; 16], typ_index("zombie"), (0.0, 64.0, 5.0), 0.0, 0.0, (0.0, 0.0, 0.0));
+        entities.move_relative(9, 2.0, 0.0, 0.0);
+        entities.move_relative(10, 2.0, 0.0, 0.0);
+        assert_eq!(entities.get(9).unwrap().hit_pos(), (2.0, 64.0, 5.0));
+        assert_eq!(entities.get(10).unwrap().hit_pos(), (0.0, 64.0, 5.0));
+    }
+
     // Ein Pfeil, der beim Laden der Gegend schon steckt (IN_GROUND aus den Metadaten), faellt
     // nicht aus der Wand -- auch nicht durch ein Bewegungspaket mit Geschwindigkeit null.
     #[test]
@@ -3444,6 +3505,21 @@ mod tests {
         entities.spawn(1, [0u8; 16], typ("arrow"), (0.0, 64.0, 0.0), 0.0, 0.0, (0.0, 0.0, 0.0));
         entities.spawn(2, [0u8; 16], typ("arrow"), (1.0, 64.0, 1.0), 0.0, 0.0, (0.0, 0.0, 0.0));
         assert_eq!(entities.len(), 2);
+    }
+
+    // Server setzen auch der EIGENEN Figur ein Namensschild-Display auf. Die eigene Figur
+    // steht nicht in der Liste -- das Display muss trotzdem aufsitzen und mitlaufen.
+    #[test]
+    fn ein_display_folgt_der_eigenen_figur() {
+        let mut entities = Entities::new();
+        entities.spawn(2, [2u8; 16], typ("text_display"), (0.0, 64.0, 0.0), 0.0, 0.0, (0.0, 0.0, 0.0));
+        entities.set_own_body(7, (10.0, 70.0, 5.0), 0.0, PLAYER_BOX_HEIGHT);
+        entities.set_passengers(7, &[2]);
+        assert!(entities.has_passengers(7));
+        entities.tick(&test_welt(), &crate::BlockShapes::all_full_cubes(), None);
+        let display = entities.get(2).unwrap().pos;
+        assert!((display.0 - 10.0).abs() < 1e-9 && (display.2 - 5.0).abs() < 1e-9, "{display:?}");
+        assert!((display.1 - (70.0 + PLAYER_BOX_HEIGHT)).abs() < 1e-9, "{display:?}");
     }
 
     // Ein Passagier hat KEINE eigene Bewegung -- er sitzt da, wo sein Fahrzeug ist. Genau

@@ -13,7 +13,7 @@ use crate::buffer::{PacketReader, ReadError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NbtValue {
     Byte(i8),
     Short(i16),
@@ -204,6 +204,133 @@ pub fn read_root(r: &mut PacketReader) -> Result<Option<NbtValue>, ReadError> {
         return Ok(None);
     }
     Ok(Some(read_payload(r, tag_type)?))
+}
+
+// Gegenstueck zu read_root: ein Wurzel-Tag im Netzwerk-Format (Typ-Byte, kein Name,
+// Payload). Gebraucht fuer die Werte, die ein Dialog an den Server zurueckschickt.
+pub fn write_root(w: &mut crate::buffer::PacketWriter, value: &NbtValue) {
+    w.write_u8(tag_type(value));
+    write_payload(w, value);
+}
+
+fn tag_type(value: &NbtValue) -> u8 {
+    match value {
+        NbtValue::Byte(_) => TAG_BYTE,
+        NbtValue::Short(_) => TAG_SHORT,
+        NbtValue::Int(_) => TAG_INT,
+        NbtValue::Long(_) => TAG_LONG,
+        NbtValue::Float(_) => TAG_FLOAT,
+        NbtValue::Double(_) => TAG_DOUBLE,
+        NbtValue::ByteArray(_) => TAG_BYTE_ARRAY,
+        NbtValue::String(_) => TAG_STRING,
+        NbtValue::List(_) => TAG_LIST,
+        NbtValue::Compound(_) => TAG_COMPOUND,
+        NbtValue::IntArray(_) => TAG_INT_ARRAY,
+        NbtValue::LongArray(_) => TAG_LONG_ARRAY,
+    }
+}
+
+// Javas DataOutput.writeUTF: u16-Laenge, Modified UTF-8 (NUL als 0xC0 0x80, Zeichen
+// ausserhalb der Grundebene als zwei Surrogate zu je drei Bytes).
+fn write_nbt_string(w: &mut crate::buffer::PacketWriter, s: &str) {
+    let mut bytes = Vec::with_capacity(s.len());
+    for unit in s.encode_utf16() {
+        match unit {
+            0x0001..=0x007F => bytes.push(unit as u8),
+            0x0000 | 0x0080..=0x07FF => {
+                bytes.push(0xC0 | (unit >> 6) as u8);
+                bytes.push(0x80 | (unit & 0x3F) as u8);
+            }
+            _ => {
+                bytes.push(0xE0 | (unit >> 12) as u8);
+                bytes.push(0x80 | ((unit >> 6) & 0x3F) as u8);
+                bytes.push(0x80 | (unit & 0x3F) as u8);
+            }
+        }
+    }
+    bytes.truncate(u16::MAX as usize);
+    w.write_u16(bytes.len() as u16);
+    w.write_raw_bytes(&bytes);
+}
+
+fn write_payload(w: &mut crate::buffer::PacketWriter, value: &NbtValue) {
+    match value {
+        NbtValue::Byte(v) => {
+            w.write_u8(*v as u8);
+        }
+        NbtValue::Short(v) => {
+            w.write_u16(*v as u16);
+        }
+        NbtValue::Int(v) => {
+            w.write_i32(*v);
+        }
+        NbtValue::Long(v) => {
+            w.write_i64(*v);
+        }
+        NbtValue::Float(v) => {
+            w.write_f32(*v);
+        }
+        NbtValue::Double(v) => {
+            w.write_f64(*v);
+        }
+        NbtValue::ByteArray(v) => {
+            w.write_i32(v.len() as i32);
+            for b in v {
+                w.write_u8(*b as u8);
+            }
+        }
+        NbtValue::String(s) => write_nbt_string(w, s),
+        NbtValue::List(items) => {
+            // Gemischte Listen schreibt Vanilla als Compounds mit dem Schluessel "" (s.
+            // unwrap_list_element); einheitliche wie gewohnt.
+            let typ = items.first().map_or(TAG_END, tag_type);
+            if items.iter().all(|v| tag_type(v) == typ) {
+                w.write_u8(typ);
+                w.write_i32(items.len() as i32);
+                for v in items {
+                    write_payload(w, v);
+                }
+            } else {
+                w.write_u8(TAG_COMPOUND);
+                w.write_i32(items.len() as i32);
+                for v in items {
+                    match v {
+                        NbtValue::Compound(_) => write_payload(w, v),
+                        other => {
+                            w.write_u8(tag_type(other));
+                            write_nbt_string(w, "");
+                            write_payload(w, other);
+                            w.write_u8(TAG_END);
+                        }
+                    }
+                }
+            }
+        }
+        NbtValue::Compound(map) => {
+            // Feste Reihenfolge, damit gleiche Werte gleiche Bytes ergeben.
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for k in keys {
+                let v = &map[k];
+                w.write_u8(tag_type(v));
+                write_nbt_string(w, k);
+                write_payload(w, v);
+            }
+            w.write_u8(TAG_END);
+        }
+        NbtValue::IntArray(v) => {
+            w.write_i32(v.len() as i32);
+            for i in v {
+                w.write_i32(*i);
+            }
+        }
+        NbtValue::LongArray(v) => {
+            w.write_i32(v.len() as i32);
+            for i in v {
+                w.write_i64(*i);
+            }
+        }
+    }
 }
 
 // --- Farbige Text-Components ----------------------------------------------------------------
