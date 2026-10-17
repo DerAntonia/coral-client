@@ -22,7 +22,7 @@ default-members = ["crates/app"]
 
 [workspace.package]
 edition = "2021"
-version = "26.10.6"
+version = "26.10.7"
 
 # Clippy fuer alle Crates (je Crate "[lints] workspace = true"). Ausgeschaltet nur, was gegen den
 # Stil des Codes laeuft statt Fehler zu finden: GPU-/Mesh-Funktionen nehmen viele Parameter und

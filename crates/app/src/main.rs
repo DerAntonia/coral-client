@@ -6279,7 +6279,8 @@ impl GpuState {
     ) -> Self {
         let size = window.inner_size();
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN, ..Default::default() });
+        let backends = if cfg!(windows) { wgpu::Backends::DX12 } else { wgpu::Backends::VULKAN };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..Default::default() });
 
         let surface = instance.create_surface(window.clone()).expect("Surface konnte nicht erstellt werden");
 
