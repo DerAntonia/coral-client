@@ -498,11 +498,10 @@ fn load_image(mc: &mut MinecraftInstallation, path: &str) -> Option<Pending> {
     if tex.width == 0 || tex.height == 0 {
         return None;
     }
-    // Animierte Item-Texturen sind vertikale Streifen -- nur der erste Frame (wie bei den
-    // Blocktexturen, s. blocks::load_tile).
-    let height = if tex.height > tex.width && tex.height % tex.width == 0 { tex.width } else { tex.height };
-    let rgba = tex.rgba[..(tex.width * height * 4) as usize].to_vec();
-    Some(Pending { name: String::new(), width: tex.width, height, rgba, logical: (tex.width, height) })
+    // Animierte Texturen: nur das erste Bild (s. blocks::frame_size), ohne .mcmeta das ganze.
+    let (width, height) = crate::blocks::frame_size(crate::blocks::animation_meta(mc, path).as_ref(), tex.width, tex.height);
+    let rgba = crate::blocks::frame_pixels(&tex.rgba, tex.width, (width, height), 0);
+    Some(Pending { name: String::new(), width, height, rgba, logical: (width, height) })
 }
 
 // Ein GUI-Bild: wie intern, nur mit der Vanilla-Groesse als logischem Raster, wenn ein Pack
@@ -684,8 +683,8 @@ pub fn build(
     (UiAtlas { rgba, size, rects, animations }, icons, definitions)
 }
 
-// Animationen der Item-Texturen ("tex/<pfad>") an ihrem Platz im Atlas. Nur quadratische
-// Frames, wie im Atlas abgelegt (s. load_image).
+// Animationen der Item-Texturen ("tex/<pfad>") an ihrem Platz im Atlas, in der Groesse, in der
+// load_image das erste Bild abgelegt hat.
 fn item_animations(mc: &mut MinecraftInstallation, rects: &HashMap<String, AtlasRect>, size: u32) -> Vec<crate::blocks::TileAnimation> {
     let mut out = Vec::new();
     for (name, rect) in rects {
@@ -694,10 +693,10 @@ fn item_animations(mc: &mut MinecraftInstallation, rects: &HashMap<String, Atlas
         let y = (rect.uv[1] * size as f32).round() as u32;
         let breite = ((rect.uv[2] - rect.uv[0]) * size as f32).round() as u32;
         let hoehe = ((rect.uv[3] - rect.uv[1]) * size as f32).round() as u32;
-        if breite == 0 || breite != hoehe {
+        if breite == 0 || hoehe == 0 {
             continue;
         }
-        if let Some(anim) = crate::blocks::TileAnimation::load(mc, path, (x, y), breite, 1) {
+        if let Some(anim) = crate::blocks::TileAnimation::load(mc, path, (x, y), (breite, hoehe), 1) {
             out.push(anim);
         }
     }

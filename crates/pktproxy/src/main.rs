@@ -80,13 +80,50 @@ async fn main() -> io::Result<()> {
     //
     // Braucht es, sobald der Server im Online-Mode ist -- dann ist der Byte-Weiterleiter
     // unten blind (s. mitm.rs). Der Proxy meldet sich dort selbst an und spricht zum
-    // Client unverschluesselt. Ohne --account nimmt er die in Coral Client gespeicherte
-    // Anmeldung, mit --account das gleichnamige Konto aus dem Launcher.
+    // Client unverschluesselt. Ohne --account nimmt er das im Konto-Manager von Coral Client
+    // ausgewaehlte Konto, mit --account das gleichnamige Konto aus Prism/PolyMC/MultiMC.
+    // Abruf-Modus: pktproxy --fetch <server> [sekunden]. Verbindet sich selbst (aktives
+    // Coral-Konto) ueber net::join, ohne zu bewegen, und trennt nach der Zeit wieder. Mit
+    // CORAL_PKTRAW=<datei> landet dabei jedes Paket roh in der Datei -- fuer Daten, an die man
+    // sonst nur mit einem echten Client kommt (Limbo-Welten von Botfiltern).
+    if args.get(1).map(String::as_str) == Some("--fetch") {
+        let server = args.get(2).cloned().ok_or_else(|| io::Error::other("--fetch <server> [sekunden]"))?;
+        let sekunden: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5);
+        // CORAL_FETCH_OFFLINE=<name>: ohne Konto als dieser Name (nur lokale Server) -- etwa
+        // als stehendes Schlagziel auf dem Testserver.
+        let offline = std::env::var("CORAL_FETCH_OFFLINE").ok().filter(|n| !n.is_empty());
+        let credentials = match &offline {
+            Some(_) => None,
+            None => Some(mitm::active_account_credentials().await?),
+        };
+        let name = offline.clone().unwrap_or_default();
+        println!("Abruf von {server} als {} fuer {sekunden} s", credentials.as_ref().map_or(name.as_str(), |c| c.username.as_str()));
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let rotation = std::sync::Arc::new(net::SharedLook::default());
+        let task = tokio::spawn(async move { net::join(&server, &name, credentials, net::Events::new(ev_tx), out_rx, rotation).await });
+        let ende = std::time::Instant::now() + std::time::Duration::from_secs(sekunden);
+        while std::time::Instant::now() < ende && !task.is_finished() {
+            while let Ok(e) = ev_rx.try_recv() {
+                match e {
+                    net::ClientEvent::Log(l) => println!("{l}"),
+                    net::ClientEvent::Disconnected(g) => println!("getrennt: {g}"),
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        task.abort();
+        return Ok(());
+    }
     if args.get(1).map(String::as_str) == Some("--mitm") {
         let upstream = args.get(2).cloned().unwrap_or_else(|| "127.0.0.1:25565".to_string());
         let listen = args.get(3).cloned().unwrap_or_else(|| "127.0.0.1:25566".to_string());
         let log_path = args.get(4).cloned().unwrap_or_else(|| "/tmp/pktproxy-mitm.log".to_string());
         let log_tx = spawn_logger(&log_path)?;
+        // Immer auch roh: jedes Paket mit allen Bytes (s. net::write_raw), damit sich hinterher
+        // alles auswerten laesst -- auch was beim Mitschneiden noch keiner wissen wollte.
+        mitm::open_raw(&format!("{log_path}.bin"))?;
         println!("Log: {log_path}");
         return mitm::run(&listen, &upstream, konto.as_deref(), log_tx).await;
     }
@@ -407,6 +444,23 @@ pub(crate) fn extra_for(direction: &str, play_reached: bool, id: i32, body: &[u8
                     );
                 }
             }
+        }
+    } else if direction == "S2C" && id == protocol::packets::CB_PLAY_CHUNK_DATA {
+        // Die Spalte (x, z als i32 am Anfang), um fehlende Chunks zwischen zwei Clients
+        // vergleichen zu koennen.
+        if let (Some(x), Some(z)) = (read_i32(body, 0), read_i32(body, 4)) {
+            return format!("chunk=({x},{z})");
+        }
+    } else if direction == "S2C" && id == protocol::packets::CB_PLAY_LIGHT_UPDATE {
+        // Licht-Update: x und z als VarInt.
+        if let Ok((x, off)) = decode_varint(body, 0) {
+            if let Ok((z, _)) = decode_varint(body, off) {
+                return format!("chunk=({x},{z})");
+            }
+        }
+    } else if direction == "S2C" && id == protocol::packets::CB_PLAY_FORGET_LEVEL_CHUNK {
+        if let Some(packed) = body.get(0..8).map(|b| i64::from_be_bytes(b.try_into().unwrap())) {
+            return format!("chunk=({},{})", packed as i32, (packed >> 32) as i32);
         }
     }
     String::new()

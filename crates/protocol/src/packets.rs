@@ -226,7 +226,7 @@ pub fn brand_payload(brand: &str) -> Vec<u8> {
 }
 
 // Was wir als Brand melden. Der Wert wird im `minecraft:brand`-Payload an den Server gesendet.
-pub const CLIENT_BRAND: &str = "fabric";
+pub const CLIENT_BRAND: &str = "coral";
 
 // Serverbound, id 0x07. Antwort auf Clientbound Known Packs -- leeres Array bedeutet
 // "kenne keine Packs", woraufhin der Server die vollen Registry-Daten schickt (die wir
@@ -1037,7 +1037,26 @@ const ATTRIBUTE_ID_WATER_MOVEMENT_EFFICIENCY: i32 = 32;
 // explosion_knockback_resistance stehen dazwischen). Der Server legt im Kreativmodus
 // +0.5 bzw. +2.0 an (ServerPlayer.updatePlayerAttributes) und schickt sie hier mit.
 const ATTRIBUTE_ID_BLOCK_INTERACTION_RANGE: i32 = 6;
+// Angriffstempo (Grundwert 4.0). Server mit 1.8-Kampf setzen den Grundwert hoch (anticheat-test:
+// 20.0) -- dann ist jeder Schlag sofort aufgeladen, und Grim erwartet bei jedem Sprint-Treffer
+// den Slowdown. Den Item-Modifikator rechnet der Client selbst (er wechselt erst im
+// Spieler-Tick, s. App::attack_speed_attribute), deshalb kommt er hier nicht mit.
+const ATTRIBUTE_ID_ATTACK_SPEED: i32 = 4;
+const ITEM_ATTACK_SPEED_MODIFIER: &str = "minecraft:base_attack_speed";
 const ATTRIBUTE_ID_ENTITY_INTERACTION_RANGE: i32 = 10;
+// Die Koerper-Attribute in derselben Zaehlung. Vanilla setzt sie nur ueber Verzauberungen
+// (movement_efficiency: Seelenlaeufigkeit auf Seelensand), sonst Plugins und /attribute --
+// GrimAC rechnet mit allen fuenf, wer sie ignoriert, laeuft dann in Simulation-Flags.
+//   gravity               14  Schwerkraft je Tick, Vorgabe 0.08
+//   jump_strength         15  Sprungkraft, Vorgabe 0.42
+//   movement_efficiency   21  hebt die Blockbremse (Seelensand, Honig) anteilig auf, Vorgabe 0
+//   scale                 25  Groesse: Box, Augenhoehe und Modell, Vorgabe 1
+//   step_height           28  Stufenhoehe, Vorgabe 0.6
+const ATTRIBUTE_ID_GRAVITY: i32 = 14;
+const ATTRIBUTE_ID_JUMP_STRENGTH: i32 = 15;
+const ATTRIBUTE_ID_MOVEMENT_EFFICIENCY: i32 = 21;
+const ATTRIBUTE_ID_SCALE: i32 = 25;
+const ATTRIBUTE_ID_STEP_HEIGHT: i32 = 28;
 
 // Modifikatoren auf MOVEMENT_SPEED, die der CLIENT selbst anlegt (LivingEntity/MobEffects,
 // IDs am Jar geprueft) -- der Server schickt sie zusaetzlich im Attribut-Paket mit. Wir
@@ -1071,6 +1090,16 @@ pub struct AttributeUpdate {
     pub water_movement_efficiency: Option<f64>,
     pub block_interaction_range: Option<f64>,
     pub entity_interaction_range: Option<f64>,
+    // Angriffstempo OHNE den Item-Modifikator, zerlegt wie computeValue: (Grundwert + alle
+    // ADD_VALUE, Summe der ADD_MULTIPLIED_BASE, Produkt der ADD_MULTIPLIED_TOTAL-Faktoren).
+    // Der Wert mit Item ist dann (a + item) * (1 + b) * c.
+    pub attack_speed: Option<(f64, f64, f64)>,
+    // Die Koerper-Attribute, schon auf Vanillas Grenzen geklemmt (RangedAttribute.sanitizeValue).
+    pub gravity: Option<f64>,
+    pub jump_strength: Option<f64>,
+    pub movement_efficiency: Option<f64>,
+    pub scale: Option<f64>,
+    pub step_height: Option<f64>,
 }
 
 // Ruestung und Maximalgesundheit aus dem Attribut-Paket; alles andere wird ueberlesen.
@@ -1106,7 +1135,14 @@ pub fn read_attributes(payload: &[u8]) -> Result<AttributeUpdate, ReadError> {
             let operation = r.read_varint()?;
             // s. LOCAL_SPEED_MODIFIERS: nur beim Tempo-Attribut, und nur fuer die IDs, die
             // die Physik selbst anlegt.
-            if attribute_id == ATTRIBUTE_ID_MOVEMENT_SPEED && LOCAL_SPEED_MODIFIERS.contains(&id.as_str()) {
+            // Wie Identifier.parse: ohne Namensraum gilt "minecraft:". anticheat-test.com
+            // schickt den Sprint-Modifikator als blosses "sprinting" -- ungefiltert zaehlte der
+            // Sprint dann doppelt (Tempo x1.69, Grim Simulation 0.038 je Tick).
+            let voll = if id.contains(':') { id } else { format!("minecraft:{id}") };
+            if attribute_id == ATTRIBUTE_ID_MOVEMENT_SPEED && LOCAL_SPEED_MODIFIERS.contains(&voll.as_str()) {
+                continue;
+            }
+            if attribute_id == ATTRIBUTE_ID_ATTACK_SPEED && voll == ITEM_ATTACK_SPEED_MODIFIER {
                 continue;
             }
             match operation {
@@ -1128,6 +1164,13 @@ pub fn read_attributes(payload: &[u8]) -> Result<AttributeUpdate, ReadError> {
             ATTRIBUTE_ID_WATER_MOVEMENT_EFFICIENCY => out.water_movement_efficiency = Some(value),
             ATTRIBUTE_ID_BLOCK_INTERACTION_RANGE => out.block_interaction_range = Some(value),
             ATTRIBUTE_ID_ENTITY_INTERACTION_RANGE => out.entity_interaction_range = Some(value),
+            ATTRIBUTE_ID_ATTACK_SPEED => out.attack_speed = Some((sum, multiplied_base, total_factor)),
+            // Grenzen aus Attributes (RangedAttribute min/max).
+            ATTRIBUTE_ID_GRAVITY => out.gravity = Some(value.clamp(-1.0, 1.0)),
+            ATTRIBUTE_ID_JUMP_STRENGTH => out.jump_strength = Some(value.clamp(0.0, 32.0)),
+            ATTRIBUTE_ID_MOVEMENT_EFFICIENCY => out.movement_efficiency = Some(value.clamp(0.0, 1.0)),
+            ATTRIBUTE_ID_SCALE => out.scale = Some(value.clamp(0.0625, 16.0)),
+            ATTRIBUTE_ID_STEP_HEIGHT => out.step_height = Some(value.clamp(0.0, 10.0)),
             _ => {}
         }
     }
@@ -2055,14 +2098,15 @@ pub fn read_move_entity_rot(payload: &[u8]) -> Result<(i32, f32, f32), ReadError
 
 // Set Health (0x66): Leben (Float), Nahrung (VarInt), Saettigung (Float). Das Leben erkennt
 // den Tod, die NAHRUNG entscheidet ueber den Sprint: PlayerEntity.canSprintOrFly() haengt an
-// HungerManager.canSprint(), und das ist `getFoodLevel() > 6`.
-pub fn read_set_health(payload: &[u8]) -> Result<(f32, i32), ReadError> {
+// HungerManager.canSprint(), und das ist `getFoodLevel() > 6`. Die Saettigung zeigt nur das
+// Saettigungs-Modul.
+pub fn read_set_health(payload: &[u8]) -> Result<(f32, i32, f32), ReadError> {
     let mut r = PacketReader::new(payload);
     let _id = r.read_varint()?;
     let health = r.read_f32()?;
     let food = r.read_varint()?;
-    let _saturation = r.read_f32()?;
-    Ok((health, food))
+    let saturation = r.read_f32()?;
+    Ok((health, food, saturation))
 }
 
 // --- Rueckstoss ------------------------------------------------------------------------
@@ -2730,6 +2774,10 @@ pub const LIVING_FLAG_USING_ITEM: u8 = 0x01;
 pub const LIVING_FLAG_OFFHAND_ACTIVE: u8 = 0x02;
 // LivingEntity.isUsingRiptide(): Sog-Angriff laeuft (setzt nur der Server, s. physics).
 pub const LIVING_FLAG_USING_RIPTIDE: u8 = 0x04;
+
+// AbstractArrow.ID_FLAGS (Index 8, Byte): Bit 0x01 = kritisch (voll gespannt), 0x02 = ohne
+// Kollision (Loyalitaets-Dreizack auf dem Rueckweg).
+pub const ARROW_FLAG_CRIT: u8 = 0x01;
 
 // Was uns aus dem Metadaten-Strom interessiert. Alles andere wird uebersprungen; None heisst
 // "stand nicht in diesem Paket", nicht "auf Standard zurueckgesetzt".
@@ -4050,6 +4098,58 @@ mod chat_signing_tests {
         assert!((tempo - 0.12).abs() < 1e-9, "nur der Plugin-Zuschlag zaehlt, war {tempo}");
         assert!((update.sneaking_speed.unwrap() - 0.75).abs() < 1e-9);
         assert!((update.water_movement_efficiency.unwrap() - 1.0).abs() < 1e-9);
+    }
+
+    // anticheat-test.com schickt den Sprint-Modifikator ohne Namensraum ("sprinting"). Vanilla
+    // liest das als minecraft:sprinting -- er darf also ebensowenig doppelt zaehlen.
+    #[test]
+    fn sprint_modifikator_ohne_namensraum_zaehlt_nicht_doppelt() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_UPDATE_ATTRIBUTES);
+        w.write_varint(7);
+        w.write_varint(1);
+        w.write_varint(ATTRIBUTE_ID_MOVEMENT_SPEED).write_f64(0.1).write_varint(1);
+        w.write_string("sprinting").write_f64(0.3).write_varint(ATTRIBUTE_OP_ADD_MULTIPLIED_TOTAL);
+        let tempo = read_attributes(&w.into_bytes()).unwrap().movement_speed.expect("Tempo gelesen");
+        assert!((tempo - 0.1).abs() < 1e-9, "Sprint gehoert der Physik, war {tempo}");
+    }
+
+    // anticheat-test.com (1.8-Kampf): Grundwert 20, dazu der Item-Modifikator des Schwerts.
+    // Der Item-Teil bleibt draussen, der Rest kommt zerlegt an.
+    #[test]
+    fn angriffstempo_ohne_item_modifikator() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_UPDATE_ATTRIBUTES);
+        w.write_varint(7);
+        w.write_varint(1);
+        w.write_varint(ATTRIBUTE_ID_ATTACK_SPEED).write_f64(20.0).write_varint(2);
+        w.write_string("base_attack_speed").write_f64(-2.4).write_varint(ATTRIBUTE_OP_ADD_VALUE);
+        w.write_string("minecraft:effect.haste").write_f64(0.1).write_varint(ATTRIBUTE_OP_ADD_MULTIPLIED_BASE);
+        let (a, b, c) = read_attributes(&w.into_bytes()).unwrap().attack_speed.expect("Angriffstempo gelesen");
+        assert_eq!((a, b, c), (20.0, 0.1, 1.0));
+    }
+
+    // Die Koerper-Attribute kommen an, geklemmt auf Vanillas Grenzen (scale 0.0625..16).
+    #[test]
+    fn koerper_attribute_werden_gelesen_und_geklemmt() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_UPDATE_ATTRIBUTES);
+        w.write_varint(7);
+        w.write_varint(5);
+        w.write_varint(ATTRIBUTE_ID_GRAVITY).write_f64(0.08).write_varint(1);
+        w.write_string("test:leicht").write_f64(-0.5).write_varint(ATTRIBUTE_OP_ADD_MULTIPLIED_TOTAL);
+        w.write_varint(ATTRIBUTE_ID_JUMP_STRENGTH).write_f64(0.42).write_varint(0);
+        w.write_varint(ATTRIBUTE_ID_MOVEMENT_EFFICIENCY).write_f64(0.0).write_varint(1);
+        w.write_string("minecraft:enchantment.soul_speed").write_f64(1.0).write_varint(ATTRIBUTE_OP_ADD_VALUE);
+        w.write_varint(ATTRIBUTE_ID_SCALE).write_f64(1.0).write_varint(1);
+        w.write_string("test:riese").write_f64(40.0).write_varint(ATTRIBUTE_OP_ADD_VALUE);
+        w.write_varint(ATTRIBUTE_ID_STEP_HEIGHT).write_f64(0.6).write_varint(0);
+        let u = read_attributes(&w.into_bytes()).unwrap();
+        assert_eq!(u.gravity, Some(0.04));
+        assert_eq!(u.jump_strength, Some(0.42));
+        assert_eq!(u.movement_efficiency, Some(1.0));
+        assert_eq!(u.scale, Some(16.0));
+        assert_eq!(u.step_height, Some(0.6));
     }
 
     // EntityAttributeInstance.computeValue(): ADD_VALUE auf den Grundwert, dann

@@ -420,8 +420,11 @@ impl ChatInput {
     }
 
     // Absenden: gibt den Text zurueck (leer = nichts senden) und legt ihn in den Verlauf.
+    // Vor dem Senden bereinigt wie Vanillas ChatScreen.normalizeChatMessage (trim, dann jede
+    // Folge von Leerraum zu einem Leerzeichen). ECHTER BUG gewesen: "/ac " ging mit dem
+    // Leerzeichen raus, Grim flaggt das als ChatB.
     pub fn take_for_send(&mut self) -> String {
-        let text = std::mem::take(&mut self.text);
+        let text = normalize_chat(&std::mem::take(&mut self.text));
         self.cursor = 0;
         self.anchor = None;
         if !text.is_empty() {
@@ -812,5 +815,22 @@ mod tests {
         chat.backspace();
         chat.push_str("x");
         assert_eq!(chat.take_erased(), None);
+    }
+}
+
+// Vanillas normalizeChatMessage: StringUtils.normalizeSpace(message.trim()).
+fn normalize_chat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_chat;
+
+    #[test]
+    fn wie_vanilla() {
+        assert_eq!(normalize_chat("/ac "), "/ac");
+        assert_eq!(normalize_chat("  hallo   welt \t"), "hallo welt");
+        assert_eq!(normalize_chat("   "), "");
     }
 }

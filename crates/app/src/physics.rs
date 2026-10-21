@@ -250,6 +250,16 @@ const FLUID_JUMP_THRESHOLD: f64 = 0.4;
 // Entity.travel(): updateMovementInFluid(FluidTags.WATER, 0.014) -- Staerke, mit der die
 // Wasserstroemung pro Tick auf die Geschwindigkeit addiert wird.
 const WATER_PUSH_SPEED: f64 = 0.014;
+
+// Mit Input::float_drag (Modul Botcheck-Pass) ein Reibungsfaktor so, wie Vanilla ihn als float
+// hinschreibt und als double liest (0.98F = 0.9800000190734863), sonst der exakte Wert.
+fn float_or(input: &Input, faktor: f64) -> f64 {
+    if input.float_drag {
+        faktor as f32 as f64
+    } else {
+        faktor
+    }
+}
 // Lava schiebt in der Overworld deutlich schwaecher, s. Entity.travel (der Wert haengt dort
 // an der Dimension; 0.0023333333333333335 ist der Overworld-Fall).
 const LAVA_PUSH_SPEED: f64 = 0.0023333333333333335;
@@ -265,8 +275,11 @@ pub const SLEEPING_HEIGHT: f64 = 0.2;
 pub const PLAYER_WIDTH: f32 = 0.6;
 pub const PLAYER_HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;
-// f64-Spiegel fuer die Physik selbst (s. Kommentar an EPS: gerechnet wird in f64).
+// f64-Spiegel der Vorgabemasse, nur noch fuer Tests -- die Physik nimmt die skalierten Masse
+// aus BodyAttributes.
+#[cfg(test)]
 const WIDTH_F64: f64 = PLAYER_WIDTH as f64;
+#[cfg(test)]
 const HEIGHT_F64: f64 = PLAYER_HEIGHT as f64;
 
 // Pose-abhaengige Kollisionsgroesse -- NICHT (wie eine fruehere Fassung annahm) eine
@@ -286,6 +299,7 @@ const HEIGHT_F64: f64 = PLAYER_HEIGHT as f64;
 // unterscheidet sich, deshalb keine eigene Breiten-Konstante pro Pose noetig.
 const SWIMMING_HEIGHT: f32 = 0.6;
 pub const SWIMMING_EYE_HEIGHT: f32 = 0.4;
+#[cfg(test)]
 const SWIMMING_HEIGHT_F64: f64 = SWIMMING_HEIGHT as f64;
 // TridentItem.onStoppedUsing: useRiptide(20, ...) und ein Versatz um 1.1999999 nach oben.
 const RIPTIDE_TICKS: u32 = 20;
@@ -299,6 +313,7 @@ pub fn approach_eye_height(aktuell: f32, ziel: f32) -> f32 {
 }
 
 pub const CROUCHING_EYE_HEIGHT: f32 = 1.27;
+#[cfg(test)]
 const CROUCHING_HEIGHT_F64: f64 = CROUCHING_HEIGHT as f64;
 
 // Verhindert, dass Fliesskomma-Rundung an einer exakten Blockkante haengen bleibt (0.0000001
@@ -323,6 +338,50 @@ const MAX_COLLISION_OVERFLOW_BLOCKS: f64 = 0.5;
 // (0.5), Teppiche und Trapdoors ab, aber keinen ganzen Block (1.0) -- daher muss man auf
 // einen vollen Block weiterhin springen.
 const STEP_HEIGHT: f64 = 0.6;
+// Vorgabe von JUMP_STRENGTH: 0.42 als float (Attributes, am Jar abgelesen).
+const DEFAULT_JUMP_STRENGTH: f64 = 0.42f32 as f64;
+
+// Die Koerper-Attribute vom Server (s. packets::AttributeUpdate). Vanilla setzt sie selbst
+// kaum (movement_efficiency: Seelenlaeufigkeit auf Seelensand), Plugins und /attribute
+// dagegen gern -- und GrimAC rechnet mit allen. Liegen in PlayerPhysics statt in Input, weil
+// Groesse und Stufenhoehe auch ausserhalb des Ticks gebraucht werden (Kamera, Trefferbox).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyAttributes {
+    // GRAVITY, LivingEntity.getDefaultGravity.
+    pub gravity: f64,
+    // JUMP_STRENGTH, LivingEntity.getJumpPower: als float mit dem Blockfaktor multipliziert.
+    pub jump_strength: f64,
+    // MOVEMENT_EFFICIENCY, LivingEntity.getBlockSpeedFactor: Mth.lerp(eff, Blockfaktor, 1).
+    pub movement_efficiency: f64,
+    // SCALE, LivingEntity.getScale: EntityDimensions.scale -- Breite, Hoehe und Augenhoehe
+    // jeder Pose (ausser Schlafen) mal diesen float.
+    pub scale: f32,
+    // STEP_HEIGHT, LivingEntity.maxUpStep: Stufen UND Kantenschutz beim Schleichen.
+    pub step_height: f64,
+}
+
+impl Default for BodyAttributes {
+    fn default() -> Self {
+        Self { gravity: GRAVITY, jump_strength: DEFAULT_JUMP_STRENGTH, movement_efficiency: 0.0, scale: 1.0, step_height: STEP_HEIGHT }
+    }
+}
+
+impl BodyAttributes {
+    // STEP_HEIGHT aus dem Paket (double). maxUpStep liefert es als float -- die Vorgabe bleibt
+    // aber beim exakten STEP_HEIGHT, damit sich ohne Plugin nichts aendert.
+    pub fn set_step_height(&mut self, v: f64) {
+        self.step_height = if v == STEP_HEIGHT { STEP_HEIGHT } else { v as f32 as f64 };
+    }
+
+    // Eine Posenmasszahl (Breite, Hoehe, Augenhoehe) skaliert -- in float wie EntityDimensions.
+    fn scaled(&self, v: f32) -> f32 {
+        v * self.scale
+    }
+
+    pub fn width(&self) -> f64 {
+        self.scaled(PLAYER_WIDTH) as f64
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Input {
@@ -372,6 +431,12 @@ pub struct Input {
     pub levitation: Option<i32>,
     pub jump_boost: Option<i32>,
     pub dolphins_grace: bool,
+    // Modul Botcheck-Pass: die Reibungsfaktoren als Vanillas float-Konstanten (0.98F, 0.91F,
+    // 0.8F, 0.9F, als double gelesen) statt exakter doubles. Der Unterschied liegt bei 1e-9 je
+    // Tick -- Grim stoert das nicht, der Fallcheck von anticheat-test.com (LimboAPI)
+    // vergleicht die Hoehen aber bitgenau. Gemessen mit pktproxy: Fabric 99.92159999847412,
+    // wir 99.9216.
+    pub float_drag: bool,
     // Radiant, in Camera::yaw's Konvention (0 = Blick nach +Z, s. camera.rs) -- exakt
     // Vanillas eigene Yaw-Konvention, deshalb keine Vorzeichenumkehr noetig.
     pub yaw_rad: f32,
@@ -436,8 +501,8 @@ pub struct PlayerPhysics {
     // fuer getExpectedPose() UND das apply_swim_pitch_pull-Gate -- NICHT direkt fuer
     // Hitbox/Augenhoehe, s. `swimming` (oeffentliches Feld) unten.
     // isSwimming() -- der ECHTE Sprint-Schwimm-Zustand, nicht die blosse Pose (s.
-    // apply_swim_pitch_pull). Oeffentlich, weil das Rendern die Schwimm-Haltung daran haengt
-    // (world::Lean::swimming).
+    // apply_swim_pitch_pull). Die Schwimm-Haltung im Bild haengt dagegen an der Pose
+    // (`swimming`).
     pub raw_swimming: bool,
     // isTouchingWater(): beruehrt die Kollisionsbox in diesem Tick Wasser? Fuer die
     // Schwimm-Haltung beim Rendern -- nur im Wasser richtet sich der Koerper nach der
@@ -539,6 +604,8 @@ pub struct PlayerPhysics {
     // JEDEM Netz-Eintritt und -Austritt von der Server-Simulation ab.
     movement_multiplier: DVec3,
     pub abilities: Abilities,
+    // Koerper-Attribute vom Server; App setzt sie vor jedem Tick (s. BodyAttributes).
+    pub body: BodyAttributes,
     // Hat der Tick `abilities.flying` umgestellt? Main.rs schickt dann Vanillas
     // ServerboundPlayerAbilities (LocalPlayer.onUpdateAbilities) und setzt es zurueck.
     pub abilities_changed: bool,
@@ -569,6 +636,10 @@ pub struct CarryOverState {
     force_update_supporting_block: bool,
     abilities: Abilities,
     jump_trigger_time: u32,
+    // Vanillas handleMovePlayer fasst den Sprint nicht an. Ging er hier verloren, schickten
+    // wir nach jedem Positions-Paket STOP_SPRINTING und liefen langsamer weiter -- auf
+    // applepvp (Teleports mit Versatz 0 im Sekundentakt) wie Rubberbanding.
+    sprinting: bool,
 }
 
 impl PlayerPhysics {
@@ -603,6 +674,7 @@ impl PlayerPhysics {
             sneak_key: false,
             movement_multiplier: DVec3::ZERO,
             abilities: Abilities::default(),
+            body: BodyAttributes::default(),
             abilities_changed: false,
             jump_trigger_time: 0,
             piston_deltas: [0.0; 3],
@@ -700,7 +772,7 @@ impl PlayerPhysics {
             self.supporting_block = None;
             return;
         }
-        let half = WIDTH_F64 / 2.0;
+        let half = self.width() / 2.0;
         let min = DVec3::new(self.pos.x - half, self.pos.y - 1.0e-6, self.pos.z - half);
         let max = DVec3::new(self.pos.x + half, self.pos.y, self.pos.z + half);
         let mut gefunden = self.find_supporting_block(min, max, world, shapes);
@@ -818,13 +890,26 @@ impl PlayerPhysics {
 
     // Entity.getVelocityMultiplier(): erst der Block, IN dem man steht -- nur wenn der neutral
     // ist (1.0), zaehlt der Block darunter. Steht man in Wasser oder einer Blasensaeule, wird
-    // der Block darunter GAR NICHT befragt: Seelensand unter Wasser bremst also nicht (in
-    // Vanilla schiebt dort stattdessen die Blasensaeule, die wir nicht modellieren).
+    // der Block darunter GAR NICHT befragt: Seelensand unter Wasser bremst also nicht (dort
+    // schiebt stattdessen die Blasensaeule, s. bubble_columns).
     fn velocity_multiplier(&self, world: &World) -> f64 {
         // PlayerEntity.getVelocityMultiplier: gleitend bremst weder Seelensand noch Honig.
         if self.gliding {
             return 1.0;
         }
+        let f = self.block_speed_factor(world);
+        // LivingEntity.getBlockSpeedFactor: MOVEMENT_EFFICIENCY hebt die Bremse anteilig auf
+        // (Mth.lerp in float). Ohne Attribut bleibt der Faktor unberuehrt.
+        if self.body.movement_efficiency == 0.0 {
+            return f;
+        }
+        let eff = self.body.movement_efficiency as f32;
+        let f = f as f32;
+        (f + eff * (1.0 - f)) as f64
+    }
+
+    // Entity.getBlockSpeedFactor: der Bremsfaktor des Blocks, ohne Attribut.
+    fn block_speed_factor(&self, world: &World) -> f64 {
         let feet = block_at_pos(world, self.feet_block_pos());
         let name = world::block_registry::block_name(feet);
         let f = name.map(block_velocity_multiplier).unwrap_or(1.0);
@@ -901,6 +986,7 @@ impl PlayerPhysics {
             force_update_supporting_block: self.force_update_supporting_block,
             abilities: self.abilities,
             jump_trigger_time: self.jump_trigger_time,
+            sprinting: self.sprinting,
         }
     }
 
@@ -916,6 +1002,7 @@ impl PlayerPhysics {
         self.force_update_supporting_block = state.force_update_supporting_block;
         self.abilities = state.abilities;
         self.jump_trigger_time = state.jump_trigger_time;
+        self.sprinting = state.sprinting;
     }
 
     // PlayerEntity.isStandingOnSurface(stepHeight) -- die Bedingung, unter der der
@@ -931,8 +1018,8 @@ impl PlayerPhysics {
         if self.on_ground {
             return true;
         }
-        self.fall_distance < SNEAK_STEP_HEIGHT
-            && !space_around_player_empty(self.pos, 0.0, 0.0, SNEAK_STEP_HEIGHT - self.fall_distance, world, shapes, self.shape_context())
+        let step = self.body.step_height;
+        self.fall_distance < step && !space_around_player_empty(self.pos, 0.0, 0.0, step - self.fall_distance, world, shapes, self.shape_context(), self.body)
     }
 
     pub fn refresh_on_ground(&mut self, world: &World, shapes: &world::BlockShapes) {
@@ -940,7 +1027,7 @@ impl PlayerPhysics {
         // on_ground=false: dieser Probe-Sweep darf NIE steppen -- er fragt nur "steht unter
         // mir etwas", und ein Schritt daraus wuerde die Position verfaelschen.
         let (_, _, hit_y_down, _, _) =
-            move_and_collide(self.pos, DVec3::new(0.0, -0.01, 0.0), height, false, world, shapes, self.shape_context());
+            move_and_collide(self.pos, DVec3::new(0.0, -0.01, 0.0), height, false, world, shapes, self.shape_context(), self.body);
         self.on_ground = hit_y_down;
         // Nach einem Teleport gehoert auch der Standblock neu bestimmt -- der alte liegt in
         // aller Regel ganz woanders. Ohne Bewegung dieses Ticks entfaellt der zweite Anlauf.
@@ -961,13 +1048,13 @@ impl PlayerPhysics {
         }
         // SPIN_ATTACK und GLIDING haben dieselben Masse wie SWIMMING (EntityPose-Tabelle in
         // PlayerEntity).
-        if self.swimming || self.spin_attack || self.glide_pose {
+        self.body.scaled(if self.swimming || self.spin_attack || self.glide_pose {
             SWIMMING_EYE_HEIGHT
         } else if self.crouching {
             CROUCHING_EYE_HEIGHT
         } else {
             EYE_HEIGHT
-        }
+        })
     }
 
     pub fn eye_pos(&self) -> DVec3 {
@@ -978,13 +1065,22 @@ impl PlayerPhysics {
         if self.sleeping {
             return SLEEPING_HEIGHT;
         }
-        if self.swimming || self.spin_attack || self.glide_pose {
-            SWIMMING_HEIGHT_F64
+        self.pose_height(if self.swimming || self.spin_attack || self.glide_pose {
+            SWIMMING_HEIGHT
         } else if self.crouching {
-            CROUCHING_HEIGHT_F64
+            CROUCHING_HEIGHT
         } else {
-            HEIGHT_F64
-        }
+            PLAYER_HEIGHT
+        })
+    }
+
+    // Hoehe einer (nicht schlafenden) Pose samt SCALE.
+    fn pose_height(&self, h: f32) -> f64 {
+        self.body.scaled(h) as f64
+    }
+
+    pub fn width(&self) -> f64 {
+        self.body.width()
     }
 
     // isUnderWater(): Augenposition liegt innerhalb einer Wasserzelle, UNTER deren
@@ -1039,7 +1135,7 @@ impl PlayerPhysics {
         // Diese Box wird jetzt AUCH fuer die Sprint-Startbedingung unten gebraucht
         // (isPartlyTouchingWater()), muss also VOR der Sprint-Entscheidung stehen.
         let scan_height = self.current_height();
-        let half = WIDTH_F64 / 2.0;
+        let half = self.width() / 2.0;
         let box_min = DVec3::new(self.pos.x - half, self.pos.y, self.pos.z - half);
         let box_max = DVec3::new(self.pos.x + half, self.pos.y + scan_height, self.pos.z + half);
         let water_height = fluid_height_scan(box_min, box_max, world, shapes, world::FluidKind::Water);
@@ -1152,8 +1248,8 @@ impl PlayerPhysics {
         //     aus einer Messung geraten, die eine andere Ursache hatte.
         //   - Die Posen-Pruefungen laufen auf der Position vom ENDE des letzten Ticks. Genau
         //     das ist self.pos an dieser Stelle: bewegt wird erst weiter unten.
-        let steh_passt = pose_fits(self.pos, HEIGHT_F64, world, shapes, self.shape_context());
-        let hock_passt = pose_fits(self.pos, CROUCHING_HEIGHT_F64, world, shapes, self.shape_context());
+        let steh_passt = pose_fits(self.pos, self.pose_height(PLAYER_HEIGHT), world, shapes, self.shape_context(), self.body);
+        let hock_passt = pose_fits(self.pos, self.pose_height(CROUCHING_HEIGHT), world, shapes, self.shape_context(), self.body);
         // LocalPlayer.aiStep: `crouching = !abilities.flying && ...` -- fliegend schleicht niemand.
         let in_sneaking_pose = !was_flying && !self.raw_swimming && hock_passt && (self.prev_sneak || !steh_passt);
         // shouldSlowDown() = isInSneakingPose() || isCrawling() (ClientPlayerEntity Zeile 641-642)
@@ -1223,7 +1319,7 @@ impl PlayerPhysics {
         // Nicht mit noPhysics (Zuschauer).
         if !input.spectator {
             for (dx, dz) in [(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 1.0)] {
-                let ecke = WIDTH_F64 * 0.35;
+                let ecke = self.width() * 0.35;
                 self.move_towards_closest_space(self.pos.x + dx * ecke, self.pos.z + dz * ecke, world, shapes);
             }
         }
@@ -1465,7 +1561,7 @@ impl PlayerPhysics {
         // LivingEntity.tickMovement(): direkt NACH travel() -- diese Reihenfolge ist der
         // ganze Punkt (s. movement_multiplier). Zuschauer beruehren keine Bloecke.
         if !input.spectator {
-            self.tick_block_collision(input, world);
+            self.tick_block_collision(input, world, shapes);
         }
         // Ende von LocalPlayer.aiStep: wer fliegend aufsetzt, hoert auf zu fliegen (Zuschauer nie).
         if self.on_ground && self.abilities.flying && !input.spectator {
@@ -1502,13 +1598,13 @@ impl PlayerPhysics {
                 name(self.swimming, self.crouching),
                 input.sneak,
                 self.raw_swimming,
-                if was_swimming {
-                    SWIMMING_HEIGHT_F64
+                self.pose_height(if was_swimming {
+                    SWIMMING_HEIGHT
                 } else if was_crouching {
-                    CROUCHING_HEIGHT_F64
+                    CROUCHING_HEIGHT
                 } else {
-                    HEIGHT_F64
-                },
+                    PLAYER_HEIGHT
+                }),
                 self.current_height(),
                 pos_vor_bewegung.x,
                 pos_vor_bewegung.y,
@@ -1554,14 +1650,14 @@ impl PlayerPhysics {
     // CobwebBlock ueberschreibt das nicht -- `voxelShape == VoxelShapes.fullCube()` greift
     // also sofort. Kaeme hier je ein Block mit kleinerer Innenform dazu, muesste die
     // Ueberlappung wirklich gegen dessen Form geprueft werden.
-    fn tick_block_collision(&mut self, input: &Input, world: &World) {
+    fn tick_block_collision(&mut self, input: &Input, world: &World, shapes: &world::BlockShapes) {
         // Entity.tickBlockCollisions(): VOR der Zellen-Schleife und nur am Boden bekommt der
         // Block unter den Fuessen (getLandingPos) onSteppedOn.
         if self.on_ground {
             self.stepped_on_block(input, world);
         }
         const SHRINK: f64 = 1.0e-5;
-        let half = WIDTH_F64 / 2.0;
+        let half = self.width() / 2.0;
         let min = DVec3::new(self.pos.x - half + SHRINK, self.pos.y + SHRINK, self.pos.z - half + SHRINK);
         let max = DVec3::new(self.pos.x + half - SHRINK, self.pos.y + self.current_height() - SHRINK, self.pos.z + half - SHRINK);
         // Leere Box (Schrumpfen groesser als die Box selbst) beruehrt nichts.
@@ -1601,6 +1697,45 @@ impl PlayerPhysics {
         for pos in honig {
             if self.slide_down_honey(pos) {
                 break;
+            }
+        }
+        self.bubble_columns(min, max, world, shapes);
+    }
+
+    // BubbleColumnBlock.entityInside -> Entity.onInside/onAboveBubbleColumn (1.21.11,
+    // nachgesehen): JEDE beruehrte Saeulenzelle schiebt einmal, in Vanillas Reihenfolge der
+    // Zellen (BlockPos.betweenClosed: z aussen, y, x innen) -- die Obergrenzen greifen sonst
+    // an anderer Stelle. Ist ueber der Zelle weder Kollisionsform noch Fluid, gilt sie als
+    // Oberkante: dort staerker, und ohne Ruecksetzen der Fallstrecke.
+    //
+    // ECHTER BUG gewesen (Grim "Simulation" x26 auf anticheat-test.com): Blasensaeulen
+    // fehlten ganz -- der Server schob uns, wir nicht.
+    fn bubble_columns(&mut self, min: DVec3, max: DVec3, world: &World, shapes: &world::BlockShapes) {
+        // Player.onInside/onAboveBubbleColumn: fliegend nichts.
+        if self.abilities.flying {
+            return;
+        }
+        for bz in min.z.floor() as i32..=max.z.floor() as i32 {
+            for by in min.y.floor() as i32..=max.y.floor() as i32 {
+                for bx in min.x.floor() as i32..=max.x.floor() as i32 {
+                    let state = world.block_at(bx, by, bz);
+                    if world::block_registry::block_name(state) != Some("bubble_column") {
+                        continue;
+                    }
+                    let runter = world::state_props::property(state, "drag") == Some("true");
+                    let oben = world.block_at(bx, by + 1, bz);
+                    let oberkante = world::collision_boxes(oben, shapes).is_empty() && world::fluid_kind(oben).is_none();
+                    let y = self.vel.y;
+                    self.vel.y = match (oberkante, runter) {
+                        (true, true) => (y - 0.03).max(-0.9),
+                        (true, false) => (y + 0.1).min(1.8),
+                        (false, true) => (y - 0.03).max(-0.3),
+                        (false, false) => (y + 0.06).min(0.7),
+                    };
+                    if !oberkante {
+                        self.fall_distance = 0.0;
+                    }
+                }
             }
         }
     }
@@ -1645,7 +1780,7 @@ impl PlayerPhysics {
         // mittig ueber/in ihm haengt. 0.4375 + halbe Spielerbreite = 0.7375.
         let dx = (pos.0 as f64 + 0.5 - self.pos.x).abs();
         let dz = (pos.2 as f64 + 0.5 - self.pos.z).abs();
-        let grenze = 0.4375 + WIDTH_F64 / 2.0;
+        let grenze = 0.4375 + self.width() / 2.0;
         if !(dx + 1.0e-7 > grenze || dz + 1.0e-7 > grenze) {
             return false;
         }
@@ -1670,7 +1805,8 @@ impl PlayerPhysics {
         // dieses Ticks gelesen (also der Bodenkontakt-Zustand vom Ende des letzten Ticks).
         // In der Luft zaehlt immer 1.0.
         let f = if self.on_ground { self.ground_friction(world) } else { 1.0 };
-        let horizontal_drag = f * 0.91;
+        // Vanilla: Blockreibung (float) × 0.91F, das Produkt noch als float.
+        let horizontal_drag = if input.float_drag { (f as f32 * 0.91f32) as f64 } else { f * 0.91 };
 
         let speed = self.movement_speed(input);
         // Sneak NICHT mehr hier auf die accel: die Sneak-Verlangsamung (SNEAKING_SPEED = 0.3)
@@ -1742,11 +1878,11 @@ impl PlayerPhysics {
         // (s. effective_gravity -- gefragt wird mit der Geschwindigkeit NACH move()).
         match input.levitation {
             Some(stufe) => self.vel.y += (0.05 * (stufe + 1) as f64 - self.vel.y) * 0.2,
-            None => self.vel.y -= effective_gravity(self.vel.y, input),
+            None => self.vel.y -= effective_gravity(self.vel.y, input, self.body.gravity),
         }
         self.vel.x *= horizontal_drag;
         self.vel.z *= horizontal_drag;
-        self.vel.y *= VERTICAL_DRAG;
+        self.vel.y *= float_or(input, VERTICAL_DRAG);
     }
 
     // LivingEntity.travelGliding: an einer Leiter endet der Flug (dann gilt die normale
@@ -1765,7 +1901,7 @@ impl PlayerPhysics {
             self.try_jump(input, world);
         }
         let rotation = rotation_vector(input.pitch_deg, input.yaw_deg);
-        self.vel = calc_gliding_velocity(self.vel, rotation, input.pitch_deg, effective_gravity(self.vel.y, input));
+        self.vel = calc_gliding_velocity(self.vel, rotation, input.pitch_deg, effective_gravity(self.vel.y, input, self.body.gravity));
         self.move_and_zero(input, world, shapes);
     }
 
@@ -1807,7 +1943,7 @@ impl PlayerPhysics {
 
         let was_falling = self.vel.y <= 0.0; // travelInFluid(): bl VOR moveRelative/move
         // travelInFluid holt die Schwerkraft ebenfalls VOR der Bewegung.
-        let gravity = effective_gravity(self.vel.y, input);
+        let gravity = effective_gravity(self.vel.y, input, self.body.gravity);
         // Wasserlaeufer (WATER_MOVEMENT_EFFICIENCY). travelInWater():
         //   h = Attributwert, ausserhalb des Bodenkontakts halbiert
         //   wenn h > 0:  f rueckt um h auf 0.54600006 zu    (Bremse Richtung Landreibung)
@@ -1834,7 +1970,7 @@ impl PlayerPhysics {
 
         // Reihenfolge wie in travelInWater: erst Sprint/Grundbremse, dann der Wasserlaeufer,
         // und die Gunst des Delfins setzt am Ende HART 0.96 (sie ersetzt, sie mischt nicht).
-        let mut f = if self.sprinting { WATER_SPRINT_SLOW_DOWN } else { WATER_SLOW_DOWN };
+        let mut f = float_or(input, if self.sprinting { WATER_SPRINT_SLOW_DOWN } else { WATER_SLOW_DOWN });
         if efficiency > 0.0 {
             f += (WATER_EFFICIENCY_TARGET_DRAG - f) * efficiency;
         }
@@ -1842,7 +1978,7 @@ impl PlayerPhysics {
             f = DOLPHINS_GRACE_SLOW_DOWN;
         }
         self.vel.x *= f;
-        self.vel.y *= FLUID_VERTICAL_DRAG;
+        self.vel.y *= float_or(input, FLUID_VERTICAL_DRAG);
         self.vel.z *= f;
         self.vel = fluid_falling_adjusted_movement(self.vel, gravity, was_falling, self.sprinting);
         // resetVerticalVelocityInFluid() -- letzter Schritt von travelInWater(), s. dort.
@@ -1858,7 +1994,7 @@ impl PlayerPhysics {
         self.apply_swim_input(input, world, lava_height, false);
 
         let was_falling = self.vel.y <= 0.0;
-        let gravity = effective_gravity(self.vel.y, input);
+        let gravity = effective_gravity(self.vel.y, input, self.body.gravity);
         self.add_move_input(input, FLUID_ACCEL);
         self.move_and_zero(input, world, shapes);
 
@@ -1933,10 +2069,12 @@ impl PlayerPhysics {
         // Honig im Spiel ist.
         let mult = self.jump_multiplier(world);
         // Sprungkraft kommt in derselben float-Rechnung obendrauf: 0.1 * (Stufe + 1).
+        // JUMP_STRENGTH vom Server (s. BodyAttributes), Vorgabe 0.42F.
+        let staerke = self.body.jump_strength as f32;
         let jump_velocity = match input.jump_boost {
-            Some(stufe) => (JUMP_VELOCITY as f32 * mult + 0.1f32 * (stufe as f32 + 1.0)) as f64,
-            None if mult == 1.0 => JUMP_VELOCITY,
-            None => (JUMP_VELOCITY as f32 * mult) as f64,
+            Some(stufe) => (staerke * mult + 0.1f32 * (stufe as f32 + 1.0)) as f64,
+            None if mult == 1.0 && self.body.jump_strength == DEFAULT_JUMP_STRENGTH => JUMP_VELOCITY,
+            None => (staerke * mult) as f64,
         };
         self.vel.y = self.vel.y.max(jump_velocity);
         if self.sprinting {
@@ -2062,7 +2200,7 @@ impl PlayerPhysics {
         let offset_y = self.vel.y + 0.6f32 as f64 - self.pos.y + y_before;
         let target = DVec3::new(self.pos.x + self.vel.x, self.pos.y + offset_y, self.pos.z + self.vel.z);
         let height = self.current_height();
-        let half = WIDTH_F64 / 2.0;
+        let half = self.width() / 2.0;
         let box_min = DVec3::new(target.x - half, target.y, target.z - half);
         let box_max = DVec3::new(target.x + half, target.y + height, target.z + half);
         if box_is_empty(box_min, box_max, world, shapes, self.shape_context()) && !contains_fluid(box_min, box_max, world) {
@@ -2146,7 +2284,7 @@ impl PlayerPhysics {
     //      Luecke (z.B. unter einer Bodenplatte auf einer Bodenplatte) eine Pose erzeugte,
     //      die Vanilla dort nie annimmt.
     fn update_pose(&mut self, input: &Input, world: &World, shapes: &world::BlockShapes) {
-        if !pose_fits(self.pos, SWIMMING_HEIGHT_F64, world, shapes, self.shape_context()) {
+        if !pose_fits(self.pos, self.pose_height(SWIMMING_HEIGHT), world, shapes, self.shape_context(), self.body) {
             return;
         }
         // getDesiredPose() (vereinfacht, s. Feld-Kommentar): Schleichen zaehlt nur, wenn nicht
@@ -2204,7 +2342,7 @@ impl PlayerPhysics {
             // Y-Geschwindigkeit -- wie bei jeder Vertikalkollision.
             let hub = DVec3::new(0.0, RIPTIDE_GROUND_LIFT, 0.0);
             let (neu, _, _, oben_an, _) =
-                move_and_collide(self.pos, hub, self.current_height(), self.on_ground, world, shapes, self.shape_context());
+                move_and_collide(self.pos, hub, self.current_height(), self.on_ground, world, shapes, self.shape_context(), self.body);
             self.pos = neu;
             self.on_ground = false;
             if oben_an {
@@ -2227,7 +2365,7 @@ impl PlayerPhysics {
             return;
         }
         self.riptide_ticks -= 1;
-        let half = WIDTH_F64 / 2.0;
+        let half = self.width() / 2.0;
         let hoehe = self.current_height();
         let min = DVec3::new(vorher.x.min(self.pos.x) - half, vorher.y.min(self.pos.y), vorher.z.min(self.pos.z) - half);
         let max = DVec3::new(vorher.x.max(self.pos.x) + half, vorher.y.max(self.pos.y) + hoehe, vorher.z.max(self.pos.z) + half);
@@ -2250,10 +2388,10 @@ impl PlayerPhysics {
         if self.raw_swimming {
             return (true, false);
         }
-        let desired_height = if want_crouch { CROUCHING_HEIGHT_F64 } else { HEIGHT_F64 };
-        if pose_fits(self.pos, desired_height, world, shapes, self.shape_context()) {
+        let desired_height = self.pose_height(if want_crouch { CROUCHING_HEIGHT } else { PLAYER_HEIGHT });
+        if pose_fits(self.pos, desired_height, world, shapes, self.shape_context(), self.body) {
             (false, want_crouch)
-        } else if !want_crouch && pose_fits(self.pos, CROUCHING_HEIGHT_F64, world, shapes, self.shape_context()) {
+        } else if !want_crouch && pose_fits(self.pos, self.pose_height(CROUCHING_HEIGHT), world, shapes, self.shape_context(), self.body) {
             (false, true)
         } else {
             (true, false)
@@ -2374,7 +2512,7 @@ impl PlayerPhysics {
             && self.is_standing_on_surface(world, shapes)
             && requested.y <= 0.0
         {
-            let (dx, dz) = adjust_for_sneaking(self.pos, requested.x, requested.z, world, shapes, self.shape_context());
+            let (dx, dz) = adjust_for_sneaking(self.pos, requested.x, requested.z, world, shapes, self.shape_context(), self.body);
             move_vel.x = dx;
             move_vel.z = dz;
         }
@@ -2435,7 +2573,7 @@ impl PlayerPhysics {
         shapes: &world::BlockShapes,
     ) -> (bool, bool, bool, bool) {
         let (new_pos, hit_x, hit_y_down, hit_y_up, hit_z) =
-            move_and_collide(self.pos, move_vel, self.current_height(), self.on_ground, world, shapes, self.shape_context());
+            move_and_collide(self.pos, move_vel, self.current_height(), self.on_ground, world, shapes, self.shape_context(), self.body);
         // Vanillas `vec3d` in Entity.move: die TATSAECHLICH zurueckgelegte Bewegung, also nach
         // Kantenschutz UND Kollision. Genau daran haengen unten horizontalCollision und die
         // Fallhoehe -- beide duerfen NICHT aus den Kollisions-Flags abgeleitet werden.
@@ -2509,7 +2647,7 @@ impl PlayerPhysics {
         // 0.014 × 0.91 + 0.014 = 0.026740. Danach folgen beide Reihen identisch
         // v <- 0.8 * v + 0.014.
         if !self.touching_water {
-            let half = WIDTH_F64 / 2.0;
+            let half = self.width() / 2.0;
             let hoehe = self.current_height();
             let box_min = DVec3::new(self.pos.x - half, self.pos.y, self.pos.z - half);
             let box_max = DVec3::new(self.pos.x + half, self.pos.y + hoehe, self.pos.z + half);
@@ -2700,11 +2838,11 @@ fn contains_fluid(min: DVec3, max: DVec3, world: &World) -> bool {
 // (-0.003) statt der Formel nimmt, um Ruckeln an der Wasseroberflaeche zu vermeiden.
 // LivingEntity.getEffectiveGravity: mit Sanftem Fall faellt man hoechstens mit 0.01 --
 // aber nur FALLEND (vel.y <= 0). Nach oben (Sprung) wirkt die volle Schwerkraft.
-fn effective_gravity(vel_y: f64, input: &Input) -> f64 {
+fn effective_gravity(vel_y: f64, input: &Input, gravity: f64) -> f64 {
     if vel_y <= 0.0 && input.slow_falling {
-        GRAVITY.min(0.01)
+        gravity.min(0.01)
     } else {
-        GRAVITY
+        gravity
     }
 }
 
@@ -2781,8 +2919,8 @@ fn fluid_falling_adjusted_movement(vel: DVec3, gravity: f64, was_falling: bool, 
 // klemmt) hier ein reiner STATISCHER Ueberlappungstest -- sweep_axis selbst kann das nicht
 // leisten, weil es bei delta=0 sofort abbricht (s. dortigen fruehen Return). Dieselbe
 // Block-Scan-/Kollisionsbox-Logik wie sweep_axis, nur ohne Bewegungsrichtung.
-fn pose_fits(pos: DVec3, height: f64, world: &World, shapes: &world::BlockShapes, ctx: world::ShapeContext) -> bool {
-    let half = WIDTH_F64 / 2.0;
+fn pose_fits(pos: DVec3, height: f64, world: &World, shapes: &world::BlockShapes, ctx: world::ShapeContext, body: BodyAttributes) -> bool {
+    let half = body.width() / 2.0;
     // Vanilla verkleinert die Posen-Box vor der Pruefung um 1e-7 je Seite
     // (canChangeIntoPose: `...getBoxAt(pos).contract(1.0E-7)`, und contract(v) ist
     // expand(-v) auf allen sechs Seiten). GrimAC macht exakt dasselbe (canEnterPose:
@@ -2856,7 +2994,6 @@ fn box_is_empty(min: DVec3, max: DVec3, world: &World, shapes: &world::BlockShap
 // Bewegungseingabe waehrend einer Item-Benutzung daempft (wirksam: Input::item_use_speed).
 #[cfg(test)]
 pub const ITEM_USE_SPEED_MULT: f64 = 0.2;
-const SNEAK_STEP_HEIGHT: f64 = 0.6; // getStepHeight() eines Spielers
 const SNEAK_STEP: f64 = 0.05; // STEPPING_APPROACH_DISTANCE
 
 // MathHelper.approximatelyEquals -- Vanillas Vergleich fuer horizontalCollision.
@@ -2905,8 +3042,9 @@ fn space_around_player_empty(
     world: &World,
     shapes: &world::BlockShapes,
     ctx: world::ShapeContext,
+    body: BodyAttributes,
 ) -> bool {
-    let half = WIDTH_F64 / 2.0;
+    let half = body.width() / 2.0;
     let e = 1.0e-7;
     let min = DVec3::new(pos.x - half + e + dx, pos.y - step_height - e, pos.z - half + e + dz);
     let max = DVec3::new(pos.x + half - e + dx, pos.y, pos.z + half - e + dz);
@@ -2920,8 +3058,9 @@ fn adjust_for_sneaking(
     world: &World,
     shapes: &world::BlockShapes,
     ctx: world::ShapeContext,
+    body: BodyAttributes,
 ) -> (f64, f64) {
-    let space_empty = |dx: f64, dz: f64| -> bool { space_around_player_empty(pos, dx, dz, SNEAK_STEP_HEIGHT, world, shapes, ctx) };
+    let space_empty = |dx: f64, dz: f64| -> bool { space_around_player_empty(pos, dx, dz, body.step_height, world, shapes, ctx, body) };
     let mut d = vel_x;
     let mut e = vel_z;
     let hx = d.signum() * SNEAK_STEP;
@@ -3282,6 +3421,7 @@ fn adjust_movement_with_step(
     world: &World,
     shapes: &world::BlockShapes,
     ctx: world::ShapeContext,
+    step_height: f64,
 ) -> DVec3 {
     let (r_min, r_max) = stretch(box_min, box_max, movement);
     let mut boxes = collect_collision_boxes(r_min, r_max, world, shapes, ctx);
@@ -3302,7 +3442,7 @@ fn adjust_movement_with_step(
     let lift = if landed { DVec3::new(0.0, base.y, 0.0) } else { DVec3::ZERO };
     let (b2_min, b2_max) = (box_min + lift, box_max + lift);
 
-    let (mut s_min, s_max) = stretch(b2_min, b2_max, DVec3::new(movement.x, STEP_HEIGHT, movement.z));
+    let (mut s_min, s_max) = stretch(b2_min, b2_max, DVec3::new(movement.x, step_height, movement.z));
     // Ohne Landung in diesem Tick zusaetzlich ein Hauch nach unten (Vanilla: stretch(0,
     // -1.0E-5, 0)) -- sonst faende der Scan die Box, auf der man GERADE STEHT, nicht mehr,
     // und ihre Oberkante fiele als Kandidat weg.
@@ -3312,7 +3452,7 @@ fn adjust_movement_with_step(
     let mut step_boxes = collect_collision_boxes(s_min, s_max, world, shapes, ctx);
     add_border_boxes(&mut step_boxes, box_min, box_max, s_min, s_max, world);
 
-    for g in collect_step_heights(b2_min.y, &step_boxes, STEP_HEIGHT, base.y) {
+    for g in collect_step_heights(b2_min.y, &step_boxes, step_height, base.y) {
         let attempt = DVec3::new(movement.x, g as f64, movement.z);
         let stepped = adjust_movement(b2_min, b2_max, attempt, &step_boxes);
         // Nur uebernehmen, wenn man dadurch horizontal WEITER kommt -- eine Stufe, die einen
@@ -3658,12 +3798,13 @@ fn move_and_collide(
     world: &World,
     shapes: &world::BlockShapes,
     ctx: world::ShapeContext,
+    body: BodyAttributes,
 ) -> (DVec3, bool, bool, bool, bool) {
-    let half = WIDTH_F64 / 2.0;
+    let half = body.width() / 2.0;
     let box_min = DVec3::new(pos.x - half, pos.y, pos.z - half);
     let box_max = DVec3::new(pos.x + half, pos.y + height, pos.z + half);
 
-    let moved = adjust_movement_with_step(box_min, box_max, vel, on_ground, world, shapes, ctx);
+    let moved = adjust_movement_with_step(box_min, box_max, vel, on_ground, world, shapes, ctx, body.step_height);
 
     let hit_x = (moved.x - vel.x).abs() > 1.0e-6;
     let hit_z = (moved.z - vel.z).abs() > 1.0e-6;
@@ -3987,6 +4128,42 @@ mod tests {
         assert!(!bei(-(grenze_grad + 0.01)));
     }
 
+    // Fall in einer mitgeschnittenen Welt: alle Chunk-Pakete aus einem Rohmitschnitt
+    // (pktproxy, CORAL_PKTRAW; Format s. net::write_raw), min_y der Dimension, Startposition.
+    // Druckt die Position je Tick -- zum Vergleich mit dem, was ein Client dort schickt.
+    // CORAL_FALL_RAW=<datei> CORAL_FALL_MIN_Y=0 CORAL_FALL_START=0.5,100,0.5 \
+    //   cargo test -p app --bins fall_auf_mitschnitt -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn fall_auf_mitschnitt() {
+        let roh = std::fs::read(std::env::var("CORAL_FALL_RAW").expect("CORAL_FALL_RAW")).unwrap();
+        let min_y: i32 = std::env::var("CORAL_FALL_MIN_Y").ok().and_then(|v| v.parse().ok()).unwrap_or(-64);
+        let start: Vec<f64> = std::env::var("CORAL_FALL_START").unwrap_or("0.5,100,0.5".into()).split(',').map(|v| v.parse().unwrap()).collect();
+        let mut w = World::new();
+        w.set_min_y(min_y);
+        let mut i = 0;
+        while i + 17 <= roh.len() {
+            let len = u32::from_be_bytes(roh[i + 13..i + 17].try_into().unwrap()) as usize;
+            let payload = &roh[i + 17..i + 17 + len];
+            if roh[i] == b'S' && payload.first() == Some(&(protocol::packets::CB_PLAY_CHUNK_DATA as u8)) {
+                if let Ok(c) = protocol::chunk::parse_chunk_data(payload) {
+                    let sections = c.sections.iter().map(|s| ChunkSection::from_states_and_biomes(s.block_states.clone(), s.biomes.clone())).collect();
+                    w.insert_column(c.x, c.z, sections);
+                }
+            }
+            i += 17 + len;
+        }
+        let shapes = world::BlockShapes::all_full_cubes();
+        let mut p = PlayerPhysics::new(DVec3::new(start[0], start[1], start[2]));
+        let mut input = idle_input(0.0);
+        // CORAL_FALL_FLOAT=1: wie mit Modul Botcheck-Pass (s. Input::float_drag).
+        input.float_drag = std::env::var_os("CORAL_FALL_FLOAT").is_some();
+        for t in 0..30 {
+            p.tick(&input, &w, &shapes);
+            println!("{t:2} pos=({:?}, {:?}, {:?}) boden={}", p.pos.x, p.pos.y, p.pos.z, p.on_ground);
+        }
+    }
+
     fn idle_input(yaw_rad: f32) -> Input {
         Input {
             forward: 0.0,
@@ -4007,6 +4184,7 @@ mod tests {
             levitation: None,
             jump_boost: None,
             dolphins_grace: false,
+            float_drag: false,
             yaw_rad,
             look_dir_y: 0.0,
             yaw_deg: yaw_rad.to_degrees(),
@@ -4089,6 +4267,35 @@ mod tests {
         let mut p = PlayerPhysics::new(DVec3::new(8.85, 0.9375, 8.5));
         p.move_towards_closest_space(9.06, 8.5, &welt, &shapes);
         assert!((p.vel.x + 0.1).abs() < 1e-12, "Gras ragt 1/16 in die Box, zurueck nach Westen: {:?}", p.vel);
+    }
+
+    // Blasensaeule aus Seelensand, drei Zellen hoch, Luft darueber. Der Spieler (1.8 hoch)
+    // steht in den unteren beiden: zwei Innenzellen, keine Oberkante -- also zweimal +0.06.
+    // Mit dem Kopf in der obersten Zelle kommt deren Oberkanten-Schub (+0.1) dazu.
+    #[test]
+    fn blasensaeule_schiebt_je_beruehrter_zelle() {
+        let hoch = (0..world::state_count() as u32)
+            .find(|&s| world::block_name(s) == Some("bubble_column") && world::state_props::property(s, "drag") == Some("false"))
+            .unwrap();
+        let welt = world_with_floor_and_blocks(0, &[((8, 1, 8), hoch), ((8, 2, 8), hoch), ((8, 3, 8), hoch)]);
+        let shapes = world::BlockShapes::new(vec![None; world::state_count()]);
+        let input = idle_input(0.0);
+
+        let mut p = PlayerPhysics::new(DVec3::new(8.5, 1.0, 8.5));
+        p.fall_distance = 3.0;
+        p.tick_block_collision(&input, &welt, &shapes);
+        assert!((p.vel.y - 0.12).abs() < 1e-12, "zwei Innenzellen: {}", p.vel.y);
+        assert_eq!(p.fall_distance, 0.0);
+
+        let mut p = PlayerPhysics::new(DVec3::new(8.5, 1.5, 8.5));
+        p.tick_block_collision(&input, &welt, &shapes);
+        assert!((p.vel.y - 0.22).abs() < 1e-12, "zwei Innenzellen + Oberkante: {}", p.vel.y);
+
+        // Fliegend wirkt nichts.
+        let mut p = PlayerPhysics::new(DVec3::new(8.5, 1.0, 8.5));
+        p.abilities.flying = true;
+        p.tick_block_collision(&input, &welt, &shapes);
+        assert_eq!(p.vel.y, 0.0);
     }
 
     fn shapes_ohne_netz_kollision() -> world::BlockShapes {
@@ -4740,7 +4947,7 @@ mod tests {
         let mut ohne = idle_input(181.0f32.to_radians());
         ohne.forward = 1.0;
         p.tick(&ohne, &world, &shapes);
-        assert!(!pose_fits(p.pos, HEIGHT_F64, &world, &shapes, world::ShapeContext::ABSENT), "Test setzt die niedrige Decke voraus");
+        assert!(!pose_fits(p.pos, HEIGHT_F64, &world, &shapes, world::ShapeContext::ABSENT, BodyAttributes::default()), "Test setzt die niedrige Decke voraus");
         assert!(p.in_sneaking_pose_move, "unter der Decke gilt die Verlangsamung ab dem ersten Tick");
     }
 
@@ -5144,8 +5351,8 @@ mod tests {
             "unter der oberen Stufe (1.5 Bloecke Luft) muss die Schleich-Pose greifen -- crouch={} swim={} passt1.8={} passt1.5={}",
             p.crouching,
             p.swimming,
-            pose_fits(p.pos, HEIGHT_F64, &world, &shapes, world::ShapeContext::ABSENT),
-            pose_fits(p.pos, CROUCHING_HEIGHT_F64, &world, &shapes, world::ShapeContext::ABSENT)
+            pose_fits(p.pos, HEIGHT_F64, &world, &shapes, world::ShapeContext::ABSENT, BodyAttributes::default()),
+            pose_fits(p.pos, CROUCHING_HEIGHT_F64, &world, &shapes, world::ShapeContext::ABSENT, BodyAttributes::default())
         );
 
         // Und OHNE Sneak-Taste ebenso: unter einer zu niedrigen Decke erzwingt Vanilla die
@@ -6419,7 +6626,7 @@ mod tests {
             p.tick(&input, &world, &shapes);
             assert!(p.swimming, "Pose sollte trotz losgelassenem Sprint bei SWIMMING bleiben (kein Platz zum Stehen)");
             assert!(
-                pose_fits(p.pos, p.current_height(), &world, &shapes, world::ShapeContext::ABSENT),
+                pose_fits(p.pos, p.current_height(), &world, &shapes, world::ShapeContext::ABSENT, BodyAttributes::default()),
                 "die tatsächlich benutzte Hitbox darf nie in die Decke clippen"
             );
         }
@@ -7185,6 +7392,57 @@ mod tests {
         }
         assert!(frei.vel.y < rutsch * 3.0, "freier Fall muss viel schneller sein: {}", frei.vel.y);
     }
+
+    // MOVEMENT_EFFICIENCY (Seelenlaeufigkeit auf Seelensand): Mth.lerp(eff, Blockfaktor, 1)
+    // in float. Ohne Attribut bleibt die Bremse 0.4F.
+    #[test]
+    fn seelenlaeufigkeit_hebt_die_seelensand_bremse_auf() {
+        let shapes = world::BlockShapes::all_full_cubes();
+        let world = world_with_floor_of(0, "soul_sand");
+        let mut p = steht_still_auf(&world, &shapes, DVec3::new(8.5, 2.0, 8.5));
+        assert_eq!(p.velocity_multiplier(&world), SOUL_SAND_HONEY_SPEED);
+        p.body.movement_efficiency = 1.0;
+        assert_eq!(p.velocity_multiplier(&world), 1.0);
+        p.body.movement_efficiency = 0.5;
+        assert_eq!(p.velocity_multiplier(&world), (0.4f32 + 0.5f32 * (1.0f32 - 0.4f32)) as f64);
+    }
+
+    // SCALE: Breite, Hoehe und Augenhoehe der Pose mal den float (EntityDimensions.scale).
+    #[test]
+    fn groesse_skaliert_box_und_augenhoehe() {
+        let mut p = PlayerPhysics::new(DVec3::ZERO);
+        assert_eq!(p.width(), WIDTH_F64);
+        assert_eq!(p.current_height(), HEIGHT_F64);
+        p.body.scale = 2.0;
+        assert_eq!(p.width(), (PLAYER_WIDTH * 2.0) as f64);
+        assert_eq!(p.current_height(), (PLAYER_HEIGHT * 2.0) as f64);
+        assert_eq!(p.eye_height(), EYE_HEIGHT * 2.0);
+    }
+
+    // JUMP_STRENGTH: (float)Attribut * Blockfaktor, dann Schwerkraft und Daempfung des Ticks.
+    #[test]
+    fn sprungkraft_vom_server() {
+        let shapes = world::BlockShapes::all_full_cubes();
+        let world = world_with_floor_of(0, "stone");
+        let mut p = steht_still_auf(&world, &shapes, DVec3::new(8.0, 4.0, 8.0));
+        p.body.jump_strength = 0.84;
+        let mut input = idle_input(0.0);
+        input.jump = true;
+        p.tick(&input, &world, &shapes);
+        let erwartet = (0.84f32 as f64 - GRAVITY) * VERTICAL_DRAG;
+        assert!((p.vel.y - erwartet).abs() < 1.0e-9, "{} statt {}", p.vel.y, erwartet);
+    }
+
+    // GRAVITY: der Fall rechnet mit dem Attribut statt mit 0.08.
+    #[test]
+    fn schwerkraft_vom_server() {
+        let shapes = world::BlockShapes::all_full_cubes();
+        let world = world_with_floor_of(0, "stone");
+        let mut p = PlayerPhysics::new(DVec3::new(8.0, 20.0, 8.0));
+        p.body.gravity = 0.04;
+        p.tick(&idle_input(0.0), &world, &shapes);
+        assert!((p.vel.y - -0.04 * VERTICAL_DRAG).abs() < 1.0e-12, "{}", p.vel.y);
+    }
 }
 
 #[cfg(test)]
@@ -7267,6 +7525,7 @@ mod step_tests {
             levitation: None,
             jump_boost: None,
             dolphins_grace: false,
+            float_drag: false,
             yaw_rad,
             look_dir_y: 0.0,
             yaw_deg: yaw_rad.to_degrees(),
@@ -7338,8 +7597,26 @@ mod step_tests {
         let box_max = box_min + DVec3::new(PLAYER_WIDTH as f64, PLAYER_HEIGHT as f64, PLAYER_WIDTH as f64);
         // Nach oben UND nach +X gegen die Stufe, ohne Bodenkontakt.
         let movement = DVec3::new(0.5, 0.2, 0.0);
-        let moved = adjust_movement_with_step(box_min, box_max, movement, false, &world, &shapes, world::ShapeContext::ABSENT);
+        let moved = adjust_movement_with_step(box_min, box_max, movement, false, &world, &shapes, world::ShapeContext::ABSENT, STEP_HEIGHT);
         assert!(moved.y <= movement.y + 1.0e-9, "ohne Bodenkontakt darf kein Schritt angehoben werden");
+    }
+
+    // STEP_HEIGHT 1.0 (Plugin): ein ganzer Block wird im Laufen erstiegen, mit der Vorgabe
+    // 0.6 bleibt man davor stehen.
+    #[test]
+    fn stufenhoehe_vom_server() {
+        let world = world_with_ledge(0, 10, SOLID);
+        let shapes = shapes_with_slab();
+        let lauf = |step: f64| {
+            let mut p = PlayerPhysics::new(DVec3::new(8.0, 1.0, 8.5));
+            p.body.set_step_height(step);
+            for _ in 0..40 {
+                p.tick(&walk_east(0.0), &world, &shapes);
+            }
+            p.pos.y
+        };
+        assert!((lauf(STEP_HEIGHT) - 1.0).abs() < 1.0e-6);
+        assert!((lauf(1.0) - 2.0).abs() < 1.0e-6, "{}", lauf(1.0));
     }
 
     // collectStepHeights: Kandidaten sind die Y-Kanten der Kollisionsboxen relativ zur

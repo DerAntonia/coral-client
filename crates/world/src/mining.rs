@@ -21,7 +21,7 @@
 //   kannErnten = !braucht_werkzeug || Werkzeug.isCorrectForDrops(block)
 
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use crate::block_registry::block_name;
 
@@ -134,11 +134,42 @@ pub fn default_tool(item: &str) -> Option<&'static Tool> {
     data().tools.get(item)
 }
 
+// Die Block-Tags des Servers (Update Tags). Sie gelten statt der eingebauten, sobald einer
+// da ist -- Datapacks aendern Tags, und can_place_on/can_break nennen beliebige.
+static SERVER_TAGS: RwLock<Option<HashMap<String, HashSet<u32>>>> = RwLock::new(None);
+
+// Schluessel ohne "minecraft:" wie in mining_data.txt.
+pub fn set_server_block_tags(tags: HashMap<String, Vec<u32>>) {
+    let tags = tags
+        .into_iter()
+        .map(|(name, ids)| (name.strip_prefix("minecraft:").map(str::to_string).unwrap_or(name), ids.into_iter().collect()))
+        .collect();
+    if let Ok(mut g) = SERVER_TAGS.write() {
+        *g = Some(tags);
+    }
+}
+
 fn set_contains(set: &BlockSet, block: u32) -> bool {
     match set {
         // Tags kommen mit oder ohne "minecraft:"-Praefix (vom Server immer mit).
-        BlockSet::Tag(tag) => data().tags.get(tag.strip_prefix("minecraft:").unwrap_or(tag)).is_some_and(|s| s.contains(&block)),
+        BlockSet::Tag(tag) => {
+            let tag = tag.strip_prefix('#').unwrap_or(tag);
+            let tag = tag.strip_prefix("minecraft:").unwrap_or(tag);
+            if let Ok(g) = SERVER_TAGS.read() {
+                if let Some(server) = g.as_ref() {
+                    return server.get(tag).is_some_and(|s| s.contains(&block));
+                }
+            }
+            data().tags.get(tag).is_some_and(|s| s.contains(&block))
+        }
         BlockSet::Ids(ids) => ids.contains(&block),
+    }
+}
+
+impl BlockSet {
+    // Liegt der Block dieses Zustands in der Menge?
+    pub fn contains_state(&self, state: u32) -> bool {
+        block_id(state).is_some_and(|b| set_contains(self, b))
     }
 }
 

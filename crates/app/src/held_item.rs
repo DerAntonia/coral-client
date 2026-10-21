@@ -460,8 +460,10 @@ impl HeldItems {
         let faktor = [(farbe >> 16) & 0xff, (farbe >> 8) & 0xff, farbe & 0xff];
         let mut bild: Option<(u32, u32, Vec<u8>)> = None;
         for (path, getoent) in layers {
-            let Ok(tex) = mc.load_texture(&assets::resource_path("textures", path, ".png")) else { continue };
-            let Some((w, h, mut rgba)) = fit_to_slot(tex.width, tex.height, &tex.rgba) else { continue };
+            let png = assets::resource_path("textures", path, ".png");
+            let Ok(tex) = mc.load_texture(&png) else { continue };
+            let groesse = assets::frame_size(assets::animation_meta(mc, &png).as_ref(), tex.width, tex.height);
+            let Some((w, h, mut rgba)) = fit_to_slot(tex.width, groesse, &tex.rgba) else { continue };
             if *getoent {
                 for px in rgba.chunks_exact_mut(4) {
                     for (c, f) in px.iter_mut().zip(faktor) {
@@ -499,13 +501,16 @@ impl HeldItems {
         if self.textures.contains_key(path) {
             return;
         }
-        let Ok(tex) = mc.load_texture(&assets::resource_path("textures", path, ".png")) else { return };
-        let Some((width, height, rgba)) = fit_to_slot(tex.width, tex.height, &tex.rgba) else { return };
+        let png = assets::resource_path("textures", path, ".png");
+        let Ok(tex) = mc.load_texture(&png) else { return };
+        let meta = assets::animation_meta(mc, &png);
+        let bild = assets::frame_size(meta.as_ref(), tex.width, tex.height);
+        let Some((width, height, rgba)) = fit_to_slot(tex.width, bild, &tex.rgba) else { return };
         let Some(origin) = self.install_texture(path, width, height, rgba, atlas, upload) else { return };
-        // Animationsstreifen quadratischer Frames: im Platz in der eingepassten Groesse
-        // weiterspielen (der Entity-Atlas hat keine Mip-Stufen).
-        if width == height && tex.height > tex.width {
-            if let Some(anim) = assets::TileAnimation::load(mc, path, origin, width, 1) {
+        // Animation: im Platz in der eingepassten Groesse weiterspielen (der Entity-Atlas hat
+        // keine Mip-Stufen).
+        if meta.is_some() {
+            if let Some(anim) = assets::TileAnimation::load(mc, path, origin, (width, height), 1) {
                 self.animations.push(ItemAnimation { path: path.to_string(), anim, last: None });
             }
         }
@@ -909,38 +914,36 @@ pub fn hand_pre_transform(arm: Affine, right_hand: bool) -> Affine {
     ]))
 }
 
-// Eine Textur auf einen Item-Platz bringen: animierte Texturen sind senkrechte Streifen
-// (mehrere Bilder untereinander) -- davon zaehlt nur das erste, genau wie bei den Block- und
-// Inventar-Texturen. Was danach noch groesser als der Platz ist, wird ganzzahlig
-// heruntergerechnet (Nearest, damit Pixelkunst Pixelkunst bleibt).
-fn fit_to_slot(width: u32, height: u32, rgba: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    if width == 0 || height == 0 {
+// Eine Textur auf einen Item-Platz bringen: von einer animierten nur das erste Bild (`bild`,
+// s. assets::frame_size), genau wie bei den Block- und Inventar-Texturen. Was danach noch
+// groesser als der Platz ist, wird je Achse ganzzahlig heruntergerechnet (Nearest, damit
+// Pixelkunst Pixelkunst bleibt; die UVs sind ohnehin relativ, ein schmales hohes Bild wie
+// cpvpwars' 12x1974-Zonenwaende behaelt so seine Breite).
+fn fit_to_slot(tex_width: u32, (width, height): (u32, u32), rgba: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    if width == 0 || height == 0 || rgba.len() < (tex_width * height * 4) as usize {
         return None;
     }
-    // Erster Frame eines Animationsstreifens.
-    let frame_height = if height > width && height.is_multiple_of(width) { width } else { height };
-    let frame_len = (width * frame_height * 4) as usize;
-    if rgba.len() < frame_len {
-        return None;
-    }
-    let frame = &rgba[..frame_len];
-
+    let frame = assets_frame(rgba, tex_width, (width, height));
     let max = assets::ITEM_SLOT_SIZE;
-    if width <= max && frame_height <= max {
-        return Some((width, frame_height, frame.to_vec()));
+    if width <= max && height <= max {
+        return Some((width, height, frame));
     }
-    // Ganzzahliger Verkleinerungsfaktor, aufgerundet -- danach passt beides sicher hinein.
-    let factor = (width.div_ceil(max)).max(frame_height.div_ceil(max)).max(1);
-    let (out_w, out_h) = ((width / factor).max(1), (frame_height / factor).max(1));
+    // Ganzzahlige Verkleinerungsfaktoren, aufgerundet -- danach passt beides sicher hinein.
+    let (fx, fy) = (width.div_ceil(max).max(1), height.div_ceil(max).max(1));
+    let (out_w, out_h) = ((width / fx).max(1), (height / fy).max(1));
     let mut out = vec![0u8; (out_w * out_h * 4) as usize];
     for y in 0..out_h {
         for x in 0..out_w {
-            let src = (((y * factor) * width + x * factor) * 4) as usize;
+            let src = (((y * fy) * width + x * fx) * 4) as usize;
             let dst = ((y * out_w + x) * 4) as usize;
             out[dst..dst + 4].copy_from_slice(&frame[src..src + 4]);
         }
     }
     Some((out_w, out_h, out))
+}
+
+fn assets_frame(rgba: &[u8], tex_width: u32, bild: (u32, u32)) -> Vec<u8> {
+    assets::frame_pixels(rgba, tex_width, bild, 0)
 }
 
 // Schluessel der zusammengesetzten Textur (s. HeldItems::load_composite), oder None fuer ein
@@ -987,7 +990,7 @@ mod tests {
     #[test]
     fn animationsstreifen_liefert_nur_das_erste_bild() {
         let rgba = vec![255u8; (16 * 64 * 4) as usize];
-        let (w, h, out) = fit_to_slot(16, 64, &rgba).unwrap();
+        let (w, h, out) = fit_to_slot(16, (16, 16), &rgba).unwrap();
         assert_eq!((w, h), (16, 16));
         assert_eq!(out.len(), (16 * 16 * 4) as usize);
     }
@@ -996,7 +999,7 @@ mod tests {
     #[test]
     fn unteilbares_bild_bleibt_unveraendert() {
         let rgba = vec![255u8; (16 * 20 * 4) as usize];
-        let (w, h, _) = fit_to_slot(16, 20, &rgba).unwrap();
+        let (w, h, _) = fit_to_slot(16, (16, 20), &rgba).unwrap();
         assert_eq!((w, h), (16, 20));
     }
 
@@ -1005,7 +1008,7 @@ mod tests {
     #[test]
     fn zu_grosse_textur_wird_verkleinert() {
         let rgba = vec![128u8; (64 * 64 * 4) as usize];
-        let (w, h, out) = fit_to_slot(64, 64, &rgba).unwrap();
+        let (w, h, out) = fit_to_slot(64, (64, 64), &rgba).unwrap();
         assert!(w <= assets::ITEM_SLOT_SIZE && h <= assets::ITEM_SLOT_SIZE, "passt nicht in den Platz: {w}x{h}");
         assert_eq!(out.len(), (w * h * 4) as usize);
     }

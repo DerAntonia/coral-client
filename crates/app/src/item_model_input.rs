@@ -6,6 +6,10 @@ use assets::ItemModelInput;
 use protocol::item::ItemStack;
 use world::item_components::Components;
 
+// Bogen: ab hier zeigt Vanillas Modell die letzte Spannstufe, ab hier ist er voll gespannt.
+const BOW_LAST_STAGE_TICKS: f32 = 18.0;
+const BOW_FULL_TICKS: f32 = 20.0;
+
 // Laufende Benutzung genau dieses Stapels: Ticks seit Beginn und Gesamtdauer.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UseState {
@@ -59,7 +63,15 @@ impl ItemModelInput for StackInput<'_> {
     }
 
     fn use_ticks(&self) -> f32 {
-        self.using.map_or(0.0, |u| u.ticks)
+        let ticks = self.using.map_or(0.0, |u| u.ticks);
+        // Bewusst anders als Vanilla: dort kommt die letzte Spannstufe des Bogens (Schwelle
+        // 0.9 = 18 Ticks) zwei Ticks VOR der vollen Kraft (BowItem.getPowerForTime, 20
+        // Ticks). Wer bei ihr loslaesst, schiesst ohne Krit. Hier erscheint sie erst bei
+        // voller Kraft; andere Schwellen eines Packs bleiben unberuehrt.
+        if (BOW_LAST_STAGE_TICKS..BOW_FULL_TICKS).contains(&ticks) && world::item_registry::item_name(self.stack.item_id) == Some("bow") {
+            return BOW_LAST_STAGE_TICKS - 0.01;
+        }
+        ticks
     }
 
     fn use_duration(&self) -> f32 {

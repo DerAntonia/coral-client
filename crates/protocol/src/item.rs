@@ -130,6 +130,9 @@ pub struct ItemStack {
     pub kinetic_weapon: Option<KineticWeapon>,
     pub swing_animation: Option<SwingAnimation>,
     pub minimum_attack_charge: Option<f32>,
+    // can_place_on / can_break (Abenteuermodus): s. BlockPredicate.
+    pub can_place_on: Option<Vec<BlockPredicate>>,
+    pub can_break: Option<Vec<BlockPredicate>>,
     // bundle_contents: was im Buendel steckt, das zuletzt Eingelegte zuerst.
     pub bundle_contents: Option<Vec<ItemStack>>,
     // Im Buendel gewaehltes Item (Mausrad ueber dem Buendel), -1 = keins. Nur im Client, wie
@@ -376,6 +379,28 @@ pub struct ToolRuleData {
 // Registry-ID des tool-Components.
 pub const COMPONENT_TOOL: i32 = 28;
 
+// AdventureModePredicate (can_place_on 14 / can_break 15): ein Block passt, wenn EINES der
+// Praedikate passt (BlockPredicate.test, ausgewertet in world::item_behavior).
+pub const COMPONENT_CAN_PLACE_ON: i32 = 14;
+pub const COMPONENT_CAN_BREAK: i32 = 15;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockPredicate {
+    // None = jeder Block. Sonst wie bei ToolRuleData: Tag ODER Block-Roh-IDs.
+    pub blocks: Option<(Option<String>, Vec<i32>)>,
+    // StatePropertiesPredicate: Property-Name und Bedingung, alle muessen passen.
+    pub properties: Vec<(String, StateValueMatcher)>,
+    // Bedingungen an NBT oder Components des Blockobjekts. Die Daten dafuer fuehren wir
+    // nicht -- ein solches Praedikat passt hier nie, entscheiden tut ohnehin der Server.
+    pub needs_block_entity: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum StateValueMatcher {
+    Exact(String),
+    Range(Option<String>, Option<String>),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct UseCooldown {
     pub seconds: f32,
@@ -435,6 +460,8 @@ impl ItemStack {
             kinetic_weapon: None,
             swing_animation: None,
             minimum_attack_charge: None,
+            can_place_on: None,
+            can_break: None,
             bundle_contents: None,
             bundle_selected: -1,
             bees: None,
@@ -804,45 +831,77 @@ fn skip_status_effect_parameters(r: &mut PacketReader) -> Result<(), SlotError> 
 }
 
 // BlockPredicate (can_place_on/can_break).
-fn skip_block_predicate(r: &mut PacketReader) -> Result<(), SlotError> {
-    optional(r, skip_registry_entry_list)?; // blocks
-    optional(r, |r| {
-        // StatePredicate: Liste aus (Property-Name, ValueMatcher).
-        list(r, |r| {
-            skip_string(r)?;
-            skip_state_value_matcher(r)
+fn read_block_predicate(r: &mut PacketReader) -> Result<BlockPredicate, SlotError> {
+    // blocks: registryEntryList, Groesse + 1, 0 heisst "Tag folgt".
+    let blocks = if r.read_bool()? {
+        let size = r.read_varint()? - 1;
+        Some(if size == -1 {
+            (Some(r.read_string()?), Vec::new())
+        } else {
+            if !(0..=65536).contains(&size) {
+                return Err(SlotError::Read);
+            }
+            let mut ids = Vec::new();
+            for _ in 0..size {
+                ids.push(r.read_varint()?);
+            }
+            (None, ids)
         })
-    })?;
-    optional(r, skip_nbt)?; // NbtPredicate
-    skip_components_predicate(r)
+    } else {
+        None
+    };
+    let mut properties = Vec::new();
+    if r.read_bool()? {
+        let n = r.read_varint()?;
+        if !(0..=256).contains(&n) {
+            return Err(SlotError::Read);
+        }
+        for _ in 0..n {
+            let name = r.read_string()?;
+            properties.push((name, read_state_value_matcher(r)?));
+        }
+    }
+    let mut needs_block_entity = false;
+    if r.read_bool()? {
+        skip_nbt(r)?; // NbtPredicate
+        needs_block_entity = true;
+    }
+    needs_block_entity |= read_components_predicate(r)?;
+    Ok(BlockPredicate { blocks, properties, needs_block_entity })
 }
 
 // StatePredicate.ValueMatcher: Exact (0) = ein String, Ranged (1) = zwei optionale Strings.
-fn skip_state_value_matcher(r: &mut PacketReader) -> Result<(), SlotError> {
+fn read_state_value_matcher(r: &mut PacketReader) -> Result<StateValueMatcher, SlotError> {
     match r.read_varint()? {
-        0 => skip_string(r),
+        0 => Ok(StateValueMatcher::Exact(r.read_string()?)),
         1 => {
-            optional(r, skip_string)?;
-            optional(r, skip_string)
+            let min = if r.read_bool()? { Some(r.read_string()?) } else { None };
+            let max = if r.read_bool()? { Some(r.read_string()?) } else { None };
+            Ok(StateValueMatcher::Range(min, max))
         }
         other => Err(SlotError::UnsupportedComponent(other)),
     }
 }
 
-// ComponentsPredicate: exakte Component-Map + partielle Praedikate. Beides sind Maps mit
-// VarInt-Laenge; die Werte sind wieder Component-Payloads bzw. Praedikat-Payloads, die wir
-// nicht kennen -- leere Maps (der Normalfall bei can_place_on/can_break) gehen sauber
-// durch, alles andere bricht bewusst ab statt sich zu verlesen.
-fn skip_components_predicate(r: &mut PacketReader) -> Result<(), SlotError> {
+// DataComponentMatchers: exakte Component-Map + partielle Praedikate. Die exakten Werte sind
+// gewoehnliche Component-Payloads und lassen sich mit der Tabelle unten ueberlesen. Die
+// partiellen haben je Praedikat-Typ ein eigenes Format, das wir nicht kennen -- dort bricht es
+// bewusst ab statt sich zu verlesen. Zurueck: ob ueberhaupt eine Bedingung dastand.
+fn read_components_predicate(r: &mut PacketReader) -> Result<bool, SlotError> {
     let exact = r.read_varint()?;
-    if exact != 0 {
-        return Err(SlotError::UnsupportedComponent(-1));
+    if !(0..=256).contains(&exact) {
+        return Err(SlotError::Read);
+    }
+    let mut ablage = ItemStack::new(0, 1);
+    for _ in 0..exact {
+        let type_id = r.read_varint()?;
+        read_component_payload(r, type_id, &mut ablage)?;
     }
     let partial = r.read_varint()?;
     if partial != 0 {
         return Err(SlotError::UnsupportedComponent(-2));
     }
-    Ok(())
+    Ok(exact != 0)
 }
 
 // --- Die Component-Tabelle ------------------------------------------------------------
@@ -928,7 +987,22 @@ fn read_component_payload(r: &mut PacketReader, type_id: i32, stack: &mut ItemSt
             }
             Ok(())
         }
-        14 | 15 => list(r, skip_block_predicate), // can_place_on / can_break
+        COMPONENT_CAN_PLACE_ON | COMPONENT_CAN_BREAK => {
+            let n = r.read_varint()?;
+            if !(0..=256).contains(&n) {
+                return Err(SlotError::Read);
+            }
+            let mut preds = Vec::new();
+            for _ in 0..n {
+                preds.push(read_block_predicate(r)?);
+            }
+            if type_id == COMPONENT_CAN_PLACE_ON {
+                stack.can_place_on = Some(preds);
+            } else {
+                stack.can_break = Some(preds);
+            }
+            Ok(())
+        }
         16 => {
             // attribute_modifiers
             let mut liste = Vec::new();
@@ -1433,6 +1507,32 @@ mod tests {
 
     fn reader(bytes: &[u8]) -> PacketReader<'_> {
         PacketReader::new(bytes)
+    }
+
+    // can_break: Stein (Roh-ID 1) und ein Tag mit Property-Bereich; ein exakter Component-
+    // Wert am Blockobjekt wird ueberlesen und macht das Praedikat unauswertbar.
+    #[test]
+    fn can_break_wird_gelesen() {
+        let mut w = PacketWriter::new();
+        w.write_varint(1).write_varint(5).write_varint(1).write_varint(0);
+        w.write_varint(COMPONENT_CAN_BREAK).write_varint(3);
+        // 1: blocks = [1], keine Properties, kein NBT, keine Components.
+        w.write_bool(true).write_varint(2).write_varint(1);
+        w.write_bool(false).write_bool(false).write_varint(0).write_varint(0);
+        // 2: Tag, age >= 7 als Bereich.
+        w.write_bool(true).write_varint(0).write_string("minecraft:crops");
+        w.write_bool(true).write_varint(1).write_string("age").write_varint(1).write_bool(true).write_string("7").write_bool(false);
+        w.write_bool(false).write_varint(0).write_varint(0);
+        // 3: jeder Block, aber mit exakter Component (max_stack_size 3).
+        w.write_bool(false).write_bool(false).write_bool(false);
+        w.write_varint(1).write_varint(1).write_varint(3).write_varint(0);
+        let stack = read_optional_slot(&mut PacketReader::new(&w.into_bytes())).unwrap().unwrap();
+        let p = stack.can_break.expect("can_break gelesen");
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0], BlockPredicate { blocks: Some((None, vec![1])), properties: vec![], needs_block_entity: false });
+        assert_eq!(p[1].blocks, Some((Some("minecraft:crops".into()), vec![])));
+        assert_eq!(p[1].properties, vec![("age".into(), StateValueMatcher::Range(Some("7".into()), None))]);
+        assert!(p[2].needs_block_entity);
     }
 
     // Der unsichtbare Helm aus UHC Royale: equippable mit eigenem Equipment-Asset -- und der

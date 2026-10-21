@@ -1,5 +1,7 @@
 # Coral Client
 
+[![CodeFactor](https://www.codefactor.io/repository/github/derantonia/coral-client/badge)](https://www.codefactor.io/repository/github/derantonia/coral-client)
+
 [English](README.md) · **Deutsch**
 
 Ein eigener Minecraft-Java-Client, von Grund auf in Rust geschrieben. Er ist für PvP gebaut:

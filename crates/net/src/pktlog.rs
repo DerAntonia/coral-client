@@ -18,6 +18,10 @@
 //      es war, und beim naechsten Versuch ist der Moment schon vorbei.
 //   2. Vollmitschnitt (CORAL_PKTLOG=<pfad> gesetzt): zusaetzlich jedes Paket sofort in die
 //      Datei. Fuer lange Sitzungen, in denen der Ringpuffer zu kurz waere.
+//   3. Rohmitschnitt (CORAL_PKTRAW=<pfad> gesetzt): jedes Paket mit ALLEN Bytes, damit sich
+//      hinterher alles auswerten laesst, auch was beim Mitschneiden noch keiner wissen wollte.
+//      Format je Paket: 'C' oder 'S', Sitzung (u32 BE), Unix-Zeit in ms (f64 BE, mit Bruchteilen),
+//      Laenge (u32 BE), Payload (Packet-ID + Felder, entpackt). Dasselbe schreibt pktproxy.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -75,6 +79,20 @@ pub struct PacketLog {
     // Erst im Play-State sind die Packet-IDs die aus PlayStateFactories; vorher (Handshake/
     // Login/Configuration) wuerde eine Feld-Deutung nur Unsinn erzeugen.
     play: bool,
+    // Rohmitschnitt (s. Modulkopf, Betriebsart 3).
+    raw: Option<File>,
+}
+
+// Ein Paket im Rohformat (s. Modulkopf) -- auch fuer pktproxy.
+// Die Zeit ist die Uhrzeit (Unix, ms), damit sich Dateien verschiedener Prozesse und
+// Verbindungen direkt nebeneinanderlegen lassen.
+pub fn write_raw(out: &mut impl Write, s2c: bool, session: u32, payload: &[u8]) -> std::io::Result<()> {
+    let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+    out.write_all(if s2c { b"S" } else { b"C" })?;
+    out.write_all(&session.to_be_bytes())?;
+    out.write_all(&millis.to_be_bytes())?;
+    out.write_all(&(payload.len() as u32).to_be_bytes())?;
+    out.write_all(payload)
 }
 
 impl PacketLog {
@@ -89,7 +107,13 @@ impl PacketLog {
                 None
             }
         });
-        Self { start: Instant::now(), ring: VecDeque::with_capacity(RING_LEN), file, play: false }
+        // Anhaengen: mehrere Verbindungen nacheinander (Transfer, pktproxy-Sitzungen) landen
+        // alle in derselben Datei, keine ueberschreibt die vorige.
+        let raw = std::env::var("CORAL_PKTRAW")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .and_then(|path| std::fs::OpenOptions::new().create(true).append(true).open(&path).ok());
+        Self { start: Instant::now(), ring: VecDeque::with_capacity(RING_LEN), file, raw, play: false }
     }
 
     // Ab hier gelten die Play-State-IDs (s. `play`-Feldkommentar).
@@ -107,6 +131,11 @@ impl PacketLog {
     // `payload` ist der unkomprimierte Paketinhalt: VarInt-Packet-ID, dann die Felder.
     pub fn record(&mut self, dir: Dir, payload: &[u8]) {
         let seconds = self.start.elapsed().as_secs_f64();
+        if let Some(raw) = &mut self.raw {
+            if write_raw(raw, dir == Dir::S2C, 0, payload).is_err() {
+                self.raw = None;
+            }
+        }
         let (id, body) = match decode_varint(payload, 0) {
             Ok((id, off)) => (Some(id), &payload[off..]),
             Err(_) => (None, payload),
@@ -283,7 +312,12 @@ fn describe(dir: Dir, id: i32, body: &[u8]) -> String {
             let (Some(x), Some(y), Some(z)) = (read_f64(body, off), read_f64(body, off + 8), read_f64(body, off + 16)) else {
                 return format!("teleport_id={tp} pos=<zu kurz>");
             };
-            format!("TELEPORT teleport_id={tp} pos=({x:.4},{y:.4},{z:.4})")
+            // Danach Geschwindigkeit (3x f64), Yaw, Pitch (f32) und die Relativ-Flags (i32).
+            let flags = body.get(off + 56..off + 60).map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+            match flags {
+                Some(f) => format!("TELEPORT teleport_id={tp} pos=({x:.4},{y:.4},{z:.4}) flags={f:#x}"),
+                None => format!("TELEPORT teleport_id={tp} pos=({x:.4},{y:.4},{z:.4})"),
+            }
         }
         _ => String::new(),
     }

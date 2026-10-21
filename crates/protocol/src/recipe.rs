@@ -272,12 +272,22 @@ pub fn place_recipe_payload(container_id: i32, recipe_id: i32, max: bool) -> Vec
 // Update Tags (Konfiguration und Spiel gleich aufgebaut): je Registry ihre Tags mit den
 // Eintrags-IDs. Zurueck kommen nur die Item-Tags, Schluessel ohne "#".
 pub fn read_item_tags(payload: &[u8]) -> Result<HashMap<String, Vec<u32>>, ReadError> {
+    read_tags_of(payload, "item")
+}
+
+// Dasselbe Paket, die Block-Tags (Block-Roh-IDs) -- fuer Werkzeugregeln und
+// can_place_on/can_break mit Tag.
+pub fn read_block_tags(payload: &[u8]) -> Result<HashMap<String, Vec<u32>>, ReadError> {
+    read_tags_of(payload, "block")
+}
+
+fn read_tags_of(payload: &[u8], wanted: &str) -> Result<HashMap<String, Vec<u32>>, ReadError> {
     let mut r = PacketReader::new(payload);
     let _id = r.read_varint()?;
     let mut out = HashMap::new();
     for _ in 0..read_count(&mut r)? {
         let registry = r.read_string()?;
-        let items = registry == "minecraft:item" || registry == "item";
+        let items = registry.strip_prefix("minecraft:").unwrap_or(&registry) == wanted;
         for _ in 0..read_count(&mut r)? {
             let name = r.read_string()?;
             let n = read_count(&mut r)?;

@@ -665,18 +665,72 @@ fn determine_tile_size(mc: &mut MinecraftInstallation, needed: &[(String, Textur
     max_width.next_power_of_two().clamp(16, 256)
 }
 
-// Ein RGBA-Kachelbild (tile_size x tile_size) aus einer Texturdatei laden, hochskaliert falls
-// die echte Textur kleiner ist (s. nearest_scale_tile). Animierte Texturen sind vertikale
-// Streifen (Hoehe = Vielfaches der Breite) -- davon hier nur der erste Frame (das oberste
-// `Breite x Breite`-Quadrat), die weiteren tauscht TileAnimation zur Laufzeit ein.
+// Der "animation"-Block der .mcmeta zu einer Textur (`png` = voller Ressourcenpfad der
+// .png-Datei), None ohne Animation.
+pub fn animation_meta(mc: &mut MinecraftInstallation, png: &str) -> Option<serde_json::Value> {
+    let meta: serde_json::Value = serde_json::from_slice(&mc.load_bytes(&format!("{png}.mcmeta")).ok()?).ok()?;
+    meta.get("animation").cloned()
+}
+
+// Groesse EINES Bildes einer Textur (AnimationMetadataSection.calculateFrameSize): mit
+// Animation die Angaben "width"/"height" der .mcmeta, fehlt eine, gilt dort das ganze Bild;
+// fehlen beide, ein Quadrat aus der kuerzeren Seite. Ohne Animation das ganze Bild. Die Bilder
+// liegen zeilenweise im Raster (s. frame_pixels) -- nicht zwingend quadratisch und nicht
+// zwingend untereinander (cpvpwars: 12x1974-Bilder fuer ihre Zonenwaende).
+pub fn frame_size(animation: Option<&serde_json::Value>, width: u32, height: u32) -> (u32, u32) {
+    let Some(a) = animation else { return (width, height) };
+    let wert = |k: &str| a.get(k).and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0);
+    match (wert("width"), wert("height")) {
+        (Some(w), Some(h)) => (w.min(width), h.min(height)),
+        (Some(w), None) => (w.min(width), height),
+        (None, Some(h)) => (width, h.min(height)),
+        (None, None) => (width.min(height), width.min(height)),
+    }
+}
+
+// Die Pixel von Bild `index` (SpriteContents: Spalte index % Bilder_je_Zeile, Zeile
+// index / Bilder_je_Zeile).
+pub fn frame_pixels(rgba: &[u8], width: u32, (fw, fh): (u32, u32), index: u32) -> Vec<u8> {
+    let je_zeile = (width / fw.max(1)).max(1);
+    let (x0, y0) = ((index % je_zeile) * fw, (index / je_zeile) * fh);
+    let mut out = Vec::with_capacity((fw * fh * 4) as usize);
+    for y in 0..fh {
+        let start = (((y0 + y) * width + x0) * 4) as usize;
+        out.extend_from_slice(&rgba[start..start + (fw * 4) as usize]);
+    }
+    out
+}
+
+// Nearest-Neighbor von (sw x sh) auf (dw x dh), die Achsen unabhaengig.
+pub fn nearest_scale(src: &[u8], (sw, sh): (u32, u32), (dw, dh): (u32, u32)) -> Vec<u8> {
+    if (sw, sh) == (dw, dh) {
+        return src.to_vec();
+    }
+    let mut out = vec![0u8; (dw * dh * 4) as usize];
+    for y in 0..dh {
+        for x in 0..dw {
+            let sx = (x * sw / dw).min(sw - 1);
+            let sy = (y * sh / dh).min(sh - 1);
+            let s = ((sy * sw + sx) * 4) as usize;
+            let d = ((y * dw + x) * 4) as usize;
+            out[d..d + 4].copy_from_slice(&src[s..s + 4]);
+        }
+    }
+    out
+}
+
+// Ein RGBA-Kachelbild (tile_size x tile_size) aus einer Texturdatei laden, auf die Kachel
+// skaliert (s. nearest_scale). Animierte Texturen: hier nur das erste Bild (s. frame_size),
+// die weiteren tauscht TileAnimation zur Laufzeit ein.
 fn load_tile(mc: &mut MinecraftInstallation, texture_path: &str, tile_size: u32) -> Option<Vec<u8>> {
-    let tex = mc.load_texture(&resource_path("textures", texture_path, ".png")).ok()?;
-    let native = tex.width;
-    if native == 0 || tex.height < native {
+    let png = resource_path("textures", texture_path, ".png");
+    let tex = mc.load_texture(&png).ok()?;
+    if tex.width == 0 || tex.height == 0 {
         return None;
     }
-    let frame = &tex.rgba[0..(native * native * 4) as usize];
-    Some(nearest_scale_tile(frame, native, tile_size))
+    let groesse = frame_size(animation_meta(mc, &png).as_ref(), tex.width, tex.height);
+    let frame = frame_pixels(&tex.rgba, tex.width, groesse, 0);
+    Some(nearest_scale(&frame, groesse, (tile_size, tile_size)))
 }
 
 // Wie load_tile, aber ALLE Animationsframes einer vertikal gestapelten Textur (Breite =
@@ -716,9 +770,13 @@ fn load_tile_frames(mc: &mut MinecraftInstallation, texture_path: &str, tile_siz
 pub struct TileAnimation {
     /// Pixel (Mip-Stufe 0, oben links) der Kachel im Atlas.
     pub origin: (u32, u32),
+    /// Groesse des Platzes im Atlas (Breite, Hoehe) -- bei Bloecken quadratisch.
     pub tile_size: u32,
+    pub tile_height: u32,
     mip_levels: u32,
-    native: u32,
+    // Ein Bild in nativer Groesse (s. frame_size) und die ganze Textur, aus der es kommt.
+    frame: (u32, u32),
+    tex_width: u32,
     strip: Vec<u8>,
     frame_count: u32,
     /// (Frame, Dauer in Ticks) in Abspielreihenfolge.
@@ -758,15 +816,21 @@ impl AnimationState {
 
 impl TileAnimation {
     /// None, wenn die Textur keine Animation hat (keine .mcmeta, nur ein Frame, ...).
-    pub fn load(mc: &mut MinecraftInstallation, path: &str, origin: (u32, u32), tile_size: u32, mip_levels: u32) -> Option<Self> {
-        let meta: serde_json::Value = serde_json::from_slice(&mc.load_bytes(&resource_path("textures", path, ".png.mcmeta")).ok()?).ok()?;
-        let animation = meta.get("animation")?;
-        let tex = mc.load_texture(&resource_path("textures", path, ".png")).ok()?;
-        let native = tex.width;
-        if native == 0 || tex.height < native * 2 {
+    /// `tile` ist der Platz im Atlas (Breite, Hoehe); Mip-Stufen nur bei quadratischem Platz.
+    pub fn load(mc: &mut MinecraftInstallation, path: &str, origin: (u32, u32), tile: (u32, u32), mip_levels: u32) -> Option<Self> {
+        let png = resource_path("textures", path, ".png");
+        let animation = animation_meta(mc, &png)?;
+        let animation = &animation;
+        let tex = mc.load_texture(&png).ok()?;
+        if tex.width == 0 || tex.height == 0 {
             return None;
         }
-        let frame_count = tex.height / native;
+        let frame = frame_size(Some(animation), tex.width, tex.height);
+        let frame_count = (tex.width / frame.0) * (tex.height / frame.1);
+        if frame_count < 2 {
+            return None;
+        }
+        let mip_levels = if tile.0 == tile.1 { mip_levels } else { 1 };
         let frametime = animation.get("frametime").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as u32;
         let sequence: Vec<(u32, u32)> = match animation.get("frames").and_then(|f| f.as_array()) {
             Some(frames) => frames
@@ -788,8 +852,21 @@ impl TileAnimation {
             return None;
         }
         let interpolate = animation.get("interpolate").and_then(|v| v.as_bool()).unwrap_or(false);
-        let strip = tex.rgba[..(native * native * 4 * frame_count) as usize].to_vec();
-        Some(Self { origin, tile_size, mip_levels, native, strip, frame_count, sequence, interpolate, tick_offset: 0, rate: RATE_UNIT, path: path.to_string() })
+        Some(Self {
+            origin,
+            tile_size: tile.0,
+            tile_height: tile.1,
+            mip_levels,
+            frame,
+            tex_width: tex.width,
+            strip: tex.rgba,
+            frame_count,
+            sequence,
+            interpolate,
+            tick_offset: 0,
+            rate: RATE_UNIT,
+            path: path.to_string(),
+        })
     }
 
     /// Stand zum Spieltick `tick` (20 pro Sekunde, laeuft einfach durch).
@@ -812,13 +889,9 @@ impl TileAnimation {
 
     /// Alle Mip-Stufen der Kachel fuer `state`, Stufe 0 zuerst.
     pub fn render(&self, state: AnimationState) -> Vec<Vec<u8>> {
-        let frame_bytes = (self.native * self.native * 4) as usize;
-        let frame = |f: u32| {
-            let f = f.min(self.frame_count - 1) as usize;
-            &self.strip[f * frame_bytes..(f + 1) * frame_bytes]
-        };
+        let frame = |f: u32| frame_pixels(&self.strip, self.tex_width, self.frame, f.min(self.frame_count - 1));
         let pixels = if state.sub == 0 {
-            frame(state.frame).to_vec()
+            frame(state.frame)
         } else {
             // Vanilla (Animation.Interpolation): Farbe linear zwischen aktuellem und naechstem
             // Frame, Anteil des naechsten = sub / Dauer. Alpha bleibt beim aktuellen Frame.
@@ -832,7 +905,11 @@ impl TileAnimation {
             }
             out
         };
-        build_tile_mips(&nearest_scale_tile(&pixels, self.native, self.tile_size), self.tile_size, self.mip_levels)
+        let kachel = nearest_scale(&pixels, self.frame, (self.tile_size, self.tile_height));
+        if self.tile_size != self.tile_height {
+            return vec![kachel];
+        }
+        build_tile_mips(&kachel, self.tile_size, self.mip_levels)
     }
 }
 
@@ -1353,7 +1430,7 @@ impl BlockAtlas {
             if let Some(&idx) = tile_index.get(key) {
                 let idx = idx as u32;
                 let origin = ((idx % tiles_per_row) * tile_size, (idx / tiles_per_row) * tile_size);
-                let mut animation = TileAnimation::load(mc, path, origin, tile_size, mip_levels);
+                let mut animation = TileAnimation::load(mc, path, origin, (tile_size, tile_size), mip_levels);
                 if let Some(a) = animation.as_mut() {
                     let total = a.sequence.iter().map(|&(_, t)| t as u64).sum();
                     if is_fire_texture(path) {
@@ -1805,10 +1882,29 @@ mod mipmap_alpha_tests {
 mod animation_tests {
     use super::*;
 
+    // AnimationMetadataSection.calculateFrameSize: Angaben aus der .mcmeta, sonst ein Quadrat
+    // aus der kuerzeren Seite; ohne Animation das ganze Bild.
+    #[test]
+    fn bildgroesse_nach_mcmeta() {
+        let meta = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        // cpvpwars-Zonenwand: 12x3948, zwei Bilder zu 12x1974.
+        assert_eq!(frame_size(Some(&meta(r#"{"width":12,"height":1974}"#)), 12, 3948), (12, 1974));
+        assert_eq!(frame_size(Some(&meta("{}")), 16, 512), (16, 16));
+        assert_eq!(frame_size(Some(&meta(r#"{"height":8}"#)), 16, 32), (16, 8));
+        assert_eq!(frame_size(None, 12, 3948), (12, 3948));
+    }
+
+    // Bilder liegen zeilenweise im Raster: bei 4x2 mit 2x2-Bildern ist Bild 1 rechts oben.
+    #[test]
+    fn bilder_im_raster() {
+        let rgba: Vec<u8> = (0..4 * 2).flat_map(|i| [i as u8, 0, 0, 255]).collect();
+        assert_eq!(frame_pixels(&rgba, 4, (2, 2), 1).chunks(4).map(|p| p[0]).collect::<Vec<_>>(), vec![2, 3, 6, 7]);
+    }
+
     fn animation(sequence: Vec<(u32, u32)>, interpolate: bool) -> TileAnimation {
         // Zwei 1x1-Frames: schwarz und weiss.
         let strip = vec![0, 0, 0, 255, 255, 255, 255, 255];
-        TileAnimation { origin: (0, 0), tile_size: 1, mip_levels: 0, native: 1, strip, frame_count: 2, sequence, interpolate, tick_offset: 0, rate: RATE_UNIT, path: String::new() }
+        TileAnimation { origin: (0, 0), tile_size: 1, tile_height: 1, mip_levels: 0, frame: (1, 1), tex_width: 1, strip, frame_count: 2, sequence, interpolate, tick_offset: 0, rate: RATE_UNIT, path: String::new() }
     }
 
     #[test]

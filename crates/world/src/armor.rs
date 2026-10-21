@@ -229,6 +229,16 @@ pub fn worn_asset(item: &str, equip: Equip, slot: ArmorSlot) -> Option<String> {
     }
 }
 
+// Das Equipment-Asset fuer die Fluegel am Ruecken (WingsLayer): das der equippable-Component
+// des Brust-Items, ohne Slot-Pruefung. Von Haus aus hat nur die Elytra eins.
+pub fn wings_asset(item: &str, equip: Equip) -> Option<String> {
+    match equip {
+        Equip::Default => (item == "elytra").then(|| "minecraft:elytra".to_string()),
+        Equip::Removed => None,
+        Equip::Set { asset, .. } => asset_name(asset?),
+    }
+}
+
 // Die Ebene dieses Materials fuer diesen Slot. Welche der beiden gespeicherten gilt, haengt
 // allein daran, ob der Slot die INNERE Modellebene nutzt (s. ArmorSlot::inner). None, wenn es
 // das Material fuer diese Ebene gar nicht gibt (Schildkroetenpanzer als Hose).

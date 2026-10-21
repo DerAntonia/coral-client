@@ -3,8 +3,10 @@
 // Die minecraft.wiki dokumentiert 776; unsere Zielversion ist 774. Das Format ist hier
 // nach der etablierten Protokoll-Spezifikation implementiert und wird empirisch gegen
 // den echten Server geprueft: parse_chunk_data() liest die Sections so lange, bis das
-// Data-Feld exakt aufgebraucht ist -- bleibt etwas uebrig oder fehlt etwas, stimmt das
-// Format nicht und wir bekommen einen Fehler statt stiller Fehlinterpretation.
+// Data-Feld exakt aufgebraucht ist. Bleibt am Ende ein unlesbarer Rest, behalten wir die
+// Sections davor und melden den Rest (tail_unreadable): Vanilla liest nur so viele Sections,
+// wie die Dimension hoch ist, und uebergeht alles dahinter -- manche Server (minemen.club)
+// haengen dort Muell an. Wie viele davon echt sind, weiss erst die App (Dimensionshoehe).
 
 use crate::buffer::{PacketReader, ReadError};
 
@@ -25,6 +27,8 @@ pub struct ChunkData {
     pub heads: Vec<((i32, i32, i32), crate::item::HeadProfile)>,
     // Himmelslicht des Servers (s. LightData). None, wenn davor etwas nicht lesbar war.
     pub light: Option<LightData>,
+    // Das Data-Feld ging nicht in ganzen Sections auf; `sections` endet vor dem Rest.
+    pub tail_unreadable: bool,
 }
 
 // Himmelslicht aus "Chunk Data and Update Light" bzw. "Update Light". Ebene i ist die Section
@@ -196,7 +200,10 @@ pub fn parse_chunk_data(payload: &[u8]) -> Result<ChunkData, ReadError> {
     let data_len = r.read_varint()? as usize;
     let data = r.read_bytes(data_len)?;
 
-    let sections = parse_sections(data)?;
+    let (sections, tail_unreadable) = parse_sections(data);
+    if sections.is_empty() && tail_unreadable {
+        return Err(ReadError);
+    }
 
     // Block Entities: je Eintrag gepacktes XZ (x << 4 | z), Hoehe, Typ und NBT. Ein Fehler
     // hier kostet nur die Schilder (und das Licht dahinter), nicht die Spalte.
@@ -223,23 +230,28 @@ pub fn parse_chunk_data(payload: &[u8]) -> Result<ChunkData, ReadError> {
         Err(_) => None,
     };
 
-    Ok(ChunkData { x, z, sections, signs, heads, light })
+    Ok(ChunkData { x, z, sections, signs, heads, light, tail_unreadable })
 }
 
 // Liest Sections, bis `data` exakt aufgebraucht ist. Das ist gleichzeitig die
-// Format-Verifikation: ein Off-by-one im Bit-Unpacking wuerde hier auffliegen.
-fn parse_sections(data: &[u8]) -> Result<Vec<ChunkSectionData>, ReadError> {
+// Format-Verifikation: ein Off-by-one im Bit-Unpacking wuerde hier auffliegen. true im
+// zweiten Wert = der Rest war keine ganze Section mehr (s. Modulkopf).
+fn parse_sections(data: &[u8]) -> (Vec<ChunkSectionData>, bool) {
     let mut r = PacketReader::new(data);
     let mut sections = Vec::new();
-
-    while !r.is_exhausted() {
+    let eine = |r: &mut PacketReader<'_>| -> Result<ChunkSectionData, ReadError> {
         let block_count = r.read_i16()?;
-        let block_states = read_paletted_container(&mut r, SECTION_VOLUME, PaletteKind::BlockStates)?;
-        let biomes = read_paletted_container(&mut r, 64, PaletteKind::Biomes)?;
-        sections.push(ChunkSectionData { block_count, block_states, biomes });
+        let block_states = read_paletted_container(r, SECTION_VOLUME, PaletteKind::BlockStates)?;
+        let biomes = read_paletted_container(r, 64, PaletteKind::Biomes)?;
+        Ok(ChunkSectionData { block_count, block_states, biomes })
+    };
+    while !r.is_exhausted() {
+        match eine(&mut r) {
+            Ok(s) => sections.push(s),
+            Err(_) => return (sections, true),
+        }
     }
-
-    Ok(sections)
+    (sections, false)
 }
 
 #[derive(Clone, Copy)]
@@ -321,6 +333,19 @@ fn unpack(longs: &[u64], bits_per_entry: u8, entry_count: usize) -> Vec<u32> {
 mod light_tests {
     use super::*;
     use crate::buffer::PacketWriter;
+
+    // Ein mitgeschnittenes Chunk-Paket pruefen (pktproxy CORAL_DUMP_CHUNK):
+    // CORAL_CHUNK_DUMP=<datei> cargo test -p protocol chunk_dump -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn chunk_dump() {
+        let pfad = std::env::var("CORAL_CHUNK_DUMP").expect("CORAL_CHUNK_DUMP setzen");
+        let payload = std::fs::read(pfad).unwrap();
+        match parse_chunk_data(&payload) {
+            Ok(c) => println!("ok: ({}, {}) {} Sections, Rest unlesbar: {}", c.x, c.z, c.sections.len(), c.tail_unreadable),
+            Err(e) => println!("FEHLER: {e:?}\n{}", debug_chunk_layout(&payload)),
+        }
+    }
 
     #[test]
     fn himmelslicht_masken_und_felder() {

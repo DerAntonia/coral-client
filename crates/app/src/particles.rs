@@ -1207,6 +1207,11 @@ impl Particles {
 
     // Ein Trank-Wirbel an einem Entity (LivingEntity.tickStatusEffects): Vanilla gibt als
     // "Geschwindigkeit" immer (1, 1, 1) mit.
+    // Level.addParticle aus einem Entity-Tick (force = false, important = false).
+    pub fn add_world_particle(&mut self, effect: &ParticleEffect, pos: DVec3, vel: DVec3, ctx: &SpawnContext) {
+        self.add_client(effect, false, false, pos, vel, ctx);
+    }
+
     pub fn add_potion_swirl(&mut self, argb: u32, pos: DVec3, ctx: &SpawnContext) {
         let effect = ParticleEffect { type_id: pp::PARTICLE_ENTITY_EFFECT, options: ParticleOptions::Tinted(argb) };
         self.add_client(&effect, false, false, pos, DVec3::ONE, ctx);

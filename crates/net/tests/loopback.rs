@@ -133,7 +133,7 @@ async fn join_local_server() {
                         entities.set_equipment(id, entry.slot, held);
                     }
                 }
-                net::ClientEvent::Health(h, food) => {
+                net::ClientEvent::Health(h, food, _) => {
                     println!("[event] Leben: {h}, Nahrung: {food}");
                 }
                 net::ClientEvent::EntityVelocity(id, vel) => {

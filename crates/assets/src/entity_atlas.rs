@@ -17,8 +17,9 @@ use crate::installation::MinecraftInstallation;
 
 // Kantenlaenge des Atlas. 1024 reichte fuer Mob-Texturen und Skins, aber nach Betten,
 // Ruestung und Co. nur noch fuer 96 Item-Plaetze -- zu wenig, seit auch liegende Items und
-// Wurfgeschosse welche brauchen (s. ITEM_SLOTS). 2048 kostet 16 statt 4 MB VRAM.
-const ATLAS_SIZE: u32 = 2048;
+// Wurfgeschosse welche brauchen (s. ITEM_SLOTS). 4096 (64 MB VRAM) seit den 1024
+// Skin-Plaetzen.
+const ATLAS_SIZE: u32 = 4096;
 const PADDING: u32 = 1;
 // Wie viele Spieler-Skins gleichzeitig gehalten werden koennen. Mehr Spieler in Sicht als
 // das heisst: Plaetze werden neu belegt (s. app::claim_atlas_slot).
@@ -27,12 +28,31 @@ const PADDING: u32 = 1;
 // "Skin springt auf Default" auf. 128 passen in DENSELBEN 1024er-Atlas (nachgemessen mit
 // tests/entity_atlas_smoke.rs, das auch prueft, dass Umhang- und Item-Plaetze dahinter noch
 // unterkommen) -- es kostet also kein einziges Byte VRAM mehr.
-pub const SKIN_SLOTS: usize = 128;
+//
+// 128 waren auf anticheat-test.com zu wenig: dort stehen Statuen aus Spielerkoepfen mit je
+// eigener Textur, und zusammen mit den Spielern liefen die Plaetze ueber -- die Koepfe fielen
+// nach und nach auf Standard-Gesichter. 1024 Plaetze sind 16 MB, der Atlas ist dafuer 4096.
+pub const SKIN_SLOTS: usize = 1024;
 // Vanilla-Skinformat seit 1.8.
 pub const SKIN_SIZE: u32 = 64;
+// Ein Skin im Skinformat, schwarz-lila kariert: steht fuer "Skin nicht geladen" (s.
+// app::skull_texture_for). Hier erzeugt, kein Bild aus einem Pack.
+pub const MISSING_SKIN: &str = "coral/missing_skin";
+
+// Karos zu 4 Pixeln: eine Kopfseite (8x8) zeigt so vier Felder.
+fn missing_skin_rgba() -> Vec<u8> {
+    let mut rgba = Vec::with_capacity((SKIN_SIZE * SKIN_SIZE * 4) as usize);
+    for y in 0..SKIN_SIZE {
+        for x in 0..SKIN_SIZE {
+            let lila = (x / 4 + y / 4) % 2 == 0;
+            rgba.extend_from_slice(if lila { &[248, 0, 248, 255] } else { &[0, 0, 0, 255] });
+        }
+    }
+    rgba
+}
 // Wie viele Umhaenge gleichzeitig gehalten werden. Deutlich weniger als Skin-Plaetze: einen
 // Umhang haben nur wenige Konten, und wer keinen hat, belegt keinen Platz.
-pub const CAPE_SLOTS: usize = 16;
+pub const CAPE_SLOTS: usize = 64;
 // Cape-Bilder sind 64x32 (s. assets::decode_cape_png).
 pub const CAPE_WIDTH: u32 = 64;
 pub const CAPE_HEIGHT: u32 = 32;
@@ -311,6 +331,7 @@ pub fn build(mc: &mut MinecraftInstallation, textures: &[&str]) -> EntityAtlas {
         }
         pending.push(Pending { name: (*name).to_string(), width: tex.width, height: tex.height, rgba: tex.rgba });
     }
+    pending.push(Pending { name: MISSING_SKIN.to_string(), width: SKIN_SIZE, height: SKIN_SIZE, rgba: missing_skin_rgba() });
 
     // Hoehe absteigend -- der Regal-Packer laesst so am wenigsten Verschnitt.
     pending.sort_by_key(|p| std::cmp::Reverse((p.height, p.width)));

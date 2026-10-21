@@ -240,6 +240,54 @@ fn pick<T: Copy>(stack: &ItemStack, id: i32, feld: impl Fn(&ItemStack) -> Option
     crate::item_components::defaults(stack.item_id).and_then(feld)
 }
 
+// Abenteuermodus (Player.blockActionRestricted / ItemStack.canPlaceOnBlockInAdventureMode):
+// abbauen nur mit can_break, das den Block nennt, platzieren und benutzen nur mit
+// can_place_on fuer den ANGEKLICKTEN Block. Ein Praedikat aus der Liste genuegt.
+pub fn adventure_allows(preds: Option<&[protocol::item::BlockPredicate]>, state: u32) -> bool {
+    preds.is_some_and(|p| p.iter().any(|p| block_predicate_matches(p, state)))
+}
+
+// BlockPredicate.test ohne Blockobjekt-Daten (s. BlockPredicate::needs_block_entity).
+fn block_predicate_matches(p: &protocol::item::BlockPredicate, state: u32) -> bool {
+    use protocol::item::StateValueMatcher;
+    if p.needs_block_entity {
+        return false;
+    }
+    if let Some((tag, ids)) = &p.blocks {
+        let set = match tag {
+            Some(t) => crate::mining::BlockSet::Tag(t.clone()),
+            None => crate::mining::BlockSet::Ids(ids.iter().map(|&i| i as u32).collect()),
+        };
+        if !set.contains_state(state) {
+            return false;
+        }
+    }
+    p.properties.iter().all(|(name, matcher)| {
+        // Eine Property, die der Block nicht hat, passt nie.
+        let Some(wert) = crate::state_props::property(state, name) else { return false };
+        match matcher {
+            StateValueMatcher::Exact(v) => wert == v,
+            StateValueMatcher::Range(min, max) => {
+                min.as_deref().map_or(true, |m| property_order(wert, m).is_some_and(|o| o.is_ge()))
+                    && max.as_deref().map_or(true, |m| property_order(wert, m).is_some_and(|o| o.is_le()))
+            }
+        }
+    })
+}
+
+// Reihenfolge zweier Property-Werte wie Comparable in Vanilla: Zahlen numerisch, false < true.
+// Aufzaehlungen vergleicht Vanilla nach Deklaration -- die kennen wir nicht, dort zaehlt nur
+// Gleichheit.
+fn property_order(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    if let (Ok(x), Ok(y)) = (a.parse::<i64>(), b.parse::<i64>()) {
+        return Some(x.cmp(&y));
+    }
+    if let (Ok(x), Ok(y)) = (a.parse::<bool>(), b.parse::<bool>()) {
+        return Some(x.cmp(&y));
+    }
+    (a == b).then_some(std::cmp::Ordering::Equal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +368,29 @@ mod tests {
         assert!(equips_on_use(&s("diamond_helmet")) && equips_on_use(&s("elytra")) && equips_on_use(&s("turtle_helmet")));
         assert!(!equips_on_use(&s("carved_pumpkin")) && !equips_on_use(&s("player_head")));
         assert!(!equips_on_use(&s("diamond_horse_armor")) && !equips_on_use(&s("wolf_armor")) && !equips_on_use(&s("diamond_sword")));
+    }
+
+    // can_break mit Blockliste und Property-Bereich: Stein ja, Erde nein; Weizen erst ab Alter 7.
+    #[test]
+    fn abenteuer_praedikate() {
+        use protocol::item::{BlockPredicate, StateValueMatcher};
+        let state = |name: &str, props: &[(&str, &str)]| {
+            (0..crate::block_registry::state_count() as u32)
+                .find(|&s| crate::block_name(s) == Some(name) && props.iter().all(|(k, v)| crate::state_props::property(s, k) == Some(*v)))
+                .unwrap()
+        };
+        let stein = state("stone", &[]);
+        let id = crate::mining::block_id(stein).unwrap() as i32;
+        let nur_stein = [BlockPredicate { blocks: Some((None, vec![id])), properties: vec![], needs_block_entity: false }];
+        assert!(adventure_allows(Some(&nur_stein), stein));
+        assert!(!adventure_allows(Some(&nur_stein), state("dirt", &[])));
+        assert!(!adventure_allows(None, stein), "ohne Component nichts");
+        let reif = [BlockPredicate { blocks: None, properties: vec![("age".into(), StateValueMatcher::Range(Some("7".into()), None))], needs_block_entity: false }];
+        assert!(adventure_allows(Some(&reif), state("wheat", &[("age", "7")])));
+        assert!(!adventure_allows(Some(&reif), state("wheat", &[("age", "3")])));
+        assert!(!adventure_allows(Some(&reif), stein), "Stein hat kein Alter");
+        let tag = [BlockPredicate { blocks: Some((Some("minecraft:mineable/pickaxe".into()), vec![])), properties: vec![], needs_block_entity: false }];
+        assert!(adventure_allows(Some(&tag), stein));
+        assert!(!adventure_allows(Some(&tag), state("dirt", &[])));
     }
 }

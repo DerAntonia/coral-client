@@ -397,6 +397,9 @@ pub struct Entity {
     // Steckt das Projektil in einem Block? Dann bewegt es sich nicht mehr
     // (AbstractArrow.inGround); ein Wurfgeschoss ist an der Stelle ohnehin zu Ende.
     in_ground: bool,
+    // AbstractArrow.ID_FLAGS Bit 0x01: voll gespannt geschossen -- zieht im Flug eine Spur aus
+    // Krit-Partikeln (s. crit_trail).
+    crit_arrow: bool,
     // Groesse eines interaction-Entities (Breite, Hoehe) aus den Metadaten; Vanilla-Vorgabe 1 x 1.
     interaction_size: (f64, f64),
     // Einmal beim Spawn aufgeloest, damit nicht jeder Tick den Typnamen nachschlaegt.
@@ -423,6 +426,9 @@ pub struct Entity {
     pub frame_rotation: i32,
     // Jungtier (Metadaten Index 16, nur bei Typen aus can_be_baby): halbe Hitbox.
     pub baby: bool,
+    // Attribut SCALE (Update Attributes): Box, Augenhoehe und Modell mal diesen Faktor.
+    // Plugins machen damit Spieler riesig oder winzig -- mit der festen Box zielte man daneben.
+    pub scale: f32,
     // Dorfbewohner-Daten (Biom-Typ, Beruf, Stufe), s. mob_catalog::villager_layers.
     pub villager_data: Option<(i32, i32, i32)>,
     on_ground: bool,
@@ -921,12 +927,19 @@ impl Entity {
         if entity_type_name(self.entity_type) == Some("interaction") {
             self.interaction_size
         } else {
-            hit_box_size(self.entity_type, self.pose)
+            self.box_size()
         }
     }
 
     pub fn in_ground(&self) -> bool {
         self.in_ground
+    }
+
+    // Ein fliegender Krit-Pfeil: (Position, Geschwindigkeit) fuer die Partikelspur, die
+    // AbstractArrow.tick im Client jeden Tick streut. None, wenn er nicht kritisch ist oder
+    // schon steckt.
+    pub fn crit_trail(&self) -> Option<((f64, f64, f64), (f64, f64, f64))> {
+        (self.crit_arrow && !self.in_ground && self.projectile == Some(ProjectileKind::Arrow)).then_some((self.pos, self.vel))
     }
 
     pub fn launch_render_offset(&self, tick_progress: f32) -> [f32; 3] {
@@ -940,14 +953,15 @@ impl Entity {
 
     // Bild-Position: zwischen dem Stand zu Tickbeginn und dem aktuellen Stand, mit dem
     // Bruchteil des laufenden Ticks -- Vanillas Entity.getLerpedPos(deltaTicks).
-    // (Breite, Hoehe) der Hitbox samt Baby-Halbierung (LivingEntity.getScaleFactor: 0.5).
+    // (Breite, Hoehe) der Hitbox samt Baby-Halbierung (LivingEntity.getAgeScale: 0.5) und
+    // Attribut SCALE (LivingEntity.getDimensions: EntityDimensions.scale(getScale())).
     pub fn box_size(&self) -> (f64, f64) {
         let (w, h) = hit_box_size(self.entity_type, self.pose);
-        if self.baby {
-            (w * 0.5, h * 0.5)
-        } else {
-            (w, h)
+        if self.pose == POSE_SLEEPING && is_player(self.entity_type) {
+            return (w, h);
         }
+        let f = if self.baby { 0.5 } else { 1.0 } * self.scale as f64;
+        (w * f, h * f)
     }
 
     pub fn render_pos(&self, tick_progress: f32) -> (f64, f64, f64) {
@@ -981,11 +995,12 @@ impl Entity {
     // der Hoehe (einzelne Typen weichen in Vanilla davon ab).
     pub fn eye_height(&self) -> f64 {
         if is_player(self.entity_type) {
+            // Schlafend gilt die feste Box ohne SCALE (LivingEntity.getDimensions).
             return match self.pose {
                 POSE_SLEEPING => 0.2,
-                POSE_SWIMMING | POSE_GLIDING | POSE_SPIN_ATTACK => 0.4,
-                POSE_CROUCHING => 1.27,
-                _ => 1.62,
+                POSE_SWIMMING | POSE_GLIDING | POSE_SPIN_ATTACK => 0.4 * self.scale as f64,
+                POSE_CROUCHING => 1.27 * self.scale as f64,
+                _ => 1.62 * self.scale as f64,
             };
         }
         self.box_size().1 * 0.85
@@ -1629,7 +1644,7 @@ impl Entity {
         if !is_living(self.entity_type) {
             return false;
         }
-        let (w, h) = hit_box_size(self.entity_type, self.pose);
+        let (w, h) = self.box_size();
         let r = w / 2.0 - 0.001;
         let (x, y, z) = self.pos;
         for dy in [0.001, h * 0.5, h - 0.001] {
@@ -1774,7 +1789,7 @@ impl Entities {
         }
         let v = self.by_id.get(&vehicle)?;
         let name = entity_type_name(v.entity_type)?;
-        let hoehe = hit_box_size(v.entity_type, v.pose).1;
+        let hoehe = v.box_size().1;
         let p = crate::riding::riding_pos(name, hoehe, [v.pos.0, v.pos.1, v.pos.2], v.yaw_deg, seat, passenger_type);
         Some((p[0], p[1], p[2]))
     }
@@ -1928,6 +1943,7 @@ impl Entities {
                 interp_steps: 0,
                 vel,
                 in_ground: false,
+                crit_arrow: false,
                 interaction_size: (1.0, 1.0),
                 projectile: projectile_kind(entity_type),
                 item_physics: entity_type_name(entity_type) == Some("item"),
@@ -1940,6 +1956,7 @@ impl Entities {
                 frame_facing: 3,
                 frame_rotation: 0,
                 baby: false,
+                scale: 1.0,
                 villager_data: None,
                 on_ground: false,
                 launch_offset: (0.0, 0.0, 0.0),
@@ -2129,6 +2146,11 @@ impl Entities {
         // steckte, bei uns los -- die Schwerkraft zog ihn aus der Wand, und er fehlte
         // dort.
         if projectile_kind(e.entity_type) == Some(ProjectileKind::Arrow) {
+            // Index 8 ist beim Pfeil AbstractArrow.ID_FLAGS -- dasselbe Byte, das bei
+            // Lebewesen LIVING_FLAGS heisst, der Parser legt es deshalb dort ab.
+            if let Some(f) = update.living_flags {
+                e.crit_arrow = f & protocol::packets::ARROW_FLAG_CRIT != 0;
+            }
             if let Some(v) = update.arrow_in_ground {
                 e.in_ground = v;
                 if v {

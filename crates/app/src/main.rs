@@ -23,6 +23,7 @@ mod dialog_screen;
 mod crosshair_editor;
 mod crystal_optimizer;
 mod cursor_fx;
+mod transactions;
 mod discord_rpc;
 mod font_atlas;
 mod gpu_timer;
@@ -35,6 +36,7 @@ mod item_cooldowns;
 mod item_icons;
 mod item_model_input;
 mod latency_tuning;
+mod link_whitelist;
 mod lod;
 mod mesh_pool;
 mod particles;
@@ -70,6 +72,7 @@ mod wallpaper;
 mod last_view;
 mod armor_hud;
 mod keystrokes;
+mod ego_name;
 mod vanilla_sounds;
 mod voicechat;
 
@@ -905,6 +908,18 @@ fn eat_rest_within(dauer: u32, benutzt: u32, grenze_ms: u32) -> bool {
     dauer.saturating_sub(benutzt) * 50 <= grenze_ms
 }
 
+// Bogen (BowItem.releaseUsing / getPowerForTime): unter Kraft 0.1 -- weniger als 3 Ticks
+// gespannt -- fliegt kein Pfeil, ab 20 Ticks ist er voll (kritisch). Ohne Puffer: bei
+// stabilem Ping kommen USE und RELEASE beim Server im selben Abstand an, in dem sie gingen.
+const BOW_MIN_SHOT_TICKS: u32 = 3;
+const BOW_FULL_SHOT_TICKS: u32 = 20;
+
+// Usage-Optimizer am Bogen: Muss die Benutzung nach `benutzt` Ticks noch weiterlaufen? Bis
+// ein Pfeil ueberhaupt fliegt immer; bis zur vollen Kraft, wenn hoechstens `grenze_ms` fehlen.
+fn bow_hold_through(benutzt: u32, grenze_ms: u32) -> bool {
+    benutzt < BOW_MIN_SHOT_TICKS || (benutzt < BOW_FULL_SHOT_TICKS && grenze_ms > 0 && eat_rest_within(BOW_FULL_SHOT_TICKS, benutzt, grenze_ms))
+}
+
 // Hoechsthaltbarkeit eines Stapels, None ohne Haltbarkeit (oder unzerbrechlich, dann zeigt
 // Vanilla keinen Balken): die wirksame max_damage-Component, ohne Standards die Tabelle.
 fn max_damage_of(stack: &protocol::item::ItemStack, name: &str) -> Option<i32> {
@@ -1117,7 +1132,7 @@ fn shadow_marker(t: &UiText) -> Option<Option<(TextShadow, f32)>> {
 // FOLGENDEN Text -- nur fuer ihn, damit nichts auf Nachbartext ueberlaeuft. Ohne eigene Farbe
 // kein Marker. Code -6; rgb in color (linear), das Alpha des Servers in x.
 fn push_span_shadow(texts: &mut Vec<UiText>, shadow: Option<u32>) {
-    let Some(argb) = shadow else { return };
+    let Some(argb) = shadow.and_then(ego_name::shadow) else { return };
     let [r, g, b, _] = rgb_to_rgba(argb & 0xFF_FFFF);
     texts.push(UiText { text: String::new(), x: (argb >> 24) as f32 / 255.0, y: 0.0, color: [r, g, b, -6.0], scale: 1.0 });
 }
@@ -1150,9 +1165,24 @@ fn is_typed_marker(t: &UiText) -> bool {
 // Geloeschte Zeichen fallen heraus wie in osu! (osu-framework BasicTextBox,
 // FallingDownContainer.Hide): ausblenden und dabei beschleunigt (InQuad) nach unten. Dazu
 // jedes Zeichen fuer sich und etwas zufaellig (Wunsch des Nutzers): Fallweg, seitliche Drift
-// und Drehung streuen je Zeichen, die Dauer auch (ERASE_FALL ist die laengste). Gilt fuer
-// jedes Feld mit Eingabe-Markierung (s. push_typed_marker).
+// und Drehung streuen je Zeichen, die Dauer auch (ERASE_FALL ist die laengste). Manche fliegen
+// stattdessen nach oben, manche zerplatzen in Pixel (s. GlyphExit). Gilt fuer jedes Feld mit
+// Eingabe-Markierung (s. push_typed_marker).
 const ERASE_FALL: Duration = Duration::from_millis(320);
+// Deckkraft, mit der ein geloeschtes Zeichen losfaellt: sofort sichtlich weg, nicht erst am
+// Ende des Falls.
+const ERASE_START_ALPHA: f32 = 0.5;
+// Splitter eines zerplatzenden Zeichens.
+const ERASE_SHARDS: u32 = 8;
+
+// Wie ein geloeschtes Zeichen verschwindet.
+#[derive(Clone, Copy, PartialEq)]
+enum GlyphExit {
+    Fall,
+    Rise,
+    // Zerplatzt; der Wert streut die Splitter.
+    Burst(u32),
+}
 
 // Ein Stueck getippter Text, wie es gezeichnet wurde.
 #[derive(Clone, Debug, PartialEq)]
@@ -1180,11 +1210,20 @@ struct FallingGlyph {
     angle: f32,
     dur: Duration,
     start: Instant,
+    exit: GlyphExit,
 }
 
 impl FallingGlyph {
-    // Zufall aus drei Werten in -1..1 (s. zufallswert).
-    fn new(run: TypedRun, w: f32, h: f32, start: Instant, r: [f32; 4]) -> Self {
+    // Zufall aus sechs Werten in -1..1 (s. zufallswert): Fallweg, Drift, Drehung, Dauer, Art
+    // (gut die Haelfte faellt, ein Drittel steigt, der Rest zerplatzt), Splitter-Streuung.
+    fn new(run: TypedRun, w: f32, h: f32, start: Instant, r: [f32; 6]) -> Self {
+        let exit = if r[4] > 0.35 {
+            GlyphExit::Rise
+        } else if r[4] < -0.75 {
+            GlyphExit::Burst((r[5] * 1.0e6) as i32 as u32)
+        } else {
+            GlyphExit::Fall
+        };
         FallingGlyph {
             run,
             w,
@@ -1194,20 +1233,49 @@ impl FallingGlyph {
             angle: 0.6 * r[2],
             dur: ERASE_FALL.mul_f32(0.8 + 0.2 * r[3]),
             start,
+            exit,
         }
     }
 
-    // Stand nach `t` Sekunden: Text an seiner Stelle, Drehpunkt, Winkel. None = vorbei.
-    fn at(&self, t: f32) -> Option<(UiText, (f32, f32), f32)> {
+    // Stand nach `t` Sekunden als eigene Overlay-Gruppe (jedes Zeichen dreht sich um seine
+    // eigene Mitte). None = vorbei.
+    fn group(&self, t: f32) -> Option<UiOverlayGroup> {
         let k = t / self.dur.as_secs_f32();
         if k >= 1.0 {
             return None;
         }
-        let x = self.run.x + self.drift * k;
-        let y = self.run.y + self.fall * k * k;
         let [r, g, b, a] = self.run.color;
-        let text = UiText { text: self.run.text.clone(), x, y, color: [r, g, b, a * (1.0 - k)], scale: self.run.scale };
-        Some((text, (x + self.w / 2.0, y + self.h / 2.0), self.angle * k))
+        let alpha = a * ERASE_START_ALPHA * (1.0 - k);
+        let mut gruppe = UiOverlayGroup { rects: Vec::new(), texts: Vec::new(), sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 };
+        let (x, y) = match self.exit {
+            GlyphExit::Fall => (self.run.x + self.drift * k, self.run.y + self.fall * k * k),
+            // Schnell hoch und dabei abbremsend: Wurf gegen die Schwerkraft, am Ende oben.
+            GlyphExit::Rise => (self.run.x + self.drift * k, self.run.y - self.fall * (2.0 * k - k * k)),
+            GlyphExit::Burst(seed) => {
+                // Pixelsplitter in der Farbe des Zeichens, aus seiner Mitte nach allen Seiten,
+                // auslaufend und leicht absackend.
+                let px = (self.h / 8.0).max(1.0).round();
+                let (mx, my) = (self.run.x + self.w / 2.0, self.run.y + self.h / 2.0);
+                let weg = 1.0 - (1.0 - k) * (1.0 - k);
+                for i in 0..ERASE_SHARDS {
+                    let z = |n: u32| zufallswert(seed.wrapping_add(i * 31 + n));
+                    let winkel = (i as f32 + 0.5 * z(1)) / ERASE_SHARDS as f32 * std::f32::consts::TAU;
+                    let weite = self.h * (0.9 + 0.5 * z(2)) * weg;
+                    let sx = mx + winkel.cos() * weite - px / 2.0;
+                    let sy = my + winkel.sin() * weite + self.h * 0.6 * k * k - px / 2.0;
+                    gruppe.rects.push(UiRect { rect: Rect { x: sx.round(), y: sy.round(), w: px, h: px }, color: [r, g, b, alpha], ..UiRect::FLAT });
+                }
+                return Some(gruppe);
+            }
+        };
+        push_shadow_marker(&mut gruppe.texts, self.run.shadow);
+        push_font_marker(&mut gruppe.texts, self.run.font);
+        gruppe.texts.push(UiText { text: self.run.text.clone(), x, y, color: [r, g, b, alpha], scale: self.run.scale });
+        push_shadow_marker(&mut gruppe.texts, None);
+        push_font_marker(&mut gruppe.texts, None);
+        gruppe.pivot = (x + self.w / 2.0, y + self.h / 2.0);
+        gruppe.angle = self.angle * k;
+        Some(gruppe)
     }
 }
 
@@ -1851,6 +1919,8 @@ fn black_veil(alpha: f32) -> [f32; 4] {
 
 // 0xRRGGBB (Textfarbe eines Components) -> die Vec4-Form der UI, voll deckend.
 fn rgb_to_rgba(rgb: u32) -> [f32; 4] {
+    // Zeichen des eigenen Namens tragen eine Marke statt einer Farbe (s. ego_name).
+    let rgb = ego_name::paint(rgb);
     [srgb_channel(rgb >> 16), srgb_channel(rgb >> 8), srgb_channel(rgb), 1.0]
 }
 
@@ -1864,6 +1934,15 @@ const STATUS_ROW_PITCH: f32 = 10.0;
 // Breite der Hotbar und damit auch der Erfahrungsleiste; die rechte Kante ist der Nullpunkt
 // fuer Nahrung und Luft.
 const STATUS_BAR_WIDTH: f32 = 182.0;
+// Hoehe des Saettigungsbalkens (Modul "Saettigung") samt Rahmen, in GUI-Pixeln: Vorgabe und
+// Modul "Eigenname": laengster Alias, Tempo-Grenzen in Zehntel-Umlaeufen je Sekunde.
+const EGO_ALIAS_MAX: usize = 32;
+const EGO_SPEED_MIN: u32 = 1;
+const EGO_SPEED_MAX: u32 = 30;
+// Grenzen des Reglers (s. Settings::saturation_hud_height).
+const SATURATION_BAR_HEIGHT_DEFAULT: u32 = 5;
+const SATURATION_BAR_HEIGHT_MIN: u32 = 2;
+const SATURATION_BAR_HEIGHT_MAX: u32 = 12;
 // Wie weit ueber der Hotbar-Oberkante die jeweilige Zeile sitzt (Vanilla-Werte, umgerechnet:
 // Herzen height-39, Erfahrungsleiste height-29, Stufenzahl height-35, Hotbar-Oberkante
 // height-22).
@@ -1939,6 +2018,27 @@ fn ui_screen() -> (f32, f32) {
     let (w, h) = (f32::from_bits(UI_SCREEN[0].load(Relaxed)), f32::from_bits(UI_SCREEN[1].load(Relaxed)));
     if w > 0.0 { (w, h) } else { (1920.0, 1080.0) }
 }
+
+// Verbindungs-Overlay: so viele letzte Log-Zeilen zeigen die Connect-Phase.
+const OVERLAY_LOG_LINES: usize = 6;
+
+// Abbrechen-Knopf im Verbindungs-Overlay, unter den Log-Zeilen (s. build_connecting_overlay).
+fn connect_cancel_rect() -> Rect {
+    let (sw, sh) = ui_screen();
+    let y = (sh * 0.32).round() + 88.0 + OVERLAY_LOG_LINES as f32 * LOG_LINE_HEIGHT + 24.0;
+    Rect { x: ((sw - 160.0) / 2.0).round(), y, w: 160.0, h: 40.0 }
+}
+
+// Verbindungs-Warnungen (s. App::check_packet_gap, App::note_lagback).
+const PACKET_GAP_WARN: Duration = Duration::from_secs(2);
+// Die Karte steht, bis wieder etwas kommt -- laenger als jede Stille, die man noch abwartet.
+const PACKET_GAP_NOTE_LIFETIME: Duration = Duration::from_secs(120);
+// Lag-back: vom Server versetzt, aber nicht weit. Unter 1 cm ist es nur eine Bestaetigung
+// der eigenen Stelle, ueber 10 Bloecke ein echter Teleport.
+const LAGBACK_MIN_BLOCKS: f64 = 0.01;
+const LAGBACK_MAX_BLOCKS: f64 = 10.0;
+// Lag-backs mit hoechstens diesem Abstand zaehlen in derselben Karte weiter.
+const LAGBACK_GROUP: Duration = Duration::from_secs(2);
 
 fn server_panel() -> Rect {
     let (sw, sh) = ui_screen();
@@ -2996,6 +3096,18 @@ const HURT_CAM_MAX_DEGREES: f32 = 14.0;
 const FIRE_MODE_VANILLA: u8 = 0;
 const FIRE_MODE_CROSSHAIR: u8 = 1;
 const FIRE_MODE_NAMES: [&str; 2] = ["Vanilla", "Fadenkreuz"];
+
+// Sonstiges > No UI close (Settings::no_ui_close). Knopf-Reihenfolge wie besprochen,
+// gespeichert wird der Wert.
+const NO_UI_CLOSE_NEVER: u8 = 0;
+const NO_UI_CLOSE_ALWAYS: u8 = 1;
+const NO_UI_CLOSE_INVENTORY: u8 = 2;
+// Sonstiges > No slot set / No rotate set (Settings::no_slot_set, no_rotate_set).
+const SERVER_SET_FOLLOW: u8 = 0;
+const SERVER_SET_IGNORE: u8 = 1;
+const SERVER_SET_RESET: u8 = 2;
+const SERVER_SET_NAMES: [(&str, u8); 3] = [("Aus", SERVER_SET_FOLLOW), ("Ignore", SERVER_SET_IGNORE), ("Reset", SERVER_SET_RESET)];
+const NO_UI_CLOSE_NAMES: [(&str, u8); 3] = [("Immer", NO_UI_CLOSE_ALWAYS), ("Nie", NO_UI_CLOSE_NEVER), ("Nur Inventar", NO_UI_CLOSE_INVENTORY)];
 const PLAYER_LIST_SCALE_TOOLTIP: &str = "Größe der Spielerliste (Tab) in Prozent. 100 % = wie Vanilla, sie folgt dann nur der GUI-Skala wie die Hotbar. Zahl anklicken für einen eigenen Wert.";
 // Vanillas hurtTime: 10 Ticks. Nach oben bis 2 s, darueber verschwimmen Treffer ineinander.
 const DAMAGE_TINT_TICKS_DEFAULT: u32 = 10;
@@ -3106,6 +3218,8 @@ enum ControlsRow {
     RocketRepeat,
     UseWhileMining,
     CapsLock,
+    HoldConfirm,
+    ReconnectHold,
     Bind(KeyBindAction),
 }
 
@@ -3170,6 +3284,9 @@ const CONTROLS_SECTIONS: &[(&str, &[ControlsRow])] = {
                 Bind(K::VolumeUp),
                 Bind(K::VolumeDown),
                 CapsLock,
+                HoldConfirm,
+                Bind(K::Reconnect),
+                ReconnectHold,
             ],
         ),
     ]
@@ -3200,6 +3317,13 @@ fn controls_sections() -> &'static [(&'static str, usize)] {
 fn controls_row(r: ControlsRow) -> usize {
     controls_rows().iter().position(|&z| z == r).unwrap_or(0)
 }
+
+const HOLD_CONFIRM_MAX: u32 = 2000;
+const HOLD_CONFIRM_STEP: u32 = 50;
+// Reconnect-Taste ohne eigene Dauer: es gilt die allgemeine (linkes Ende des Reglers).
+const RECONNECT_HOLD_GENERAL: i32 = -(HOLD_CONFIRM_STEP as i32);
+const HOLD_CONFIRM_TOOLTIP: &str = "Wie lange eine Taste gehalten werden muss, bis ihre Aktion ausgelöst wird (wie osus Hold-to-confirm). Gilt für jede Halte-Bestätigung ohne eigene Dauer.";
+const RECONNECT_HOLD_TOOLTIP: &str = "Wie lange die Reconnect-Taste gehalten werden muss, bis neu verbunden wird; währenddessen dunkelt das Bild ab. Ganz links: die allgemeine Bestätigungsdauer.";
 
 const CURSOR_SIZE_MIN: u32 = 50;
 const CURSOR_SIZE_MAX: u32 = 300;
@@ -3409,7 +3533,7 @@ fn hud_config_rows(element: HudElement, set: &Settings) -> usize {
         HudElement::BossBar => 1,
         // Groesse.
         HudElement::HeldName => 1,
-        // Groesse, Ausrichtung, Ruecken, Abstand, Zahlgroesse, Zahl x und y, Gruen ab 95 %.
+        // Groesse, Ausrichtung, Ruecken, Abstand, Zahlgroesse, Zahl x und y, Gruen ab 87 %.
         HudElement::Armor => 8,
         // Groesse, Deckkraft.
         HudElement::Keystrokes => 2,
@@ -3451,7 +3575,17 @@ fn hud_reset_button(row: usize) -> Rect {
 // Seiten ohne Seiten-Scroll 0, unbegrenzt und ohne Abschnitte.
 static SETTINGS_SCROLL_FIRST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SETTINGS_SCROLL_BOTTOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(f32::INFINITY.to_bits());
-static SETTINGS_SECTION_STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Abschnittsmaske (s. SettingsPage::section_starts) in zwei Haelften: es gibt kein AtomicU128.
+static SETTINGS_SECTION_STARTS: [std::sync::atomic::AtomicU64; 2] = [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+fn store_section_starts(starts: u128) {
+    SETTINGS_SECTION_STARTS[0].store(starts as u64, std::sync::atomic::Ordering::Relaxed);
+    SETTINGS_SECTION_STARTS[1].store((starts >> 64) as u64, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn load_section_starts() -> u128 {
+    SETTINGS_SECTION_STARTS[0].load(std::sync::atomic::Ordering::Relaxed) as u128 | (SETTINGS_SECTION_STARTS[1].load(std::sync::atomic::Ordering::Relaxed) as u128) << 64
+}
 
 // Zusaetzlicher Platz vor jedem Abschnitt ausser dem obersten: zusammen mit dem Abstand
 // zwischen zwei Zeilen genug fuer seine Trennlinie, der Name steht rechts darueber.
@@ -3461,19 +3595,19 @@ fn settings_row_y(row: usize) -> f32 {
     use std::sync::atomic::Ordering::Relaxed;
     let erste = SETTINGS_SCROLL_FIRST.load(Relaxed);
     let unten = f32::from_bits(SETTINGS_SCROLL_BOTTOM.load(Relaxed));
-    settings_row_y_in(row, erste, SETTINGS_SECTION_STARTS.load(Relaxed), unten).unwrap_or(-10_000.0)
+    settings_row_y_in(row, erste, load_section_starts(), unten).unwrap_or(-10_000.0)
 }
 
 // Wo Zeile `row` steht, wenn Zeile `erste` oben ist; None, wenn sie darueber liegt oder nicht
 // mehr ganz vor `unten` passt. `starts`: Bit n = Abschnitt beginnt bei Zeile n. Vor jedem
 // Abschnittsanfang unterhalb von `erste` kommt SETTINGS_SECTION_GAP dazu. Ein Abschnitt, der
 // oben steht, braucht keine Trennlinie: dort zeigt der Reiter, wo man ist.
-fn settings_row_y_in(row: usize, erste: usize, starts: u64, unten: f32) -> Option<f32> {
+fn settings_row_y_in(row: usize, erste: usize, starts: u128, unten: f32) -> Option<f32> {
     if row < erste {
         return None;
     }
-    let bis = if row >= 63 { u64::MAX } else { (1u64 << (row + 1)) - 1 };
-    let ab = if erste >= 63 { 0 } else { !((1u64 << (erste + 1)) - 1) };
+    let bis = if row >= 127 { u128::MAX } else { (1u128 << (row + 1)) - 1 };
+    let ab = if erste >= 127 { 0 } else { !((1u128 << (erste + 1)) - 1) };
     let luecken = (starts & bis & ab).count_ones();
     let y = SETTINGS_FIRST_Y + (row - erste) as f32 * SETTINGS_ROW_H + luecken as f32 * SETTINGS_SECTION_GAP;
     (y + SETTINGS_ROW_H <= unten).then_some(y)
@@ -3486,7 +3620,7 @@ fn settings_rows_bottom(screen_h: f32) -> f32 {
 
 // Kleinste erste Zeile, bei der die letzte von `rows` Zeilen ganz sichtbar ist: so weit laesst
 // sich die Seite scrollen. 0, wenn alles passt.
-fn settings_max_first(rows: usize, starts: u64, unten: f32) -> usize {
+fn settings_max_first(rows: usize, starts: u128, unten: f32) -> usize {
     let letzte = rows.saturating_sub(1);
     (0..letzte).find(|&erste| settings_row_y_in(letzte, erste, starts, unten).is_some()).unwrap_or(letzte)
 }
@@ -3495,6 +3629,11 @@ fn settings_max_first(rows: usize, starts: u64, unten: f32) -> usize {
 // brauchen Fussleiste (Zuruecksetzen, Speicherstatus) und etwas Rand ihren Platz.
 fn settings_visible_rows(screen_h: f32) -> usize {
     (((screen_h - SETTINGS_CONTENT_DY - SETTINGS_FIRST_Y - 24.0) / SETTINGS_ROW_H).floor() as usize).max(1)
+}
+
+// Knopf "Ueberspringen" rechts neben dem Sichtfeld-Regler (hinter der Einheit).
+fn skip_perspective_rect(row: usize) -> Rect {
+    Rect { x: SETTINGS_CTRL_X - SLIDER_GROW + SLIDER_SPAN_W + 40.0, y: settings_row_y(row), w: 150.0, h: SETTINGS_CTRL_H }
 }
 
 fn stepper_value_rect(row: usize) -> Rect {
@@ -3858,6 +3997,11 @@ const ARROW_EMPTY_FEEDBACK_SHAKE: u8 = 2;
 const ARROW_EMPTY_BLINK_SECS: f32 = 0.8;
 const ARROW_EMPTY_SHAKE_SECS: f32 = 0.3;
 
+// Autoklicker (Debug): Klicks je Sekunde, Grenzen des Reglers (s. Settings::autoclicker_cps).
+const AUTOCLICKER_CPS_DEFAULT: u32 = 12;
+const AUTOCLICKER_CPS_MIN: u32 = 1;
+const AUTOCLICKER_CPS_MAX: u32 = 30;
+
 // Ghostblock-Indikator: Grenzen und Schrittweite des Reglers (s. Settings::ghost_tolerance_ms).
 const GHOST_TOLERANCE_DEFAULT_MS: u32 = 200;
 const GHOST_TOLERANCE_MIN_MS: u32 = 0;
@@ -3995,6 +4139,16 @@ const CURSOR_PRESS_TINT: f32 = 0.55;
 const COLOR_CARET: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const CARET_WIDTH_PX: f32 = 3.0;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(1000);
+// Schwaechste Deckkraft des Cursors im Blinken.
+const CARET_BLINK_MIN: f32 = 0.15;
+
+// Deckkraft des Cursors `seit` der letzten Bewegung: weich pulsierend wie in osu! (Sinus-Ein-
+// und Ausblenden statt hartem An/Aus), nach jeder Bewegung voll.
+fn caret_alpha(seit: Duration) -> f32 {
+    let t = seit.as_secs_f32() / CARET_BLINK_INTERVAL.as_secs_f32();
+    let welle = 0.5 + 0.5 * (t * std::f32::consts::TAU).cos();
+    CARET_BLINK_MIN + (1.0 - CARET_BLINK_MIN) * welle
+}
 
 // Der Schreibcursor gleitet wie in osu! (OsuCaret: 60 ms, Easing.Out) an die neue Stelle,
 // solange er in derselben Zeile bleibt; in eine andere Zeile oder ein eben erst gezeigtes Feld
@@ -4108,6 +4262,17 @@ struct ChatSlide {
     line_x: f32,
     from: f32,
     start: Instant,
+}
+
+// Nach dem Loeschen bleibt der Text der letzten Eingabezeile stehen, statt nach rechts an den
+// festen Cursor-Anker zu ruecken -- stattdessen wandert der Cursor nach links. `gap` ist der
+// Abstand des Zeilenendes vom Anker; Tippen zehrt ihn wieder auf, bis die Zeile wie gewohnt am
+// Anker steht. Gilt fuer den Text `text`, die Werte daneben fuer dessen letzte Zeile.
+struct ChatGap {
+    text: String,
+    lines: usize,
+    last_w: f32,
+    gap: f32,
 }
 
 impl ChatSlide {
@@ -5203,6 +5368,9 @@ struct CrosshairExtras {
     ring: Option<((f32, f32), f32)>,
     // Kontur um den Ring (Settings::crosshair_ring_outline).
     ring_outline: bool,
+    // Feuer-Modus "Fadenkreuz" beim Brennen: diese Farbe nur fuer Kreuz und Ring -- die
+    // Zahlen (Pfeile, Countdown) behalten die normale Fadenkreuz-Farbe.
+    fire_rgb: Option<[f32; 3]>,
 }
 
 // Ring um `center_px`, ab 12 Uhr im Uhrzeigersinn bis `fraction` des Umfangs (verbleibende
@@ -7681,7 +7849,7 @@ impl GpuState {
         if !erlaubt || self.text_shadow_style == TextShadow::Off || color[3] <= 0.0 {
             return None;
         }
-        let rand = match shadow {
+        let rand = match shadow.and_then(ego_name::shadow) {
             None => [0.0, 0.0, 0.0, color[3]],
             Some(argb) => {
                 let [r, g, b, a] = argb_to_rgba(argb as i32);
@@ -9042,7 +9210,9 @@ impl GpuState {
             // Reihenfolge/Groesse exakt wie crosshair.wgsl::CrosshairSettings.
             let byte = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u32;
             let farbe = byte(crosshair_rgb[0]) | byte(crosshair_rgb[1]) << 8 | byte(crosshair_rgb[2]) << 16 | 0xff << 24;
-            let crosshair_settings: [u32; 4] = [crosshair_mode, crosshair_boost.to_bits(), farbe, 0];
+            // Viertes Feld: Brenn-Farbe fuer Kreuz und Ring, Alpha 0 = brennt nicht.
+            let feuer = crosshair_extras.fire_rgb.map_or(0, |c| byte(c[0]) | byte(c[1]) << 8 | byte(c[2]) << 16 | 0xff << 24);
+            let crosshair_settings: [u32; 4] = [crosshair_mode, crosshair_boost.to_bits(), farbe, feuer];
             self.queue.write_buffer(&self.crosshair_mode_buffer, 0, bytemuck::bytes_of(&crosshair_settings));
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -9622,7 +9792,7 @@ enum MenuScreen {
     // SettingsVideo (Knopf neben der Partikel-Stufe).
     SettingsParticles,
     // Sonstiges: was zu keiner anderen Seite passt (bisher: Schliessen durch den Server
-    // ignorieren, s. Settings::no_ui_close_s2c).
+    // ignorieren, s. Settings::no_ui_close).
     SettingsMisc,
     // Einrichtung: ganz unten in der Kategorienleiste, erste Seite beim allerersten Oeffnen der
     // Einstellungen. Hier kommt der Tastenbelegungs-Assistent hin.
@@ -9690,9 +9860,9 @@ impl MenuScreen {
                 sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Feuer", FIRE_MODE_ROW)],
             }),
             MenuScreen::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
-            // Zeilen 4..6 = Trank-Buchstaben.
-            MenuScreen::SettingsInventory => Some(SettingsPage { rows: 7, sections: &[("Allgemein", 0), ("Tränke", 4)] }),
-            MenuScreen::SettingsMisc => Some(SettingsPage { rows: 1, sections: &[] }),
+            // Zeile 4 = Zusammenfassen bei Hover, Zeilen 5..7 = Trank-Buchstaben.
+            MenuScreen::SettingsInventory => Some(SettingsPage { rows: 8, sections: &[("Allgemein", 0), ("Tränke", 5)] }),
+            MenuScreen::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[] }),
             MenuScreen::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
             MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_PITCH_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
@@ -9717,8 +9887,8 @@ struct SettingsPage {
 impl SettingsPage {
     // Bitmaske fuer settings_row_y_in. Der erste Abschnitt bekommt keine Trennlinie -- direkt
     // darueber stehen die Reiter.
-    fn section_starts(self) -> u64 {
-        self.sections.iter().filter(|&&(_, row)| row > 0 && row < 64).fold(0, |m, &(_, row)| m | 1 << row)
+    fn section_starts(self) -> u128 {
+        self.sections.iter().filter(|&&(_, row)| row > 0 && row < 128).fold(0, |m, &(_, row)| m | 1 << row)
     }
 }
 
@@ -9856,6 +10026,9 @@ enum ColorTarget {
     DamageTint,
     Crit,
     Crosshair,
+    SaturationHud,
+    // Modul Eigenname: 0, 1 = Farben des Verlaufs, 2 = Schatten.
+    EgoName(u8),
     // Fadenkreuzfarbe beim Brennen (Feuer-Modus "Fadenkreuz").
     FireCrosshair,
 }
@@ -10006,11 +10179,19 @@ fn serialize_custom_theme(t: &CustomTheme) -> String {
     format!("{}|{}", farben.join(","), t.name)
 }
 
-// Fenster mit einem Namensfeld fuer ein neues Theme (wie Quick Connect).
+// Fenster mit einem Namensfeld (wie Quick Connect): fuer ein neues Theme oder den Alias des
+// Moduls Eigenname -- dieses auch im Spiel, aus dem Modul-Menue.
 struct ThemeNameDialog {
     field: text_field::TextField,
     dragging: bool,
     last_press: Option<(Instant, (f32, f32))>,
+    purpose: NameDialogPurpose,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NameDialogPurpose {
+    Theme,
+    EgoAlias,
 }
 
 // Druck in ein einzeiliges Feld bei Zeichengrenze `i`: ein zweiter kurz danach an derselben
@@ -10493,10 +10674,13 @@ enum KeyBindAction {
     // Spielmodus-Rad (s. gamemode_wheel.rs): solange gehalten offen, beim Loslassen gilt der
     // Modus unter dem Zeiger, in der Mitte der vorige.
     GameModeWheel,
+    // Wie osus Neustart-Taste: so lange gehalten, wie Settings::reconnect_hold vorgibt, verbindet
+    // neu (s. App::tick_reconnect_hold); waehrenddessen dunkelt das Bild ab.
+    Reconnect,
 }
 
 impl KeyBindAction {
-    const ALL: [KeyBindAction; 46] = [
+    const ALL: [KeyBindAction; 47] = [
         KeyBindAction::Forward,
         KeyBindAction::Backward,
         KeyBindAction::Left,
@@ -10543,6 +10727,7 @@ impl KeyBindAction {
         KeyBindAction::SpectatorSlower,
         KeyBindAction::SpectatorFaster,
         KeyBindAction::GameModeWheel,
+        KeyBindAction::Reconnect,
     ];
 
     // Aktionen, die NUR bei offenem Inventar/Container gelten. Sie duerfen sich eine Taste
@@ -10571,6 +10756,12 @@ impl KeyBindAction {
     // Einmal-Aktionen: sie loesen beim Druck etwas aus, statt einen Zustand zu halten. Fuer
     // sie ergibt die Halten/Umschalten-Wahl keinen Sinn (beides waere dasselbe), und sie
     // haben keinen "aktiv"-Zustand, den action_active zurueckgeben koennte.
+    // Hat die Aktion einen Halten/Umschalten-Modus? Alle haltenden, dazu die Perspektive-
+    // Taste: Halten ist dort Quicklook (s. Settings::quicklook_target).
+    fn has_mode(self) -> bool {
+        (!self.is_press_action() && self != KeyBindAction::Reconnect) || self == KeyBindAction::TogglePerspective
+    }
+
     fn is_press_action(self) -> bool {
         !matches!(
             self,
@@ -10594,6 +10785,8 @@ impl KeyBindAction {
                 | KeyBindAction::InspectItem
                 | KeyBindAction::VoiceWhisper
                 | KeyBindAction::GameModeWheel
+                // Haelt einen Zustand: erst nach der Bestaetigungsdauer wird neu verbunden.
+                | KeyBindAction::Reconnect
         )
     }
 
@@ -10625,6 +10818,7 @@ impl KeyBindAction {
             KeyBindAction::SpectatorSlower => "Zuschauer: langsamer",
             KeyBindAction::SpectatorFaster => "Zuschauer: schneller",
             KeyBindAction::GameModeWheel => "Spielmodus-Rad",
+            KeyBindAction::Reconnect => "Reconnect (halten)",
             KeyBindAction::VoiceMute => "Sprachchat: Mikrofon stumm",
             KeyBindAction::VoiceDeafen => "Sprachchat: taub",
             KeyBindAction::VoiceWhisper => "Sprachchat: Flüstern",
@@ -10708,6 +10902,7 @@ impl KeyBindAction {
             KeyBindAction::SpectatorSlower => 43,
             KeyBindAction::SpectatorFaster => 44,
             KeyBindAction::GameModeWheel => 45,
+            KeyBindAction::Reconnect => 46,
             KeyBindAction::VoiceMute => 38,
             KeyBindAction::VoiceDeafen => 39,
             KeyBindAction::VoiceWhisper => 40,
@@ -10753,6 +10948,7 @@ impl KeyBindAction {
             KeyBindAction::SpectatorSlower => "spectator_slower",
             KeyBindAction::SpectatorFaster => "spectator_faster",
             KeyBindAction::GameModeWheel => "gamemode_wheel",
+            KeyBindAction::Reconnect => "reconnect",
             KeyBindAction::VoiceMute => "voice_mute",
             KeyBindAction::VoiceDeafen => "voice_deafen",
             KeyBindAction::VoiceWhisper => "voice_whisper",
@@ -10886,6 +11082,8 @@ impl Default for Keybinds {
             (KeyBindAction::HideHud, Bind::Key(KeyCode::F1)),
             (KeyBindAction::ToggleProfiler, Bind::Key(KeyCode::F6)),
             (KeyBindAction::GameModeWheel, Bind::Key(KeyCode::F4)),
+            // Wie osus Neustart-Taste: ^ auf deutscher Tastatur (physisch die Backquote-Taste).
+            (KeyBindAction::Reconnect, Bind::Key(KeyCode::Backquote)),
             // Wie bei den bekannten Zoom-Mods (OptiFine, Zoomify).
             (KeyBindAction::Zoom, Bind::Key(KeyCode::KeyC)),
             // Wie bei Simple Voice Chat.
@@ -10966,6 +11164,7 @@ struct KeybindModes {
     push_to_talk: KeybindMode,
     inspect_item: KeybindMode,
     voice_whisper: KeybindMode,
+    perspective: KeybindMode,
 }
 
 impl KeybindModes {
@@ -10984,6 +11183,7 @@ impl KeybindModes {
             KeyBindAction::PushToTalk => self.push_to_talk,
             KeyBindAction::InspectItem => self.inspect_item,
             KeyBindAction::VoiceWhisper => self.voice_whisper,
+            KeyBindAction::TogglePerspective => self.perspective,
             // Einmal-Aktionen haben keinen Modus (s. is_press_action) -- Hold ist hier
             // schlicht der neutrale Wert, benutzt wird er nie.
             // Einmal-Aktionen haben keinen Halte-/Umschalt-Zustand.
@@ -11006,6 +11206,7 @@ impl KeybindModes {
             KeyBindAction::PushToTalk => self.push_to_talk = mode,
             KeyBindAction::InspectItem => self.inspect_item = mode,
             KeyBindAction::VoiceWhisper => self.voice_whisper = mode,
+            KeyBindAction::TogglePerspective => self.perspective = mode,
             _ => {}
         }
     }
@@ -11028,6 +11229,8 @@ impl Default for KeybindModes {
             push_to_talk: KeybindMode::Hold,
             inspect_item: KeybindMode::Hold,
             voice_whisper: KeybindMode::Hold,
+            // Umschalten wie Vanillas F5; Halten (Quicklook) nur auf Wunsch.
+            perspective: KeybindMode::Toggle,
         }
     }
 }
@@ -11458,6 +11661,10 @@ struct Settings {
     // Groesse des Mauszeigers in Prozent (s. cursor_fx_frame).
     cursor_size: u32,
     cursor_width: u32,
+    // Bestaetigungsdauer (wie osus Hold-to-confirm) in ms, und die der Reconnect-Taste;
+    // RECONNECT_HOLD_GENERAL dort = die allgemeine.
+    hold_confirm_ms: u32,
+    reconnect_hold_ms: i32,
     // Kreis unter dem Pfeil des Mauszeigers (s. cursor_polygons).
     cursor_circle: bool,
     // War frueher der Deckel fuer Mesh-Job-VERGABE pro Frame (Job in den Pool einreihen) --
@@ -11672,6 +11879,11 @@ struct Settings {
     // ein weiter Blick in der Verfolgeransicht die Ego-Perspektive nicht mitzieht.
     fov_third_back: f32,
     fov_third_front: f32,
+    // 3.-Person-Ansichten, die die Perspektive-Taste ueberspringt (Knopf neben dem Sichtfeld).
+    // Hoechstens eine: ist eine uebersprungen, bekommt die Taste H/T -- Halten schaut nur so
+    // lange in die andere, wie sie gedrueckt ist (Quicklook, s. quicklook_target).
+    skip_third_back: bool,
+    skip_third_front: bool,
     // Kameraabstand je 3.-Person-Perspektive in Bloecken (Vanillas EntityAttributes::
     // CAMERA_DISTANCE, Default 4.0). An Waenden wird der Wert automatisch verkuerzt, s.
     // physics::clip_camera_distance -- er ist eine Obergrenze, kein fester Abstand.
@@ -11857,6 +12069,29 @@ struct Settings {
     // anvisierten Block wie Vanilla (schwarz, 40 % deckend, s. vanilla_block_outline), AN mit
     // eigener Farbe, Deckkraft und Linienbreite.
     module_block_outline: bool,
+    // Modul "Saettigung": ein Balken in eigener Farbe ueber der Hungerleiste (s.
+    // build_status_bars).
+    module_saturation_hud: bool,
+    saturation_hud_hue: u32,
+    saturation_hud_saturation: u32,
+    saturation_hud_value: u32,
+    saturation_hud_height: u32,
+    // Deckkraft in Prozent: der schwarze Grund innerhalb des Rahmens und das Raster (Rahmen
+    // und Trennstriche).
+    saturation_hud_bg_alpha: u32,
+    saturation_hud_grid_alpha: u32,
+    // Modul "Eigenname" (s. ego_name): Alias (leer = Name bleibt), Verzierung, Farben als
+    // (Ton, Saettigung, Helligkeit, Deckkraft) -- erste, zweite Farbe, Schatten --, eigener
+    // Schatten an/aus, Tempo in Zehntel-Umlaeufen je Sekunde, Ton bei Erwaehnung ("" = aus)
+    // und dessen Lautstaerke in Prozent.
+    module_ego_name: bool,
+    ego_alias: String,
+    ego_deco: ego_name::Deco,
+    ego_colors: [[u32; 4]; 3],
+    ego_shadow: bool,
+    ego_speed: u32,
+    ego_sound: String,
+    ego_volume: u32,
     block_outline_hue: u32,
     block_outline_saturation: u32,
     block_outline_value: u32,
@@ -11920,7 +12155,7 @@ struct Settings {
     armor_hud_number_y: i32,
     armor_hud_sort_vertical: u8,
     armor_hud_sort_flat: u8,
-    // Haltbarkeitszahl gruen, solange ueber 95 % uebrig sind.
+    // Haltbarkeitszahl gruen, solange ueber 87 % uebrig sind.
     armor_hud_green: bool,
     // Keystrokes (s. ModuleId::Keystrokes, keystrokes.rs): obere linke Ecke normiert, Groesse
     // in Prozent und Deckkraft der nicht gedrueckten Tasten.
@@ -11957,6 +12192,11 @@ struct Settings {
     // Eingaben mit Zeitstempel in eine lokale Datei. Vorgabe aus -- ein Input-Protokoll laeuft
     // nur auf ausdruecklichen Wunsch.
     module_input_log_enabled: bool,
+    // Debug-Modul "Autoklicker" (s. App::tick_autoclicker): solange Angreifen oder Benutzen gehalten ist,
+    // klickt es autoclicker_cps-mal je Sekunde. Wirkt nur auf anticheat-test.com und lokalen
+    // Servern (s. App::autoclicker_allowed) -- zum Testen der Anticheats, nicht zum Spielen.
+    module_autoclicker: bool,
+    autoclicker_cps: u32,
     // Modul "Farbe" (s. color.wgsl): Saettigung des ganzen Bildes in Prozent, 0 = schwarzweiss,
     // 100 = unveraendert.
     module_color: bool,
@@ -11979,11 +12219,23 @@ struct Settings {
     // mit Befehlsbloecken & Co. zeigen.
     creative_op_tab: bool,
     // Sonstiges: ClientboundContainerClose ignorieren -- der Server kann kein Fenster mehr
-    // schliessen (s. ClientEvent::CloseScreen).
-    no_ui_close_s2c: bool,
+    // schliessen (s. ClientEvent::CloseScreen). NO_UI_CLOSE_*: nie, immer oder nur das
+    // eigene Inventar (Truhen & Co. schliesst er weiter).
+    no_ui_close: u8,
     // Sonstiges: der Server kann den Chat nicht leeren -- weder mit Reset Chat noch mit den
     // Leerzeilen, die Clear-Chat-Plugins schicken (s. push_chat_message).
     no_chat_clear: bool,
+    // Sonstiges: Schilder direkt in der Welt beschreiben (s. sign_edit_in_world). Aus = immer
+    // das Editor-Fenster wie Vanilla.
+    sign_edit_in_world: bool,
+    // Sonstiges: was mit dem Hotbar-Slot bzw. der Blickrichtung passiert, die der Server
+    // setzt (s. SERVER_SET_*): uebernehmen wie Vanilla, ignorieren, oder ignorieren und den
+    // eigenen Wert zurueckschicken.
+    no_slot_set: u8,
+    no_rotate_set: u8,
+    // Haelt man einen Stapel ueber einen gleichartigen, steht nur die Summe am Zeiger und die
+    // Zahl im Slot verschwindet -- zwei Zahlen dicht uebereinander sind unlesbar.
+    inventory_merge_hover: bool,
     // Buchstaben auf Traenken im Inventar (s. world::potion::variant_mark), je einzeln:
     // S = verstaerkt, L = verlaengert, W = schwache Heilung/Schaden.
     potion_mark_strong: bool,
@@ -13110,6 +13362,16 @@ impl Settings {
         }
     }
 
+    // Farbe i des Moduls Eigenname (0, 1 = Verlauf, 2 = Schatten), sRGB 0..1.
+    fn ego_rgb(&self, i: usize) -> [f32; 3] {
+        let c = self.ego_colors[i];
+        hsv_to_rgb(c[0] as f32, c[1] as f32 / 100.0, c[2] as f32 / 100.0)
+    }
+
+    fn saturation_hud_rgb(&self) -> [f32; 3] {
+        hsv_to_rgb(self.saturation_hud_hue as f32, self.saturation_hud_saturation as f32 / 100.0, self.saturation_hud_value as f32 / 100.0)
+    }
+
     // Farbe und Deckkraft des eigenen Blockumrisses, in derselben Form wie crit_color_rgba.
     fn block_outline_rgba(&self) -> [f32; 4] {
         let rgb = hsv_to_rgb(
@@ -13267,6 +13529,24 @@ impl Settings {
 
     // Sichtfeld der jeweiligen Perspektive -- eine Stelle statt eines match an jedem
     // Aufrufer (Kamera, Stepper, Wertfeld, Zuruecksetzen).
+    fn perspective_skipped(&self, p: Perspective) -> bool {
+        match p {
+            Perspective::FirstPerson => false,
+            Perspective::ThirdPersonBack => self.skip_third_back,
+            Perspective::ThirdPersonFront => self.skip_third_front,
+        }
+    }
+
+    // Die 3.-Person-Ansicht, in die Quicklook schaut: die nicht uebersprungene, wenn genau
+    // eine uebersprungen ist. Sonst kein Quicklook (und kein H/T an der Taste).
+    fn quicklook_target(&self) -> Option<Perspective> {
+        match (self.skip_third_back, self.skip_third_front) {
+            (true, false) => Some(Perspective::ThirdPersonFront),
+            (false, true) => Some(Perspective::ThirdPersonBack),
+            _ => None,
+        }
+    }
+
     fn fov_of(&self, p: Perspective) -> f32 {
         match p {
             Perspective::FirstPerson => self.fov,
@@ -13395,6 +13675,16 @@ impl Settings {
                     }
                 }
                 "cursor_circle" => settings.cursor_circle = value == "true",
+                "hold_confirm_ms" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.hold_confirm_ms = v.min(HOLD_CONFIRM_MAX);
+                    }
+                }
+                "reconnect_hold_ms" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        settings.reconnect_hold_ms = v.clamp(RECONNECT_HOLD_GENERAL, HOLD_CONFIRM_MAX as i32);
+                    }
+                }
                 "cursor_width" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.cursor_width = v.clamp(CURSOR_WIDTH_MIN, CURSOR_WIDTH_MAX);
@@ -14275,6 +14565,52 @@ impl Settings {
                     }
                 }
                 "module_block_outline" => settings.module_block_outline = value == "true",
+                "module_saturation_hud" => settings.module_saturation_hud = value == "true",
+                "module_ego_name" => settings.module_ego_name = value == "true",
+                "ego_alias" => settings.ego_alias = value.trim().chars().take(EGO_ALIAS_MAX).collect(),
+                "ego_deco" => settings.ego_deco = ego_name::Deco::parse(value).unwrap_or(settings.ego_deco),
+                "ego_colors" => {
+                    for (i, c) in value.split(',').take(3).enumerate() {
+                        let teile: Vec<u32> = c.split('/').filter_map(|v| v.trim().parse().ok()).collect();
+                        if let [h, s, v, a] = teile[..] {
+                            settings.ego_colors[i] = [h % 360, s.min(100), v.min(100), a.min(100)];
+                        }
+                    }
+                }
+                "ego_shadow" => settings.ego_shadow = value == "true",
+                "ego_speed" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.ego_speed = v.clamp(EGO_SPEED_MIN, EGO_SPEED_MAX);
+                    }
+                }
+                "ego_sound" => settings.ego_sound = value.trim().to_string(),
+                "ego_volume" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.ego_volume = v.min(100);
+                    }
+                }
+                "saturation_hud_hue" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.saturation_hud_hue = v % 360;
+                    }
+                }
+                "saturation_hud_bg_alpha" | "saturation_hud_grid_alpha" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        let feld = if key == "saturation_hud_bg_alpha" { &mut settings.saturation_hud_bg_alpha } else { &mut settings.saturation_hud_grid_alpha };
+                        *feld = v.min(100);
+                    }
+                }
+                "saturation_hud_height" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.saturation_hud_height = v.clamp(SATURATION_BAR_HEIGHT_MIN, SATURATION_BAR_HEIGHT_MAX);
+                    }
+                }
+                "saturation_hud_saturation" | "saturation_hud_value" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        let feld = if key == "saturation_hud_value" { &mut settings.saturation_hud_value } else { &mut settings.saturation_hud_saturation };
+                        *feld = v.min(100);
+                    }
+                }
                 "arrow_empty_feedback" => {
                     if let Ok(v) = value.parse::<u8>() {
                         settings.arrow_empty_feedback = v.min(ARROW_EMPTY_FEEDBACK_NAMES.len() as u8 - 1);
@@ -14284,6 +14620,12 @@ impl Settings {
                 "module_sound_debug" => settings.module_sound_debug = value == "true",
                 "module_discord_status" => settings.module_discord_status = value == "true",
                 "module_input_log_enabled" => settings.module_input_log_enabled = value == "true",
+                "module_autoclicker" => settings.module_autoclicker = value == "true",
+                "autoclicker_cps" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.autoclicker_cps = v.clamp(AUTOCLICKER_CPS_MIN, AUTOCLICKER_CPS_MAX);
+                    }
+                }
                 "module_color" => settings.module_color = value == "true",
                 "module_sustainability" => settings.module_sustainability = value == "true",
                 "sustain_background" => settings.sustain_background = value == "true",
@@ -14292,11 +14634,19 @@ impl Settings {
                 "chunk_saver_render" => alt_zeichnen = value == "true",
                 "chunk_saver_render_saved" => settings.chunk_saver_render_saved = value == "true",
                 "creative_op_tab" => settings.creative_op_tab = value == "true",
-                "no_ui_close_s2c" => settings.no_ui_close_s2c = value == "true",
+                // Alter An/Aus-Schalter: An hiess "immer".
+                "no_ui_close_s2c" => settings.no_ui_close = if value == "true" { NO_UI_CLOSE_ALWAYS } else { NO_UI_CLOSE_NEVER },
+                "no_ui_close" => settings.no_ui_close = value.parse::<u8>().unwrap_or(NO_UI_CLOSE_NEVER).min(NO_UI_CLOSE_INVENTORY),
                 "no_chat_clear" => settings.no_chat_clear = value == "true",
+                "skip_third_back" => settings.skip_third_back = value == "true",
+                "skip_third_front" => settings.skip_third_front = value == "true",
+                "sign_edit_in_world" => settings.sign_edit_in_world = value != "false",
+                "no_slot_set" => settings.no_slot_set = value.parse::<u8>().unwrap_or(SERVER_SET_FOLLOW).min(SERVER_SET_RESET),
+                "no_rotate_set" => settings.no_rotate_set = value.parse::<u8>().unwrap_or(SERVER_SET_FOLLOW).min(SERVER_SET_RESET),
                 "potion_mark_strong" => settings.potion_mark_strong = value != "false",
                 "potion_mark_long" => settings.potion_mark_long = value != "false",
                 "potion_mark_weak" => settings.potion_mark_weak = value != "false",
+                "inventory_merge_hover" => settings.inventory_merge_hover = value == "true",
                 "chunk_saver_threads" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.chunk_saver_threads = v.clamp(1, lod::THREADS_MAX);
@@ -14783,6 +15133,7 @@ impl Settings {
         body.push_str(&format!("spectator_speed={}\n", self.spectator_speed));
         body.push_str(&format!("mouse_sens_split={}\nmouse_sensitivity_y={}\n", self.mouse_sens_split, self.mouse_sensitivity_y));
         body.push_str(&format!("cursor_width={}\n", self.cursor_width));
+        body.push_str(&format!("hold_confirm_ms={}\nreconnect_hold_ms={}\n", self.hold_confirm_ms, self.reconnect_hold_ms));
         body.push_str(&format!("text_shadow_style={}\n", self.text_shadow_style));
         body.push_str(&format!("stable_numbers={}\n", self.stable_numbers));
         body.push_str(&format!("topbar_uptime={}\n", self.topbar_uptime));
@@ -14903,6 +15254,29 @@ impl Settings {
         ));
         body.push_str(&format!("module_discord_status={}\ndiscord_client_id={}\n", self.module_discord_status, self.discord_client_id));
         body.push_str(&format!("module_input_log_enabled={}\n", self.module_input_log_enabled));
+        body.push_str(&format!("module_autoclicker={}\nautoclicker_cps={}\n", self.module_autoclicker, self.autoclicker_cps));
+        body.push_str(&format!(
+            "module_saturation_hud={}\nsaturation_hud_hue={}\nsaturation_hud_saturation={}\nsaturation_hud_value={}\nsaturation_hud_height={}\nsaturation_hud_bg_alpha={}\nsaturation_hud_grid_alpha={}\n",
+            self.module_saturation_hud,
+            self.saturation_hud_hue,
+            self.saturation_hud_saturation,
+            self.saturation_hud_value,
+            self.saturation_hud_height,
+            self.saturation_hud_bg_alpha,
+            self.saturation_hud_grid_alpha
+        ));
+        let ego_farben: Vec<String> = self.ego_colors.iter().map(|c| format!("{}/{}/{}/{}", c[0], c[1], c[2], c[3])).collect();
+        body.push_str(&format!(
+            "module_ego_name={}\nego_alias={}\nego_deco={}\nego_colors={}\nego_shadow={}\nego_speed={}\nego_sound={}\nego_volume={}\n",
+            self.module_ego_name,
+            self.ego_alias,
+            self.ego_deco.key(),
+            ego_farben.join(","),
+            self.ego_shadow,
+            self.ego_speed,
+            self.ego_sound,
+            self.ego_volume
+        ));
         body.push_str(&format!("module_color={}\ncolor_saturation={}\n", self.module_color, self.color_saturation));
         body.push_str(&format!(
             "module_sustainability={}\nsustain_background={}\nsustain_pause={}\n",
@@ -14919,8 +15293,12 @@ impl Settings {
         body.push_str(&format!("sprint_on_start={}\n", self.sprint_on_start));
         body.push_str(&format!("caps_lock_blocked={}\n", self.caps_lock_blocked));
         body.push_str(&format!("creative_op_tab={}\n", self.creative_op_tab));
-        body.push_str(&format!("no_ui_close_s2c={}\n", self.no_ui_close_s2c));
+        body.push_str(&format!("no_ui_close={}\n", self.no_ui_close));
         body.push_str(&format!("no_chat_clear={}\n", self.no_chat_clear));
+        body.push_str(&format!("sign_edit_in_world={}\n", self.sign_edit_in_world));
+        body.push_str(&format!("no_slot_set={}\nno_rotate_set={}\n", self.no_slot_set, self.no_rotate_set));
+        body.push_str(&format!("skip_third_back={}\nskip_third_front={}\n", self.skip_third_back, self.skip_third_front));
+        body.push_str(&format!("inventory_merge_hover={}\n", self.inventory_merge_hover));
         body.push_str(&format!(
             "potion_mark_strong={}\npotion_mark_long={}\npotion_mark_weak={}\n",
             self.potion_mark_strong, self.potion_mark_long, self.potion_mark_weak
@@ -14928,7 +15306,7 @@ impl Settings {
         for action in KeyBindAction::ALL {
             body.push_str(&format!("keybind_{}={}\n", action.settings_key(), binds_to_str(kb, action)));
         }
-        for action in KeyBindAction::ALL.into_iter().filter(|a| !a.is_press_action()) {
+        for action in KeyBindAction::ALL.into_iter().filter(|a| a.has_mode()) {
             body.push_str(&format!("keybind_mode_{}={}\n", action.settings_key(), keybind_mode_to_str(km.get(action))));
         }
         body
@@ -14990,6 +15368,8 @@ impl Settings {
             cursor_sensitivity: DEFAULT_CURSOR_SENSITIVITY,
             cursor_size: 100,
             cursor_width: 100,
+            hold_confirm_ms: 200,
+            reconnect_hold_ms: RECONNECT_HOLD_GENERAL,
             cursor_circle: true,
             mesh_columns_per_frame: DEFAULT_MESH_COLUMNS_PER_FRAME,
             // Standard = Maximum (wirkungslos, bis bewusst gesenkt) -- wie frame_latency soll
@@ -15256,6 +15636,25 @@ impl Settings {
             module_sound_debug: false,
             module_discord_status: false,
             module_input_log_enabled: false,
+            module_autoclicker: false,
+            autoclicker_cps: AUTOCLICKER_CPS_DEFAULT,
+            module_saturation_hud: false,
+            // Goldgelb wie die Hunger-Symbole.
+            saturation_hud_hue: 40,
+            saturation_hud_saturation: 100,
+            saturation_hud_value: 100,
+            saturation_hud_height: SATURATION_BAR_HEIGHT_DEFAULT,
+            saturation_hud_bg_alpha: 40,
+            saturation_hud_grid_alpha: 100,
+            module_ego_name: false,
+            ego_alias: String::new(),
+            ego_deco: ego_name::Deco::Flowing,
+            // Tuerkis nach Violett, Schatten fast schwarz.
+            ego_colors: [[175, 80, 100, 100], [280, 70, 100, 100], [260, 60, 20, 100]],
+            ego_shadow: false,
+            ego_speed: 5,
+            ego_sound: "minecraft:block.note_block.pling".to_string(),
+            ego_volume: 100,
             module_color: false,
             module_sustainability: false,
             sustain_background: true,
@@ -15266,11 +15665,17 @@ impl Settings {
             chunk_saver_threshold: lod::THRESHOLD_DEFAULT,
             chunk_saver_render_saved: true,
             creative_op_tab: false,
-            no_ui_close_s2c: false,
+            no_ui_close: NO_UI_CLOSE_NEVER,
             no_chat_clear: false,
+            sign_edit_in_world: true,
+            no_slot_set: SERVER_SET_FOLLOW,
+            no_rotate_set: SERVER_SET_FOLLOW,
+            skip_third_back: false,
+            skip_third_front: false,
             potion_mark_strong: true,
             potion_mark_long: true,
             potion_mark_weak: true,
+            inventory_merge_hover: true,
             color_saturation: 0,
             discord_client_id: String::new(),
             block_outline_hue: 0,
@@ -15405,6 +15810,20 @@ fn claim_atlas_slot(
     current: Option<usize>,
     sichtbar: impl Fn(&[u8; 16]) -> bool,
 ) -> Option<(usize, Option<[u8; 16]>)> {
+    claim_atlas_slot_near(order, capacity, uuid, current, |u| sichtbar(u).then_some(0.0))
+}
+
+// Wie claim_atlas_slot, aber mit Abstand: None = gerade nicht gebraucht, sonst wie weit weg.
+// Sind alle Platzinhaber gebraucht, weicht der am weitesten entfernte (bei Gleichstand der
+// aelteste) -- nicht einfach der aelteste. Sonst verlor auf einem vollen Spawn ausgerechnet
+// eine Statue aus Koepfen direkt vor einem ihre Skins, weil sie als Erstes geladen war.
+fn claim_atlas_slot_near(
+    order: &mut std::collections::VecDeque<([u8; 16], usize)>,
+    capacity: usize,
+    uuid: [u8; 16],
+    current: Option<usize>,
+    abstand: impl Fn(&[u8; 16]) -> Option<f32>,
+) -> Option<(usize, Option<[u8; 16]>)> {
     if capacity == 0 {
         return None;
     }
@@ -15417,8 +15836,17 @@ fn claim_atlas_slot(
         order.push_back((uuid, slot));
         return Some((slot, None));
     }
-    // Aeltester unsichtbarer Platzinhaber, sonst der aelteste ueberhaupt.
-    let index = order.iter().position(|(u, _)| !sichtbar(u)).unwrap_or(0);
+    // Aeltester ungebrauchter Platzinhaber, sonst der entfernteste.
+    let index = order.iter().position(|(u, _)| abstand(u).is_none()).unwrap_or_else(|| {
+        let mut weitester = (0, f32::NEG_INFINITY);
+        for (i, (u, _)) in order.iter().enumerate() {
+            let d = abstand(u).unwrap_or(f32::INFINITY);
+            if d > weitester.1 {
+                weitester = (i, d);
+            }
+        }
+        weitester.0
+    });
     let (evicted, slot) = order.remove(index)?;
     order.push_back((uuid, slot));
     Some((slot, Some(evicted)))
@@ -15825,6 +16253,7 @@ enum ButtonAction {
     OpenConfigFolder,
     // Pausemenue: die Links des Servers als Dialog.
     ServerLinks,
+    Reconnect,
     DeleteConfig,
     ScatteringPrev,
     ScatteringNext,
@@ -15851,9 +16280,15 @@ enum ButtonAction {
     CursorSizeDown,
     CursorWidthDown,
     CursorWidthUp,
+    HoldConfirmDown,
+    HoldConfirmUp,
+    ReconnectHoldDown,
+    ReconnectHoldUp,
     CursorSizeUp,
     ToggleCursorCircle,
     FovDown(Perspective),
+    // Knopf "Ueberspringen" neben dem Sichtfeld einer 3.-Person-Ansicht.
+    SkipPerspective(Perspective),
     FovUp(Perspective),
     CameraDistanceDown(Perspective),
     CameraDistanceUp(Perspective),
@@ -15946,8 +16381,12 @@ enum ButtonAction {
     InventoryTransparencyPrev,
     ToggleInventoryCursorToSlot,
     ToggleCreativeOpTab,
-    ToggleNoUiCloseS2c,
+    NoUiClose(u8),
     ToggleNoChatClear,
+    ToggleSignEditInWorld,
+    NoSlotSet(u8),
+    NoRotateSet(u8),
+    ToggleInventoryMergeHover,
     TogglePotionMarkStrong,
     TogglePotionMarkLong,
     TogglePotionMarkWeak,
@@ -16100,6 +16539,24 @@ enum ButtonAction {
     ToggleModuleSoundDebug,
     ToggleModuleDiscordStatus,
     ToggleModuleInputLog,
+    ToggleModuleAutoclicker,
+    ToggleModuleSaturationHud,
+    SaturationHeightPrev,
+    SaturationHeightNext,
+    // (welcher Regler: false = Grund, true = Raster; hoch?)
+    SaturationAlpha(bool, bool),
+    ToggleModuleEgoName,
+    // Oeffnet das Namensfenster fuer den Alias.
+    EditEgoAlias,
+    CycleEgoDeco,
+    // Eigene Schattenfarbe an?
+    EgoShadow(bool),
+    // hoch?
+    EgoSpeed(bool),
+    CycleEgoSound,
+    EgoVolume(bool),
+    AutoclickerCpsPrev,
+    AutoclickerCpsNext,
     ToggleModuleColor,
     ToggleModuleSustainability,
     ToggleSustainBackground,
@@ -16204,12 +16661,15 @@ enum ModuleId {
     FpsDisplay,
     DiscordStatus,
     InputLog,
+    Autoclicker,
+    SaturationHud,
+    EgoName,
     Color,
     Sustainability,
     ChunkSaver,
 }
 
-const MODULE_IDS: [ModuleId; 31] = [
+const MODULE_IDS: [ModuleId; 34] = [
     ModuleId::Totem,
     ModuleId::TotemWarning,
     ModuleId::TotemSlots,
@@ -16233,9 +16693,12 @@ const MODULE_IDS: [ModuleId; 31] = [
     ModuleId::Zoom,
     ModuleId::VoiceChat,
     ModuleId::BlockOutline,
+    ModuleId::SaturationHud,
+    ModuleId::EgoName,
     ModuleId::ShowMarkers,
     ModuleId::SoundDebug,
     ModuleId::FpsDisplay,
+    ModuleId::Autoclicker,
     ModuleId::DiscordStatus,
     ModuleId::InputLog,
     ModuleId::Color,
@@ -16257,7 +16720,7 @@ impl ModuleId {
             ModuleId::Weather => "Wetter",
             ModuleId::GhostTolerance => "Ghostblock-Indikator",
             ModuleId::CrystalOptimizer => "Crystal-Optimizer",
-            ModuleId::ConsumableOptimizer => "Consumable-Optimizer",
+            ModuleId::ConsumableOptimizer => "Usage-Optimizer",
             ModuleId::UseTimer => "Timer",
             ModuleId::NoToolBreak => "No Tool Break",
             ModuleId::BotcheckPass => "Botcheck-Pass",
@@ -16274,6 +16737,9 @@ impl ModuleId {
             ModuleId::FpsDisplay => "FPS-Anzeige",
             ModuleId::DiscordStatus => "Discord-Status",
             ModuleId::InputLog => "Input-Log",
+            ModuleId::Autoclicker => "Autoklicker",
+            ModuleId::SaturationHud => "Sättigung",
+            ModuleId::EgoName => "Eigenname",
             ModuleId::Color => "Farbe",
             ModuleId::Sustainability => "Nachhaltigkeit",
             ModuleId::ChunkSaver => "Chunk-Saver",
@@ -16312,6 +16778,9 @@ impl ModuleId {
             ModuleId::FpsDisplay => settings.show_hud,
             ModuleId::DiscordStatus => settings.module_discord_status,
             ModuleId::InputLog => settings.module_input_log_enabled,
+            ModuleId::Autoclicker => settings.module_autoclicker,
+            ModuleId::SaturationHud => settings.module_saturation_hud,
+            ModuleId::EgoName => settings.module_ego_name,
             ModuleId::Color => settings.module_color,
             ModuleId::Sustainability => settings.module_sustainability,
             ModuleId::ChunkSaver => settings.module_chunk_saver,
@@ -16348,6 +16817,9 @@ impl ModuleId {
             ModuleId::FpsDisplay => ButtonAction::ToggleHud,
             ModuleId::DiscordStatus => ButtonAction::ToggleModuleDiscordStatus,
             ModuleId::InputLog => ButtonAction::ToggleModuleInputLog,
+            ModuleId::Autoclicker => ButtonAction::ToggleModuleAutoclicker,
+            ModuleId::SaturationHud => ButtonAction::ToggleModuleSaturationHud,
+            ModuleId::EgoName => ButtonAction::ToggleModuleEgoName,
             ModuleId::Color => ButtonAction::ToggleModuleColor,
             ModuleId::Sustainability => ButtonAction::ToggleModuleSustainability,
             ModuleId::ChunkSaver => ButtonAction::ToggleModuleChunkSaver,
@@ -16368,7 +16840,7 @@ impl ModuleId {
             ModuleId::Weather => "Regen oder Schnee fest einstellen (oder klar) und in welcher Kugel um dich er fällt (von/bis) -- nur fürs Bild, auch wenn der Pack Wetter ausblendet",
             ModuleId::GhostTolerance => "Unbestätigte Blöcke (gesetzt, abgebaut, Anker) werden nach der Toleranz halbdurchsichtig",
             ModuleId::CrystalOptimizer => "Getroffene Kristalle sofort weg, ohne auf den Server zu warten",
-            ModuleId::ConsumableOptimizer => "Essen und Trinken enden im richtigen Tick, ohne auf den Server zu warten",
+            ModuleId::ConsumableOptimizer => "Essen und Trinken enden im richtigen Tick, ohne auf den Server zu warten -- der Bogen spannt zu kurzes Laden durch",
             ModuleId::UseTimer => "Kreis am Fadenkreuz: füllt sich beim Essen bis fertig, leert sich beim Spannen bis zum kritischen Pfeil",
             ModuleId::NoToolBreak => "Sperrt das Abbauen, bevor ein Diamant-/Netherit-Werkzeug mit Reparatur zerbricht",
             ModuleId::BotcheckPass => "Beim Betreten wie Vanilla erst die Welt laden, dann loslaufen (langsamer)",
@@ -16384,12 +16856,37 @@ impl ModuleId {
             ModuleId::SoundDebug => "Zwei Balken: wie laut gerade der linke und der rechte Kanal ist",
             ModuleId::FpsDisplay => "Bildrate und Frame-Zeiten -- verschieben im HUD-Editor",
             ModuleId::DiscordStatus => "Zeigt in Discord, dass du Coral Client spielst -- mit Version, Server und Spielzeit",
+            ModuleId::SaturationHud => "Balken über der Hungerleiste: wie viel Sättigung noch übrig ist, von rechts nach links",
+            ModuleId::EgoName => "Der eigene Name überall im Text umgeschrieben und eingefärbt, auf Wunsch mit Ton, wenn jemand ihn schreibt",
+            ModuleId::Autoclicker => "Klickt beim Halten von Angreifen oder Benutzen von selbst -- nur auf anticheat-test.com und lokalen Servern",
             ModuleId::InputLog => "Schreibt Tasten, Maustasten und Rad (nur im Spiel, nicht Chat) mit Zeitstempel in input_log.txt",
             ModuleId::Color => "Sättigung des ganzen Bildes -- 0 % ist schwarzweiß",
             ModuleId::Sustainability => "Spart Strom: keine Bilder, solange das Fenster im Hintergrund ist, und eine stehende Welt hinter dem Pausemenü",
             ModuleId::ChunkSaver => "Speichert jeden geladenen Chunk -- daraus zeichnet die LOD-Render-Distance (Einstellungen > Video) Fernsicht weit über die Render-Distance hinaus (wie Voxy)",
         }
     }
+}
+
+// Zustand des Autoklickers (s. App::tick_autoclicker): je ein Kanal fuer Angreifen und
+// Benutzen (s. AUTOCLICK_ACTIONS).
+#[derive(Default)]
+struct Autoclick {
+    channels: [AutoclickChannel; 2],
+    // Waehrend ein erzeugter Klick durch apply_key_action laeuft (nicht abfangen).
+    synthetic: bool,
+}
+
+const AUTOCLICK_ACTIONS: [KeyBindAction; 2] = [KeyBindAction::Attack, KeyBindAction::Use];
+
+#[derive(Default)]
+struct AutoclickChannel {
+    // Die Taste ist gerade gehalten (die echte, nicht die erzeugten Klicks).
+    held: bool,
+    // Ein erzeugter Klick ist unten; losgelassen wird zu release_at.
+    down: bool,
+    // Faellig ab: der naechste Druck bzw. das Loslassen des laufenden.
+    next: Option<Instant>,
+    release_at: Option<Instant>,
 }
 
 // Die Kategorien links im Modul-Menue. Jedes Modul gehoert zu genau einer.
@@ -16439,6 +16936,8 @@ impl ModuleId {
             | ModuleId::Keystrokes
             | ModuleId::DynamicFire
             | ModuleId::BlockOutline
+            | ModuleId::SaturationHud
+            | ModuleId::EgoName
             | ModuleId::Color
             | ModuleId::ChunkSaver => ModuleCategory::Render,
             ModuleId::NoToolBreak
@@ -16448,7 +16947,12 @@ impl ModuleId {
             | ModuleId::DiscordStatus
             | ModuleId::InputLog
             | ModuleId::Sustainability => ModuleCategory::Utility,
-            ModuleId::GhostTolerance | ModuleId::BotcheckPass | ModuleId::ShowMarkers | ModuleId::SoundDebug | ModuleId::FpsDisplay => ModuleCategory::Debug,
+            ModuleId::GhostTolerance
+            | ModuleId::BotcheckPass
+            | ModuleId::ShowMarkers
+            | ModuleId::SoundDebug
+            | ModuleId::FpsDisplay
+            | ModuleId::Autoclicker => ModuleCategory::Debug,
         }
     }
 }
@@ -17036,6 +17540,8 @@ struct App {
     // Modul-Menue eingeschaltet -- dann schreibt es die per Raw-Input erkannten Spiel-
     // Eingaben mit Zeitstempel in eine lokale Datei.
     input_log: input_log::InputLog,
+    // Debug-Modul "Autoklicker" (s. tick_autoclicker).
+    autoclick: Autoclick,
     // Hintergrundbild des Startbildschirms: Laden im Hintergrund (s. wallpaper.rs) und wann
     // zuletzt nachgesehen wurde, ob sich der Desktop-Hintergrund geaendert hat.
     wallpaper_loader: wallpaper::Loader,
@@ -17097,6 +17603,8 @@ struct App {
     // Dialog-Registry, auf die Show Dialog im Spiel verweisen kann.
     dialog: Option<dialog_screen::OpenDialog>,
     dialog_waiting: Option<Instant>,
+    // Link, dessen Bestaetigungsfenster gerade offen ist: "Öffnen" darf genau ihn oeffnen.
+    link_pending: Option<String>,
     code_of_conduct: Option<dialog_screen::CodeOfConduct>,
     server_links: Vec<protocol::packets::ServerLink>,
     dialog_registry: Vec<(String, Option<protocol::nbt::NbtValue>)>,
@@ -17322,6 +17830,10 @@ struct App {
     kinetic_hit_at: std::collections::HashMap<i32, Instant>,
     // Offenes Spielmodus-Rad und der Modus vor dem letzten Wechsel (s. gamemode_wheel.rs).
     gamemode_wheel: Option<gamemode_wheel::Wheel>,
+    // Reconnect-Taste: seit wann gehalten (s. tick_reconnect_hold). Nach dem Ausloesen erst
+    // wieder scharf, wenn die Taste los ist -- sonst verbaende ein Halten immer wieder neu.
+    reconnect_hold: Option<Instant>,
+    reconnect_needs_release: bool,
     previous_game_mode: Option<u8>,
     // Eigene Operator-Stufe 0..4 (Entity-Events 24..28 fuer den eigenen Spieler).
     op_level: u8,
@@ -17342,8 +17854,15 @@ struct App {
     // Ohne sie bewegt sich der Client mit jeder dieser Verzauberungen anders als der Server
     // rechnet -- GrimAC liest genau diese drei Attribute (MovementCheckRunner).
     attr_movement_speed: f64,
+    // Angriffstempo vom Server ohne Item-Modifikator (s. attack_speed_attribute). None = noch
+    // nichts gekommen, dann gilt Vanillas Grundwert 4.0.
+    attr_attack_speed: Option<(f64, f64, f64)>,
     attr_sneaking_speed: f64,
     attr_water_movement_efficiency: f64,
+    // Koerper-Attribute des eigenen Spielers (Schwerkraft, Sprungkraft, Seelenlaeufigkeit,
+    // Groesse, Stufenhoehe; s. physics::BodyAttributes). Hier statt nur in der Physik, weil
+    // die beim Teleport neu angelegt wird.
+    attr_body: physics::BodyAttributes,
     // Reichweiten (block_interaction_range 4.5, entity_interaction_range 3.0) -- im
     // Kreativmodus legt der Server +0.5 bzw. +2.0 an und schickt sie mit.
     attr_block_range: f64,
@@ -17370,6 +17889,11 @@ struct App {
     // Nahrung (Set Health) -- eine Sprint-Bedingung in Vanilla, s. physics::Input. Start ist
     // "satt": bis das erste Set Health kommt, darf der Sprint nicht faelschlich gesperrt sein.
     food_level: i32,
+    // Saettigung aus Set Health (0..20), nur fuer das Saettigungs-Modul.
+    food_saturation: f32,
+    // Was der Saettigungsbalken gerade zeigt, und wann zuletzt gezeichnet: er laeuft dem Wert
+    // weich nach (s. build_saturation_bar).
+    saturation_shown: std::cell::Cell<Option<(f32, Instant)>>,
     // Die eigenen Statuseffekte: Registry-ID -> Staerke. Gefuellt aus Update Mob Effect,
     // geleert aus Remove Mob Effect.
     //
@@ -17473,6 +17997,15 @@ struct App {
     // Benachrichtigungen fuer die Glocke oben rechts: die letzten NOTIFICATION_HISTORY (Titel,
     // Text, Art, wann), wie viele davon schon gesehen sind, und ob die Liste offen ist.
     notification_history: std::collections::VecDeque<(String, String, notifications::Kind, Instant)>,
+    // Verbindungs-Warnungen (s. check_packet_gap, note_lagback): wann das letzte Ereignis vom
+    // Server kam, die stehende "Keine Pakete"-Karte, die Lag-backs der letzten Sekunden und
+    // die Rubberbanding-Karte, die mitzaehlt.
+    last_server_event: Instant,
+    // Ping-IDs des Servers (Anticheat-Transaktionen), fuers Debug-Overlay.
+    transactions: transactions::Transactions,
+    packet_gap_note: Option<notifications::NotificationId>,
+    lagback_note: Option<(notifications::NotificationId, u32, Instant)>,
+    rubberband_note: Option<(notifications::NotificationId, u32)>,
     notifications_seen: usize,
     notification_panel_open: bool,
     // Wann die Glocke zuletzt auf- oder zugemacht wurde: das Fenster faehrt von da an
@@ -17505,6 +18038,7 @@ struct App {
     // Hover-Animation der Knoepfe, nach ihrer Flaeche (s. hover_level).
     hover_anims: std::cell::RefCell<rustc_hash::FxHashMap<(i32, i32, i32, i32), HoverAnim>>,
     chat_slide: std::cell::RefCell<Option<ChatSlide>>,
+    chat_gap: std::cell::RefCell<Option<ChatGap>>,
     chat_recall: Option<ChatRecall>,
     // Fuer "laeuft seit" unter der Uhr.
     app_started: Instant,
@@ -17519,6 +18053,8 @@ struct App {
     persist_paused: bool,
     // Offenes Farbfenster (s. ColorPopup).
     color_popup: Option<ColorPopup>,
+    // Wann der Erwaehnungston (Modul Eigenname) zuletzt klang.
+    ego_sound_at: Option<Instant>,
     // Seiten-Scroll der uebrigen Einstellungsseiten (s. MenuScreen::settings_page), je
     // settings_key. Render behaelt settings_scroll, das gespeichert wird.
     page_scrolls: std::collections::BTreeMap<&'static str, usize>,
@@ -17589,8 +18125,9 @@ struct App {
     anvil_name: String,
     anvil_name_for: Option<String>,
     // Textur-Property je Kopf-Schluessel fuer Koepfe, die andere halten oder tragen (s.
-    // request_head_skins). Gehoert zur Verbindung.
-    head_textures: std::collections::HashMap<[u8; 16], String>,
+    // request_head_skins), beim Merken einmal gelesen: None = die Property nennt keinen Skin
+    // (oder keinen von Mojangs Host). Gehoert zur Verbindung.
+    head_textures: std::collections::HashMap<[u8; 16], Option<auth::SkinRef>>,
     // Kopf-Schluessel, deren Profil schon bei Mojang nachgeschlagen wird oder wurde (s.
     // note_head_profile) -- jeder hoechstens einmal je Verbindung.
     head_lookups: std::collections::HashSet<[u8; 16]>,
@@ -18054,6 +18591,12 @@ struct App {
     // Handle auf den laufenden Join-Task -- nur damit ist die Verbindung wieder stoppbar.
     conn_task: Option<tokio::task::JoinHandle<()>>,
     chunks_received: usize,
+    // Fuer die F3-Zeile "Blick-Chunk": wann jede Spalte zuletzt kam, vergessen wurde und
+    // zuletzt als unlesbares Paket ankam.
+    column_history: std::collections::HashMap<(i32, i32), (Option<Instant>, Option<Instant>, Option<Instant>)>,
+    // Letzter Welt-Reset (Weltwechsel-Respawn, Rekonfiguration) und sein Grund; die Historie
+    // oben bleibt darueber stehen, damit man sieht, ob eine Spalte VOR dem Reset kam.
+    world_reset_debug: Option<(Instant, &'static str)>,
     // Weltzustand aus den Server-Chunks; Meshes davon liegen im BlockRenderer.
     world: world::World,
     // Getrackte Entities (andere Spieler, Mobs, ...) aus den Server-Packets, mit
@@ -18762,6 +19305,7 @@ impl App {
             caps_lock_recheck: None,
             input_watcher,
             input_log,
+            autoclick: Autoclick::default(),
             wallpaper_loader: wallpaper::Loader::default(),
             wallpaper_checked_at: Instant::now(),
             last_view_requested: false,
@@ -18792,6 +19336,7 @@ impl App {
             disconnect_popup: None,
             dialog: None,
             dialog_waiting: None,
+            link_pending: None,
             code_of_conduct: None,
             server_links: Vec::new(),
             dialog_registry: Vec::new(),
@@ -18898,12 +19443,16 @@ impl App {
             spectator_flight: None,
             kinetic_hit_at: std::collections::HashMap::new(),
             gamemode_wheel: None,
+            reconnect_hold: None,
+            reconnect_needs_release: false,
             previous_game_mode: None,
             creative: creative::Creative::default(),
             creative_registries: creative::Registries::default(),
             attr_movement_speed: physics::BASE_SPEED,
+            attr_attack_speed: None,
             attr_sneaking_speed: physics::DEFAULT_SNEAKING_SPEED,
             attr_water_movement_efficiency: 0.0,
+            attr_body: physics::BodyAttributes::default(),
             attr_block_range: BLOCK_INTERACTION_REACH,
             attr_entity_range: ENTITY_INTERACTION_REACH,
             attr_block_break_speed: 1.0,
@@ -18918,6 +19467,8 @@ impl App {
             step_next: 1.0,
             ao_fades: Vec::new(),
             food_level: 20,
+            food_saturation: 5.0,
+            saturation_shown: std::cell::Cell::new(None),
             player_names: std::collections::HashMap::new(),
             health: 20.0,
             max_health: 20.0,
@@ -18953,6 +19504,11 @@ impl App {
             settings_return: MenuScreen::Connect,
             hud_editor_return: MenuScreen::Main,
             notification_history: std::collections::VecDeque::new(),
+            last_server_event: Instant::now(),
+            transactions: transactions::Transactions::default(),
+            packet_gap_note: None,
+            lagback_note: None,
+            rubberband_note: None,
             notifications_seen: 0,
             notification_panel_open: false,
             notification_panel_since: Instant::now() - Duration::from_secs(1),
@@ -18970,6 +19526,7 @@ impl App {
             selection_sound_deselect: false,
             hover_anims: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             chat_slide: std::cell::RefCell::new(None),
+            chat_gap: std::cell::RefCell::new(None),
             chat_recall: None,
             app_started: Instant::now(),
             slider_drag: None,
@@ -18977,6 +19534,7 @@ impl App {
             step_drag: None,
             persist_paused: false,
             color_popup: None,
+            ego_sound_at: None,
             page_scrolls: std::collections::BTreeMap::new(),
             section_click: None,
             scrolls_loaded: false,
@@ -19170,6 +19728,8 @@ impl App {
             shared_rotation: std::sync::Arc::new(net::SharedLook::default()),
             conn_task: None,
             chunks_received: 0,
+            column_history: std::collections::HashMap::new(),
+            world_reset_debug: None,
             world: world::World::new(),
             entities: world::Entities::new(),
             mesh_results_tx,
@@ -19911,10 +20471,9 @@ impl App {
         if self.dialog_escape() {
             return;
         }
-        // Beim Verbinden bricht Esc sofort ab (wie "Abbrechen" in Vanillas ConnectScreen).
-        if self.connecting_view() && self.conn_task.is_some() {
-            self.play_ui_sound(ui_sound::UiSound::Close);
-            self.disconnect();
+        // Beim Verbinden tut Esc nichts -- abgebrochen wird mit dem Knopf im Overlay (s.
+        // connect_cancel_rect). Ein Dialog des Servers bekommt Esc oben trotzdem.
+        if self.connecting_view() {
             return;
         }
         if self.disconnect_popup.take().is_some() || self.theme_delete.take().is_some() || self.theme_name_dialog.take().is_some() {
@@ -20126,6 +20685,10 @@ impl App {
                 self.set_action_active(action, false);
             }
         }
+        // Ein laufender Quicklook endet wie jede gehaltene Taste.
+        if self.quicklook_hold() && self.keybind_physical_down[KeyBindAction::TogglePerspective.index()] {
+            self.perspective = Perspective::FirstPerson;
+        }
         // Auch die rohe Tastenverfolgung leeren: sonst wuerde nach einem Fokuswechsel eine
         // eigentlich losgelassene Taste im Umschalten-Modus als "noch unten" gelten und der
         // naechste Druck loest keine steigende Flanke aus (s. apply_key_action).
@@ -20204,6 +20767,7 @@ impl App {
             KeyBindAction::InspectItem => self.inspect_held,
             KeyBindAction::VoiceWhisper => self.whisper_held,
             KeyBindAction::GameModeWheel => self.gamemode_wheel.is_some(),
+            KeyBindAction::Reconnect => self.reconnect_hold.is_some(),
             // Einmal-Aktionen ohne Dauerzustand -- sie loesen beim Druck aus (s.
             // apply_key_action). BEWUSST einzeln aufgezaehlt statt `_ => false`: mit dem
             // Auffangzweig fiel eine neu hinzugefuegte HALTE-Aktion still hier hinein und war
@@ -20253,6 +20817,9 @@ impl App {
             KeyBindAction::InspectItem => self.inspect_held = active,
             KeyBindAction::VoiceWhisper => self.whisper_held = active,
             KeyBindAction::GameModeWheel => self.set_gamemode_wheel(active),
+            KeyBindAction::Reconnect => {
+                self.reconnect_hold = (active && !self.reconnect_needs_release).then(|| self.reconnect_hold.unwrap_or_else(Instant::now));
+            }
             // Ebenfalls vollstaendig aufgezaehlt, aus demselben Grund wie in action_active.
             KeyBindAction::TogglePerspective
             | KeyBindAction::OpenInventory
@@ -20289,7 +20856,80 @@ impl App {
     // kippt den Zustand um -- dafuer wird der vorherige physische Zustand mitgefuehrt
     // (keybind_physical_down), da move_forward selbst im Umschalten-Modus NICHT mehr dem
     // physischen Zustand entspricht.
+    // Naechste Perspektive fuer die Taste, uebersprungene 3.-Person-Ansichten ausgelassen.
+    fn next_perspective(&self) -> Perspective {
+        let mut p = self.perspective.next();
+        while self.settings.perspective_skipped(p) {
+            p = p.next();
+        }
+        p
+    }
+
+    fn quicklook_hold(&self) -> bool {
+        self.settings.quicklook_target().is_some() && self.settings.keybind_modes.perspective == KeybindMode::Hold
+    }
+
+    // Der Autoklicker wirkt nur, wo er nichts anrichtet: auf anticheat-test.com (dafuer ist er
+    // da) und auf Servern auf diesem Rechner, auch dem pktproxy davor.
+    fn autoclicker_allowed(&self) -> bool {
+        let adresse = self.server_address.trim();
+        let host = adresse.rsplit_once(':').map_or(adresse, |(h, _)| h).trim_end_matches('.').to_ascii_lowercase();
+        net::is_local_address(adresse) || host == "anticheat-test.com" || host.ends_with(".anticheat-test.com")
+    }
+
+    fn autoclicker_active(&self) -> bool {
+        self.settings.module_autoclicker && self.mode == AppMode::World && self.autoclicker_allowed()
+    }
+
+    // Einmal je Bild, fuer Angreifen und Benutzen getrennt: solange die Taste gehalten ist,
+    // druecken und wieder loslassen im Takt von autoclicker_cps, jeder Klick eine halbe
+    // Periode unten. Faellt ein Bild zu spaet, wird nicht nachgeholt -- sonst kaemen nach
+    // einem Ruckler mehrere Klicks auf einmal.
+    fn tick_autoclicker(&mut self) {
+        let jetzt = Instant::now();
+        let erlaubt = self.autoclicker_active();
+        let bereit = erlaubt && self.focused && self.chat_input.is_none() && !self.screen_overlay_open();
+        let periode = Duration::from_secs_f64(1.0 / self.settings.autoclicker_cps.max(1) as f64);
+        for (i, action) in AUTOCLICK_ACTIONS.into_iter().enumerate() {
+            let k = &self.autoclick.channels[i];
+            let aktiv = k.held && bereit;
+            if k.down && (!aktiv || k.release_at.is_none_or(|t| jetzt >= t)) {
+                self.synthetic_click(i, action, false);
+            }
+            let k = &mut self.autoclick.channels[i];
+            if !aktiv {
+                k.held &= erlaubt;
+                k.next = None;
+                continue;
+            }
+            let faellig = *k.next.get_or_insert(jetzt);
+            if !k.down && jetzt >= faellig {
+                let naechster = faellig + periode;
+                k.next = Some(if naechster < jetzt { jetzt + periode } else { naechster });
+                k.release_at = Some(jetzt + periode / 2);
+                self.synthetic_click(i, action, true);
+            }
+        }
+    }
+
+    fn synthetic_click(&mut self, kanal: usize, action: KeyBindAction, pressed: bool) {
+        self.autoclick.synthetic = true;
+        self.apply_key_action(action, pressed);
+        self.autoclick.synthetic = false;
+        self.autoclick.channels[kanal].down = pressed;
+    }
+
     fn apply_key_action(&mut self, action: KeyBindAction, pressed: bool) {
+        // Autoklicker: gehaltenes Angreifen/Benutzen klickt nicht selbst, es gibt nur den Takt
+        // frei (s. tick_autoclicker). Die erzeugten Klicks kommen mit synthetic hier durch.
+        if let Some(kanal) = AUTOCLICK_ACTIONS.iter().position(|a| *a == action).filter(|_| !self.autoclick.synthetic && self.autoclicker_active()) {
+            let k = &mut self.autoclick.channels[kanal];
+            k.held = pressed;
+            if pressed {
+                k.next = Some(Instant::now());
+            }
+            return;
+        }
         let idx = action.index();
         let was_down = self.keybind_physical_down[idx];
         self.keybind_physical_down[idx] = pressed;
@@ -20305,6 +20945,18 @@ impl App {
             if action == KeyBindAction::Use {
                 self.queue_use_click();
             }
+        }
+        // Quicklook: Perspektive-Taste auf Halten und eine 3.-Person-Ansicht uebersprungen --
+        // solange sie unten ist, schaut man in die andere, beim Loslassen zurueck ins Auge.
+        if action == KeyBindAction::TogglePerspective && self.quicklook_hold() {
+            if let Some(ziel) = self.settings.quicklook_target() {
+                if pressed && !was_down {
+                    self.perspective = ziel;
+                } else if !pressed && was_down {
+                    self.perspective = Perspective::FirstPerson;
+                }
+            }
+            return;
         }
         // Einmal-Aktionen: nur die steigende Flanke zaehlt (kein Auto-Repeat, kein
         // Loslassen), danach ist nichts weiter zu setzen.
@@ -21265,7 +21917,7 @@ impl App {
             return;
         }
         match action {
-            KeyBindAction::TogglePerspective => self.perspective = self.perspective.next(),
+            KeyBindAction::TogglePerspective => self.perspective = self.next_perspective(),
             KeyBindAction::OpenInventory => self.toggle_inventory(),
             KeyBindAction::Attack => {
                 // Vanillas Schwungdauer fuer Spieler: 6 Ticks. Solange richtet sich der
@@ -21490,12 +22142,12 @@ impl App {
                 THEME_TILE_COUNT.store(theme::PRESETS.len() + self.settings.custom_themes.len() + 1, Relaxed);
                 SETTINGS_SCROLL_FIRST.store(self.page_scroll().min(self.page_max_scroll()), Relaxed);
                 SETTINGS_SCROLL_BOTTOM.store(settings_rows_bottom(h).to_bits(), Relaxed);
-                SETTINGS_SECTION_STARTS.store(page.section_starts(), Relaxed);
+                store_section_starts(page.section_starts());
             }
             None => {
                 SETTINGS_SCROLL_FIRST.store(0, Relaxed);
                 SETTINGS_SCROLL_BOTTOM.store(f32::INFINITY.to_bits(), Relaxed);
-                SETTINGS_SECTION_STARTS.store(0, Relaxed);
+                store_section_starts(0);
             }
         }
     }
@@ -21648,9 +22300,21 @@ impl App {
 
     // Verbindungs-Events aus dem Netzwerk-Task einsammeln (nicht blockierend).
     fn drain_events(&mut self) {
+        self.publish_ego_look();
         while let Ok(event) = self.events_rx.try_recv() {
+            // Log-Zeilen schreibt der Netz-Task selbst, alles andere kam vom Server.
+            if !matches!(event, net::ClientEvent::Log(_) | net::ClientEvent::PacketStall { .. }) {
+                self.server_event_seen();
+            }
             match event {
                 net::ClientEvent::Log(msg) => self.push_log(msg),
+                net::ClientEvent::PacketStall { outgoing, millis } => self.note_rubberband(outgoing, millis),
+                net::ClientEvent::TransactionPing(id) => {
+                    if let Some(zeile) = self.transactions.push(id, Instant::now()) {
+                        eprintln!("{zeile}");
+                        self.push_log(zeile);
+                    }
+                }
                 net::ClientEvent::Connected => {
                     self.conn_status = ConnStatus::Connected;
                     // Mit dem Spiel beginnt ein neuer Bildschirm: Fenster aus der
@@ -21752,6 +22416,7 @@ impl App {
                     // wieder das Verbindungs-Overlay (haengt an chunks_received == 0) und
                     // laeuft normal weiter, sobald die neuen Chunks da sind.
                     self.reset_world();
+                    self.world_reset_debug = Some((Instant::now(), "Rekonfiguration"));
                     self.inventory.reset();
                 }
                 net::ClientEvent::Route(ziel) => self.conn_route = Some(ziel),
@@ -21773,14 +22438,28 @@ impl App {
                 net::ClientEvent::Chunk(chunk) => {
                     self.chunks_received += 1;
                     let (cx, cz) = (chunk.x, chunk.z);
+                    self.column_history.entry((cx, cz)).or_default().0 = Some(Instant::now());
                     self.signs.retain(|p, _| (p.0.div_euclid(16), p.2.div_euclid(16)) != (cx, cz));
                     self.signs.extend(chunk.signs);
                     self.placed_heads.retain(|p, _| (p.0.div_euclid(16), p.2.div_euclid(16)) != (cx, cz));
                     for (pos, profil) in &chunk.heads {
                         self.note_placed_head(*pos, profil);
                     }
-                    let sections =
-                        chunk.sections.into_iter().map(|s| world::ChunkSection::from_states_and_biomes(s.block_states, s.biomes)).collect();
+                    // Nur so viele Sections wie die Dimension hoch ist, wie Vanilla; dahinter
+                    // haengen manche Server Muell an (s. protocol::chunk, tail_unreadable).
+                    // Ohne bekannte Dimension nur bei Muell kuerzen, dann auf die Overworld.
+                    let hoehe = self
+                        .dimension_types
+                        .iter()
+                        .find(|d| d.name == self.dimension_type_name)
+                        .map(|d| (d.height.max(0) / 16) as usize)
+                        .or(chunk.tail_unreadable.then_some(384 / 16));
+                    let sections = chunk
+                        .sections
+                        .into_iter()
+                        .take(hoehe.unwrap_or(usize::MAX))
+                        .map(|s| world::ChunkSection::from_states_and_biomes(s.block_states, s.biomes))
+                        .collect();
                     // Markiert die Spalte (und ihre Nachbarn) als zu meshen; gebaut wird
                     // sie budgetiert im Frame, s. mesh_pending_columns.
                     self.world.insert_column(chunk.x, chunk.z, sections);
@@ -21794,6 +22473,8 @@ impl App {
                     self.spectator_flight = None;
                     let (x, y, z) = sync.pos;
                     let (yaw_deg, pitch_deg, flags) = (sync.yaw, sync.pitch, sync.flags);
+                    // Die erste Position nach dem Betreten ist kein Lag-back (s. note_lagback).
+                    let hatte_position = self.player_loaded_have_pos;
                     self.player_loaded_have_pos = true;
                     // Sitzend laesst Vanilla Position und Drehung liegen
                     // (ClientPacketListener.handleMovePlayer, nur ohne isPassenger): die Stelle
@@ -21803,6 +22484,7 @@ impl App {
                     // und dessen Drehung ist der Stand, den der Server zuletzt von uns hatte --
                     // die Kamera sprang dauernd dorthin zurueck.
                     if self.own_ride.is_some() {
+                        eprintln!("[teleport] sitzend, uebergangen: pos=({x:.2},{y:.2},{z:.2}) flags={flags:#x}");
                         continue;
                     }
                     // JEDE Synchronize Player Position hart uebernehmen, nicht nur die
@@ -21823,6 +22505,38 @@ impl App {
                     let resolved_x = if flags & protocol::packets::POSITION_FLAG_REL_X != 0 { old_pos.x + x } else { x };
                     let resolved_y = if flags & protocol::packets::POSITION_FLAG_REL_Y != 0 { old_pos.y + y } else { y };
                     let resolved_z = if flags & protocol::packets::POSITION_FLAG_REL_Z != 0 { old_pos.z + z } else { z };
+                    // Perle und Chorusfrucht teleportieren mit allen Delta-Bits (der Schwung
+                    // bleibt, s. teleport_velocity) -- das ist gewollt, kein Zuruecksetzen.
+                    const DELTA_ALLE: i32 = protocol::packets::POSITION_FLAG_REL_DELTA_X
+                        | protocol::packets::POSITION_FLAG_REL_DELTA_Y
+                        | protocol::packets::POSITION_FLAG_REL_DELTA_Z;
+                    const POS_REL: i32 = protocol::packets::POSITION_FLAG_REL_X
+                        | protocol::packets::POSITION_FLAG_REL_Y
+                        | protocol::packets::POSITION_FLAG_REL_Z;
+                    // Perle/Chorus: Schwung bleibt, Ziel absolut. Alles relativ (applepvp,
+                    // flags=0x1ff) ist dagegen ein Versatz, kein Perlenwurf.
+                    let perle = flags & DELTA_ALLE == DELTA_ALLE && flags & POS_REL == 0;
+                    let strecke = old_pos.distance(DVec3::new(resolved_x, resolved_y, resolved_z));
+                    // Immer ins Client-Log (selten, nur bei Server-Teleports): woran eine
+                    // fehlende oder falsche Lag-back-Karte lag, steht dann schon da.
+                    let urteil = if !hatte_position {
+                        "erste Position"
+                    } else if strecke < LAGBACK_MIN_BLOCKS {
+                        "an Ort und Stelle"
+                    } else if perle {
+                        "Perle/Chorus"
+                    } else if strecke > LAGBACK_MAX_BLOCKS {
+                        "zu weit (echter Teleport)"
+                    } else {
+                        "Lag-back"
+                    };
+                    eprintln!(
+                        "[teleport] {strecke:.3} Bloecke, flags={flags:#x}, vel=({:.3},{:.3},{:.3}), von ({:.2},{:.2},{:.2}) nach ({resolved_x:.2},{resolved_y:.2},{resolved_z:.2}) -> {urteil}",
+                        sync.vel.0, sync.vel.1, sync.vel.2, old_pos.x, old_pos.y, old_pos.z
+                    );
+                    if hatte_position && !perle {
+                        self.note_lagback(strecke);
+                    }
                     // ZWEITER ECHTER BUG gewesen (wer Maus und Tastatur gleichzeitig bewegte,
                     // wurde sofort an den Spawnpunkt zurueckteleportiert): Yaw/Pitch aus diesem Paket wurden bisher
                     // komplett verworfen, die Kamera behielt einfach ihren alten Wert. Grims
@@ -21871,16 +22585,31 @@ impl App {
                     );
                     let uebernommen = self.physics.carry_over_state();
                     self.physics = physics::PlayerPhysics::new(DVec3::new(resolved_x, resolved_y, resolved_z));
+                    self.physics.body = self.attr_body;
                     self.physics.restore_carry_over_state(uebernommen);
                     self.physics.vel = neue_vel;
                     // KEIN refresh_on_ground: Vanillas setValuesFromPositionPacket laesst
                     // onGround und den Standblock in Ruhe, beide kommen ueber
                     // carry_over_state herueber (s. dortigen Kommentar -- die Neumessung war
                     // die Ursache eines Grim-Simulation-Flags nach jeder Enderperle).
-                    self.physics_render_prev = self.physics.pos;
-                    self.physics_accum = 0.0;
-                    self.camera.yaw = resolved_yaw_deg;
-                    self.camera.pitch = (-resolved_pitch_deg).clamp(-MAX_PITCH, MAX_PITCH);
+                    // Die gezeichnete Zwischenposition wie Vanillas setOldPosAndRot: dieselbe
+                    // Aenderung auch auf die vorige Tick-Position, relative Achsen also nur
+                    // verschoben, absolute gesetzt. Den Tick-Takt (physics_accum) fasst Vanilla
+                    // gar nicht an.
+                    //
+                    // ECHTER BUG gewesen (applepvp): der Server schickt "Teleports" mit allen
+                    // Relativ-Bits und Versatz 0 -- man bleibt, wo man ist. Wir setzten
+                    // trotzdem die Zwischenposition auf den neuesten Tick (Sprung nach vorn um
+                    // bis zu einen Tick Bewegung) und den Takt auf 0 (bis zu 50 ms Stillstand):
+                    // sah jedes Mal aus wie ein Teleport.
+                    let prev = self.physics_render_prev;
+                    let achse = |bit: i32, alt: f64, rel: f64, abs: f64| if flags & bit != 0 { alt + rel } else { abs };
+                    self.physics_render_prev = DVec3::new(
+                        achse(protocol::packets::POSITION_FLAG_REL_X, prev.x, x, resolved_x),
+                        achse(protocol::packets::POSITION_FLAG_REL_Y, prev.y, y, resolved_y),
+                        achse(protocol::packets::POSITION_FLAG_REL_Z, prev.z, z, resolved_z),
+                    );
+                    self.apply_server_rotation(resolved_yaw_deg, resolved_pitch_deg);
                     // Netz-Task sofort mit der neuen Blickrichtung versorgen, damit ein direkt
                     // folgender Teleport (Setback-Kette) die richtige Rotation zurueckmeldet.
                     self.shared_rotation.set(resolved_yaw_deg, resolved_pitch_deg);
@@ -21915,13 +22644,17 @@ impl App {
                     // Vorzeichen wie ueberall sonst: das Protokoll zaehlt Pitch nach unten
                     // positiv, unsere Kamera nach oben (s. look_pitch_deg / die Teleport-
                     // Behandlung weiter oben) -- deshalb das Minus.
-                    self.camera.yaw = yaw_deg;
-                    self.camera.pitch = (-pitch_deg).clamp(-MAX_PITCH, MAX_PITCH);
+                    self.apply_server_rotation(yaw_deg, pitch_deg);
                     // Kein Ruecksetzen von ticks_since_position_sent und kein Reset der
                     // "zuletzt gesendet"-Position: dieses Paket bewegt uns NICHT, es dreht
                     // uns nur. Die Positionsbuchhaltung bleibt damit gueltig.
                 }
+                net::ClientEvent::ChunkUndecodable(x, z) => {
+                    self.column_history.entry((x, z)).or_default().2 = Some(Instant::now());
+                    self.push_log(format!("Chunk {x} {z} nicht dekodierbar"));
+                }
                 net::ClientEvent::ForgetChunk(x, z) => {
+                    self.column_history.entry((x, z)).or_default().1 = Some(Instant::now());
                     self.column_light.remove(&(x, z));
                     self.signs.retain(|p, _| (p.0.div_euclid(16), p.2.div_euclid(16)) != (x, z));
                     self.placed_heads.retain(|p, _| (p.0.div_euclid(16), p.2.div_euclid(16)) != (x, z));
@@ -22038,6 +22771,9 @@ impl App {
                     self.attr_movement_speed = physics::BASE_SPEED;
                     self.attr_sneaking_speed = physics::DEFAULT_SNEAKING_SPEED;
                     self.attr_water_movement_efficiency = 0.0;
+                    self.attr_body = physics::BodyAttributes::default();
+                    self.physics.body = self.attr_body;
+                    self.attr_attack_speed = None;
                     self.attr_block_range = BLOCK_INTERACTION_REACH;
                     self.attr_entity_range = ENTITY_INTERACTION_REACH;
                     // Neuer Spieler, neue Faehigkeiten; GameMode und Abilities des Servers folgen.
@@ -22140,6 +22876,7 @@ impl App {
                         // GrimACs BadPacketsH bei 0 neu anfaengt: garantierter Flag beim
                         // ersten Blockklick drueben.
                         self.reset_world_state();
+                        self.world_reset_debug = Some((Instant::now(), "Weltwechsel-Respawn"));
                     }
                 }
                 net::ClientEvent::OwnUuid(uuid) => {
@@ -22233,9 +22970,7 @@ impl App {
                             // Waehrend wir selbst essen oder auf ihn warten, gilt sein Flag nicht
                             // (es ist dann veraltet, s. consumable_optimizer.rs).
                             if !benutzt {
-                                self.consumable.stop_waiting();
-                                // Er ist fertig: der naechste Bissen muss nicht mehr warten.
-                                self.eat_next_use_delay = 0;
+                                self.consumable_server_done("Flag");
                             }
                             let eigenes_essen = self.consumable_optimizer_active()
                                 && (self.consumable.waiting(Instant::now())
@@ -22313,6 +23048,34 @@ impl App {
                         }
                     }
                 }
+                net::ClientEvent::BodyAttributes { id, gravity, jump_strength, movement_efficiency, scale, step_height } => {
+                    if Some(id) == self.own_entity_id {
+                        let b = &mut self.attr_body;
+                        if let Some(v) = gravity {
+                            b.gravity = v;
+                        }
+                        if let Some(v) = jump_strength {
+                            b.jump_strength = v;
+                        }
+                        if let Some(v) = movement_efficiency {
+                            b.movement_efficiency = v;
+                        }
+                        if let Some(v) = scale {
+                            b.scale = v as f32;
+                        }
+                        if let Some(v) = step_height {
+                            b.set_step_height(v);
+                        }
+                        self.physics.body = self.attr_body;
+                    } else if let (Some(v), Some(e)) = (scale, self.entities.get_mut(id)) {
+                        e.scale = v as f32;
+                    }
+                }
+                net::ClientEvent::AttackSpeed { id, parts } => {
+                    if Some(id) == self.own_entity_id {
+                        self.attr_attack_speed = Some(parts);
+                    }
+                }
                 net::ClientEvent::RangeAttributes { id, block, entity } => {
                     if Some(id) == self.own_entity_id {
                         if let Some(v) = block {
@@ -22379,6 +23142,13 @@ impl App {
                     // dann gab es die Kruemel schon.
                     if status == ENTITY_STATUS_USE_ITEM_COMPLETE && self.own_entity_id == Some(entity_id) && self.using_item {
                         self.own_eating_particles(true);
+                    }
+                    // Auch das ist das "fertig" des Servers, auf das der Consumable Optimizer
+                    // wartet. Auf pvphq kam das Flag "benutzt Item aus" gemessen nicht an, die
+                    // Ess-Verlangsamung lief die vollen 500 ms nach dem Klang weiter; vermutlich
+                    // meldet der Server dort nur mit diesem Event (s. "[essen]" im Client-Log).
+                    if status == ENTITY_STATUS_USE_ITEM_COMPLETE && self.own_entity_id == Some(entity_id) {
+                        self.consumable_server_done("Event 9");
                     }
                     // Totem: 30 Ticks Glitzer (ClientPlayNetworkHandler.onEntityStatus, Fall 35).
                     // Tod: 20 Rauchwoelkchen (LivingEntity.handleStatus, Fall 60). Beides fuer
@@ -22676,9 +23446,18 @@ impl App {
                 }
                 // Vanilla (onPlayerListHeader): ein leerer Text heisst "keine Kopf-/Fusszeile".
                 net::ClientEvent::TabList { header, footer } => {
+                    let (header, footer) = (self.ego_incoming(header, false), self.ego_incoming(footer, false));
                     let leer = |spans: &[protocol::nbt::TextSpan]| spans.iter().all(|s| s.text.is_empty());
                     self.tab_header = if leer(&header) { Vec::new() } else { header };
                     self.tab_footer = if leer(&footer) { Vec::new() } else { footer };
+                }
+                // Sonstiges > No slot set: der eigene Slot bleibt. Bei Reset glaubt
+                // sync_selected_slot, der Server habe seinen Slot, und schickt im naechsten
+                // Tick den eigenen -- an der Stelle, an der Vanilla Slotwechsel schickt.
+                net::ClientEvent::HeldSlot(slot) if self.settings.no_slot_set != SERVER_SET_FOLLOW && (0..9).contains(&slot) => {
+                    if self.settings.no_slot_set == SERVER_SET_RESET {
+                        self.last_synced_slot = slot as usize;
+                    }
                 }
                 net::ClientEvent::HeldSlot(slot) => {
                     // Der Server darf den aktiven Slot setzen (Respawn, /clear, Plugins).
@@ -22725,8 +23504,15 @@ impl App {
                 net::ClientEvent::RecipeBookAdd(add) => self.recipe_book.apply_add(add),
                 net::ClientEvent::RecipeBookRemove(ids) => self.recipe_book.apply_remove(&ids),
                 net::ClientEvent::ItemTags(tags) => self.recipe_book.tags = tags,
-                // Sonstiges > No UI close S2C: der Server schliesst nichts.
-                net::ClientEvent::CloseScreen(_) if self.settings.no_ui_close_s2c => {}
+                net::ClientEvent::BlockTags(tags) => world::mining::set_server_block_tags(tags),
+                // Sonstiges > No UI close: der Server schliesst nichts (oder nur das eigene
+                // Inventar nicht -- offen ohne Container und ohne Schild-Editor).
+                net::ClientEvent::CloseScreen(_)
+                    if self.settings.no_ui_close == NO_UI_CLOSE_ALWAYS
+                        || (self.settings.no_ui_close == NO_UI_CLOSE_INVENTORY
+                            && self.inventory.screen_open
+                            && self.inventory.open.is_none()
+                            && self.sign_edit.is_none()) => {}
                 net::ClientEvent::CloseScreen(_sync_id) => {
                     // Vanilla schliesst bei Container Close jeden offenen Screen, ohne auf die
                     // ID zu schauen -- auch den Schild-Editor, der dabei seinen Text als Sign
@@ -22740,6 +23526,7 @@ impl App {
                     self.restore_held_controls();
                 }
                 net::ClientEvent::Chat(spans, overlay) => {
+                    let spans = self.ego_incoming(spans, !overlay);
                     // overlay=true ist Actionbar (ueber der Hotbar), nicht die Chat-Liste.
                     if overlay {
                         // Die Actionbar zeichnet bisher einfarbig -- dort wird der Text
@@ -22751,14 +23538,17 @@ impl App {
                     }
                 }
                 net::ClientEvent::ActionBar(spans) => {
+                    let spans = self.ego_incoming(spans, false);
                     self.action_bar = Some((spans, Instant::now()));
                 }
                 net::ClientEvent::Title(text) => {
+                    let text = self.ego_incoming(text, false);
                     self.title_debug("Titel", &text);
                     self.title_text = if text.iter().all(|s| s.text.is_empty()) { None } else { Some(text) };
                     self.title_set_at = Instant::now();
                 }
                 net::ClientEvent::Subtitle(text) => {
+                    let text = self.ego_incoming(text, false);
                     self.title_debug("Untertitel", &text);
                     self.subtitle_text = if text.iter().all(|s| s.text.is_empty()) { None } else { Some(text) };
                 }
@@ -22967,10 +23757,11 @@ impl App {
                         self.air_ticks = air.clamp(0, MAX_AIR_TICKS);
                     }
                 }
-                net::ClientEvent::Health(health, food) => {
+                net::ClientEvent::Health(health, food, saturation) => {
                     // Vanillas HungerManager.canSprint(): foodLevel > 6. Darunter laesst sich
                     // kein Sprint mehr STARTEN und ein laufender endet (s. physics::Input).
                     self.food_level = food;
+                    self.food_saturation = saturation;
                     // Gesunken heisst getroffen (s. own_hurt_ticks). Erst ab dem ZWEITEN
                     // Paket, sonst zaehlt der Anfangswert als Treffer.
                     if self.own_health_initialized && health < self.health {
@@ -23337,6 +24128,13 @@ impl App {
     fn reset_world(&mut self) {
         self.reset_dialogs();
         self.server_links.clear();
+        // Verbindungs-Warnungen gehoeren zur Verbindung.
+        if let Some(id) = self.packet_gap_note.take() {
+            self.notifications.dismiss(id, Instant::now());
+        }
+        self.lagback_note = None;
+        self.rubberband_note = None;
+        self.transactions = transactions::Transactions::default();
         // Den Standort fuers naechste Verbinden merken (s. lod::App::lod_preview_saved).
         self.lod_remember_pose();
         self.reset_world_state();
@@ -23831,7 +24629,7 @@ impl App {
                 AuthEvent::SkinLoaded { uuid, url, rgba, slim } => self.apply_loaded_skin(uuid, url, rgba, slim),
                 AuthEvent::HeadProfile { key, textures } => {
                     if let Some(t) = textures {
-                        self.head_textures.insert(key, t);
+                        self.head_textures.insert(key, auth::parse_textures_property(&t));
                     }
                     // Das Profil eines gespeicherten Kontos: jetzt seinen Skin laden -- auch bei
                     // geschlossener Liste, der Kopf oben in der Leiste braucht ihn ebenso.
@@ -23893,10 +24691,45 @@ impl App {
             self.notify(notifications::Notification::error("Nicht angemeldet", "Bitte zuerst mit Microsoft anmelden."));
             return;
         }
+        self.column_history.clear();
+        self.world_reset_debug = None;
         self.start_connect();
         self.mode = AppMode::World;
         self.screen = MenuScreen::Main;
         self.restore_held_controls();
+    }
+
+    // Pausemenue "Reconnect" und die gehaltene Reconnect-Taste: dieselbe Adresse neu
+    // verbinden, start_connect baut die alte Verbindung vorher ab.
+    fn reconnect(&mut self) {
+        if self.server_address.is_empty() {
+            return;
+        }
+        self.push_log("== reconnect (vom Nutzer) ==");
+        self.go_connect();
+    }
+
+    // Reconnect-Taste: nach der Bestaetigungsdauer neu verbinden. Danach erst wieder, wenn die
+    // Taste losgelassen wurde.
+    fn tick_reconnect_hold(&mut self) {
+        if self.reconnect_needs_release && !self.settings.keybinds.binds(KeyBindAction::Reconnect).any(|b| self.binds_down.contains(&b)) {
+            self.reconnect_needs_release = false;
+        }
+        if self.reconnect_progress().is_some_and(|f| f >= 1.0) {
+            self.reconnect_hold = None;
+            self.reconnect_needs_release = true;
+            self.reconnect();
+        }
+    }
+
+    // Wie weit die Reconnect-Taste gehalten ist, 0..1 (1 = loest aus).
+    fn reconnect_progress(&self) -> Option<f32> {
+        let seit = self.reconnect_hold?.elapsed().as_secs_f32();
+        let ms = match self.settings.reconnect_hold_ms {
+            m if m < 0 => self.settings.hold_confirm_ms,
+            m => m as u32,
+        };
+        Some(if ms == 0 { 1.0 } else { (seit * 1000.0 / ms as f32).min(1.0) })
     }
 
     // Das Protokoll kennt kein serverbound Disconnect-Packet: ein Client verlaesst den
@@ -24459,13 +25292,15 @@ impl App {
                     // Disconnect genau in der Bildschirmmitte: dort erscheint der Zeiger beim
                     // Pausieren (s. on_escape), er liegt also gleich darauf.
                     let screen_h = self.gpu.as_ref().map_or(720.0, |g| g.size().1);
-                    let zeile = |row: usize| pause_button_around_center(row, 1, screen_w, screen_h);
+                    // HUD-Editor und Einstellungen gehoeren zusammen, darum beide ueber Disconnect.
+                    let zeile = |row: usize| pause_button_around_center(row, 2, screen_w, screen_h);
                     out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::HudEditor), zeile(0), "HUD-Editor", UI_SCALE_NORMAL));
-                    out.push(Self::nav_button(ButtonAction::Disconnect, zeile(1), "Disconnect", UI_SCALE_NORMAL));
-                    out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::Settings), zeile(2), "Einstellungen", UI_SCALE_NORMAL));
+                    out.push(Self::nav_button(ButtonAction::OpenScreen(MenuScreen::Settings), zeile(1), "Einstellungen", UI_SCALE_NORMAL));
+                    out.push(Self::nav_button(ButtonAction::Disconnect, zeile(2), "Disconnect", UI_SCALE_NORMAL));
+                    out.push(Self::nav_button(ButtonAction::Reconnect, zeile(3), "Reconnect", UI_SCALE_NORMAL));
                     // Links des Servers (Vanillas "Server-Links..."), nur wenn er welche schickt.
                     if !self.server_links.is_empty() {
-                        out.push(Self::nav_button(ButtonAction::ServerLinks, zeile(3), "Server-Links", UI_SCALE_NORMAL));
+                        out.push(Self::nav_button(ButtonAction::ServerLinks, zeile(4), "Server-Links", UI_SCALE_NORMAL));
                     }
                 }
             }
@@ -24610,6 +25445,20 @@ impl App {
                             d > CAMERA_DISTANCE_MIN + f32::EPSILON,
                             d < CAMERA_DISTANCE_MAX - f32::EPSILON,
                         ));
+                    }
+                    // Ueberspringen: hoechstens eine der beiden 3.-Person-Ansichten.
+                    if p != Perspective::FirstPerson {
+                        let an = set.perspective_skipped(p);
+                        let andere = Perspective::THIRD_PERSON.into_iter().any(|q| q != p && set.perspective_skipped(q));
+                        out.push(Button {
+                            action: ButtonAction::SkipPerspective(p),
+                            rect: skip_perspective_rect(p.fov_row()),
+                            label: "Überspringen".to_string(),
+                            enabled: an || !andere,
+                            color: if an { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::Surface2) },
+                            scale: UI_SCALE_SMALL,
+                            slider: None,
+                        });
                     }
                     if let Some(row) = p.y_offset_row() {
                         let y = set.camera_y_offset_of(p);
@@ -24878,14 +25727,27 @@ impl App {
                 out.extend(Self::stepper(ButtonAction::InventoryScalePrev, ButtonAction::InventoryScaleNext, 1, scale > 0, scale < 4));
                 out.push(Self::toggle(ButtonAction::ToggleInventoryCursorToSlot, 2, self.settings.inventory_cursor_to_slot));
                 out.push(Self::toggle(ButtonAction::ToggleCreativeOpTab, 3, self.settings.creative_op_tab));
-                out.push(Self::toggle(ButtonAction::TogglePotionMarkStrong, 4, self.settings.potion_mark_strong));
-                out.push(Self::toggle(ButtonAction::TogglePotionMarkLong, 5, self.settings.potion_mark_long));
-                out.push(Self::toggle(ButtonAction::TogglePotionMarkWeak, 6, self.settings.potion_mark_weak));
+                out.push(Self::toggle(ButtonAction::ToggleInventoryMergeHover, 4, self.settings.inventory_merge_hover));
+                out.push(Self::toggle(ButtonAction::TogglePotionMarkStrong, 5, self.settings.potion_mark_strong));
+                out.push(Self::toggle(ButtonAction::TogglePotionMarkLong, 6, self.settings.potion_mark_long));
+                out.push(Self::toggle(ButtonAction::TogglePotionMarkWeak, 7, self.settings.potion_mark_weak));
             }
             MenuScreen::SettingsMisc => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
-                out.push(Self::toggle(ButtonAction::ToggleNoUiCloseS2c, 0, self.settings.no_ui_close_s2c));
+                let modi: Vec<_> = NO_UI_CLOSE_NAMES
+                    .iter()
+                    .map(|&(name, wert)| (name, ButtonAction::NoUiClose(wert), self.settings.no_ui_close == wert))
+                    .collect();
+                out.extend(pick_buttons(settings_wide_rect(0), &modi, true));
                 out.push(Self::toggle(ButtonAction::ToggleNoChatClear, 1, self.settings.no_chat_clear));
+                out.push(Self::toggle(ButtonAction::ToggleSignEditInWorld, 2, self.settings.sign_edit_in_world));
+                for (row, wert, aktion) in [
+                    (3, self.settings.no_slot_set, ButtonAction::NoSlotSet as fn(u8) -> ButtonAction),
+                    (4, self.settings.no_rotate_set, ButtonAction::NoRotateSet),
+                ] {
+                    let modi: Vec<_> = SERVER_SET_NAMES.iter().map(|&(name, m)| (name, aktion(m), wert == m)).collect();
+                    out.extend(pick_buttons(settings_wide_rect(row), &modi, true));
+                }
             }
             MenuScreen::SettingsAudio => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
@@ -25034,6 +25896,24 @@ impl App {
                             CURSOR_SIZE_MAX as f64,
                             true,
                         )),
+                        ControlsRow::HoldConfirm => out.push(Self::step_slider(
+                            ButtonAction::HoldConfirmDown,
+                            ButtonAction::HoldConfirmUp,
+                            stepper_value_rect(row),
+                            set.hold_confirm_ms as f64,
+                            0.0,
+                            HOLD_CONFIRM_MAX as f64,
+                            true,
+                        )),
+                        ControlsRow::ReconnectHold => out.push(Self::step_slider(
+                            ButtonAction::ReconnectHoldDown,
+                            ButtonAction::ReconnectHoldUp,
+                            stepper_value_rect(row),
+                            set.reconnect_hold_ms as f64,
+                            RECONNECT_HOLD_GENERAL as f64,
+                            HOLD_CONFIRM_MAX as f64,
+                            true,
+                        )),
                         ControlsRow::CursorWidth => out.push(Self::step_slider(
                             ButtonAction::CursorWidthDown,
                             ButtonAction::CursorWidthUp,
@@ -25077,7 +25957,9 @@ impl App {
                             out.push(knopf);
                             if wartet {
                                 out.push(Self::nav_button(ButtonAction::OpenKeybindAdvanced(aktion), keybind_mode_rect(row, true), "Erweitert", UI_SCALE_SMALL));
-                            } else if !aktion.is_press_action() {
+                            } else if !aktion.is_press_action()
+                                || (aktion == KeyBindAction::TogglePerspective && set.quicklook_target().is_some())
+                            {
                                 out.push(Self::nav_button(
                                     ButtonAction::ToggleKeybindMode(aktion),
                                     keybind_mode_rect(row, false),
@@ -25477,6 +26359,14 @@ impl App {
     // Objective in Slot 1 haengt bzw. keine Zeilen da sind. Von build_server_hud UND der
     // Groessenberechnung (hud_scoreboard_rect) genutzt, damit Anzeige und Griff-Rechteck exakt
     // uebereinstimmen.
+    // Die Seitenleiste, wie sie gezeichnet wird (eigener Name umgeschrieben, s. ego_name).
+    #[allow(clippy::type_complexity)]
+    fn scoreboard_lines_shown(&self) -> Option<(Vec<protocol::nbt::TextSpan>, Vec<Vec<protocol::nbt::TextSpan>>)> {
+        let (title, lines) = self.scoreboard_lines()?;
+        let neu = |z: Vec<protocol::nbt::TextSpan>| self.ego_rewrite(&z).unwrap_or(z);
+        Some((neu(title), lines.into_iter().map(neu).collect()))
+    }
+
     fn scoreboard_lines(&self) -> Option<(Vec<protocol::nbt::TextSpan>, Vec<Vec<protocol::nbt::TextSpan>>)> {
         let obj = self.sb_sidebar_objective.as_ref()?;
         let scores = self.sb_scores.get(obj)?;
@@ -25521,7 +26411,7 @@ impl App {
     // Serververbindung) ein fester Platzhalter, damit man das Element trotzdem positionieren kann.
     fn hud_scoreboard_size(&self, gpu: &GpuState) -> (f32, f32) {
         let (scale, line_h, title_h, pad) = self.scoreboard_metrics(gpu);
-        match self.scoreboard_lines() {
+        match self.scoreboard_lines_shown() {
             Some((title, lines)) => {
                 // Die ganze Zeile auf einmal messen: nur so zaehlt der Platz, den eine
                 // wechselnde Zahl darin reserviert hat (s. build_server_hud).
@@ -26237,6 +27127,20 @@ impl App {
             | ButtonAction::NoToolBreakReserveNext
             | ButtonAction::GhostTolerancePrev
             | ButtonAction::GhostToleranceNext
+            | ButtonAction::ToggleModuleAutoclicker
+            | ButtonAction::ToggleModuleSaturationHud
+            | ButtonAction::SaturationHeightPrev
+            | ButtonAction::SaturationHeightNext
+            | ButtonAction::SaturationAlpha(..)
+            | ButtonAction::ToggleModuleEgoName
+            | ButtonAction::EditEgoAlias
+            | ButtonAction::CycleEgoDeco
+            | ButtonAction::EgoShadow(_)
+            | ButtonAction::EgoSpeed(_)
+            | ButtonAction::CycleEgoSound
+            | ButtonAction::EgoVolume(_)
+            | ButtonAction::AutoclickerCpsPrev
+            | ButtonAction::AutoclickerCpsNext
             | ButtonAction::CycleSkyMode
             | ButtonAction::ToggleSkySun
             | ButtonAction::ToggleSkyMoon
@@ -26319,7 +27223,12 @@ impl App {
                 }
             }
             ButtonAction::NewCustomTheme => {
-                self.theme_name_dialog = Some(ThemeNameDialog { field: text_field::TextField::new("", THEME_NAME_MAX), dragging: false, last_press: None });
+                self.theme_name_dialog = Some(ThemeNameDialog {
+                    field: text_field::TextField::new("", THEME_NAME_MAX),
+                    dragging: false,
+                    last_press: None,
+                    purpose: NameDialogPurpose::Theme,
+                });
             }
             ButtonAction::SettingsSection(i) => self.jump_to_section(i as usize),
             ButtonAction::ToggleUptime => self.settings.topbar_uptime = !self.settings.topbar_uptime,
@@ -26370,6 +27279,7 @@ impl App {
             ButtonAction::Back => self.navigate_back(),
             ButtonAction::Connect => self.go_connect(),
             ButtonAction::Disconnect => self.disconnect(),
+            ButtonAction::Reconnect => self.reconnect(),
             ButtonAction::MicrosoftLogin => self.start_microsoft_login(),
             ButtonAction::OpenInputField(kind) => {
                 // Toggle: nochmal auf denselben Button schliesst das Feld; ein anderer wechselt.
@@ -26473,10 +27383,25 @@ impl App {
             ButtonAction::CursorSizeUp => set.cursor_size = (set.cursor_size + CURSOR_SIZE_STEP).min(CURSOR_SIZE_MAX),
             ButtonAction::CursorWidthDown => set.cursor_width = set.cursor_width.saturating_sub(CURSOR_WIDTH_STEP).max(CURSOR_WIDTH_MIN),
             ButtonAction::CursorWidthUp => set.cursor_width = (set.cursor_width + CURSOR_WIDTH_STEP).min(CURSOR_WIDTH_MAX),
+            ButtonAction::HoldConfirmDown => set.hold_confirm_ms = set.hold_confirm_ms.saturating_sub(HOLD_CONFIRM_STEP),
+            ButtonAction::HoldConfirmUp => set.hold_confirm_ms = (set.hold_confirm_ms + HOLD_CONFIRM_STEP).min(HOLD_CONFIRM_MAX),
+            ButtonAction::ReconnectHoldDown => set.reconnect_hold_ms = (set.reconnect_hold_ms - HOLD_CONFIRM_STEP as i32).max(RECONNECT_HOLD_GENERAL),
+            ButtonAction::ReconnectHoldUp => set.reconnect_hold_ms = (set.reconnect_hold_ms + HOLD_CONFIRM_STEP as i32).min(HOLD_CONFIRM_MAX as i32),
             ButtonAction::ToggleCursorCircle => set.cursor_circle = !set.cursor_circle,
             ButtonAction::UiPitchDown => set.ui_pitch_semitones -= 1,
             ButtonAction::UiPitchUp => set.ui_pitch_semitones += 1,
             ButtonAction::FovDown(p) => set.set_fov_of(p, set.fov_of(p) - FOV_STEP),
+            ButtonAction::SkipPerspective(p) => {
+                match p {
+                    Perspective::FirstPerson => {}
+                    Perspective::ThirdPersonBack => set.skip_third_back = !set.skip_third_back,
+                    Perspective::ThirdPersonFront => set.skip_third_front = !set.skip_third_front,
+                }
+                // Steht man gerade in der jetzt uebersprungenen Ansicht, zurueck ins Auge.
+                if set.perspective_skipped(self.perspective) {
+                    self.perspective = Perspective::FirstPerson;
+                }
+            }
             ButtonAction::FovUp(p) => set.set_fov_of(p, set.fov_of(p) + FOV_STEP),
             ButtonAction::CameraDistanceDown(p) => set.set_camera_distance_of(p, set.camera_distance_of(p) - CAMERA_DISTANCE_STEP),
             ButtonAction::CameraDistanceUp(p) => set.set_camera_distance_of(p, set.camera_distance_of(p) + CAMERA_DISTANCE_STEP),
@@ -26583,8 +27508,12 @@ impl App {
             ButtonAction::InventoryScaleNext => set.inventory_scale = (set.inventory_scale + 1).min(4),
             ButtonAction::ToggleInventoryCursorToSlot => set.inventory_cursor_to_slot = !set.inventory_cursor_to_slot,
             ButtonAction::ToggleCreativeOpTab => set.creative_op_tab = !set.creative_op_tab,
-            ButtonAction::ToggleNoUiCloseS2c => set.no_ui_close_s2c = !set.no_ui_close_s2c,
+            ButtonAction::NoUiClose(m) => set.no_ui_close = m,
             ButtonAction::ToggleNoChatClear => set.no_chat_clear = !set.no_chat_clear,
+            ButtonAction::ToggleSignEditInWorld => set.sign_edit_in_world = !set.sign_edit_in_world,
+            ButtonAction::NoSlotSet(m) => set.no_slot_set = m,
+            ButtonAction::NoRotateSet(m) => set.no_rotate_set = m,
+            ButtonAction::ToggleInventoryMergeHover => set.inventory_merge_hover = !set.inventory_merge_hover,
             ButtonAction::TogglePotionMarkStrong => set.potion_mark_strong = !set.potion_mark_strong,
             ButtonAction::TogglePotionMarkLong => set.potion_mark_long = !set.potion_mark_long,
             ButtonAction::TogglePotionMarkWeak => set.potion_mark_weak = !set.potion_mark_weak,
@@ -27489,7 +28418,14 @@ impl App {
 
     fn color_axes(&self, t: ColorTarget) -> usize {
         match t {
-            ColorTarget::Theme(_) | ColorTarget::Hitbox(_) | ColorTarget::Team(_) | ColorTarget::Sky | ColorTarget::Crosshair | ColorTarget::FireCrosshair => 3,
+            ColorTarget::Theme(_)
+            | ColorTarget::Hitbox(_)
+            | ColorTarget::Team(_)
+            | ColorTarget::Sky
+            | ColorTarget::Crosshair
+            | ColorTarget::FireCrosshair
+            | ColorTarget::SaturationHud => 3,
+            ColorTarget::EgoName(i) => if i == 2 { 4 } else { 3 },
             ColorTarget::Shield(farbe) => ShieldColor::axes(self.settings.shield_mark(farbe)).len(),
             ColorTarget::BlockOutline | ColorTarget::DamageTint | ColorTarget::Crit | ColorTarget::HitboxKind(_) => 4,
         }
@@ -27510,6 +28446,9 @@ impl App {
             ColorTarget::Crit => "Crit-Farbe".to_string(),
             ColorTarget::Crosshair => "Kreuz-Farbe".to_string(),
             ColorTarget::FireCrosshair => "Kreuz beim Brennen".to_string(),
+            ColorTarget::SaturationHud => "Sättigung".to_string(),
+            ColorTarget::EgoName(2) => "Namensschatten".to_string(),
+            ColorTarget::EgoName(i) => format!("Namensfarbe {}", i + 1),
         }
     }
 
@@ -27538,6 +28477,8 @@ impl App {
             }
             ColorTarget::Crosshair => [s.crosshair_hue as f32, s.crosshair_saturation as f32, s.crosshair_value as f32, 100.0],
             ColorTarget::FireCrosshair => [s.fire_crosshair_hue as f32, s.fire_crosshair_saturation as f32, s.fire_crosshair_value as f32, 100.0],
+            ColorTarget::SaturationHud => [s.saturation_hud_hue as f32, s.saturation_hud_saturation as f32, s.saturation_hud_value as f32, 100.0],
+            ColorTarget::EgoName(i) => s.ego_colors[i as usize].map(|v| v as f32),
             ColorTarget::Sky => [
                 s.sky_color_of(SkyColorAxis::Hue) as f32,
                 s.sky_color_of(SkyColorAxis::Saturation) as f32,
@@ -27591,6 +28532,10 @@ impl App {
             }
             ColorTarget::FireCrosshair => {
                 (set.fire_crosshair_hue, set.fire_crosshair_saturation, set.fire_crosshair_value) = (h, u(1).min(100), u(2).min(100));
+            }
+            ColorTarget::EgoName(i) => set.ego_colors[i as usize] = [h, u(1).min(100), u(2).min(100), if i == 2 { u(3).min(100) } else { 100 }],
+            ColorTarget::SaturationHud => {
+                (set.saturation_hud_hue, set.saturation_hud_saturation, set.saturation_hud_value) = (h, u(1).min(100), u(2).min(100));
             }
             ColorTarget::Sky => {
                 *set.sky_color_mut(SkyColorAxis::Hue) = h;
@@ -28567,6 +29512,21 @@ impl App {
                     }
                 }
             }
+            // Die Fluegel des Brust-Items (s. emit_elytra): eigenes Asset, Ebene "wings".
+            let Some(item) = armor[world::armor::ArmorSlot::Chest.index()] else { continue };
+            let Some(asset) = world::item_registry::item_name(item.item_id).and_then(|n| world::armor::wings_asset(n, item.equip)) else { continue };
+            if !self.equipment_models.contains_key(&asset) {
+                let modell = self.installation.load_equipment_model(&asset);
+                self.equipment_models.insert(asset.clone(), modell);
+            }
+            let Some(Some(equipment)) = self.equipment_models.get(&asset) else { continue };
+            for ebene in &equipment.wings {
+                let im_atlas = ebene.texture.strip_prefix("minecraft:").is_some_and(|p| self.entity_atlas.rect(p).is_some());
+                let k = format!("eq:{}", ebene.texture);
+                if !im_atlas && !self.trim_textures.contains_key(&k) && !schluessel.contains(&k) {
+                    schluessel.push(k);
+                }
+            }
         }
         for k in schluessel {
             let pixel = if let Some(textur) = k.strip_prefix("eq:") {
@@ -28605,12 +29565,14 @@ impl App {
         }
     }
 
-    // Die Elytra auf dem Ruecken (WingsFeatureRenderer): nur mit einer Elytra im Brust-Slot.
-    // Vanilla setzt das Modell um 0.125 nach hinten an die Wurzel des Spielermodells -- nicht an
+    // Die Fluegel auf dem Ruecken (WingsLayer): fuer jedes Brust-Item, dessen Equipment-Asset
+    // eine Ebene "wings" hat -- von Haus aus die Elytra, Server-Packs geben auch anderen Items
+    // eigene Fluegel. Vanilla setzt das Modell um 0.125 nach hinten an die Wurzel des Spielermodells -- nicht an
     // den Rumpf, deshalb macht es das Kippen beim Schleichen nicht mit, sondern hat dafuer eigene
     // Winkel (s. world::elytra_pose). Wer einen Umhang hat, traegt dessen Bild auch auf den
     // Fluegeln (SkinTextures.elytraTexture faellt auf den Umhang zurueck; beide Bilder haben
-    // dasselbe 64x32-Raster). Liefert, ob gezeichnet wurde -- dann entfaellt der Umhang.
+    // dasselbe 64x32-Raster), sofern die Ebene use_player_texture hat. Liefert, ob das Asset
+    // Fluegel hat -- dann entfaellt der Umhang (CapeLayer).
     fn emit_elytra(
         &self,
         armor: &[Option<world::HeldItem>; 4],
@@ -28620,13 +29582,31 @@ impl App {
         base: world::entity_model::Affine,
         out: &mut Vec<world::BlockVertex>,
     ) -> bool {
-        let chest = armor[world::armor::ArmorSlot::Chest.index()];
-        if chest.and_then(|i| world::item_registry::item_name(i.item_id)) != Some("elytra") {
+        let Some(chest) = armor[world::armor::ArmorSlot::Chest.index()] else { return false };
+        let Some(asset) = world::item_registry::item_name(chest.item_id).and_then(|n| world::armor::wings_asset(n, chest.equip)) else {
+            return false;
+        };
+        let Some(Some(equipment)) = self.equipment_models.get(&asset) else { return false };
+        if equipment.wings.is_empty() {
             return false;
         }
-        let Some(tex) = cape_tex.or_else(|| self.entity_atlas.rect(world::ELYTRA_TEXTURE)) else { return false };
         let base = base.then(world::entity_model::Affine::translation([0.0, 0.0, 0.125]));
-        world::emit_entity_model(&world::elytra_model(), &world::elytra_pose(glide, sneaking), base, tex, ENTITY_BRIGHTNESS, out);
+        let pose = world::elytra_pose(glide, sneaking);
+        let anfang = out.len();
+        for ebene in &equipment.wings {
+            let tex = match cape_tex.filter(|_| ebene.use_player_texture) {
+                Some(t) => Some(t),
+                None => self.equipment_texture(&ebene.texture),
+            };
+            if let Some(tex) = tex {
+                world::emit_entity_model(&world::elytra_model(), &pose, base, tex, ENTITY_BRIGHTNESS, out);
+            }
+        }
+        // Beidseitig wie der End-Kristall: Vanilla zeichnet Equipment mit armorCutoutNoCull.
+        // Viele Umhang-Bilder fuellen nur die Rueckseite der Fluegel, die Vorderseite ist
+        // durchsichtig -- von vorn sieht man dann die Innenseite der Rueckseite.
+        let rueckseiten: Vec<world::BlockVertex> = out[anfang..].chunks_exact(3).flat_map(|t| [t[0], t[2], t[1]]).collect();
+        out.extend(rueckseiten);
         true
     }
 
@@ -29111,7 +30091,7 @@ impl App {
         if self.is_dead || self.game_mode == GAME_MODE_SPECTATOR || self.physics.is_climbing(&self.world) {
             return DVec3::ZERO;
         }
-        let halb = physics::PLAYER_WIDTH as f64 / 2.0;
+        let halb = self.physics.width() / 2.0;
         let (p_min, p_max) = (DVec3::new(p.x - halb, p.y, p.z - halb), DVec3::new(p.x + halb, p.y + self.physics.current_height(), p.z + halb));
         let eigenes_team = self.own_uuid.and_then(|u| self.player_names.get(&u)).and_then(|n| self.sb_entry_team.get(n)).map(String::as_str);
         let regel = |team: Option<&str>| team.and_then(|t| self.sb_teams.get(t)).map_or(0, |t| t.collision_rule);
@@ -29430,7 +30410,9 @@ impl App {
                 amount: self.own_leaning_pitch,
                 pitch_deg: pitch,
                 in_water: self.physics.touching_water,
-                swimming: self.physics.raw_swimming,
+                // AvatarRenderer: isVisuallySwimming, also die POSE -- auch beim Kriechen an
+                // Land. Mit isSwimming fehlte dort der Versatz, die Figur lag zu tief.
+                swimming: self.physics.swimming,
             };
             // Der eigene Skin kommt aus derselben Quelle wie der von Fremden: dem Eintrag
             // zur EIGENEN UUID in der Spielerliste. Genau so macht es Vanilla
@@ -29442,8 +30424,8 @@ impl App {
             // sonst dreht sich die ganze Figur samt Beinen sofort mit der Maus mit.
             let body_yaw = self.own_body_yaw.body_yaw(tick_progress);
             let base = match &glide {
-                Some(glide) => world::entity_transform_gliding(rel(feet), body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE, glide),
-                None => world::entity_transform_leaning(rel(feet), body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE, &lean),
+                Some(glide) => world::entity_transform_gliding(rel(feet), body_yaw, self.physics.body.scale, world::entity_model::PLAYER_MODEL_SCALE, glide),
+                None => world::entity_transform_leaning(rel(feet), body_yaw, self.physics.body.scale, world::entity_model::PLAYER_MODEL_SCALE, &lean),
             };
             let eigener_start = out.len();
             let eigene_umrissfarbe = self.own_glowing.then(|| self.glow_color(self.own_uuid.and_then(|u| self.player_names.get(&u))));
@@ -29458,7 +30440,7 @@ impl App {
                 nur_umriss_farbe.resize(nur_umriss_farbe.len() + nur_umriss.len() - vorher, farbe);
             }
             if self.own_on_fire && self.game_mode != GAME_MODE_SPECTATOR {
-                feuer.push((rel(feet), physics::PLAYER_WIDTH, self.physics.current_height() as f32));
+                feuer.push((rel(feet), self.physics.width() as f32, self.physics.current_height() as f32));
             }
             let own_armor = self.own_armor();
             self.emit_armor(&own_armor, &self.armor_models, &pose, base, &mut out);
@@ -29624,8 +30606,9 @@ impl App {
                 );
                 let (model, tex) = self.player_model_and_texture(&e.uuid);
                 let base = match &glide {
-                    Some(glide) => world::entity_transform_gliding(feet, body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE, glide),
-                    None => world::entity_transform_leaning(feet, body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE, &lean),
+                    // LivingEntityRenderer: das ganze Modell mal SCALE (s. Entity::scale).
+                    Some(glide) => world::entity_transform_gliding(feet, body_yaw, e.scale, world::entity_model::PLAYER_MODEL_SCALE, glide),
+                    None => world::entity_transform_leaning(feet, body_yaw, e.scale, world::entity_model::PLAYER_MODEL_SCALE, &lean),
                 };
                 if !e.invisible {
                     let start = out.len();
@@ -29717,7 +30700,7 @@ impl App {
                         if !matches!(kind, ModelKind::Biped | ModelKind::Enderman) {
                             apply_item_arm_poses(&mut pose, e.arm_items().0.is_some(), e.arm_items().1.is_some());
                         }
-                        let base = world::entity_transform(feet, body_yaw, 1.0, model_scale);
+                        let base = world::entity_transform(feet, body_yaw, e.scale, model_scale);
                         let start = out.len();
                         world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
                         haut.push(start..out.len());
@@ -29770,7 +30753,7 @@ impl App {
                 }
             }
             if e.on_fire {
-                let (breite, hoehe) = world::hit_box_size(e.entity_type, e.pose);
+                let (breite, hoehe) = e.hit_size();
                 feuer.push((feet, breite as f32, hoehe as f32));
             }
             // Alles, was dieses Entity gerade beigesteuert hat, bekommt seine Faerbung.
@@ -29796,7 +30779,7 @@ impl App {
             }
             if lit {
                 let (ex, ey, ez) = e.render_pos(progress);
-                let hoehe = world::hit_box_size(e.entity_type, e.pose).1;
+                let hoehe = e.hit_size().1;
                 lights.resize(out.len(), self.light_near(DVec3::new(ex, ey + hoehe * 0.85, ez)));
             }
             // "Nur Skin" loescht spaeter alle Faerbung ausserhalb von `haut` -- der weisse
@@ -30282,7 +31265,7 @@ impl App {
         let eigen_roh = team_eigen.map_or(raw_color, |(f, ..)| f);
         // Abschaltbar im Modul ("Eigene Hitbox").
         if let (true, true, false, Some((farbe_geglaettet, a))) = (modul_an, set.module_hitbox_self, self.perspective.is_first_person(), eigene) {
-            let half_w = physics::PLAYER_WIDTH / 2.0;
+            let half_w = self.physics.width() as f32 / 2.0;
             let height = self.physics.current_height() as f32;
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
                 let feet = rel(pos);
@@ -30598,7 +31581,7 @@ impl App {
     // (ExplosiveProjectileEntity) rechnen die Kante noch mal 4. `feet` ist schon
     // kamerarelativ.
     fn projectile_in_render_range(&self, e: &world::Entity, feet: [f32; 3], faktor: f64) -> bool {
-        let (breite, hoehe) = world::hit_box_size(e.entity_type, e.pose);
+        let (breite, hoehe) = e.hit_size();
         let kante = (breite * 2.0 + hoehe) / 3.0;
         let multiplikator = (self.settings.max_render_distance as f64 / 8.0).clamp(1.0, 2.5);
         let grenze = kante * faktor * 64.0 * multiplikator;
@@ -31630,6 +32613,11 @@ impl App {
         // Performance-Anzeige, sondern eine Zustandsmeldung.
         if self.connecting_view() {
             self.build_connecting_overlay(gpu, &mut rects, &mut texts);
+            // Dialoge des Servers (etwa der Verhaltenskodex in der Konfigurationsphase) kommen
+            // vor dem ersten Chunk -- ohne sie hinge die Verbindung unsichtbar.
+            if self.dialog_shown() || self.code_of_conduct.is_some() {
+                self.build_dialog_ui(gpu, &mut rects, &mut texts, &mut sprites);
+            }
             return (rects, hud_lines, texts, sprites, None);
         }
         // Was zur WELT gehoert (Namensschilder, Chat, Scoreboard, Hotbar, Totem-Anzeige),
@@ -31683,6 +32671,9 @@ impl App {
                 // fuer Ueberleben und Abenteuer, nicht fuer Kreativ und Zuschauer.
                 if !matches!(self.game_mode, GAME_MODE_CREATIVE | GAME_MODE_SPECTATOR) {
                     self.build_status_bars(gpu, &mut sprites, &mut texts);
+                    if self.settings.module_saturation_hud {
+                        self.build_saturation_bar(gpu, &mut rects);
+                    }
                 }
                 self.begin_text_area(gpu, &mut texts, ShadowArea::Hotbar);
                 self.build_held_name(gpu, &mut rects, &mut texts);
@@ -31751,6 +32742,11 @@ impl App {
                 doll_split = None;
             }
         }
+        // Gehaltene Reconnect-Taste: das Bild dunkelt bis zum Ausloesen ab, wie osus Neustart.
+        if let Some(f) = self.reconnect_progress() {
+            let (sw, sh) = gpu.size();
+            rects.push(UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: [0.0, 0.0, 0.0, f], ..UiRect::FLAT });
+        }
         self.push_selection_rects(gpu, &mut rects);
         (rects, hud_lines, texts, sprites, doll_split)
     }
@@ -31777,7 +32773,7 @@ impl App {
 
     // Verbindungsbildschirm: im Spiel, aber noch ohne einen Chunk vom Server. Dahinter steht
     // die zuletzt gespeicherte Welt dieses Servers (s. lod_preview_saved) wie ein Standbild --
-    // abgedunkelt, ohne HUD, die Kamera fest; Esc bricht ab.
+    // abgedunkelt, ohne HUD, die Kamera fest; der Knopf Abbrechen trennt.
     fn connecting_view(&self) -> bool {
         self.mode == AppMode::World && self.chunks_received == 0
     }
@@ -31845,6 +32841,12 @@ impl App {
         let Some(stack) = self.own_hand_stack(protocol::packets::HAND_MAIN) else { return };
         let spans = self.held_name_spans(stack);
         if spans.is_empty() {
+            return;
+        }
+        // Nur den Namen, fuer den der Timer laeuft: nach einem Slotwechsel steht bis zum
+        // naechsten Tick sonst der Name des neuen Items da, auch wenn es gar keinen zeigt.
+        let name: String = spans.iter().map(|t| t.text.as_str()).collect();
+        if stack.tooltip_hidden || !item_shows_held_name(stack) || self.held_name_last.as_deref() != Some(format!("{}:{name}", stack.item_id).as_str()) {
             return;
         }
         let alpha = (self.held_name_timer as f32 * 256.0 / 10.0).min(255.0) / 255.0;
@@ -32067,7 +33069,16 @@ impl App {
                 {
                     return Some((rect, true));
                 }
-                (world::default_skin(&schluessel.unwrap_or([0; 16])).0, true)
+                // Der Kopf nennt einen Skin, der (noch) nicht im Atlas ist -- unterwegs,
+                // verdraengt oder nicht gefunden: schwarz-lila statt eines fremden
+                // Standard-Gesichts. Standard-Skin nur ohne Profil oder wenn die Textur-
+                // Property ausdruecklich keinen Skin hat.
+                let ohne_skin = schluessel.and_then(|k| self.head_textures.get(&k)).is_some_and(Option::is_none);
+                if schluessel.is_some() && !ohne_skin {
+                    (assets::MISSING_SKIN, true)
+                } else {
+                    (world::default_skin(&schluessel.unwrap_or([0; 16])).0, true)
+                }
             }
             _ => return None,
         };
@@ -32109,7 +33120,7 @@ impl App {
             }
             // Die Quelle: die Textur des Kopfes (mitgeschickt oder nachgeschlagen), sonst der
             // Skin des gleichnamigen Spielers aus der Tab-Liste (Kopf mit dessen UUID).
-            let quelle = self.head_textures.get(&key).and_then(|t| auth::parse_textures_property(t)).or_else(|| self.skin_sources.get(&key).cloned());
+            let quelle = self.head_textures.get(&key).cloned().flatten().or_else(|| self.skin_sources.get(&key).cloned());
             if let Some(skin) = quelle {
                 wuensche.push((key, skin));
             }
@@ -32146,7 +33157,7 @@ impl App {
             if self.skins.get(&key).is_some_and(|s| s.slot.is_some()) {
                 continue;
             }
-            let Some(skin) = self.head_textures.get(&key).and_then(|t| auth::parse_textures_property(t)).or_else(|| self.skin_sources.get(&key).cloned()) else {
+            let Some(skin) = self.head_textures.get(&key).cloned().flatten().or_else(|| self.skin_sources.get(&key).cloned()) else {
                 self.note_head_profile(&protocol::item::HeadProfile { uuid: Some(key), name: None, textures: None });
                 continue;
             };
@@ -32163,16 +33174,54 @@ impl App {
         }
     }
 
-    // Wessen Skin gerade gebraucht wird: Spieler im Bild, der eigene Koerper und die Koepfe im
-    // Inventar, im offenen Container und an den Entities. Diese Plaetze werden nicht verdraengt.
+    // Wessen Skin gerade gebraucht wird, mit Abstand zum Auge: Spieler im Bild und Koepfe an
+    // Entities nach ihrer Entfernung, platzierte Koepfe in der Naehe ebenso; der eigene
+    // Koerper, die Koepfe im Inventar und die Konten der Kontenliste mit 0. Muss trotzdem ein
+    // Gebrauchter weichen, dann der entfernteste (s. claim_atlas_slot_near).
+    fn skin_distances(&self) -> std::collections::HashMap<[u8; 16], f32> {
+        let auge = self.camera.position;
+        let weite = |p: (f64, f64, f64)| (DVec3::new(p.0, p.1, p.2) - auge).length() as f32;
+        let mut abstand: std::collections::HashMap<[u8; 16], f32> = std::collections::HashMap::new();
+        let mut merke = |k: [u8; 16], d: f32| {
+            let e = abstand.entry(k).or_insert(d);
+            *e = e.min(d);
+        };
+        for (_, e) in self.entities.iter() {
+            let d = weite(e.pos);
+            if world::is_player(e.entity_type) {
+                merke(e.uuid, d);
+            }
+            for h in entity_head_items(e).into_iter().flatten().filter_map(|h| h.head_skin) {
+                merke(h, d);
+            }
+        }
+        for (p, k) in &self.placed_heads {
+            if self.near_eye(*p, 64.0) {
+                merke(*k, weite((p.0 as f64 + 0.5, p.1 as f64 + 0.5, p.2 as f64 + 0.5)));
+            }
+        }
+        for k in self.skins_anywhere() {
+            merke(k, 0.0);
+        }
+        abstand
+    }
+
+    // Wessen Skin gerade gebraucht wird: Spieler im Bild und Koepfe an Entities, dazu alles aus
+    // skins_anywhere. Diese Plaetze werden nur im Notfall verdraengt (s. skin_distances).
     fn skins_in_view(&self) -> std::collections::HashSet<[u8; 16]> {
-        let spieler = self.entities.iter().filter(|(_, e)| world::is_player(e.entity_type)).map(|(_, e)| e.uuid).chain(self.own_uuid);
+        let spieler = self.entities.iter().filter(|(_, e)| world::is_player(e.entity_type)).map(|(_, e)| e.uuid);
         let getragen = self
             .entities
             .iter()
             .flat_map(|(_, e)| entity_head_items(e))
             .flatten()
             .filter_map(|h| h.head_skin);
+        spieler.chain(getragen).chain(self.skins_anywhere()).collect()
+    }
+
+    // Was unabhaengig vom Ort gebraucht wird: der eigene Koerper, die Koepfe im Inventar, im
+    // offenen Container und am Zeiger und die Konten der Kontenliste.
+    fn skins_anywhere(&self) -> Vec<[u8; 16]> {
         let inventar = self
             .inventory
             .player
@@ -32181,7 +33230,8 @@ impl App {
             .chain(std::iter::once(&self.inventory.cursor))
             .flatten()
             .filter_map(|stack| stack.profile.as_ref().and_then(head_skin_key));
-        spieler.chain(getragen).chain(inventar).collect()
+        let konten = self.accounts.list.iter().filter_map(|a| uuid_bytes_from_hex(&a.uuid));
+        self.own_uuid.into_iter().chain(inventar).chain(konten).collect()
     }
 
     // Ein Kopf-Profil vormerken: mit Textur-Property sofort, ohne (nur Name oder UUID, Vanillas
@@ -32190,7 +33240,7 @@ impl App {
     fn note_head_profile(&mut self, profil: &protocol::item::HeadProfile) {
         let Some(key) = head_skin_key(profil) else { return };
         if let Some(t) = &profil.textures {
-            self.head_textures.entry(key).or_insert_with(|| t.clone());
+            self.head_textures.entry(key).or_insert_with(|| auth::parse_textures_property(t));
             return;
         }
         if self.head_textures.contains_key(&key) || !self.head_lookups.insert(key) {
@@ -32388,9 +33438,9 @@ impl App {
         // Wer gerade im Bild steht, darf nicht verdraengt werden -- der Neue schon gar nicht
         // gegen sich selbst. Die Liste wird VOR dem Aufruf gezogen, weil claim_atlas_slot
         // `self.skin_slot_order` exklusiv leiht.
-        let sichtbare = self.skins_in_view();
+        let abstand = self.skin_distances();
         let Some((slot, evicted)) =
-            claim_atlas_slot(&mut self.skin_slot_order, self.entity_atlas.skin_slot_count(), uuid, current, |u| sichtbare.contains(u))
+            claim_atlas_slot_near(&mut self.skin_slot_order, self.entity_atlas.skin_slot_count(), uuid, current, |u| abstand.get(u).copied())
         else {
             return;
         };
@@ -34088,7 +35138,7 @@ impl App {
         if self.server_edit.is_some() {
             return self.server_edit.as_mut().map(ServerEdit::focused);
         }
-        if self.theme_name_dialog.is_some() && self.mode == AppMode::Menu {
+        if self.theme_name_dialog.is_some() {
             return self.theme_name_dialog.as_mut().map(|d| &mut d.field);
         }
         let quick = self.quick_typing();
@@ -34266,7 +35316,7 @@ impl App {
                         let x = stueck.x + mass(&stueck, &stueck.text[..i]);
                         let zeichen = c.to_string();
                         let w = mass(&stueck, &zeichen);
-                        let mut r = [0.0; 4];
+                        let mut r = [0.0; 6];
                         for v in &mut r {
                             self.erase_seed = self.erase_seed.wrapping_add(1);
                             *v = zufallswert(self.erase_seed ^ 0x5eed_fa11);
@@ -34279,18 +35329,7 @@ impl App {
         }
         self.typed_prev = runs;
         self.falling_glyphs.retain(|g| jetzt.duration_since(g.start) < g.dur);
-        // Je Zeichen eine Gruppe: jedes dreht sich um seine eigene Mitte.
-        for g in &self.falling_glyphs {
-            if let Some((text, pivot, angle)) = g.at(jetzt.duration_since(g.start).as_secs_f32()) {
-                let mut texts = Vec::new();
-                push_shadow_marker(&mut texts, g.run.shadow);
-                push_font_marker(&mut texts, g.run.font);
-                texts.push(text);
-                push_shadow_marker(&mut texts, None);
-                push_font_marker(&mut texts, None);
-                overlay.groups.push(UiOverlayGroup { rects: Vec::new(), texts, sprites: Vec::new(), pivot, angle });
-            }
-        }
+        overlay.groups.extend(self.falling_glyphs.iter().filter_map(|g| g.group(jetzt.duration_since(g.start).as_secs_f32())));
     }
 
     // Aufklappliste der Glocke -- in der Overlay-Ebene, damit kein Menuetext durchscheint.
@@ -34935,6 +35974,90 @@ impl App {
                 can_prev: set.no_tool_break_reserve > NO_TOOL_BREAK_MIN_RESERVE,
                 can_next: set.no_tool_break_reserve < NO_TOOL_BREAK_MAX_RESERVE,
                 slider: Some((set.no_tool_break_reserve as f64, NO_TOOL_BREAK_MIN_RESERVE as f64, NO_TOOL_BREAK_MAX_RESERVE as f64)),
+            }),
+            ModuleId::SaturationHud => {
+                rows.push(ModuleRow::Swatch {
+                    label: "Farbe".to_string(),
+                    action: ButtonAction::OpenColorPicker(ColorTarget::SaturationHud),
+                    rgb: set.saturation_hud_rgb(),
+                });
+                rows.push(ModuleRow::Stepper {
+                    label: "Dicke".to_string(),
+                    prev: ButtonAction::SaturationHeightPrev,
+                    next: ButtonAction::SaturationHeightNext,
+                    text: format!("{} px", set.saturation_hud_height),
+                    can_prev: set.saturation_hud_height > SATURATION_BAR_HEIGHT_MIN,
+                    can_next: set.saturation_hud_height < SATURATION_BAR_HEIGHT_MAX,
+                    slider: Some((set.saturation_hud_height as f64, SATURATION_BAR_HEIGHT_MIN as f64, SATURATION_BAR_HEIGHT_MAX as f64)),
+                });
+                for (raster, label, wert) in [(false, "Grund", set.saturation_hud_bg_alpha), (true, "Raster", set.saturation_hud_grid_alpha)] {
+                    rows.push(ModuleRow::Stepper {
+                        label: label.to_string(),
+                        prev: ButtonAction::SaturationAlpha(raster, false),
+                        next: ButtonAction::SaturationAlpha(raster, true),
+                        text: format!("{wert} %"),
+                        can_prev: wert > 0,
+                        can_next: wert < 100,
+                        slider: Some((wert as f64, 0.0, 100.0)),
+                    });
+                }
+            }
+            ModuleId::EgoName => {
+                use ego_name::Deco;
+                rows.push(ModuleRow::Choice {
+                    label: "Anzeigen als".to_string(),
+                    action: ButtonAction::EditEgoAlias,
+                    text: if set.ego_alias.is_empty() { "eigener Name".to_string() } else { set.ego_alias.clone() },
+                });
+                rows.push(ModuleRow::Choice { label: "Färbung".to_string(), action: ButtonAction::CycleEgoDeco, text: set.ego_deco.label().to_string() });
+                if matches!(set.ego_deco, Deco::Solid | Deco::Gradient | Deco::Flowing) {
+                    let erste = if set.ego_deco.two_colors() { "Farbe 1" } else { "Farbe" };
+                    rows.push(ModuleRow::Swatch { label: erste.to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(0)), rgb: set.ego_rgb(0) });
+                }
+                if set.ego_deco.two_colors() {
+                    rows.push(ModuleRow::Swatch { label: "Farbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(1)), rgb: set.ego_rgb(1) });
+                }
+                if set.ego_deco.moves() {
+                    rows.push(ModuleRow::Stepper {
+                        label: "Tempo".to_string(),
+                        prev: ButtonAction::EgoSpeed(false),
+                        next: ButtonAction::EgoSpeed(true),
+                        text: format!("{:.1} /s", set.ego_speed as f32 / 10.0),
+                        can_prev: set.ego_speed > EGO_SPEED_MIN,
+                        can_next: set.ego_speed < EGO_SPEED_MAX,
+                        slider: Some((set.ego_speed as f64, EGO_SPEED_MIN as f64, EGO_SPEED_MAX as f64)),
+                    });
+                }
+                rows.push(ModuleRow::Pick {
+                    label: "Schatten".to_string(),
+                    options: vec![("Standard", ButtonAction::EgoShadow(false), !set.ego_shadow), ("Einfarbig", ButtonAction::EgoShadow(true), set.ego_shadow)],
+                    swatch: Some((ButtonAction::OpenColorPicker(ColorTarget::EgoName(2)), set.ego_rgb(2))),
+                });
+                rows.push(ModuleRow::Choice {
+                    label: "Ton bei Erwähnung".to_string(),
+                    action: ButtonAction::CycleEgoSound,
+                    text: ego_name::sound_label(&set.ego_sound).to_string(),
+                });
+                if !set.ego_sound.is_empty() {
+                    rows.push(ModuleRow::Stepper {
+                        label: "Lautstärke".to_string(),
+                        prev: ButtonAction::EgoVolume(false),
+                        next: ButtonAction::EgoVolume(true),
+                        text: format!("{} %", set.ego_volume),
+                        can_prev: set.ego_volume > 0,
+                        can_next: set.ego_volume < 100,
+                        slider: Some((set.ego_volume as f64, 0.0, 100.0)),
+                    });
+                }
+            }
+            ModuleId::Autoclicker => rows.push(ModuleRow::Stepper {
+                label: "Klicks je Sekunde".to_string(),
+                prev: ButtonAction::AutoclickerCpsPrev,
+                next: ButtonAction::AutoclickerCpsNext,
+                text: format!("{} CPS", set.autoclicker_cps),
+                can_prev: set.autoclicker_cps > AUTOCLICKER_CPS_MIN,
+                can_next: set.autoclicker_cps < AUTOCLICKER_CPS_MAX,
+                slider: Some((set.autoclicker_cps as f64, AUTOCLICKER_CPS_MIN as f64, AUTOCLICKER_CPS_MAX as f64)),
             }),
             ModuleId::GhostTolerance => rows.push(ModuleRow::Stepper {
                 label: "Toleranz".to_string(),
@@ -36055,12 +37178,20 @@ impl App {
     }
 
     // Fehlen beim laufenden Essen/Trinken hoechstens eat_hold_through_ms? (s. tick_item_use)
+    // Beim Bogen dazu: zu frueh losgelassen haelt es bis zum ersten Pfeil, kurz vor voll bis
+    // zur vollen Kraft (s. bow_hold_through).
     fn eat_hold_through(&self) -> bool {
         let grenze = self.settings.eat_hold_through_ms;
-        if !self.settings.module_consumable_optimizer || grenze == 0 {
+        if !self.settings.module_consumable_optimizer {
             return false;
         }
         let Some((name, stack)) = self.own_used_item() else { return false };
+        if name == "bow" {
+            return bow_hold_through(self.own_use_ticks, grenze);
+        }
+        if grenze == 0 {
+            return false;
+        }
         let Some(dauer) = consumable_optimizer::consume_ticks(name, stack.as_ref()) else { return false };
         eat_rest_within(dauer, self.own_use_ticks, grenze)
     }
@@ -36102,9 +37233,23 @@ impl App {
         Some((name, stack))
     }
 
+    // Der Server meldet, dass das eigene Essen fertig ist (Flag "benutzt Item" aus oder Entity-
+    // Event 9 -- je nach Server kommt nur eins davon): nicht mehr warten.
+    fn consumable_server_done(&mut self, woher: &str) {
+        if let Some(d) = self.consumable.confirm_delay(Instant::now()) {
+            eprintln!("[essen] lokal fertig, Server bestaetigt ({woher}) nach {} ms -- so lange blieb die Ess-Verlangsamung nach dem Klang", d.as_millis());
+        }
+        self.consumable.stop_waiting();
+        // Er ist fertig: der naechste Bissen muss nicht mehr warten.
+        self.eat_next_use_delay = 0;
+    }
+
     // Consumable Optimizer: im Tick, in dem das Essen fertig ist, selbst beenden (s.
     // consumable_optimizer.rs). Laeuft nach dem Hochzaehlen von own_use_ticks.
     fn tick_consumable_optimizer(&mut self) {
+        if self.consumable.timed_out(Instant::now()) {
+            eprintln!("[essen] lokal fertig, keine Bestaetigung vom Server -- Ess-Verlangsamung lief die vollen 500 ms nach dem Klang");
+        }
         if !self.consumable_optimizer_active() {
             return;
         }
@@ -36448,6 +37593,41 @@ impl App {
             }
             // Das Minimum ist derzeit 0 (dann wirkungslos), soll aber eine Grenze bleiben.
             #[allow(clippy::unnecessary_min_or_max)]
+            ButtonAction::ToggleModuleAutoclicker => self.settings.module_autoclicker = !self.settings.module_autoclicker,
+            ButtonAction::ToggleModuleSaturationHud => self.settings.module_saturation_hud = !self.settings.module_saturation_hud,
+            ButtonAction::SaturationHeightPrev => {
+                self.settings.saturation_hud_height = self.settings.saturation_hud_height.saturating_sub(1).max(SATURATION_BAR_HEIGHT_MIN)
+            }
+            ButtonAction::SaturationHeightNext => self.settings.saturation_hud_height = (self.settings.saturation_hud_height + 1).min(SATURATION_BAR_HEIGHT_MAX),
+            ButtonAction::SaturationAlpha(raster, hoch) => {
+                let feld = if raster { &mut self.settings.saturation_hud_grid_alpha } else { &mut self.settings.saturation_hud_bg_alpha };
+                *feld = if hoch { (*feld + 5).min(100) } else { feld.saturating_sub(5) };
+            }
+            ButtonAction::ToggleModuleEgoName => self.settings.module_ego_name = !self.settings.module_ego_name,
+            ButtonAction::EditEgoAlias => {
+                self.theme_name_dialog = Some(ThemeNameDialog {
+                    field: text_field::TextField::new(&self.settings.ego_alias, EGO_ALIAS_MAX),
+                    dragging: false,
+                    last_press: None,
+                    purpose: NameDialogPurpose::EgoAlias,
+                });
+            }
+            ButtonAction::CycleEgoDeco => self.settings.ego_deco = self.settings.ego_deco.next(),
+            ButtonAction::EgoShadow(an) => self.settings.ego_shadow = an,
+            ButtonAction::EgoSpeed(hoch) => {
+                let v = self.settings.ego_speed;
+                self.settings.ego_speed = if hoch { (v + 1).min(EGO_SPEED_MAX) } else { v.saturating_sub(1).max(EGO_SPEED_MIN) };
+            }
+            ButtonAction::CycleEgoSound => {
+                self.settings.ego_sound = ego_name::next_sound(&self.settings.ego_sound).to_string();
+                self.play_ego_sound();
+            }
+            ButtonAction::EgoVolume(hoch) => {
+                let v = self.settings.ego_volume;
+                self.settings.ego_volume = if hoch { (v + 10).min(100) } else { v.saturating_sub(10) };
+            }
+            ButtonAction::AutoclickerCpsPrev => self.settings.autoclicker_cps = self.settings.autoclicker_cps.saturating_sub(1).max(AUTOCLICKER_CPS_MIN),
+            ButtonAction::AutoclickerCpsNext => self.settings.autoclicker_cps = (self.settings.autoclicker_cps + 1).min(AUTOCLICKER_CPS_MAX),
             ButtonAction::GhostTolerancePrev => {
                 self.settings.ghost_tolerance_ms =
                     self.settings.ghost_tolerance_ms.saturating_sub(GHOST_TOLERANCE_STEP_MS).max(GHOST_TOLERANCE_MIN_MS)
@@ -37270,13 +38450,32 @@ impl App {
     // zufaelligen Stelle des Koerpers.
     //
     // Fehlte frueher ganz.
+    // AbstractArrow.tick im Client: ein fliegender Krit-Pfeil streut je Tick vier Krit-
+    // Partikel entlang seiner Geschwindigkeit, jeder mit der Gegengeschwindigkeit und 0.2 nach
+    // oben -- die Spur, an der man einen voll gespannten Schuss erkennt.
+    fn tick_crit_trails(&mut self) {
+        let spuren: Vec<_> = self.entities.iter().filter_map(|(_, e)| e.crit_trail()).collect();
+        if spuren.is_empty() {
+            return;
+        }
+        let krit = protocol::particle::ParticleEffect { type_id: protocol::particle::PARTICLE_CRIT, options: protocol::particle::ParticleOptions::None };
+        self.with_particles(|p, ctx, _| {
+            for ((x, y, z), (vx, vy, vz)) in spuren {
+                for i in 0..4 {
+                    let t = i as f64 / 4.0;
+                    p.add_world_particle(&krit, DVec3::new(x + vx * t, y + vy * t, z + vz * t), DVec3::new(-vx, -vy + 0.2, -vz), ctx);
+                }
+            }
+        });
+    }
+
     fn tick_potion_swirls(&mut self) {
         let mut quellen: Vec<(Vec<u32>, bool, bool, DVec3, f64, f64)> = Vec::new();
         for (_, e) in self.entities.iter() {
             if e.potion_swirls.is_empty() {
                 continue;
             }
-            let (w, h) = world::hit_box_size(e.entity_type, e.pose);
+            let (w, h) = e.hit_size();
             let (x, y, z) = e.hit_pos();
             quellen.push((e.potion_swirls.clone(), e.potion_swirls_ambient, e.invisible, DVec3::new(x, y, z), w, h));
         }
@@ -37440,13 +38639,13 @@ impl App {
         let entities = &self.entities;
         let own_id = self.own_entity_id;
         // Die eigene Figur steht nicht in `entities` (dort nur die anderen).
-        let own = particles::EmitterBody { pos: self.physics.pos, width: 0.6, height: self.physics.current_height() };
+        let own = particles::EmitterBody { pos: self.physics.pos, width: self.physics.width(), height: self.physics.current_height() };
         let body = move |id: i32| -> Option<particles::EmitterBody> {
             if Some(id) == own_id {
                 return Some(own);
             }
             let e = entities.get(id)?;
-            let (width, height) = world::hit_box_size(e.entity_type, e.pose);
+            let (width, height) = e.hit_size();
             Some(particles::EmitterBody { pos: DVec3::new(e.pos.0, e.pos.1, e.pos.2), width, height })
         };
         f(&mut self.particles, &ctx, &body);
@@ -38018,7 +39217,7 @@ impl App {
             let max = world::item_registry::item_name(stack.item_id).and_then(|name| max_damage_of(stack, name)).unwrap_or(0);
             let color = if rest < armor_hud::LOW_DURABILITY {
                 COLOR_ARMOR_LOW
-            } else if set.armor_hud_green && max > 0 && rest as f32 > max as f32 * 0.95 {
+            } else if set.armor_hud_green && max > 0 && rest as f32 > max as f32 * 0.87 {
                 COLOR_ARMOR_HIGH
             } else {
                 COLOR_WHITE
@@ -38293,7 +39492,7 @@ impl App {
 
             // Zeilen trennen, umbrechen und vermessen -- alles in Schriftpixeln, erst danach
             // mal `scale` in Bildschirmpixel.
-            let zeilen = wrap_label_lines(&split_label_lines(&label.spans), label.line_width, |t| gpu.measure_text(t, 1.0));
+            let zeilen = wrap_label_lines(&split_label_lines(&self.ego_spans(&label.spans)), label.line_width, |t| gpu.measure_text(t, 1.0));
             if zeilen.is_empty() {
                 continue;
             }
@@ -38464,7 +39663,7 @@ impl App {
     // Liefert Matrix und Zeilenhoehe der Seite.
     fn sign_edit_in_world(&self, gpu: &GpuState) -> Option<(glam::Mat4, f32)> {
         let edit = self.sign_edit.as_ref()?;
-        if self.mode != AppMode::World || self.hud_hidden {
+        if self.mode != AppMode::World || self.hud_hidden || !self.settings.sign_edit_in_world {
             return None;
         }
         let (sw, sh) = gpu.size();
@@ -38497,10 +39696,6 @@ impl App {
             None => SignCaret { from: ziel, to: ziel, start: jetzt },
         };
         edit.caret.set(Some(c));
-        let periode = CARET_BLINK_INTERVAL.as_millis();
-        if jetzt.duration_since(c.start).as_millis() % periode >= periode / 2 {
-            return;
-        }
         let (x, top) = c.at(jetzt);
         let h = gpu.text_height(1.0);
         let project = sign_projector(view_proj * frame, screen);
@@ -38508,7 +39703,8 @@ impl App {
         else {
             return;
         };
-        let farbe = rgb_to_rgba(sign_text_color(edit.color, glowing));
+        let mut farbe = rgb_to_rgba(sign_text_color(edit.color, glowing));
+        farbe[3] *= caret_alpha(jetzt.duration_since(c.start));
         let v = |p: (f32, f32)| Vertex { position: pixel_to_ndc(p.0, p.1, screen), color: farbe, ..Vertex::PLAIN };
         gpu.world_label_quads.borrow_mut().extend_from_slice(&[v(a), v(b), v(cc), v(a), v(cc), v(d)]);
     }
@@ -38561,7 +39757,7 @@ impl App {
     // projiziert. Wie Vanilla nur von VORN sichtbar: von hinten zeigt ein Display nichts.
     fn build_display_text(&self, gpu: &GpuState, label: &WorldLabel, basis: glam::Mat4, view_proj: glam::Mat4, screen: (f32, f32)) {
         let line_pitch = gpu.text_height(1.0) + WORLD_LABEL_LINE_GAP;
-        let zeilen = wrap_label_lines(&split_label_lines(&label.spans), label.line_width, |t| gpu.measure_text(t, 1.0));
+        let zeilen = wrap_label_lines(&split_label_lines(&self.ego_spans(&label.spans)), label.line_width, |t| gpu.measure_text(t, 1.0));
         if zeilen.is_empty() {
             return;
         }
@@ -38766,9 +39962,8 @@ impl App {
     fn name_label_height(&self, e: &world::Entity) -> f64 {
         let hoehe = match world::entity_type_name(e.entity_type) {
             Some("armor_stand") => e.armor_stand_height(),
-            // Fuer alles andere bleibt es bei der Naeherung aus hit_box_size (Spielermasse
-            // fuer Nicht-Spieler) -- dieselbe bekannte Luecke wie bei der Trefferbox.
-            _ => world::hit_box_size(e.entity_type, e.pose).1,
+            // Fuer alles andere die Trefferbox samt Jungtier und SCALE.
+            _ => e.hit_size().1,
         };
         hoehe + NAMETAG_HEIGHT_ABOVE_HEAD
     }
@@ -39099,6 +40294,60 @@ impl App {
         }
     }
 
+    // Saettigungs-Modul: ein Balken direkt ueber der Nahrung, so breit wie ihre zehn Symbole,
+    // mit runden Enden und duennen schwarzen Linien. Zehn Felder zu je 2 Punkten, von rechts
+    // gefuellt wie die Nahrung; ein ungerader Rest fuellt ein halbes Feld. Leere Felder sind
+    // durchsichtig.
+    fn build_saturation_bar(&self, gpu: &GpuState, rects: &mut Vec<UiRect>) {
+        let rect = self.hud_hotbar_rect(gpu);
+        let scale = self.hotbar_scale(gpu.size());
+        let links = STATUS_BAR_WIDTH - 9.0 * STATUS_ICON_PITCH - STATUS_ICON;
+        let dicke = self.settings.saturation_hud_height as f32;
+        let oben = -STATUS_BARS_ABOVE_HOTBAR - dicke - 1.0;
+        let px = |g: f32| (rect.x + g * scale).round();
+        let (x0, x1) = (px(links), px(STATUS_BAR_WIDTH));
+        let y0 = (rect.y + oben * scale).round();
+        let h = (dicke * scale).round();
+        let radius = h / 2.0;
+        let linie = (scale * 0.5).round().max(1.0);
+        let raster = [0.0, 0.0, 0.0, self.settings.saturation_hud_grid_alpha as f32 / 100.0];
+        let rgb = self.settings.saturation_hud_rgb();
+        // Felder von rechts: Feld j reicht von grenze(j + 1) bis grenze(j).
+        let grenze = |j: f32| x1 - (x1 - x0) * j / 10.0;
+        // Ziel in halben Feldern, angezeigt wird ein weich nachlaufender Wert (Halbwertszeit
+        // rund 70 ms) -- der Balken gleitet statt zu springen.
+        let ziel = (self.food_saturation.max(0.0).floor()).min(20.0);
+        let jetzt = Instant::now();
+        let gezeigt = match self.saturation_shown.get() {
+            Some((alt, wann)) => {
+                let dt = jetzt.duration_since(wann).as_secs_f32().min(0.5);
+                let neu = alt + (ziel - alt) * (1.0 - (-dt * 10.0).exp());
+                if (neu - ziel).abs() < 0.01 { ziel } else { neu }
+            }
+            None => ziel,
+        };
+        self.saturation_shown.set(Some((gezeigt, jetzt)));
+        // Grund und Fuellung liegen INNERHALB des Rahmens: um die Linienbreite eingerueckt, mit
+        // dem entsprechend kleineren Radius -- sonst schauen sie an den runden Enden heraus.
+        let innen = Rect { x: x0 + linie, y: y0 + linie, w: x1 - x0 - 2.0 * linie, h: h - 2.0 * linie };
+        let innen_radius = (radius - linie).max(0.0);
+        if self.settings.saturation_hud_bg_alpha > 0 {
+            rects.push(UiRect::rounded(innen, [0.0, 0.0, 0.0, self.settings.saturation_hud_bg_alpha as f32 / 100.0], innen_radius));
+        }
+        if gezeigt > 0.0 {
+            let fuell_links = grenze(gezeigt / 2.0).max(innen.x);
+            let fuellung = Rect { x: fuell_links, w: innen.x + innen.w - fuell_links, ..innen };
+            rects.push(UiRect::rounded(fuellung, [rgb[0], rgb[1], rgb[2], 1.0], innen_radius.min(fuellung.w / 2.0)));
+        }
+        if raster[3] > 0.0 {
+            for j in 1..10 {
+                let x = grenze(j as f32).round();
+                rects.push(UiRect::rounded(Rect { x: x - linie / 2.0, y: y0 + linie, w: linie, h: h - 2.0 * linie }, raster, 0.0));
+            }
+            rects.push(UiRect::framed(Rect { x: x0, y: y0, w: x1 - x0, h }, [0.0; 4], radius, linie, raster));
+        }
+    }
+
     fn build_status_bars(&self, gpu: &GpuState, sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
         if self.conn_status != ConnStatus::Connected {
             return;
@@ -39169,6 +40418,9 @@ impl App {
             }
         }
 
+        // Platz fuer den Saettigungsbalken (s. build_saturation_bar): die Luft rueckt darueber.
+        let saettigung_h = if self.settings.module_saturation_hud { self.settings.saturation_hud_height as f32 + 1.0 } else { 0.0 };
+
         // Luft: nur wenn sie nicht voll ist -- ueber der Nahrungsleiste. Vanilla blendet sie
         // ausserdem beim Auftauchen noch kurz ein, solange sie sich wieder fuellt; genau das
         // ergibt sich hier von selbst, weil der Server den steigenden Wert mitschickt.
@@ -39178,7 +40430,7 @@ impl App {
             // und getAirBubbleY() addiert ueber `getHeartRows(0) - 1 = -1` zehn wieder drauf.
             // Unterm Strich bleibt eine Zeile -- die beiden letzten Schritte heben sich auf,
             // solange man auf keinem Reittier sitzt (Reittiere fuehrt der Client nicht).
-            let gy = heart_row_y - STATUS_ROW_PITCH;
+            let gy = heart_row_y - STATUS_ROW_PITCH - saettigung_h;
             let voll = air_bubbles(self.air_ticks);
             for n in 1..=10 {
                 let gx = STATUS_BAR_WIDTH - (n - 1) as f32 * STATUS_ICON_PITCH - STATUS_ICON;
@@ -39237,11 +40489,12 @@ impl App {
             }
             // Auf Viertel gerundet wie title_scale (bei ganzer GUI-Skala unveraendert).
             let text_scale = ((scale * 4.0).round() / 4.0).max(1.0);
-            let w = span_row_width(gpu, &bar.name, text_scale);
+            let name = self.ego_spans(&bar.name);
+            let w = span_row_width(gpu, &name, text_scale);
             let tx = (mitte - w / 2.0).round();
             let ty = (rect.y + (y - 9.0) * scale).round();
             let weiss = self.ui_atlas.rect(assets::UI_WHITE).map(|r| r.uv);
-            push_styled_row(gpu, &bar.name, tx, ty, COLOR_WHITE, text_scale, texts, &mut |r, c| {
+            push_styled_row(gpu, &name, tx, ty, COLOR_WHITE, text_scale, texts, &mut |r, c| {
                 if let Some(uv) = weiss {
                     sprites.push(UiSprite::quad(r.x, r.y, r.w, r.h, uv, c, SpriteAtlas::Ui));
                 }
@@ -39469,6 +40722,18 @@ impl App {
 
         let (_, _, slots) = self.inventory.active();
         let (cx, cy) = self.cursor_pos;
+        // Zusammenfassen bei Hover: der gleichartige Stapel unter dem Zeiger zeigt keine Zahl,
+        // der am Zeiger die Summe.
+        let zusammen = self
+            .inventory
+            .cursor
+            .as_ref()
+            .filter(|_| self.settings.inventory_merge_hover)
+            .and_then(|c| {
+                let slot = layout.slots.iter().find(|s| s.contains(cx, cy))?;
+                let unten = slots.get(slot.index)?.as_ref().filter(|s| s.stackable_with(c))?;
+                Some((slot.index, unten.count + c.count))
+            });
         // Tooltip des Slots unter dem Zeiger: je Zeile ihre Abschnitte (Text, Farbe). Erste
         // Zeile der Name, darunter die Verzauberungen (world::enchantment::tooltip_lines).
         let mut hovered: Option<(Vec<Vec<protocol::nbt::TextSpan>>, inventory::SlotRect, Option<&protocol::item::ItemStack>)> = None;
@@ -39481,7 +40746,11 @@ impl App {
                 }
                 _ => 0.0,
             };
-            self.push_item(sprites, texts, stack, slot.x + zittern, slot.y, slot.size);
+            if zusammen.is_some_and(|(index, _)| index == slot.index) {
+                self.push_item(sprites, texts, &protocol::item::ItemStack { count: 1, ..stack.clone() }, slot.x + zittern, slot.y, slot.size);
+            } else {
+                self.push_item(sprites, texts, stack, slot.x + zittern, slot.y, slot.size);
+            }
             if slot.contains(cx, cy) {
                 hovered = self.item_hover_tooltip(stack).map(|zeilen| (zeilen, *slot, world::bundle::is_bundle(stack).then_some(stack)));
             }
@@ -39494,7 +40763,10 @@ impl App {
         // Der Stack an der Maus haengt am Zeiger.
         if let Some(stack) = &self.inventory.cursor {
             let size = inventory::ICON_SIZE * layout.scale;
-            self.push_item(sprites, texts, stack, cx - size / 2.0, cy - size / 2.0, size);
+            match zusammen {
+                Some((_, summe)) => self.push_item(sprites, texts, &protocol::item::ItemStack { count: summe, ..stack.clone() }, cx - size / 2.0, cy - size / 2.0, size),
+                None => self.push_item(sprites, texts, stack, cx - size / 2.0, cy - size / 2.0, size),
+            }
         } else if let Some(zeilen) = enchant_tooltip {
             // Hinweis einer Zauber-Option: rechts neben dem Zeiger, mit dunklem Grund.
             let zeilen_h = gpu.text_height(UI_SCALE_SMALL);
@@ -40280,11 +41552,14 @@ impl App {
     // PlayerListHud.getPlayerName: der Anzeigename des Servers, sonst der Name im Kleid
     // seines Teams (Team.decorateName -- Prefix, Name, Suffix, alles in der Teamfarbe).
     fn player_list_name(&self, entry: &TabEntry) -> Vec<protocol::nbt::TextSpan> {
-        if let Some(name) = &entry.display_name {
-            return name.clone();
-        }
-        let farbe = self.sb_entry_team.get(&entry.name).and_then(|t| self.sb_teams.get(t)).and_then(|t| protocol::nbt::formatting_color(t.color));
-        protocol::nbt::legacy_to_spans(&self.decorate_team_name(&entry.name), farbe)
+        let spans = match &entry.display_name {
+            Some(name) => name.clone(),
+            None => {
+                let farbe = self.sb_entry_team.get(&entry.name).and_then(|t| self.sb_teams.get(t)).and_then(|t| protocol::nbt::formatting_color(t.color));
+                protocol::nbt::legacy_to_spans(&self.decorate_team_name(&entry.name), farbe)
+            }
+        };
+        self.ego_rewrite(&spans).unwrap_or(spans)
     }
 
     // ReadableScoreboardScore.getFormattedScore: das Zahlenformat des Scores, sonst das des
@@ -40528,7 +41803,7 @@ impl App {
     fn build_server_hud(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
 
         // --- Scoreboard-Seitenleiste (Position aus dem HUD-Editor, s. hud_scoreboard_rect) ---
-        if let Some((title, lines)) = self.scoreboard_lines() {
+        if let Some((title, lines)) = self.scoreboard_lines_shown() {
             self.begin_text_area(gpu, texts, ShadowArea::Scoreboard);
             let rect = self.hud_scoreboard_rect(gpu);
             let (scale, line_h, title_h, pad) = self.scoreboard_metrics(gpu);
@@ -40832,6 +42107,30 @@ impl App {
         (gpu.size().0 / 2.0 + CHAT_CARET_OFFSET_X).round()
     }
 
+    // Wo Zeile `i` der Eingabe endet (s. ChatGap): alle am Anker, die letzte um den Abstand
+    // weiter links, den Loeschen dort hinterlassen hat.
+    fn chat_line_end(&self, gpu: &GpuState, text: &str, i: usize) -> f32 {
+        let zeilen = self.chat_input_lines(gpu, text);
+        let anker = self.chat_caret_x(gpu);
+        if i + 1 != zeilen.len() {
+            return anker;
+        }
+        let w = zeilen.last().map_or(0.0, |z| gpu.measure_raw(z, UI_SCALE_NORMAL));
+        let platz = (anker - 6.0).max(20.0);
+        let mut s = self.chat_gap.borrow_mut();
+        let gap = match s.as_ref() {
+            // Alles geloescht: der Cursor kehrt an den Anker zurueck.
+            _ if text.is_empty() => 0.0,
+            Some(g) if g.text == text => g.gap,
+            // Gleich viele Zeilen: was die letzte schmaler wurde, waechst als Abstand, was sie
+            // breiter wurde, zehrt ihn auf. Bricht der Text anders um, steht sie wieder am Anker.
+            Some(g) if g.lines == zeilen.len() => (g.gap + g.last_w - w).clamp(0.0, (platz - w).max(0.0)),
+            _ => 0.0,
+        };
+        *s = Some(ChatGap { text: text.to_string(), lines: zeilen.len(), last_w: w, gap });
+        anker - gap
+    }
+
     fn chat_input_line_h(gpu: &GpuState) -> f32 {
         gpu.text_height(UI_SCALE_NORMAL) + 2.0
     }
@@ -40993,7 +42292,8 @@ impl App {
         // wanderte die Trennstelle und mit ihr dieses Pixel: die Buchstaben wackelten.
         let (cursor_zeile, cursor_x) = self.chat_input_spot(gpu, feld.text(), feld.cursor(), false);
         let zeile_start = |z: &str| z.as_ptr() as usize - feld.text().as_ptr() as usize;
-        let versatz = zeilen.get(cursor_zeile).map_or(0.0, |z| self.chat_slide_offset(feld.text(), cursor_zeile, caret_x - gpu.measure_raw(z, UI_SCALE_NORMAL)));
+        let ende = |i: usize| self.chat_line_end(gpu, feld.text(), i);
+        let versatz = zeilen.get(cursor_zeile).map_or(0.0, |z| self.chat_slide_offset(feld.text(), cursor_zeile, ende(cursor_zeile) - gpu.measure_raw(z, UI_SCALE_NORMAL)));
         // Blaettern im Verlauf: k von 0 bis 1, der neue Text kommt aus `richtung` Zeilen Abstand.
         let recall = self.chat_recall.as_ref().and_then(|r| {
             let t = r.start.elapsed().as_secs_f32() / CHAT_RECALL.as_secs_f32();
@@ -41009,7 +42309,7 @@ impl App {
         }
         for (i, zeile) in zeilen.iter().enumerate() {
             let y = (rect.y + 3.0 + i as f32 * line_h + 1.0 + neu_dy).round();
-            let x0 = caret_x - gpu.measure_raw(zeile, UI_SCALE_NORMAL);
+            let x0 = ende(i) - gpu.measure_raw(zeile, UI_SCALE_NORMAL);
             let teile: Vec<(&str, f32)> = if i == cursor_zeile && versatz.abs() >= 0.5 {
                 let k = feld.cursor().saturating_sub(zeile_start(zeile)).min(zeile.len());
                 let (links, rechts) = zeile.split_at(k);
@@ -41313,10 +42613,9 @@ impl App {
             _ => CaretAnim { from_x: ziel.x, to: ziel, start: jetzt, seen: jetzt },
         };
         self.caret_anim.set(Some(CaretAnim { seen: jetzt, ..a }));
-        let periode = CARET_BLINK_INTERVAL.as_millis();
-        if jetzt.duration_since(a.start).as_millis() % periode < periode / 2 {
-            rects.push(UiRect { rect: Rect { x: a.x(jetzt), ..ziel }, color, ..UiRect::FLAT });
-        }
+        let [r, g, b, alpha] = color;
+        let alpha = alpha * caret_alpha(jetzt.duration_since(a.start));
+        rects.push(UiRect { rect: Rect { x: a.x(jetzt), ..ziel }, color: [r, g, b, alpha], ..UiRect::FLAT });
     }
 
     // Pfeil oben/unten im Chat. Wechselt dabei der Verlauf den Text (nicht die Vorschlagsliste),
@@ -41334,6 +42633,7 @@ impl App {
         } else if feld.text() != alt {
             self.chat_recall = Some(ChatRecall { alt, nach_oben: step == chat_input::Step::Up, start: Instant::now() });
             *self.chat_slide.borrow_mut() = None;
+            *self.chat_gap.borrow_mut() = None;
             self.play_ui_sound(ui_sound::UiSound::Popup);
         }
     }
@@ -41470,6 +42770,51 @@ impl App {
         ]
     }
 
+    // Die Spalte im Blick: der Strahl laeuft bis 128 Bloecke; die erste Spalte, der etwas fehlt
+    // (Daten, Mesh, vom Hoehlen-Culling ganz ausgeblendet), sonst die mit dem ersten Block.
+    fn look_chunk_debug_line(&self, gpu: &GpuState) -> String {
+        let start = self.camera.position;
+        let dir = self.camera.forward().as_dvec3();
+        let br = &gpu.block_renderer;
+        let mut ziel = None;
+        let mut letzte = None;
+        for i in 0..512 {
+            let p = start + dir * (i as f64 * 0.25);
+            let key = ((p.x.floor() as i32).div_euclid(16), (p.z.floor() as i32).div_euclid(16));
+            if letzte != Some(key) {
+                letzte = Some(key);
+                let (_, sichtbar) = br.column_debug(key);
+                if self.world.column(key.0, key.1).is_none() || !br.has_column_mesh(key) || sichtbar == 0 {
+                    ziel = Some(key);
+                    break;
+                }
+            }
+            if self.world.block_at(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32) != 0 {
+                ziel = Some(key);
+                break;
+            }
+        }
+        let Some(key) = ziel.or(letzte) else { return String::new() };
+        let ja = |b: bool| if b { "ja" } else { "NEIN" };
+        let (sections, sichtbar) = br.column_debug(key);
+        let vor = |t: Option<Instant>| t.map_or("nie".to_string(), |t| format!("vor {:.1} s", t.elapsed().as_secs_f32()));
+        let (empfangen, vergessen, kaputt) = self.column_history.get(&key).copied().unwrap_or_default();
+        format!(
+            "Blick-Chunk {} {}: Daten {} | Mesh {} ({} Sections, {} sichtbar) | dirty {} | empfangen {} | vergessen {} | unlesbar {} | Welt-Reset {}",
+            key.0,
+            key.1,
+            ja(self.world.column(key.0, key.1).is_some()),
+            ja(br.has_column_mesh(key)),
+            sections.count_ones(),
+            (sections & sichtbar).count_ones(),
+            ja(self.world.is_dirty(key.0, key.1)),
+            vor(empfangen),
+            vor(vergessen),
+            vor(kaputt),
+            self.world_reset_debug.map_or("nie".to_string(), |(t, grund)| format!("{} ({grund})", vor(Some(t)))),
+        )
+    }
+
     fn build_debug_overlay(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, hud_lines: &mut Vec<UiLine>, texts: &mut Vec<UiText>) {
         let pos = self.physics.pos;
         let block_x = pos.x.floor() as i64;
@@ -41532,6 +42877,8 @@ impl App {
                 None => String::new(),
             },
             self.lod_debug_line(),
+            self.look_chunk_debug_line(gpu),
+            self.transactions.debug_line(Instant::now()),
             // Welche Partikel gerade leben -- so laesst sich sagen, woher ein unerwarteter
             // Partikel stammt.
             {
@@ -41646,7 +42993,6 @@ impl App {
             UI_SCALE_SMALL,
         ));
         // Letzte Log-Zeilen als Connect-Phasen-Anzeige (Handshake, Login, Konfiguration, ...).
-        const OVERLAY_LOG_LINES: usize = 6;
         let start = self.log_lines.len().saturating_sub(OVERLAY_LOG_LINES);
         let base_y = top + 88.0;
         for (row, line) in self.log_lines[start..].iter().enumerate() {
@@ -41657,12 +43003,35 @@ impl App {
                 UI_SCALE_SMALL,
             ));
         }
-        texts.push(gpu.centered_text(
-            Rect { x: 0.0, y: base_y + OVERLAY_LOG_LINES as f32 * LOG_LINE_HEIGHT + 24.0, w: sw, h: LOG_LINE_HEIGHT },
-            "Esc: abbrechen".to_string(),
-            theme::text_2(),
-            UI_SCALE_SMALL,
-        ));
+        let r = connect_cancel_rect();
+        let b = Button {
+            slider: None,
+            action: ButtonAction::Nothing,
+            rect: r,
+            label: String::new(),
+            enabled: true,
+            color: theme::get(theme::Slot::Surface2),
+            scale: UI_SCALE_SMALL,
+        };
+        let (flaeche, farbe) = styled_button(&b, self.hover_level(r, r.contains(self.cursor_pos.0, self.cursor_pos.1)));
+        rects.push(flaeche);
+        texts.push(gpu.centered_text(r, "Abbrechen".to_string(), farbe, UI_SCALE_SMALL));
+    }
+
+    // Abbrechen-Knopf im Verbindungs-Overlay: trennt immer -- auch wenn der Verbindungs-Task
+    // schon weg ist und nur die Ansicht noch auf den ersten Chunk wartet.
+    fn cancel_connect(&mut self) {
+        self.play_ui_sound(ui_sound::UiSound::Close);
+        if self.conn_task.is_some() {
+            self.disconnect();
+            return;
+        }
+        self.keep_last_view();
+        self.conn_status = ConnStatus::Disconnected;
+        self.reset_world();
+        self.mode = AppMode::Menu;
+        self.screen = MenuScreen::Connect;
+        self.push_log("== getrennt (vom Nutzer) ==");
     }
 
     // Tearing-Test-Balken (s. Settings::show_tearing_test), falls eingeschaltet. Im Menue UND im
@@ -41892,9 +43261,15 @@ impl App {
             MenuScreen::SettingsInventory => self.build_settings_inventory_tab(gpu, rects, texts),
             MenuScreen::SettingsMisc => {
                 let y = (settings_row_y(0) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-                texts.push(UiText { text: "No UI close S2C".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                texts.push(UiText { text: "No UI close".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 let y = (settings_row_y(1) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                 texts.push(UiText { text: "No chat clear".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                let y = (settings_row_y(2) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                texts.push(UiText { text: "Schild direkt beschreiben".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                for (row, label) in [(3, "No slot set"), (4, "No rotate set")] {
+                    let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
             }
             MenuScreen::SettingsFont => self.build_settings_font_tab(gpu, rects, texts),
             MenuScreen::SettingsDesign => self.build_settings_design_tab(gpu, rects, texts),
@@ -42225,9 +43600,19 @@ impl App {
             }
             // Ohne Erklaerungsrand (s. side_strip_w).
             MenuScreen::SettingsDesign => None,
-            MenuScreen::SettingsMisc => settings_row_hover_rect(0).contains(cx, cy).then_some(
-                "Schließt der Server ein offenes Fenster (Truhe, Inventar, Schild-Editor ...), bleibt es trotzdem offen. Kein Vanilla-Verhalten: Klicks in einen Container, den der Server schon geschlossen hat, nimmt er nicht mehr an.",
-            ),
+            MenuScreen::SettingsMisc => {
+                if settings_row_hover_rect(0).contains(cx, cy) {
+                    Some("Schließt der Server ein offenes Fenster, bleibt es trotzdem offen. Immer: jedes Fenster (Truhe, Inventar, Schild-Editor ...). Nur Inventar: nur das eigene Inventar, Truhen & Co. schließt der Server weiter. Kein Vanilla-Verhalten: Klicks in einen Container, den der Server schon geschlossen hat, nimmt er nicht mehr an.")
+                } else if settings_row_hover_rect(2).contains(cx, cy) {
+                    Some("An: man schreibt direkt auf das Schild in der Welt, solange man die Seite sieht. Aus: immer das Editor-Fenster wie in Vanilla.")
+                } else if settings_row_hover_rect(3).contains(cx, cy) {
+                    Some("Wenn der Server deinen Hotbar-Slot wechselt. Aus: wie Vanilla, der Slot wechselt. Ignore: dein Slot bleibt, dem Server wird nichts gemeldet -- für ihn gilt seiner, bis du selbst wechselst. Reset: dein Slot bleibt und geht im nächsten Tick an den Server zurück.")
+                } else if settings_row_hover_rect(4).contains(cx, cy) {
+                    Some("Wenn der Server deine Blickrichtung dreht (Teleport, Kamera-Effekte). Aus: wie Vanilla. Ignore: deine Kamera bleibt, dem Server wird nichts gemeldet -- für ihn gilt seine Richtung, bis du dich bewegst. Reset: deine Kamera bleibt und deine Richtung geht im nächsten Tick an den Server. Die Bestätigung des Teleports trägt immer die Richtung des Servers, sonst flaggen Anticheats sofort.")
+                } else {
+                    None
+                }
+            }
             MenuScreen::SettingsLanguage => {
                 if settings_row_hover_rect(LATIN_MACRONS_ROW).contains(cx, cy) {
                     Some(LATIN_MACRONS_TOOLTIP)
@@ -42270,10 +43655,12 @@ impl App {
                 if settings_row_hover_rect(2).contains(cx, cy) {
                     Some("Legt man ein Item in einen Slot, springt der Mauszeiger in die Mitte dieses Slots. Nicht beim Stapel-Verschieben (Shift). Kein Vanilla-Verhalten.")
                 } else if settings_row_hover_rect(4).contains(cx, cy) {
-                    Some("Kleines S neben dem Flaschenhals verstärkter Tränke (Stufe II), z. B. Stärke II oder Schnelligkeit II. Gilt im Inventar, nicht in der Hotbar.")
+                    Some("Hält man einen Stapel über einen Slot mit demselben Item, steht am Zeiger die Summe beider Stapel und die Zahl im Slot wird ausgeblendet, statt dass sich zwei Zahlen überlagern.")
                 } else if settings_row_hover_rect(5).contains(cx, cy) {
-                    Some("Kleines L neben dem Flaschenhals verlängerter Tränke (mit Redstone gebraut). Gilt im Inventar, nicht in der Hotbar.")
+                    Some("Kleines S neben dem Flaschenhals verstärkter Tränke (Stufe II), z. B. Stärke II oder Schnelligkeit II. Gilt im Inventar, nicht in der Hotbar.")
                 } else if settings_row_hover_rect(6).contains(cx, cy) {
+                    Some("Kleines L neben dem Flaschenhals verlängerter Tränke (mit Redstone gebraut). Gilt im Inventar, nicht in der Hotbar.")
+                } else if settings_row_hover_rect(7).contains(cx, cy) {
                     Some("Kleines W auf Heil- und Schadenstränken der schwachen Stufe I. Stufe II bekommt keinen Buchstaben, weil sie im PvP der Normalfall ist. Gilt im Inventar, nicht in der Hotbar.")
                 } else {
                     settings_row_hover_rect(0).contains(cx, cy).then_some(
@@ -42289,6 +43676,8 @@ impl App {
                     ControlsRow::CursorSens => Some(CURSOR_SENSITIVITY_TOOLTIP),
                     ControlsRow::CursorSize => Some(CURSOR_SIZE_TOOLTIP),
                     ControlsRow::CursorWidth => Some(CURSOR_WIDTH_TOOLTIP),
+                    ControlsRow::HoldConfirm => Some(HOLD_CONFIRM_TOOLTIP),
+                    ControlsRow::ReconnectHold => Some(RECONNECT_HOLD_TOOLTIP),
                     ControlsRow::CursorCircle => Some(CURSOR_CIRCLE_TOOLTIP),
                     ControlsRow::SneakProtection => Some(SNEAK_PROTECTION_TOOLTIP),
                     ControlsRow::SnapTap => Some(SNAP_TAP_TOOLTIP),
@@ -42622,7 +44011,7 @@ impl App {
                 }
             }
             HudElement::Armor => {
-                for (row, text) in ["Größe", "Ausrichtung", "Rücken nach", "Abstand", "Zahl-Größe", "Zahl X", "Zahl Y", "Grün bei >95 %"].into_iter().enumerate() {
+                for (row, text) in ["Größe", "Ausrichtung", "Rücken nach", "Abstand", "Zahl-Größe", "Zahl X", "Zahl Y", "Grün bei >87 %"].into_iter().enumerate() {
                     let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                     texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 }
@@ -43297,6 +44686,8 @@ impl App {
                 ControlsRow::RocketRepeat => "Raketen wiederholen",
                 ControlsRow::UseWhileMining => "Benutzen beim Abbauen",
                 ControlsRow::CapsLock => "Feststelltaste sperren",
+                ControlsRow::HoldConfirm => "Bestätigungsdauer (allgemein)",
+                ControlsRow::ReconnectHold => "Reconnect-Verzögerung",
                 ControlsRow::Bind(aktion) => aktion.short_label(),
             };
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
@@ -43322,6 +44713,13 @@ impl App {
                     let rect = stepper_value_rect(row);
                     rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
                     texts.push(gpu.centered_text(rect, format!("{wert} %"), theme::text(), UI_SCALE_SMALL));
+                }
+                ControlsRow::HoldConfirm | ControlsRow::ReconnectHold => {
+                    let wert = if zeile == ControlsRow::HoldConfirm { set.hold_confirm_ms as i32 } else { set.reconnect_hold_ms };
+                    let text = if wert < 0 { "Allgemein".to_string() } else { format!("{wert} ms") };
+                    let rect = stepper_value_rect(row);
+                    rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                    texts.push(gpu.centered_text(rect, text, theme::text(), UI_SCALE_SMALL));
                 }
                 _ => {}
             }
@@ -43510,7 +44908,8 @@ impl App {
 
     // Namensfenster fuer ein neues Theme (Geometrie wie Quick Connect).
     fn build_theme_name_dialog(&self, overlay: &mut UiOverlay) {
-        let Some((gpu, d)) = self.gpu.as_ref().zip(self.theme_name_dialog.as_ref()).filter(|_| self.mode == AppMode::Menu) else { return };
+        let Some((gpu, d)) = self.gpu.as_ref().zip(self.theme_name_dialog.as_ref()) else { return };
+        let alias = d.purpose == NameDialogPurpose::EgoAlias;
         use theme::Slot;
         let g = theme::get;
         let (sw, sh) = gpu.size();
@@ -43523,12 +44922,13 @@ impl App {
             UiRect::framed(feld, g(Slot::SurfaceSunken), 6.0, 1.0, g(Slot::Accent)),
         ];
         let mut texts = vec![
-            UiText { text: "Neues Theme".to_string(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL },
+            UiText { text: if alias { "Eigener Name" } else { "Neues Theme" }.to_string(), x: p.x + 24.0, y: p.y + 20.0, color: theme::text(), scale: UI_SCALE_NORMAL },
             UiText { text: "NAME".to_string(), x: feld.x, y: feld.y - gpu.text_height(TOPBAR_SUB_SCALE) - 8.0, color: theme::text_3(), scale: TOPBAR_SUB_SCALE },
         ];
         self.push_text_field(gpu, &d.field, feld, true, &mut rects, &mut texts);
-        let leer = d.field.text().trim().is_empty();
-        for (r, label, primaer) in [(abbrechen, "Abbrechen", false), (ok, "Erstellen", true)] {
+        // Ein leerer Alias ist erlaubt: dann bleibt der echte Name.
+        let leer = !alias && d.field.text().trim().is_empty();
+        for (r, label, primaer) in [(abbrechen, "Abbrechen", false), (ok, if alias { "Übernehmen" } else { "Erstellen" }, true)] {
             let b = Button {
                 slider: None,
                 action: ButtonAction::NewCustomTheme,
@@ -43574,6 +44974,13 @@ impl App {
     // Neues eigenes Theme mit dem Namen aus dem Fenster, anfangs mit den Farben des gerade
     // gewaehlten -- und gleich gewaehlt, damit man rechts die Farben setzen kann.
     fn create_custom_theme(&mut self) {
+        if self.theme_name_dialog.as_ref().is_some_and(|d| d.purpose == NameDialogPurpose::EgoAlias) {
+            let alias = self.theme_name_dialog.take().map(|d| d.field.text().trim().to_string()).unwrap_or_default();
+            self.play_ui_sound(ui_sound::UiSound::Click);
+            self.settings.ego_alias = alias;
+            self.persist_settings();
+            return;
+        }
         let name = self.theme_name_dialog.as_ref().map(|d| d.field.text().trim().to_string()).unwrap_or_default();
         if name.is_empty() {
             self.play_ui_sound(ui_sound::UiSound::Denied);
@@ -44334,7 +45741,12 @@ impl App {
         let y3 = (settings_row_y(3) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         texts.push(UiText { text: "Operator-Items (Kreativ)".to_string(), x: SETTINGS_LABEL_X, y: y3, color: theme::text(), scale: UI_SCALE_SMALL });
 
-        for (zeile, text) in [(4, "Trank-Buchstabe S (verstärkt)"), (5, "Trank-Buchstabe L (verlängert)"), (6, "Trank-Buchstabe W (schwach)")] {
+        for (zeile, text) in [
+            (4, "Zusammenfassen bei Hover"),
+            (5, "Trank-Buchstabe S (verstärkt)"),
+            (6, "Trank-Buchstabe L (verlängert)"),
+            (7, "Trank-Buchstabe W (schwach)"),
+        ] {
             let y = (settings_row_y(zeile) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: text.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
         }
@@ -45173,8 +46585,10 @@ impl App {
         if !self.owns_mouse() {
             return; // Maus gehoert gerade dem Desktop (Alt-Tab / kein Fullscreen)
         }
-        // Beim Verbinden ist die Welt ein Standbild.
+        // Beim Verbinden ist die Welt ein Standbild; die Maus bewegt den Zeiger (Abbrechen-
+        // Knopf, Dialoge des Servers).
         if self.connecting_view() {
+            self.move_cursor(delta);
             return;
         }
         match self.mode {
@@ -45484,7 +46898,12 @@ impl App {
     // Hat ein Textfeld den Fokus (Amboss-Name, Kreativ-Suche)? Dann gehoeren die Tasten ihm
     // und nicht der Steuerung.
     fn text_field_focused(&self) -> bool {
-        self.anvil_typing() || self.creative_search_focused() || self.book_edit.is_some() || self.dialog_shown() || self.code_of_conduct.is_some()
+        self.anvil_typing()
+            || self.creative_search_focused()
+            || self.book_edit.is_some()
+            || self.dialog_shown()
+            || self.code_of_conduct.is_some()
+            || self.theme_name_dialog.is_some()
     }
 
     fn anvil_typing(&self) -> bool {
@@ -45674,7 +47093,7 @@ impl App {
                 .then(Affine::rotation_y_deg(180.0 - body_yaw))
                 .then(Affine::scale([-1.0, -1.0, 1.0]))
         } else {
-            world::entity_transform(feet, body_yaw, 1.0, 1.0)
+            world::entity_transform(feet, body_yaw, e.scale, 1.0)
         };
         let haelt = e.main_hand.is_some() || e.off_hand.is_some();
         let mut pose = katalog::walk_pose(model, look.anim, head_rel, pitch, swing, amount, haelt);
@@ -45716,7 +47135,7 @@ impl App {
         pose.rotate("right_leg", rechtes_bein);
         // Die Bodenplatte dreht gegen den Stand und bleibt so am Blockraster ausgerichtet.
         pose.rotate("base_plate", [0.0, -body_yaw.to_radians(), 0.0]);
-        let base = world::entity_transform(feet, body_yaw, 1.0, 1.0);
+        let base = world::entity_transform(feet, body_yaw, e.scale, 1.0);
         let layer = if small { "armor_stand_small#main" } else { "armor_stand#main" };
         let textur = world::mob_catalog::mob_look("armor_stand").and_then(|look| self.entity_atlas.rect(look.texture));
         if let (false, Some(model), Some(tex)) = (e.invisible, world::model_data::layer_model(layer), textur) {
@@ -45853,8 +47272,9 @@ impl App {
             self.tick_notifications();
             self.poll_resource_pack_job();
             let mut overlay = self.build_notifications();
-            // Im Modul-Menue im Spiel gibt es ebenfalls Farbfelder.
+            // Im Modul-Menue im Spiel gibt es ebenfalls Farbfelder und das Namensfenster.
             self.build_color_popup(&mut overlay);
+            self.build_theme_name_dialog(&mut overlay);
             (overlay, self.build_hud())
         } else {
             (UiOverlay::default(), Default::default())
@@ -45914,13 +47334,15 @@ impl App {
         let wackeln = self.arrow_empty_shake_px() / self.gpu.as_ref().map_or(1920.0, |g| g.size().0);
         let crosshair_center = (with_hud && self.crosshair_visible())
             .then_some((self.settings.hud_crosshair_x + wackeln, self.settings.hud_crosshair_y));
-        // Feuer-Modus "Fadenkreuz": beim Brennen steht das Kreuz in der eigenen Farbe -- auch
-        // anstelle der Komplementaerfarbe.
+        // Feuer-Modus "Fadenkreuz": beim Brennen stehen Kreuz und Ring in der eigenen Farbe --
+        // auch anstelle der Komplementaerfarbe. Die Zahlen daneben (Pfeile, Countdown) bleiben
+        // in der normalen Fadenkreuz-Farbe (s. CrosshairExtras::fire_rgb).
         let brennt = self.settings.fire_mode == FIRE_MODE_CROSSHAIR && self.own_on_fire && self.game_mode != GAME_MODE_SPECTATOR;
-        let crosshair_mode = if brennt { 1 } else { self.settings.crosshair_color_mode as u32 };
-        let crosshair_rgb = if brennt { self.settings.fire_crosshair_rgb() } else { self.settings.crosshair_rgb() };
+        let crosshair_mode = self.settings.crosshair_color_mode as u32;
+        let crosshair_rgb = self.settings.crosshair_rgb();
         let crosshair_outline = self.settings.crosshair_outline;
-        let crosshair_extras = if with_hud { self.crosshair_extras() } else { CrosshairExtras::default() };
+        let mut crosshair_extras = if with_hud { self.crosshair_extras() } else { CrosshairExtras::default() };
+        crosshair_extras.fire_rgb = brennt.then(|| self.settings.fire_crosshair_rgb());
         // Nur der Komplementaer-Modus kann aufgehellt werden -- eine fest gewaehlte Farbe
         // ist ja bereits genau die gewaehlte Farbe.
         let crosshair_boost =
@@ -45930,7 +47352,10 @@ impl App {
         // ein Stapel an der Maus, ersetzt DER den Zeiger -- sonst laege die
         // Pfeilspitze mitten im Item.
         let inventory_cursor = (with_hud
-            && (self.module_menu_open || self.chat_input.is_some() || (self.inventory.screen_open && self.inventory.cursor.is_none())))
+            && (self.module_menu_open
+                || self.chat_input.is_some()
+                || self.connecting_view()
+                || (self.inventory.screen_open && self.inventory.cursor.is_none())))
             .then_some(self.cursor_pos)
             // Spielmodus-Rad: derselbe Zeiger, an der Stelle, die das Rad fuehrt.
             .or_else(|| self.gamemode_wheel_cursor().filter(|_| with_hud));
@@ -46135,6 +47560,89 @@ impl App {
         {
             self.request_wallpaper(false);
         }
+    }
+
+    // Vom Server gesetzte Blickrichtung (Protokoll-Konvention: Pitch nach unten positiv).
+    // Sonstiges > No rotate set: bei Ignore/Reset bleibt die Kamera. Die Bestaetigung an den
+    // Server traegt seine Richtung trotzdem (s. connection.rs) -- bei Reset tut der naechste
+    // Tick so, als sei zuletzt diese gesendet, und schickt damit die eigene hinterher.
+    fn apply_server_rotation(&mut self, yaw_deg: f32, pitch_deg: f32) {
+        match self.settings.no_rotate_set {
+            SERVER_SET_FOLLOW => {
+                self.camera.yaw = yaw_deg;
+                self.camera.pitch = (-pitch_deg).clamp(-MAX_PITCH, MAX_PITCH);
+            }
+            SERVER_SET_RESET => {
+                self.last_sent_yaw_deg = yaw_deg;
+                self.last_sent_pitch_deg = pitch_deg;
+            }
+            _ => {}
+        }
+    }
+
+    // Ein Ereignis vom Server ist da: eine stehende "Keine Pakete"-Karte weicht der Meldung,
+    // wie lange es still war.
+    fn server_event_seen(&mut self) {
+        let jetzt = Instant::now();
+        let stille = jetzt.duration_since(self.last_server_event);
+        self.last_server_event = jetzt;
+        if let Some(id) = self.packet_gap_note.take() {
+            self.notifications.dismiss(id, jetzt);
+            self.notify(notifications::Notification::info("Server wieder da", format!("{:.1} s lang kamen keine Pakete.", stille.as_secs_f32())));
+        }
+    }
+
+    // Seit PACKET_GAP_WARN nichts vom Server: einmal warnen, bis wieder etwas kommt. Nur im
+    // Spiel -- beim Verbinden ist Warten normal.
+    fn check_packet_gap(&mut self) {
+        if self.conn_status != ConnStatus::Connected || self.chunks_received == 0 || self.packet_gap_note.is_some() {
+            return;
+        }
+        if self.last_server_event.elapsed() >= PACKET_GAP_WARN {
+            let karte = notifications::Notification::warning("Keine Pakete vom Server", format!("Seit {} s kam nichts mehr an.", PACKET_GAP_WARN.as_secs()))
+                .with_lifetime(PACKET_GAP_NOTE_LIFETIME);
+            self.packet_gap_note = Some(self.notify(karte));
+        }
+    }
+
+    // Der Server hat uns versetzt, `strecke` Bloecke weit. Nah dran heisst Lag-back (Flag,
+    // Korrektur) -- weiter weg ist ein echter Teleport (/tp, Warp) und keine Meldung wert.
+    // Folgen weitere kurz danach, zaehlt die stehende Karte mit, statt zu stapeln.
+    fn note_lagback(&mut self, strecke: f64) {
+        if !(LAGBACK_MIN_BLOCKS..=LAGBACK_MAX_BLOCKS).contains(&strecke) {
+            return;
+        }
+        let jetzt = Instant::now();
+        if let Some((id, anzahl, zuletzt)) = self.lagback_note {
+            let anzahl = anzahl + 1;
+            if jetzt.duration_since(zuletzt) < LAGBACK_GROUP
+                && self.notifications.renew(id, format!("Lag-back ×{anzahl}"), format!("Zuletzt {strecke:.1} Blöcke zurückgesetzt."))
+            {
+                self.lagback_note = Some((id, anzahl, jetzt));
+                return;
+            }
+        }
+        let id = self.notify(notifications::Notification::warning("Lag-back", format!("{strecke:.1} Blöcke zurückgesetzt.")));
+        self.lagback_note = Some((id, 1, jetzt));
+    }
+
+    // Stockung im Paketfluss (s. net::ClientEvent::PacketStall). Solange die Karte steht,
+    // zaehlt sie weitere mit.
+    fn note_rubberband(&mut self, ausgehend: bool, millis: u32) {
+        let text = if ausgehend {
+            format!("O: {millis} ms lang ging nichts an den Server.")
+        } else {
+            format!("I: {millis} ms lang kam nichts, dann alles auf einmal.")
+        };
+        if let Some((id, anzahl)) = self.rubberband_note {
+            let anzahl = anzahl + 1;
+            if self.notifications.renew(id, format!("Starkes Rubberbanding ×{anzahl}"), text.clone()) {
+                self.rubberband_note = Some((id, anzahl));
+                return;
+            }
+        }
+        let id = self.notify(notifications::Notification::warning("Starkes Rubberbanding", text));
+        self.rubberband_note = Some((id, 1));
     }
 
     fn notify(&mut self, note: notifications::Notification) -> notifications::NotificationId {
@@ -46475,6 +47983,7 @@ impl App {
             levitation: self.own_effects.get(&protocol::packets::MOB_EFFECT_LEVITATION).copied(),
             jump_boost: self.own_effects.get(&protocol::packets::MOB_EFFECT_JUMP_BOOST).copied(),
             dolphins_grace: self.own_effects.contains_key(&protocol::packets::MOB_EFFECT_DOLPHINS_GRACE),
+            float_drag: self.settings.module_botcheck_pass,
             yaw_rad: self.camera.yaw.to_radians(),
             // Vanillas getRotationVector().y nutzt MathHelper.sin (Float-Tabelle), NICHT exaktes
             // f64-sin -- fuer bit-genaue Schwimm-Physik gegen Grim, s. physics::look_dir_y_from_pitch.
@@ -46680,6 +48189,7 @@ impl App {
             self.update_team_facts();
             self.seat_own_player();
             self.tick_potion_swirls();
+            self.tick_crit_trails();
             self.tick_area_clouds();
             self.tick_eating_particles();
             // Umgebungspartikel der Bloecke um den Spieler (Blasensaeulen), dann Explosions-
@@ -47048,8 +48558,17 @@ impl App {
     // rechnen Aufladung und Mindestladung deshalb noch mit dem Tempo des alten Items -- ein
     // Schwert (12,5 Ticks) laesst so sofort mit dem Speer stechen, der fuer sich bis zu 23
     // Ticks braucht (Lunge-Swap). last_attack_hand_item ist genau dieser Stand (s. Tickschleife).
+    //
+    // Grundwert und fremde Modifikatoren (Eile, Plugins) kommen vom Server: auf Servern mit
+    // 1.8-Kampf ist der Grundwert hoch (anticheat-test: 20), jeder Schlag also sofort geladen.
+    // Mit Vanillas fester 4.0 hielten wir Spam-Hits fuer ungeladen und liessen den Sprint-
+    // Slowdown weg, den Grim erwartet (Simulation 0.06 je Treffer).
     fn attack_speed_attribute(&self) -> f32 {
-        self.last_attack_hand_item.map_or(4.0, world::item_registry::attack_speed)
+        let item = self.last_attack_hand_item.map_or(4.0, world::item_registry::attack_speed) - 4.0;
+        match self.attr_attack_speed {
+            Some((a, b, c)) => ((a + item as f64) * (1.0 + b) * c) as f32,
+            None => 4.0 + item,
+        }
     }
 
     // Player.cannotAttackWithItem fuer die Haupthand: verlangt das Item eine Mindestladung
@@ -47099,6 +48618,77 @@ impl App {
         match self.own_hand_stack(hand).filter(|_| self.using_item) {
             Some(stack) => world::item_behavior::use_effects(stack),
             None => protocol::item::UseEffects { can_sprint: false, interact_vibrations: true, speed_multiplier: world::item_behavior::DEFAULT_USE_SPEED },
+        }
+    }
+
+    // --- Modul Eigenname (s. ego_name) ------------------------------------------------------
+
+    // Der eigene Spielername, wie ihn der Server kennt.
+    fn own_name(&self) -> Option<&str> {
+        self.own_uuid.and_then(|u| self.player_names.get(&u)).or(self.credentials.as_ref().map(|c| &c.username)).map(String::as_str)
+    }
+
+    // Abschnitte mit umgeschriebenem/markiertem eigenen Namen; None = nichts zu tun.
+    fn ego_rewrite(&self, spans: &[protocol::nbt::TextSpan]) -> Option<Vec<protocol::nbt::TextSpan>> {
+        let set = &self.settings;
+        if !set.module_ego_name {
+            return None;
+        }
+        let r = ego_name::Rewrite { name: self.own_name()?, alias: &set.ego_alias, deco: set.ego_deco != ego_name::Deco::Off, shadow: set.ego_shadow };
+        ego_name::rewrite(spans, &r)
+    }
+
+    // Wie ego_rewrite, fuer Zeichenwege, die die Abschnitte nur ausleihen.
+    fn ego_spans<'a>(&self, spans: &'a [protocol::nbt::TextSpan]) -> std::borrow::Cow<'a, [protocol::nbt::TextSpan]> {
+        match self.ego_rewrite(spans) {
+            Some(neu) => std::borrow::Cow::Owned(neu),
+            None => std::borrow::Cow::Borrowed(spans),
+        }
+    }
+
+    // Eine Nachricht vom Server: Name umschreiben, und nennt sie ihn (nicht nur als Absender),
+    // klingt der Erwaehnungston.
+    fn ego_incoming(&mut self, spans: Vec<protocol::nbt::TextSpan>, ton: bool) -> Vec<protocol::nbt::TextSpan> {
+        if !self.settings.module_ego_name {
+            return spans;
+        }
+        if ton && self.own_name().is_some_and(|n| ego_name::mentions(&spans, n)) {
+            self.play_ego_sound();
+        }
+        self.ego_rewrite(&spans).unwrap_or(spans)
+    }
+
+    // Stand fuer paint()/shadow(), einmal je Durchlauf der Ereignisschleife.
+    fn publish_ego_look(&self) {
+        let set = &self.settings;
+        let look = set.module_ego_name.then(|| {
+            let [h, sa, v, a] = set.ego_colors[2];
+            let [r, g, b] = hsv_to_rgb(h as f32, sa as f32 / 100.0, v as f32 / 100.0);
+            let k = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u32;
+            ego_name::Look {
+                deco: set.ego_deco,
+                a: set.ego_rgb(0),
+                b: set.ego_rgb(1),
+                speed: set.ego_speed as f32 / 10.0,
+                shadow: set.ego_shadow.then_some((k(a as f32 / 100.0) << 24) | (k(r) << 16) | (k(g) << 8) | k(b)),
+            }
+        });
+        ego_name::set_look(look);
+    }
+
+    // Der Erwaehnungston, hoechstens alle 300 ms -- ein Spam darf nicht zum Dauerton werden.
+    fn play_ego_sound(&mut self) {
+        if self.settings.ego_sound.is_empty() || self.ego_sound_at.is_some_and(|t| t.elapsed().as_millis() < 300) {
+            return;
+        }
+        self.ego_sound_at = Some(Instant::now());
+        self.type_pitch_seed = self.type_pitch_seed.wrapping_add(1);
+        let seed = (zufallswert(self.type_pitch_seed) * i64::MAX as f32) as i64;
+        let event = self.settings.ego_sound.clone();
+        let Some(aufnahme) = self.vanilla_sounds.resolve(&mut self.installation, &event, seed) else { return };
+        let gain = aufnahme.volume * self.settings.ego_volume as f32 / 100.0 * self.settings.sound_gain(protocol::packets::SoundCategory::Players);
+        if gain > 0.0 {
+            self.audio.sink().play_sample(aufnahme.sample, gain, 0.0, aufnahme.pitch);
         }
     }
 
@@ -47392,6 +48982,14 @@ impl App {
         }
         self.pending_input_actions = angriffe;
         self.attack_broke_block = false;
+        // Vanillas hitResult: EINMAL pro Tick bestimmt (gameRenderer.pick in tick(), vor
+        // handleKeybinds), und continueAttack am Ende arbeitet mit genau diesem Ziel -- auch
+        // wenn ein Rechtsklick dazwischen einen Block davorgesetzt hat. Hier zielte der Abbau
+        // mit einem frischen Strahl und sprang im SELBEN Tick auf den gerade gesetzten Block:
+        // ABORT+START auf eine Stelle, die Grim erst mit dem naechsten Bewegungspaket als
+        // belegt kennt -- AirLiquidBreak ("block=air, type=START_DIGGING"), gemessen gegen
+        // Fabric mit Crystal Fix: dort folgt der Wechsel einen Tick spaeter.
+        let tick_ziel = self.crosshair_target();
         self.tick_item_use();
         // Hier liegt nur noch etwas, wenn tick_item_use vor dem Benutzen-Block ausgestiegen ist
         // (Bildschirm/Chat offen) -- dort wie bisher. Zurueckgestellter Tausch und Wegwerfen
@@ -47406,7 +49004,7 @@ impl App {
         //   handleBlockBreaking(currentScreen == null && !bl3 && attackKey.isPressed() && mouse.isCursorLocked())
         let welt = self.mode == AppMode::World && !self.screen_overlay_open() && self.chat_input.is_none();
         let gehalten = self.keybind_physical_down[KeyBindAction::Attack.index()];
-        self.handle_block_breaking(welt && !self.attack_broke_block && gehalten);
+        self.handle_block_breaking(welt && !self.attack_broke_block && gehalten, tick_ziel);
     }
 
     // attack_range des aktiven Items -- des gerade benutzten, sonst der Haupthand (Vanillas
@@ -47495,7 +49093,7 @@ impl App {
     }
 
     // MinecraftClient.handleBlockBreaking.
-    fn handle_block_breaking(&mut self, breaking: bool) {
+    fn handle_block_breaking(&mut self, breaking: bool, ziel: CrosshairTarget) {
         if self.using_item || self.outgoing_tx.is_none() || self.conn_status != ConnStatus::Connected {
             return;
         }
@@ -47509,7 +49107,7 @@ impl App {
             return;
         }
         if breaking {
-            if let CrosshairTarget::Block(pos, face) = self.crosshair_target() {
+            if let CrosshairTarget::Block(pos, face) = ziel {
                 // No Tool Break: wie losgelassen -- ein laufender Abbau wird abgebrochen.
                 if self.block_mining_guarded(pos) {
                     self.cancel_block_breaking();
@@ -47572,7 +49170,7 @@ impl App {
 
     // ClientPlayerInteractionManager.attackBlock -- der erste Linksklick auf einen Block.
     fn attack_block(&mut self, pos: (i32, i32, i32), face: i32) -> bool {
-        if self.block_breaking_restricted() {
+        if self.block_breaking_restricted(pos) {
             return false;
         }
         if self.game_mode == GAME_MODE_CREATIVE {
@@ -47692,16 +49290,25 @@ impl App {
                     && a.removed_components == b.removed_components
                     && a.use_cooldown == b.use_cooldown
                     && a.tool == b.tool
+                    && a.can_place_on == b.can_place_on
+                    && a.can_break == b.can_break
             }
             _ => false,
         }
     }
 
-    // PlayerEntity.isBlockBreakingRestricted: Zuschauer nie, Abenteuer nur mit can_break-
-    // Component -- das fuehren wir nicht, also dort gar nicht vorhersagen. Der Server
-    // entscheidet ohnehin selbst.
-    fn block_breaking_restricted(&self) -> bool {
-        self.game_mode == GAME_MODE_SPECTATOR || self.game_mode == GAME_MODE_ADVENTURE
+    // Player.blockActionRestricted: Zuschauer nie, Abenteuer nur mit einem Haupthand-Item,
+    // dessen can_break den Block nennt.
+    fn block_breaking_restricted(&self, pos: (i32, i32, i32)) -> bool {
+        match self.game_mode {
+            GAME_MODE_SPECTATOR => true,
+            GAME_MODE_ADVENTURE => {
+                let state = self.world.block_at(pos.0, pos.1, pos.2);
+                let preds = self.own_hand_stack(protocol::packets::HAND_MAIN).and_then(|s| s.can_break.as_deref());
+                !world::item_behavior::adventure_allows(preds, state)
+            }
+            _ => false,
+        }
     }
 
     fn next_block_sequence(&mut self) -> i32 {
@@ -47778,7 +49385,7 @@ impl App {
     // Sequenz (derselbe Weg wie eine Platzierung, s. push_pending_block). Uebrig bleibt die
     // Fluessigkeit des Blocks -- ein wassergefuellter Block wird zu Wasser, alles andere zu Luft.
     fn break_block_client(&mut self, pos: (i32, i32, i32), sequence: i32) {
-        if self.block_breaking_restricted() {
+        if self.block_breaking_restricted(pos) {
             return;
         }
         let state = self.world.block_at(pos.0, pos.1, pos.2);
@@ -48204,7 +49811,7 @@ impl App {
         self.entities
             .iter()
             .map(|(_, e)| {
-                let (width, height) = world::hit_box_size(e.entity_type, e.pose);
+                let (width, height) = e.hit_size();
                 let (x, y, z) = e.hit_pos();
                 let half = width / 2.0;
                 (DVec3::new(x - half, y, z - half), DVec3::new(x + half, y + height, z + half), world::is_living(e.entity_type))
@@ -48247,9 +49854,10 @@ impl App {
         self.inventory.player.get(slot).and_then(|s| s.as_ref()).and_then(|stack| world::item_registry::item_name(stack.item_id))
     }
 
-    // `ohne_bloecke`: die Wiederholung unter "Ausser Bloecke" (s. HoldUseRepeat) -- eine Hand
-    // mit einem Block faellt dann durch wie ein PASS, OHNE Paket (so wie no-hold-use es in
-    // interactBlock/interactItem macht), und die andere Hand kommt dran.
+    // `ohne_bloecke`: die Wiederholung unter "Ausser Bloecke" (s. HoldUseRepeat) -- eine
+    // Nebenhand mit einem Block faellt dann durch wie ein PASS, OHNE Paket (so wie no-hold-use
+    // es in interactBlock/interactItem macht). Hat die HAUPThand den Block, entfaellt die
+    // ganze Wiederholung (s. PacketOrderD in der Schleife).
     fn do_item_use(&mut self, ohne_bloecke: bool, treffer: Option<physics::BlockRayHit>, entity_ziel: Option<(i32, (f32, f32, f32))>) {
         if self.outgoing_tx.is_none() || self.conn_status != ConnStatus::Connected {
             return;
@@ -48306,6 +49914,15 @@ impl App {
 
         for (hand, item) in haende {
             if ohne_bloecke && item.is_some_and(world::block_registry::is_block) {
+                // Die HAUPThand darf nicht still ausfallen, waehrend die Nebenhand weiter
+                // Pakete schickt: Vanilla schickt fuer die Haupthand immer zuerst etwas.
+                // ECHTER FLAG GEWESEN (Grim PacketOrderD "Skipped Mainhand", 4x je Sekunde =
+                // jede Wiederholung): Block in der Hand, Rechtsklick auf ein Entity gehalten --
+                // die Nebenhand schickte ihre Interact-Pakete allein. Faellt die Haupthand
+                // durch, entfaellt deshalb die ganze Wiederholung.
+                if hand == protocol::packets::HAND_MAIN {
+                    return;
+                }
                 continue;
             }
             // Abklingzeit dieser Hand (s. item_cooldowns). Sie sperrt useOnBlock UND use, nicht
@@ -48606,6 +50223,16 @@ impl App {
         // Leere Hand oder Abklingzeit:
         // `if (!itemStack.isEmpty() && !isCoolingDown(itemStack)) ... else return PASS`.
         let Some(item) = item.filter(|_| !abkuehlend) else { return BlockUse::Durchgereicht };
+        // ItemStack.useOn: ohne Baurecht (Abenteuer) PASS, solange can_place_on den
+        // ANGEKLICKTEN Block nicht nennt -- dann geht wie in Vanilla das USE_ITEM hinterher.
+        // Vorher sagten wir dort Bloecke vorher, die der Server sofort wieder wegnahm.
+        if self.game_mode == GAME_MODE_ADVENTURE {
+            let state = self.world.block_at(block.0, block.1, block.2);
+            let preds = self.own_hand_stack(hand).and_then(|s| s.can_place_on.as_deref());
+            if !world::item_behavior::adventure_allows(preds, state) {
+                return BlockUse::Durchgereicht;
+            }
+        }
         // BlockItem.useOnBlock kennt kein PASS: entweder der Block steht (SUCCESS) oder die
         // Platzierung war unmoeglich (FAIL). Beides beendet die Benutzung -- ein USE_ITEM
         // hinterher waere ein Paket, das Vanilla nie schickt.
@@ -48897,11 +50524,11 @@ impl App {
         // vorhersagen, schoebe unsere eigene Kollision uns weg und die Abweichung zum Server
         // waere groesser statt kleiner.
         let fuss = self.physics.pos;
-        let min = [fuss.x - physics::PLAYER_WIDTH as f64 / 2.0, fuss.y, fuss.z - physics::PLAYER_WIDTH as f64 / 2.0];
+        let min = [fuss.x - self.physics.width() / 2.0, fuss.y, fuss.z - self.physics.width() / 2.0];
         let max = [
-            fuss.x + physics::PLAYER_WIDTH as f64 / 2.0,
+            fuss.x + self.physics.width() / 2.0,
             fuss.y + self.physics.current_height(),
-            fuss.z + physics::PLAYER_WIDTH as f64 / 2.0,
+            fuss.z + self.physics.width() / 2.0,
         ];
         let Some(state) = state else {
             // Ausrichtung unbekannt: steckte der Block in jeder Form im Spieler, setzt Vanilla
@@ -49655,12 +51282,11 @@ impl App {
         }
         let rect = self.chat_input_rect(gpu);
         let line_h = Self::chat_input_line_h(gpu);
-        let caret_x = self.chat_caret_x(gpu);
         let mass = |t: &str| gpu.measure_raw(t, UI_SCALE_NORMAL);
         let mut bereich: Option<std::ops::Range<usize>> = None;
         for (i, zeile) in self.chat_input_lines(gpu, text).iter().enumerate() {
             let y = rect.y + 3.0 + i as f32 * line_h + 1.0;
-            let x = (caret_x - mass(zeile)).round();
+            let x = (self.chat_line_end(gpu, text, i) - mass(zeile)).round();
             let versatz = zeile.as_ptr() as usize - text.as_ptr() as usize;
             for (run_i, r) in &markiert {
                 let run = &runs[*run_i];
@@ -49751,7 +51377,7 @@ impl App {
         let i = (((pos.1 - rect.y - 3.0) / line_h).floor().max(0.0) as usize).min(letzte);
         let zeile = zeilen[i];
         let start = zeile.as_ptr() as usize - text.as_ptr() as usize;
-        let caret_x = self.chat_caret_x(gpu);
+        let caret_x = self.chat_line_end(gpu, text, i);
         let ziel = zeile
             .char_indices()
             .map(|(k, _)| k)
@@ -49791,7 +51417,7 @@ impl App {
             .unwrap_or(if b == 0 { 0 } else { zeilen.len() - 1 });
         let (s, e) = bereich(zeilen[i]);
         let rest = &zeilen[i][b.clamp(s, e) - s..];
-        (i, self.chat_caret_x(gpu) - gpu.measure_raw(rest, UI_SCALE_NORMAL))
+        (i, self.chat_line_end(gpu, text, i) - gpu.measure_raw(rest, UI_SCALE_NORMAL))
     }
 
     // Die Tastatur-Markierung (Shift+Pfeil, Strg+A) als gewoehnliche Textauswahl: dieselbe
@@ -49969,10 +51595,14 @@ impl App {
             }
             return true;
         }
+        if self.theme_name_dialog.is_some() {
+            self.server_edit_insert(text);
+            return true;
+        }
         if self.mode != AppMode::Menu {
             return false;
         }
-        if self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
+        if self.server_edit.is_some() || self.quick_typing() {
             self.server_edit_insert(text);
             return true;
         }
@@ -50020,9 +51650,8 @@ impl App {
         self.chat_history_scroll = (self.chat_history_scroll as i64 + lines.round() as i64).clamp(0, max) as usize;
     }
 
-    // Klick in den offenen Chat: ein Verlaufseintrag kommt in die Eingabe; ein Link wird im
-    // Browser geoeffnet. Nur http(s) -- ein Server soll ueber einen Klick nichts anderes
-    // starten koennen. Die uebrigen Klick-Aktionen wie Vanillas ChatScreen.handleClickEvent:
+    // Klick in den offenen Chat: ein Verlaufseintrag kommt in die Eingabe; ein Link geht ueber
+    // open_link (nur http(s), unbekannte Seiten mit Rueckfrage). Die uebrigen Klick-Aktionen wie Vanillas ChatScreen.handleClickEvent:
     // Shift+Klick fuegt Style.insertion ein, sonst run_command / suggest_command /
     // copy_to_clipboard.
     fn chat_click(&mut self, px: f32, py: f32) {
@@ -50052,14 +51681,8 @@ impl App {
             self.run_chat_click(klick);
             return;
         }
-        let Some(url) = treffer.link else { return };
-        if !(url.starts_with("https://") || url.starts_with("http://")) {
-            self.push_log(format!("Link nicht geöffnet (nur http/https): {url}"));
-            return;
-        }
-        match open_external_command(&url).spawn() {
-            Ok(_) => self.push_log(format!("Link geöffnet: {url}")),
-            Err(e) => self.push_log(format!("Link konnte nicht geöffnet werden ({e}): {url}")),
+        if let Some(url) = treffer.link {
+            self.open_link(url);
         }
     }
 
@@ -50129,6 +51752,7 @@ impl App {
         }
         // Ohne Oeffnen-Klang: der Chat ist kein Fenster (Wunsch des Nutzers, wie beim Inventar).
         *self.chat_slide.borrow_mut() = None;
+        *self.chat_gap.borrow_mut() = None;
         let mut feld = chat_input::ChatInput::new(String::new());
         feld.restore_history(self.chat_history.clone());
         self.chat_input = Some(feld);
@@ -50394,6 +52018,8 @@ impl App {
         self.profiler.loop_call();
         let t = Instant::now();
         self.drain_events();
+        self.check_packet_gap();
+        self.tick_reconnect_hold();
         self.profiler.add(Phase::DrainEvents, t);
         let t = Instant::now();
         self.drain_auth_events();
@@ -50546,6 +52172,7 @@ impl App {
             }
         }
 
+        self.tick_autoclicker();
         self.profiler.add(Phase::Input, t_input);
         let t = Instant::now();
         self.update_movement();
@@ -50994,6 +52621,13 @@ impl App {
                     }
                     return;
                 }
+                // Verbindungs-Overlay: nur der Abbrechen-Knopf, sonst nichts.
+                if state == ElementState::Pressed && self.connecting_view() {
+                    if button == MouseButton::Left && connect_cancel_rect().contains(self.cursor_pos.0, self.cursor_pos.1) {
+                        self.cancel_connect();
+                    }
+                    return;
+                }
                 // Offene Kontenliste: Klick darin waehlt ein Konto, daneben schliesst sie.
                 if button == MouseButton::Left && state == ElementState::Pressed && self.account_menu_open && self.account_menu_press() {
                     return;
@@ -51030,7 +52664,7 @@ impl App {
                     }
                     return;
                 }
-                if state == ElementState::Pressed && self.mode == AppMode::Menu && self.theme_name_dialog.is_some() {
+                if state == ElementState::Pressed && self.theme_name_dialog.is_some() {
                     if button == MouseButton::Left {
                         self.theme_name_press();
                     }
@@ -51998,10 +53632,8 @@ impl App {
                 ServerField::Address => (13, edit.address.text().to_string()),
             });
         }
-        if self.mode == AppMode::Menu {
-            if let Some(d) = &self.theme_name_dialog {
-                return Some((14, d.field.text().to_string()));
-            }
+        if let Some(d) = &self.theme_name_dialog {
+            return Some((14, d.field.text().to_string()));
         }
         if self.quick_typing() {
             return Some((15, self.quick_field.text().to_string()));
@@ -52062,6 +53694,10 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CursorSizeDown
         | ButtonAction::CursorWidthDown
         | ButtonAction::CursorWidthUp
+        | ButtonAction::HoldConfirmDown
+        | ButtonAction::HoldConfirmUp
+        | ButtonAction::ReconnectHoldDown
+        | ButtonAction::ReconnectHoldUp
         | ButtonAction::CursorSizeUp
         | ButtonAction::FovDown(_)
         | ButtonAction::FovUp(_)
@@ -52183,8 +53819,10 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleCapsLockBlocked => umschalten(settings.caps_lock_blocked),
         ButtonAction::ToggleInventoryCursorToSlot => umschalten(settings.inventory_cursor_to_slot),
         ButtonAction::ToggleCreativeOpTab => umschalten(settings.creative_op_tab),
-        ButtonAction::ToggleNoUiCloseS2c => umschalten(settings.no_ui_close_s2c),
         ButtonAction::ToggleNoChatClear => umschalten(settings.no_chat_clear),
+        ButtonAction::ToggleSignEditInWorld => umschalten(settings.sign_edit_in_world),
+        ButtonAction::SkipPerspective(p) => umschalten(settings.perspective_skipped(p)),
+        ButtonAction::ToggleInventoryMergeHover => umschalten(settings.inventory_merge_hover),
         ButtonAction::TogglePotionMarkStrong => umschalten(settings.potion_mark_strong),
         ButtonAction::TogglePotionMarkLong => umschalten(settings.potion_mark_long),
         ButtonAction::TogglePotionMarkWeak => umschalten(settings.potion_mark_weak),
@@ -52257,6 +53895,13 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleSoundDebug => umschalten(settings.module_sound_debug),
         ButtonAction::ToggleModuleDiscordStatus => umschalten(settings.module_discord_status),
         ButtonAction::ToggleModuleInputLog => umschalten(settings.module_input_log_enabled),
+        ButtonAction::ToggleModuleAutoclicker => umschalten(settings.module_autoclicker),
+        ButtonAction::ToggleModuleSaturationHud => umschalten(settings.module_saturation_hud),
+        ButtonAction::SaturationHeightPrev | ButtonAction::SaturationHeightNext | ButtonAction::SaturationAlpha(..) => UiSound::Step,
+        ButtonAction::ToggleModuleEgoName => umschalten(settings.module_ego_name),
+        ButtonAction::EditEgoAlias | ButtonAction::CycleEgoDeco | ButtonAction::EgoShadow(_) | ButtonAction::CycleEgoSound => UiSound::Click,
+        ButtonAction::EgoSpeed(_) | ButtonAction::EgoVolume(_) => UiSound::Step,
+        ButtonAction::AutoclickerCpsPrev | ButtonAction::AutoclickerCpsNext => UiSound::Step,
         ButtonAction::ToggleModuleColor => umschalten(settings.module_color),
         ButtonAction::ToggleModuleSustainability => umschalten(settings.module_sustainability),
         ButtonAction::ToggleSustainBackground => umschalten(settings.sustain_background),
@@ -54241,7 +55886,7 @@ mod tests {
     }
 
     // Jede Aktion steht genau einmal auf der Steuerungs-Seite, jede Einstellung ebenso, und
-    // die Zeilen passen in die Abschnitts-Bitmaske (64 Bit, s. SettingsPage::section_starts).
+    // die Zeilen passen in die Abschnitts-Bitmaske (128 Bit, s. SettingsPage::section_starts).
     #[test]
     fn steuerungs_seite_zeigt_jede_aktion_genau_einmal() {
         for aktion in KeyBindAction::ALL {
@@ -54251,7 +55896,7 @@ mod tests {
         for (i, a) in controls_rows().iter().enumerate() {
             assert!(!controls_rows()[i + 1..].contains(a), "Zeile {i} doppelt");
         }
-        assert!(controls_rows().len() < 64);
+        assert!(controls_rows().len() < 128);
         let abschnitte = controls_sections();
         assert_eq!(abschnitte[0], ("Maus", 0));
         assert!(abschnitte.windows(2).all(|w| w[0].1 < w[1].1), "Abschnitte in Reihenfolge, keiner leer");
@@ -54452,6 +56097,7 @@ mod tests {
             KeyBindAction::VoiceWhisper,
             // Spielmodus-Rad: offen, solange gehalten.
             KeyBindAction::GameModeWheel,
+            KeyBindAction::Reconnect,
         ];
         for action in KeyBindAction::ALL {
             let expected_press = !hold_actions.contains(&action);
@@ -55118,7 +56764,7 @@ mod tests {
         // Jede Seite mit Abschnitten: der erste beginnt bei 0, alle aufsteigend und innerhalb.
         for (screen, _) in SETTINGS_CATEGORIES {
             let Some(p) = screen.settings_page() else { continue };
-            assert!(p.rows < 64);
+            assert!(p.rows < 128);
             assert!(p.sections.first().is_none_or(|&(_, r)| r == 0));
             assert!(p.sections.windows(2).all(|w| w[0].1 < w[1].1 && w[1].1 < p.rows));
         }
@@ -55651,6 +57297,33 @@ mod tests {
     }
 
     #[test]
+    // Bogen: zu frueh losgelassen bis zum ersten Pfeil, kurz vor voll bis voll, sonst nicht.
+    fn bogen_durchdruecken() {
+        assert!(bow_hold_through(1, 0), "unter der Mindestladung immer");
+        assert!(!bow_hold_through(BOW_MIN_SHOT_TICKS, 0), "Grenze aus: ab dem ersten Pfeil los");
+        assert!(bow_hold_through(17, 150), "3 Ticks = 150 ms Rest");
+        assert!(!bow_hold_through(16, 150), "4 Ticks Rest sind zu viel");
+        assert!(!bow_hold_through(BOW_FULL_SHOT_TICKS, 500), "voll: los");
+    }
+
+    #[test]
+    // Alle Platzinhaber gebraucht: es weicht der entfernteste, nicht der aelteste.
+    fn voll_weicht_der_entfernteste() {
+        let mut order = std::collections::VecDeque::new();
+        for n in 0..3u8 {
+            claim_atlas_slot(&mut order, 3, [n; 16], None, |_| false).expect("Platz");
+        }
+        let abstand = |u: &[u8; 16]| Some([2.0, 50.0, 7.0][u[0] as usize]);
+        let (slot, evicted) = claim_atlas_slot_near(&mut order, 3, [9; 16], None, abstand).expect("Platz");
+        assert_eq!(evicted, Some([1; 16]));
+        assert_eq!(slot, 1);
+        // Ein ungebrauchter geht trotzdem vor, auch wenn er naeher waere.
+        let abstand = |u: &[u8; 16]| if u[0] == 2 { None } else { Some(100.0) };
+        let (_, evicted) = claim_atlas_slot_near(&mut order, 3, [8; 16], None, abstand).expect("Platz");
+        assert_eq!(evicted, Some([2; 16]));
+    }
+
+    #[test]
     // Der Fehler: ein Spieler, den man gerade vor sich hat, verlor seinen Skin an
     // irgendeinen Namen, der weit weg der Tabellenliste beitrat -- allein weil sein Platz
     // laenger belegt war. Verdraengt werden darf nur, wen man gerade NICHT sieht.
@@ -56030,7 +57703,10 @@ mod puppen_tests {
         assert_eq!(modell(&bogen, &b, Some((0.0, 25.0))), "item/bow_pulling_0");
         assert_eq!(modell(&bogen, &b, Some((13.0, 25.0))), "item/bow_pulling_1", "0.65 = 13 Ticks");
         assert_eq!(modell(&bogen, &b, Some((12.9, 25.0))), "item/bow_pulling_0");
-        assert_eq!(modell(&bogen, &b, Some((18.0, 25.0))), "item/bow_pulling_2", "0.9 = 18 Ticks");
+        // Vanilla: 0.9 = 18 Ticks. Hier erst bei voller Kraft (20 Ticks), s. item_model_input.
+        assert_eq!(modell(&bogen, &b, Some((18.0, 25.0))), "item/bow_pulling_1", "18 Ticks: noch nicht voll gespannt");
+        assert_eq!(modell(&bogen, &b, Some((19.9, 25.0))), "item/bow_pulling_1");
+        assert_eq!(modell(&bogen, &b, Some((20.0, 25.0))), "item/bow_pulling_2", "20 Ticks = volle Kraft");
 
         let mut a = protocol::item::ItemStack::new(id("crossbow"), 1);
         assert_eq!(modell(&armbrust, &a, None), "item/crossbow");

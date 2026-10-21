@@ -18,7 +18,9 @@ struct CrosshairSettings {
     mode: u32,
     brightness_boost: f32,
     color: u32,
-    _pad: u32,
+    // Brenn-Farbe (Feuer-Modus "Fadenkreuz"), nur fuer Kreuz (0) und Kreis/Ring (5) -- Zahlen
+    // behalten `color`. Alpha-Byte 0 = brennt nicht.
+    fire: u32,
 };
 @group(0) @binding(2) var<uniform> settings: CrosshairSettings;
 
@@ -156,6 +158,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if (abs(in.kind - 4.0) < 0.5) {
         return vec4<f32>(1.0, 1.0, 1.0, a);
+    }
+    let feuer = unpack4x8unorm(settings.fire);
+    if (feuer.a > 0.5 && (in.kind < 0.5 || abs(in.kind - 5.0) < 0.5)) {
+        return vec4<f32>(feuer.rgb, a);
     }
     return vec4<f32>(crosshair_color(underneath), a);
 }

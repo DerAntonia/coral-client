@@ -38,12 +38,7 @@ pub async fn run(
 ) -> io::Result<()> {
     let credentials = match konto {
         Some(name) => launcher_credentials(name).await?,
-        None => load_credentials().ok_or_else(|| {
-            io::Error::other(
-                "Keine gespeicherte Anmeldung in ~/.config/coral-client/settings.conf gefunden -- \
-                 in Coral Client einmal mit Microsoft anmelden, oder --account <name> benutzen.",
-            )
-        })?,
+        None => active_account_credentials().await?,
     };
     let listener = TcpListener::bind(listen_addr).await?;
     println!("pktproxy MITM: hoere auf {listen_addr}, meldet sich bei {upstream} an als {}", credentials.username);
@@ -77,6 +72,7 @@ async fn session(
 
     // Handshake des Clients. Letztes Feld ist die Absicht: 1 = Serverliste, 2 = Login.
     let handshake = read_payload(&mut cr, None).await?;
+    roh(sid, false, &handshake);
     let intent = *handshake.last().unwrap_or(&2);
     if intent == 1 {
         // Serverlisten-Anfrage: im Status-State wird nie verschluesselt, da genuegt das
@@ -86,6 +82,7 @@ async fn session(
     }
     // Login Start (Name + UUID) -- verworfen, angemeldet wird mit dem gespeicherten Konto.
     let login_start = read_payload(&mut cr, None).await?;
+    roh(sid, false, &login_start);
     let _ = log_tx.send(format!("[S{sid}] C2S Login Start ({} Bytes), melde upstream an ...", login_start.len()));
 
     let mut link = net::UpstreamLink::login(upstream, credentials).await.map_err(io::Error::other)?;
@@ -112,6 +109,7 @@ async fn session(
     // Login Acknowledged kommt vom echten Client und geht unveraendert weiter -- so bleibt
     // die Reihenfolge exakt die eines Vanilla-Logins.
     let ack = read_payload(&mut cr, comp).await?;
+    roh(sid, false, &ack);
     link.send(&ack).await.map_err(io::Error::other)?;
     let _ = log_tx.send(format!("[S{sid}] Login Acknowledged durchgereicht, ab hier Klartext-Mitschnitt"));
 
@@ -169,11 +167,42 @@ fn roh_zeile(sid: u64, payload: &[u8]) -> String {
     format!("[S{sid}]     roh: {hex}\n[S{sid}]     txt: {text}")
 }
 
+// Rohmitschnitt aller Pakete (Format s. net::write_raw), angehaengt an <log>.bin.
+static ROH: std::sync::OnceLock<std::sync::Mutex<std::fs::File>> = std::sync::OnceLock::new();
+
+pub fn open_raw(pfad: &str) -> io::Result<()> {
+    let datei = std::fs::OpenOptions::new().create(true).append(true).open(pfad)?;
+    println!("Rohmitschnitt: {pfad}");
+    let _ = ROH.set(std::sync::Mutex::new(datei));
+    Ok(())
+}
+
+fn roh(sid: u64, s2c: bool, payload: &[u8]) {
+    if let Some(roh) = ROH.get() {
+        if let Ok(mut datei) = roh.lock() {
+            let _ = net::write_raw(&mut *datei, s2c, sid as u32, payload);
+        }
+    }
+}
+
 fn log_packet(log_tx: &UnboundedSender<String>, sid: u64, dir: &str, payload: &[u8], welt: Option<&mut WeltInfo>) {
+    roh(sid, dir == "S2C", payload);
     let Ok((id, off)) = decode_varint(payload, 0) else { return };
     let body = &payload[off..];
     if let Some(welt) = welt {
         welt.beobachte(id, payload, log_tx, sid);
+    }
+    // CORAL_DUMP_CHUNK=x,z: das Chunk-Paket dieser Spalte roh in eine Datei, um den Parser
+    // offline daran zu pruefen.
+    if dir == "S2C" && id == protocol::packets::CB_PLAY_CHUNK_DATA {
+        if let (Some(ziel), Some(x), Some(z)) = (std::env::var("CORAL_DUMP_CHUNK").ok(), body.get(0..4), body.get(4..8)) {
+            let (x, z) = (i32::from_be_bytes(x.try_into().unwrap()), i32::from_be_bytes(z.try_into().unwrap()));
+            if ziel == format!("{x},{z}") {
+                let pfad = std::env::temp_dir().join(format!("chunk_{x}_{z}_S{sid}.bin"));
+                let _ = std::fs::write(&pfad, payload);
+                let _ = log_tx.send(format!("[S{sid}] Chunk ({x},{z}) roh nach {}", pfad.display()));
+            }
+        }
     }
     let name = crate::name_for(dir, true, id);
     let extra = crate::extra_for(dir, true, id, body);
@@ -304,8 +333,11 @@ async fn write_payload(w: &mut OwnedWriteHalf, comp: Option<i32>, payload: &[u8]
 async fn raw_relay(mut cr: OwnedReadHalf, mut cw: OwnedWriteHalf, upstream: &str, handshake: &[u8]) -> io::Result<()> {
     let up = TcpStream::connect(upstream).await?;
     let (mut ur, mut uw) = up.into_split();
+    // Hostname im Handshake auf den echten Server umschreiben: manche Server (anticheat-test,
+    // Arvor) antworten sonst mit "Please connect using the correct domain".
+    let handshake = handshake_mit_host(handshake, upstream).unwrap_or_else(|| handshake.to_vec());
     let mut hs = encode_varint(handshake.len() as i32);
-    hs.extend_from_slice(handshake);
+    hs.extend_from_slice(&handshake);
     uw.write_all(&hs).await?;
     let hoch = tokio::spawn(async move { tokio::io::copy(&mut cr, &mut uw).await });
     let _ = tokio::io::copy(&mut ur, &mut cw).await;
@@ -313,9 +345,25 @@ async fn raw_relay(mut cr: OwnedReadHalf, mut cw: OwnedWriteHalf, upstream: &str
     Ok(())
 }
 
-// Die gespeicherte Anmeldung von Coral Client lesen (~/.config/coral-client/settings.conf,
-// schlichte key=value-Zeilen). Der Proxy meldet sich damit als derselbe Spieler an -- zwei
-// gleichzeitige Verbindungen desselben Kontos gehen nicht, Coral Client muss also zu sein.
+// Handshake (id 0, Protokoll, Host, Port, Absicht) mit Host und Port von `upstream`.
+fn handshake_mit_host(handshake: &[u8], upstream: &str) -> Option<Vec<u8>> {
+    let (id, off) = decode_varint(handshake, 0).ok()?;
+    let (protokoll, off) = decode_varint(handshake, off).ok()?;
+    let (len, off) = decode_varint(handshake, off).ok()?;
+    let nach_host = off + usize::try_from(len).ok()?;
+    let absicht = handshake.get(nach_host + 2..)?;
+    let (host, port) = upstream.rsplit_once(':').map_or((upstream, 25565), |(h, p)| (h, p.parse().unwrap_or(25565)));
+    let mut out = encode_varint(id);
+    out.extend_from_slice(&encode_varint(protokoll));
+    out.extend_from_slice(&encode_varint(host.len() as i32));
+    out.extend_from_slice(host.as_bytes());
+    out.extend_from_slice(&u16::to_be_bytes(port));
+    out.extend_from_slice(absicht);
+    Some(out)
+}
+
+// Der Proxy meldet sich als derselbe Spieler an wie Coral Client -- zwei gleichzeitige
+// Verbindungen desselben Kontos gehen nicht, nur ein Client darf also durch den Proxy.
 // Holt ein im Launcher (Prism/PolyMC/MultiMC) gespeichertes Konto und macht daraus
 // Zugangsdaten. Das dort liegende Token kann abgelaufen sein -- credentials_from_token
 // fragt damit das Profil ab und scheitert genau dann, was hier als Fehler durchschlaegt.
@@ -335,18 +383,40 @@ async fn launcher_credentials(name: &str) -> io::Result<auth::Credentials> {
         .map_err(|e| io::Error::other(format!("Token von {:?} nicht mehr gueltig: {e:?} -- im Launcher neu anmelden.", treffer.name)))
 }
 
-fn load_credentials() -> Option<auth::Credentials> {
-    let pfad = dirs_config()?.join("coral-client").join("settings.conf");
-    let text = std::fs::read_to_string(pfad).ok()?;
-    let feld = |name: &str| {
-        text.lines()
-            .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == name).map(|(_, v)| v.trim().to_string()))
-    };
-    let access_token = feld("mc_access_token")?;
-    if access_token.is_empty() {
-        return None;
+// Das im Konto-Manager von Coral Client ausgewaehlte Konto: account_uuid aus
+// ~/coral-client/private-config.conf, das Konto selbst (Token, Refresh-Token, Client-ID) aus
+// ~/.config/coral-client/accounts.conf. Ist das Minecraft-Token abgelaufen, holt der Proxy mit
+// dem Refresh-Token ein frisches -- gespeichert wird es nicht, das macht Coral Client selbst
+// beim naechsten Start.
+pub async fn active_account_credentials() -> io::Result<auth::Credentials> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| io::Error::other("HOME fehlt"))?;
+    let privat = std::fs::read_to_string(home.join("coral-client").join("private-config.conf"))
+        .map_err(|e| io::Error::other(format!("~/coral-client/private-config.conf nicht lesbar: {e}")))?;
+    let uuid = privat
+        .lines()
+        .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == "account_uuid").map(|(_, v)| v.trim().replace('-', "").to_lowercase()))
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| io::Error::other("In Coral Client ist kein Konto ausgewaehlt (account_uuid leer)."))?;
+    let konten = dirs_config()
+        .and_then(|d| std::fs::read_to_string(d.join("coral-client").join("accounts.conf")).ok())
+        .ok_or_else(|| io::Error::other("~/.config/coral-client/accounts.conf nicht lesbar"))?;
+    // Zeilen: konto<TAB>quelle<TAB>name<TAB>uuid<TAB>token<TAB>refresh<TAB>client-id
+    let felder = konten
+        .lines()
+        .map(|l| l.split('\t').collect::<Vec<_>>())
+        .find(|f| f.len() == 7 && f[0] == "konto" && f[3].replace('-', "").to_lowercase() == uuid)
+        .ok_or_else(|| io::Error::other(format!("Ausgewaehltes Konto {uuid} steht nicht in accounts.conf")))?;
+    let (quelle, name, token, refresh, client_id) = (felder[1], felder[2], felder[4], felder[5], felder[6]);
+    if let Ok(c) = auth::credentials_from_token(token).await {
+        return Ok(c);
     }
-    Some(auth::Credentials { access_token, profile_id: feld("account_uuid")?, username: feld("account_name")? })
+    if quelle != "microsoft" || refresh.is_empty() {
+        return Err(io::Error::other(format!("Token von {name} abgelaufen -- in Coral Client neu anmelden.")));
+    }
+    let msa = auth::refresh_msa(client_id, refresh)
+        .await
+        .map_err(|e| io::Error::other(format!("Refresh fuer {name} fehlgeschlagen: {e:?} -- in Coral Client neu anmelden.")))?;
+    auth::msa_to_minecraft(&msa.access_token).await.map_err(|e| io::Error::other(format!("Minecraft-Anmeldung fuer {name} fehlgeschlagen: {e:?}")))
 }
 
 fn dirs_config() -> Option<std::path::PathBuf> {

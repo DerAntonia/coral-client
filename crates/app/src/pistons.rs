@@ -669,7 +669,7 @@ impl Pistons {
 }
 
 fn player_box(p: &PlayerPhysics) -> Aabb {
-    let halb = crate::physics::PLAYER_WIDTH as f64 / 2.0;
+    let halb = p.width() / 2.0;
     Aabb { min: DVec3::new(p.pos.x - halb, p.pos.y, p.pos.z - halb), max: DVec3::new(p.pos.x + halb, p.pos.y + p.current_height(), p.pos.z + halb) }
 }
 

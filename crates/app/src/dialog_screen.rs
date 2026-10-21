@@ -341,15 +341,7 @@ impl App {
                     let _ = cb.set_text(text);
                 }
             }
-            Event::OpenUrl(url) => {
-                if !(url.starts_with("https://") || url.starts_with("http://")) {
-                    self.push_log(format!("Link nicht geöffnet (nur http/https): {url}"));
-                    return;
-                }
-                if let Err(e) = crate::open_external_command(&url).spawn() {
-                    self.push_log(format!("Link konnte nicht geöffnet werden: {e}"));
-                }
-            }
+            Event::OpenUrl(url) => self.open_link(url),
             Event::ShowDialog(s) => match self.resolve_source(&s) {
                 Some(d) => self.open_dialog(d),
                 None => self.push_log("Verwiesener Dialog unbekannt -- nicht angezeigt"),
@@ -1068,6 +1060,39 @@ impl App {
             self.code_of_conduct = None;
             self.disconnect();
             self.disconnect_popup = Some(vanilla_text("multiplayer.disconnect.code_of_conduct", "Der Server verlangt, dass du seinen Verhaltenskodex annimmst."));
+        }
+    }
+
+    // Link aus Chat, Dialog oder Server-Links im Browser oeffnen. Nur http(s) -- ein Server soll
+    // ueber einen Klick nichts anderes starten koennen. Seiten, die nicht auf der Whitelist
+    // stehen (link_whitelist.rs), erst nach einem Bestaetigungsfenster; dessen "Öffnen" kommt
+    // wieder hier an und geht dann durch, weil der Link in link_pending steht.
+    pub(crate) fn open_link(&mut self, url: String) {
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            self.push_log(format!("Link nicht geöffnet (nur http/https): {url}"));
+            return;
+        }
+        let bestaetigt = self.link_pending.take().is_some_and(|l| l == url);
+        if !bestaetigt && !crate::link_whitelist::trusted(&url) {
+            self.link_pending = Some(url.clone());
+            let knopf = |text: &str, action| ActionButton { label: dialog::plain_spans(text), tooltip: None, width: 150.0, action };
+            let mut text = dialog::plain_spans("Diese Seite steht nicht auf der Liste bekannter Seiten. Öffne nur Links von Leuten, denen du vertraust.\n\n");
+            text.extend(dialog::plain_spans(&url));
+            let d = Dialog {
+                title: dialog::plain_spans("Link öffnen?"),
+                external_title: None,
+                can_close_with_escape: true,
+                after_action: AfterAction::Close,
+                body: vec![Body::Text { spans: text, width: 300.0 }],
+                inputs: Vec::new(),
+                kind: Kind::Confirmation { yes: knopf("Öffnen", Some(dialog::Action::OpenUrl(url))), no: knopf("Abbrechen", None) },
+            };
+            self.open_dialog(d);
+            return;
+        }
+        match crate::open_external_command(&url).spawn() {
+            Ok(_) => self.push_log(format!("Link geöffnet: {url}")),
+            Err(e) => self.push_log(format!("Link konnte nicht geöffnet werden ({e}): {url}")),
         }
     }
 

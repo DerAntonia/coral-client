@@ -85,6 +85,12 @@ pub enum ClientEvent {
     // packets::CB_PLAY_START_CONFIGURATION). Danach kommt eine komplett neue Welt --
     // die alte muss weg, sonst stehen alte Chunks und Entities noch herum.
     Reconfiguring,
+    // Stockung im Paketfluss (Rubberbanding, s. stall.rs): eingehend lange nichts und dann
+    // alles auf einmal, oder ausgehend so lange nichts gesendet. Kommt vom Netz-Task selbst,
+    // nicht vom Server.
+    PacketStall { outgoing: bool, millis: u32 },
+    // Ping des Servers im Spiel (Transaktion, s. app/transactions.rs) -- schon beantwortet.
+    TransactionPing(i32),
     // Der Server schickt uns zu einem anderen Host (Transfer-Paket, s. packets::CB_PLAY_TRANSFER).
     // Die alte Verbindung ist zu, der Netz-Task verbindet sich gerade neu -- alles, was zur
     // alten Verbindung gehoert (Welt, Spielerliste, Skins, Chat-Signatur), muss weg. Die
@@ -139,6 +145,8 @@ pub enum ClientEvent {
     // Server entlaedt eine Chunk-Spalte (Forget Level Chunk) -- der Client muss sie aus
     // Weltzustand und VRAM werfen, sonst wachsen beide beim Umherlaufen unbegrenzt.
     ForgetChunk(i32, i32),
+    // Chunk-Paket kam, liess sich aber nicht dekodieren (Koordinaten aus den ersten 8 Bytes).
+    ChunkUndecodable(i32, i32),
     // Entity betritt den Trackingbereich (Add Entity 0x01; seit 1.20.2 auch Spieler).
     EntitySpawn(packets::AddEntity),
     // Relative Bewegung (Move Entity Pos 0x33 / Pos+Rot 0x34): Delta zur letzten Position.
@@ -179,8 +187,8 @@ pub enum ClientEvent {
     // Leben des eigenen Spielers (Set Health 0x66). <= 0 bedeutet tot -- die App zeigt
     // dann den Gestorben-Screen.
     // Leben UND Nahrung: die Nahrung entscheidet ueber den Sprint (Vanilla:
-    // HungerManager.canSprint -> foodLevel > 6).
-    Health(f32, i32),
+    // HungerManager.canSprint -> foodLevel > 6). Dazu die Saettigung.
+    Health(f32, i32, f32),
     // Set Experience (0x65): Fortschritt innerhalb der Stufe (0..1), Stufe, Gesamtpunkte.
     Experience { progress: f32, level: i32, total: i32 },
     // Update Attributes (0x81), reduziert auf das, was das HUD braucht: Ruestung und
@@ -192,6 +200,18 @@ pub enum ClientEvent {
     // Schleichtempo (Schleichender Schritt) und Wassertempo (Wasserlaeufer) -- GrimAC rechnet
     // seine Vorhersage mit genau diesen drei Werten.
     MovementAttributes { id: i32, movement_speed: Option<f64>, sneaking_speed: Option<f64>, water_movement_efficiency: Option<f64> },
+    // Angriffstempo ohne Item-Modifikator, zerlegt (s. packets::AttributeUpdate::attack_speed).
+    AttackSpeed { id: i32, parts: (f64, f64, f64) },
+    // Die Koerper-Attribute (s. packets::AttributeUpdate): Schwerkraft, Sprungkraft,
+    // Blockbremsen-Aufhebung, Groesse, Stufenhoehe. Groesse gilt auch fuer fremde Entities.
+    BodyAttributes {
+        id: i32,
+        gravity: Option<f64>,
+        jump_strength: Option<f64>,
+        movement_efficiency: Option<f64>,
+        scale: Option<f64>,
+        step_height: Option<f64>,
+    },
     // Die Reichweiten fuer Bloecke und Entities (im Kreativmodus vom Server angehoben).
     RangeAttributes { id: i32, block: Option<f64>, entity: Option<f64> },
     // Eigener Spielmodus: aus Login/Respawn und aus dem Game Event GAME_MODE_CHANGED.
@@ -383,6 +403,8 @@ pub enum ClientEvent {
     RecipeBookRemove(Vec<i32>),
     // Item-Tags des Servers (Name ohne "#" -> Item-IDs), fuer Zutaten wie "alle Bretter".
     ItemTags(std::collections::HashMap<String, Vec<u32>>),
+    // Block-Tags des Servers (Name -> Block-Roh-IDs), s. world::mining::set_server_block_tags.
+    BlockTags(std::collections::HashMap<String, Vec<u32>>),
 }
 
 // Was der Netzwerk-Task nach aussen meldet: eine Warteschlange zur App PLUS ein optionaler
@@ -1115,6 +1137,9 @@ async fn do_configuration(conn: &mut Connection, events: &Events, outgoing: &mut
                 if let Ok(tags) = protocol::recipe::read_item_tags(&payload) {
                     let _ = events.send(ClientEvent::ItemTags(tags));
                 }
+                if let Ok(tags) = protocol::recipe::read_block_tags(&payload) {
+                    let _ = events.send(ClientEvent::BlockTags(tags));
+                }
             }
             packets::CB_CONFIG_RESET_CHAT => {
                 let _ = events.send(ClientEvent::ResetChat);
@@ -1238,6 +1263,11 @@ async fn run_play_loop(
     let mut play_start = std::time::Instant::now();
     let mut watchdog = tokio::time::interval(CHUNK_WATCHDOG_INTERVAL);
     watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut stockung = crate::stall::StallWatch::default();
+    let tick_end = packets::client_tick_end_payload();
+    let melde = |outgoing: bool, d: Duration| {
+        let _ = events.send(ClientEvent::PacketStall { outgoing, millis: d.as_millis().min(u32::MAX as u128) as u32 });
+    };
 
     loop {
         tokio::select! {
@@ -1263,12 +1293,27 @@ async fn run_play_loop(
             biased;
             msg = outgoing.recv(), if !outgoing_closed => {
                 match msg {
-                    Some(payload) => conn.send(&payload).await?,
+                    Some(payload) => {
+                        let start = std::time::Instant::now();
+                        conn.send(&payload).await?;
+                        let jetzt = std::time::Instant::now();
+                        let haengt = jetzt.duration_since(start);
+                        if haengt >= crate::stall::OUT_WRITE_STALL {
+                            melde(true, haengt);
+                        } else if payload == tick_end {
+                            if let Some(luecke) = stockung.tick_end(jetzt) {
+                                melde(true, luecke);
+                            }
+                        }
+                    }
                     None => outgoing_closed = true,
                 }
             }
             result = conn.recv() => {
                 let payload = result?;
+                if let Some(pause) = stockung.incoming(std::time::Instant::now()) {
+                    melde(false, pause);
+                }
                 match handle_play_packet(conn, events, &payload, &mut stats, &mut chunk_batch, rotation).await? {
                     PlayFlow::Continue => {}
                     PlayFlow::Transfer(ziel) => return Ok(ziel),
@@ -1287,6 +1332,8 @@ async fn run_play_loop(
                         stats = PlayStats::default();
                         chunk_batch = crate::chunk_batch::ChunkBatchSizeCalculator::new();
                         play_start = std::time::Instant::now();
+                        // Die Konfiguration selbst ist keine Stockung.
+                        stockung = crate::stall::StallWatch::default();
                     }
                 }
             }
@@ -1324,6 +1371,8 @@ const CHUNK_WATCHDOG_GRACE: std::time::Duration = std::time::Duration::from_secs
 struct PlayStats {
     chunks_ok: usize,
     chunks_failed: usize,
+    // Einmal gemeldet: ein Chunk mit unlesbarem Rest hinter den Sections (s. protocol::chunk).
+    chunk_tail_logged: bool,
     entity_errors: usize,
     // Alle Play-Pakete seit dem Betreten des Play-States -- die Zahl beantwortet die erste
     // Frage bei einem Haenger: kommt ueberhaupt noch etwas an?
@@ -1510,6 +1559,10 @@ async fn handle_play_packet(
                     );
                 }
                 stats.chunks_ok += 1;
+                if chunk.tail_unreadable && !stats.chunk_tail_logged {
+                    stats.chunk_tail_logged = true;
+                    log(events, format!("Chunk {} {}: Muell hinter den Sections, uebergangen (wie Vanilla)", chunk.x, chunk.z));
+                }
                 if stats.chunks_ok.is_multiple_of(50) {
                     log(events, format!("Chunks dekodiert: {} ok, {} Fehler", stats.chunks_ok, stats.chunks_failed));
                 }
@@ -1517,6 +1570,11 @@ async fn handle_play_packet(
             }
             Err(_) => {
                 stats.chunks_failed += 1;
+                // Die Koordinaten stehen hinter der Paket-ID (ein Byte, 0x2C).
+                if let (Some(x), Some(z)) = (payload.get(1..5), payload.get(5..9)) {
+                    let (x, z) = (i32::from_be_bytes(x.try_into().unwrap()), i32::from_be_bytes(z.try_into().unwrap()));
+                    let _ = events.send(ClientEvent::ChunkUndecodable(x, z));
+                }
                 if stats.chunks_failed == 1 {
                     log(
                         events,
@@ -1656,6 +1714,7 @@ async fn handle_play_packet(
         let ping = packets::read_ping_id(payload).map_err(|_| NetError::Protocol("Ping".into()))?;
         interaktions_log("pong");
         conn.send(&packets::pong_play_payload(ping)).await?;
+        let _ = events.send(ClientEvent::TransactionPing(ping));
     } else if id == packets::CB_PLAY_PLAYER_POSITION {
         let tp = packets::read_teleport_id(payload).map_err(|_| NetError::Protocol("TeleportId".into()))?;
         // Ein Teleport ist fuer GrimAC eine Sonder-Tick-Grenze: das Bewegungspaket, das ihn
@@ -1884,7 +1943,7 @@ async fn handle_play_packet(
         }
     } else if id == packets::CB_PLAY_SET_HEALTH {
         if let Ok(health) = packets::read_set_health(payload) {
-            let _ = events.send(ClientEvent::Health(health.0, health.1));
+            let _ = events.send(ClientEvent::Health(health.0, health.1, health.2));
         }
     } else if id == packets::CB_PLAY_DISCONNECT {
         return Err(NetError::Protocol(disconnect_message("Play", payload)));
@@ -2043,6 +2102,24 @@ async fn handle_play_packet(
                     water_movement_efficiency: update.water_movement_efficiency,
                 });
             }
+            if let Some(parts) = update.attack_speed {
+                let _ = events.send(ClientEvent::AttackSpeed { id: update.entity_id, parts });
+            }
+            if update.gravity.is_some()
+                || update.jump_strength.is_some()
+                || update.movement_efficiency.is_some()
+                || update.scale.is_some()
+                || update.step_height.is_some()
+            {
+                let _ = events.send(ClientEvent::BodyAttributes {
+                    id: update.entity_id,
+                    gravity: update.gravity,
+                    jump_strength: update.jump_strength,
+                    movement_efficiency: update.movement_efficiency,
+                    scale: update.scale,
+                    step_height: update.step_height,
+                });
+            }
             if update.block_interaction_range.is_some() || update.entity_interaction_range.is_some() {
                 let _ = events.send(ClientEvent::RangeAttributes {
                     id: update.entity_id,
@@ -2145,6 +2222,9 @@ async fn handle_play_packet(
     } else if id == protocol::recipe::CB_PLAY_UPDATE_TAGS {
         if let Ok(tags) = protocol::recipe::read_item_tags(payload) {
             let _ = events.send(ClientEvent::ItemTags(tags));
+        }
+        if let Ok(tags) = protocol::recipe::read_block_tags(payload) {
+            let _ = events.send(ClientEvent::BlockTags(tags));
         }
     } else if id == protocol::recipe::CB_PLAY_RECIPE_BOOK_SETTINGS || id == protocol::recipe::CB_PLAY_PLACE_GHOST_RECIPE {
         // Buch-Einstellungen des Servers und Geister-Rezepte: das Buch hier hat eigene.

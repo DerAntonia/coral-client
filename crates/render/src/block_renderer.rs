@@ -2012,6 +2012,17 @@ impl BlockRenderer {
         self.terrain_arena.write(queue, mesh.slot, start, vertices);
     }
 
+    // Fuer F3: belegte Sections der Spalte im Mesh und was das Hoehlen-Culling davon zeigt.
+    pub fn column_debug(&self, key: (i32, i32)) -> (u64, u64) {
+        let sections = self.meshes.get(&key).map_or(0, |m| m.sections);
+        let sichtbar = if self.cave_culling { self.occlusion.mask(key) } else { u64::MAX };
+        (sections, sichtbar)
+    }
+
+    pub fn has_column_mesh(&self, key: (i32, i32)) -> bool {
+        self.meshes.contains_key(&key)
+    }
+
     pub fn mesh_count(&self) -> usize {
         self.meshes.len()
     }

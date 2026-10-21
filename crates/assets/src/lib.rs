@@ -20,7 +20,7 @@ mod storage;
 mod source;
 mod ui_atlas;
 
-pub use blocks::{is_fire_texture, resource_path, AnimationState, BlockAtlas, ANIM_VARIANTS, TileAnimation, UvRect, DESTROY_STAGE_COUNT, FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST};
+pub use blocks::{animation_meta, frame_pixels, frame_size, is_fire_texture, resource_path, AnimationState, BlockAtlas, ANIM_VARIANTS, TileAnimation, UvRect, DESTROY_STAGE_COUNT, FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST};
 pub use colormap::Colormap;
 pub use item_model::{ItemDefinition, ItemModelInput, Leaf as ItemModelLeaf, SELECTED_ITEM};
 pub use equipment::{parse_equipment_model, EquipmentLayer, EquipmentModel};
@@ -29,7 +29,7 @@ pub use configs::{
     config_path, configs_dir, create_config, private_config_path, delete_config, last_used, list_configs, rename_config, set_last_used, startup_config, validate_name, DEFAULT_CONFIG,
 };
 pub use entity_atlas::{
-    build as build_entity_atlas, build_trim_texture, EntityAtlas, CAPE_HEIGHT, CAPE_SLOTS, CAPE_WIDTH, HEAD_SLOTS, HEAD_SLOT_HEIGHT, HEAD_SLOT_WIDTH, ITEM_SLOTS, MAP_SLOTS, MAP_SLOT_SIZE, TRIM_HEIGHT, TRIM_SLOTS, TRIM_WIDTH, ITEM_SLOT_SIZE, SKIN_SIZE, SKIN_SLOTS,
+    build as build_entity_atlas, build_trim_texture, EntityAtlas, CAPE_HEIGHT, CAPE_SLOTS, CAPE_WIDTH, HEAD_SLOTS, HEAD_SLOT_HEIGHT, HEAD_SLOT_WIDTH, ITEM_SLOTS, MAP_SLOTS, MISSING_SKIN, MAP_SLOT_SIZE, TRIM_HEIGHT, TRIM_SLOTS, TRIM_WIDTH, ITEM_SLOT_SIZE, SKIN_SIZE, SKIN_SLOTS,
 };
 pub use font::{full_font_id, AltFontGlyphs, AltGlyph, BitmapFont, FontPage, PackFonts, PackGlyph, UniGlyph, Unihex};
 pub use installation::{decode_cape_png, decode_skin_png, path_excluded, AssetsError, DecodedTexture, MinecraftInstallation, PackDir, RESOURCE_PACK_FORMAT};

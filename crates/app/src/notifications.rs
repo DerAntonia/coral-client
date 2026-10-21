@@ -270,6 +270,17 @@ impl Notifications {
         }
     }
 
+    /// Eine noch stehende Meldung neu beschriften und ihre Standzeit von vorn beginnen lassen
+    /// -- fuer Zaehler, die weiterlaufen, solange der Anlass anhaelt. false, wenn die Karte
+    /// schon geht oder weg ist (dann macht der Aufrufer eine neue auf).
+    pub fn renew(&mut self, id: NotificationId, title: impl Into<String>, body: impl Into<String>) -> bool {
+        let Some(t) = self.toasts.iter_mut().find(|t| t.id == id && t.phase == Phase::Live) else { return false };
+        t.note.title = title.into();
+        t.note.body = body.into();
+        t.shown = Duration::ZERO;
+        true
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.toasts.is_empty()

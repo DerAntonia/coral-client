@@ -8,8 +8,8 @@
 //                                  "use_player_texture": bool }, ... ],
 //                 "humanoid_leggings": [ ... ], "wings": [ ... ], ... } }
 // Die Textur einer Ebene liegt unter assets/<ns>/textures/entity/equipment/<ebene>/<name>.png.
-// Dieser Client zeichnet Ruestung nur am Menschenmodell; die Ebenen fuer Tiere und Fluegel
-// werden nicht gelesen.
+// Dieser Client zeichnet Ruestung nur am Menschenmodell und die Fluegel am Ruecken; die
+// Ebenen fuer Tiere werden nicht gelesen.
 
 use crate::MinecraftInstallation;
 
@@ -21,12 +21,17 @@ pub struct EquipmentLayer {
     // Faerbbar? Dann Some(Farbe ohne Faerbung, 0 = keine). Vanilla laesst eine faerbbare Ebene
     // ganz weg, wenn weder das Item gefaerbt ist noch eine Ersatzfarbe da ist.
     pub dyeable: Option<u32>,
+    // Statt der eigenen Textur die des Spielers (Elytra-Bild aus dem Skin bzw. der Umhang),
+    // sofern er eine hat -- so tragen Umhang-Besitzer ihn auf den Fluegeln.
+    pub use_player_texture: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EquipmentModel {
     pub humanoid: Vec<EquipmentLayer>,
     pub humanoid_leggings: Vec<EquipmentLayer>,
+    // Fluegel am Ruecken (WingsLayer): Elytra und alles, dessen Asset diese Ebene hat.
+    pub wings: Vec<EquipmentLayer>,
 }
 
 impl EquipmentModel {
@@ -51,11 +56,12 @@ pub fn parse_equipment_model(json: &[u8]) -> Option<EquipmentModel> {
                 let id = e.get("texture")?.as_str()?;
                 let (ns, pfad) = id.split_once(':').unwrap_or(("minecraft", id));
                 let dyeable = e.get("dyeable").map(|d| d.get("color_when_undyed").and_then(|c| c.as_i64()).map_or(0, |c| c as u32 & 0xff_ffff));
-                Some(EquipmentLayer { texture: format!("{ns}:entity/equipment/{typ}/{pfad}"), dyeable })
+                let use_player_texture = e.get("use_player_texture").and_then(|v| v.as_bool()).unwrap_or(false);
+                Some(EquipmentLayer { texture: format!("{ns}:entity/equipment/{typ}/{pfad}"), dyeable, use_player_texture })
             })
             .collect()
     };
-    Some(EquipmentModel { humanoid: lies("humanoid"), humanoid_leggings: lies("humanoid_leggings") })
+    Some(EquipmentModel { humanoid: lies("humanoid"), humanoid_leggings: lies("humanoid_leggings"), wings: lies("wings") })
 }
 
 impl MinecraftInstallation {
@@ -88,5 +94,15 @@ mod tests {
         assert!(leer.layers(false).is_empty() && leer.layers(true).is_empty());
         let eigen = parse_equipment_model(br#"{"layers":{"humanoid":[{"texture":"uhc:invisible"}]}}"#).unwrap();
         assert_eq!(eigen.humanoid[0].texture, "uhc:entity/equipment/humanoid/invisible");
+    }
+
+    // Vanillas elytra.json: eine Fluegel-Ebene, die das Spielerbild bevorzugt.
+    #[test]
+    fn fluegel_ebene() {
+        let m = parse_equipment_model(br#"{"layers":{"wings":[{"texture":"minecraft:elytra","use_player_texture":true}]}}"#).unwrap();
+        assert_eq!(m.wings.len(), 1);
+        assert_eq!(m.wings[0].texture, "minecraft:entity/equipment/wings/elytra");
+        assert!(m.wings[0].use_player_texture);
+        assert!(m.humanoid.is_empty());
     }
 }

@@ -65,6 +65,9 @@ pub const BURP_SOUND: &str = "entity.player.burp";
 pub struct State {
     // Lokal fertig gegessen, Bestaetigung des Servers steht noch aus.
     waiting_until: Option<Instant>,
+    // Wann lokal fertig gegessen -- fuer die Messung, wie lange der Server danach braucht
+    // (s. confirm_delay, timed_out).
+    finished_at: Option<Instant>,
     // Klaenge, die wir schon gespielt haben und die der Server gleich noch einmal schickt.
     suppressed: Vec<(&'static str, Instant)>,
     // Der Server hat die Mod abgeschaltet (bis zum Trennen).
@@ -74,6 +77,7 @@ pub struct State {
 impl State {
     pub fn finished_locally(&mut self, sounds: &[&'static str], now: Instant) {
         self.waiting_until = Some(now + SERVER_WAIT);
+        self.finished_at = Some(now);
         self.suppressed = sounds.iter().map(|s| (*s, now + SOUND_SUPPRESS)).collect();
     }
 
@@ -83,6 +87,22 @@ impl State {
 
     pub fn stop_waiting(&mut self) {
         self.waiting_until = None;
+    }
+
+    /// Der Server meldet "fertig": wie lange nach dem lokalen Ende (None, wenn wir nicht
+    /// darauf gewartet haben).
+    pub fn confirm_delay(&mut self, now: Instant) -> Option<Duration> {
+        let seit = self.finished_at.take()?;
+        self.waiting_until.is_some_and(|t| now < t).then(|| now.duration_since(seit))
+    }
+
+    /// Ist das Warten gerade ohne Meldung des Servers abgelaufen? Einmal je Essen true.
+    pub fn timed_out(&mut self, now: Instant) -> bool {
+        if self.finished_at.is_some() && self.waiting_until.is_some_and(|t| now >= t) {
+            self.finished_at = None;
+            return true;
+        }
+        false
     }
 
     // Ein Klang vom Server: true = schon selbst gespielt, verwerfen (je Eintrag einmal).
