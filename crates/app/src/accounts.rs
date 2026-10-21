@@ -81,22 +81,19 @@ impl Store {
         let mut store = Store::default();
         for line in text.lines() {
             let f: Vec<&str> = line.split('\t').collect();
-            match f.as_slice() {
-                ["konto", quelle, name, uuid, token, refresh, client_id] => {
-                    let Some(source) = Source::from_key(quelle) else { continue };
-                    if uuid.is_empty() || token.is_empty() {
-                        continue;
-                    }
-                    store.list.push(Account {
-                        name: name.to_string(),
-                        uuid: uuid.to_string(),
-                        source,
-                        access_token: token.to_string(),
-                        refresh_token: refresh.to_string(),
-                        client_id: client_id.to_string(),
-                    });
+            if let ["konto", quelle, name, uuid, token, refresh, client_id] = f.as_slice() {
+                let Some(source) = Source::from_key(quelle) else { continue };
+                if uuid.is_empty() || token.is_empty() {
+                    continue;
                 }
-                _ => {}
+                store.list.push(Account {
+                    name: name.to_string(),
+                    uuid: uuid.to_string(),
+                    source,
+                    access_token: token.to_string(),
+                    refresh_token: refresh.to_string(),
+                    client_id: client_id.to_string(),
+                });
             }
         }
         store

@@ -268,8 +268,8 @@ fn block_predicate_matches(p: &protocol::item::BlockPredicate, state: u32) -> bo
         match matcher {
             StateValueMatcher::Exact(v) => wert == v,
             StateValueMatcher::Range(min, max) => {
-                min.as_deref().map_or(true, |m| property_order(wert, m).is_some_and(|o| o.is_ge()))
-                    && max.as_deref().map_or(true, |m| property_order(wert, m).is_some_and(|o| o.is_le()))
+                min.as_deref().is_none_or(|m| property_order(wert, m).is_some_and(|o| o.is_ge()))
+                    && max.as_deref().is_none_or(|m| property_order(wert, m).is_some_and(|o| o.is_le()))
             }
         }
     })

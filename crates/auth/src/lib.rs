@@ -819,7 +819,7 @@ mod browser_login_tests {
             sock.read_to_string(&mut antwort).await.unwrap();
             assert!(antwort.starts_with("HTTP/1.1 "), "{antwort}");
         }
-        let e = warten.await.unwrap().err().expect("Abbruch");
+        let e = warten.await.unwrap().expect_err("Abbruch");
         assert!(e.0.contains("abgebrochen"), "{e}");
     }
 

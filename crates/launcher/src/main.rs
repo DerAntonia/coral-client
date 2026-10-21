@@ -118,7 +118,7 @@ fn check_client(release: Option<&Release>, path: &Path) -> ClientCheck {
     if !path.is_file() {
         return ClientCheck::Missing;
     }
-    match (asset.sha256(), update::sha256_file(&path)) {
+    match (asset.sha256(), update::sha256_file(path)) {
         (None, _) => ClientCheck::NoDigest,
         (Some(expected), Ok(actual)) if actual == expected => ClientCheck::Matches,
         _ => ClientCheck::Differs,

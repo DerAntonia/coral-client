@@ -70,7 +70,8 @@ enum Part {
     Text(Vec<ChatLine>),
     // Beschriftung einer Eingabe, linksbuendig.
     Label(Vec<ChatLine>),
-    Item { stack: protocol::item::ItemStack, decorations: bool },
+    // Geschachtelt: ein Stapel ist gross, die uebrigen Teile klein.
+    Item { stack: Box<protocol::item::ItemStack>, decorations: bool },
     Field(usize),
     Toggle(usize),
     Cycle(usize),
@@ -466,7 +467,7 @@ impl App {
                     let name = id.strip_prefix("minecraft:").unwrap_or(id);
                     let Some(item_id) = world::item_registry::item_id_by_name(name) else { continue };
                     let groesse = (width.max(*height) * 2.0).min(innen_max);
-                    stapel.push(((groesse, groesse), Part::Item { stack: protocol::item::ItemStack::new(item_id, *count), decorations: *decorations }, GAP));
+                    stapel.push(((groesse, groesse), Part::Item { stack: Box::new(protocol::item::ItemStack::new(item_id, *count)), decorations: *decorations }, GAP));
                     if let Some((spans, w)) = description {
                         let zeilen = wrap(gpu, spans, gui(*w));
                         let w = zeilen.iter().map(|z| spans_width(gpu, z)).fold(0.0, f32::max);

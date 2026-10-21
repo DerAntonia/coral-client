@@ -255,13 +255,15 @@ mod tests {
 
     #[test]
     fn craftbares_zuerst_und_nur_was_ins_feld_passt() {
-        let mut buch = RecipeBook::default();
-        buch.entries = vec![
-            eintrag(1, vec![Ingredient::Items(vec![5])], 3),
-            eintrag(2, vec![Ingredient::Items(vec![6])], 0),
-            eintrag(3, vec![Ingredient::Items(vec![7]); 5], 3), // fuenf Zutaten: nur Werkbank
-            eintrag(4, vec![Ingredient::Items(vec![8])], 6),    // Ofen-Kategorie
-        ];
+        let mut buch = RecipeBook {
+            entries: vec![
+                eintrag(1, vec![Ingredient::Items(vec![5])], 3),
+                eintrag(2, vec![Ingredient::Items(vec![6])], 0),
+                eintrag(3, vec![Ingredient::Items(vec![7]); 5], 3), // fuenf Zutaten: nur Werkbank
+                eintrag(4, vec![Ingredient::Items(vec![8])], 6),    // Ofen-Kategorie
+            ],
+            ..Default::default()
+        };
         let vorrat = HashMap::from([(5, 1)]);
         let ids = |v: Vec<Shown>| v.into_iter().map(|s| buch.entries[s.index].id).collect::<Vec<_>>();
         assert_eq!(ids(buch.shown(2, &vorrat)), vec![2, 1]);

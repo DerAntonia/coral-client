@@ -1,0 +1,24 @@
+# Strenges Clippy: der ganze Workspace samt Tests, jede Warnung ist ein Fehler. Feste
+# Rust-Version, damit ein neues Clippy mit neuen Regeln das Badge nicht ueber Nacht rot macht --
+# gehoben wird sie bewusst, zusammen mit den Korrekturen.
+name: Clippy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  clippy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Ton (ALSA), Rohe Eingabe (udev) und Fenster (Wayland, xkbcommon).
+      - name: Systembibliotheken
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

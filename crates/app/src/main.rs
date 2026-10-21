@@ -1810,7 +1810,7 @@ fn wrap_spans_styled(msg: &[protocol::nbt::TextSpan], max_width: f32, measure: i
                 }
                 let grenze = max_width - zeilen_einzug;
                 if measure(stueck) > grenze {
-                    for teil in hard_break(&measure, stueck, grenze.min(max_width - einzug).max(1.0)) {
+                    for teil in hard_break(measure, stueck, grenze.min(max_width - einzug).max(1.0)) {
                         if breite > 0.0 {
                             out.push(ChatLine { indent: zeilen_einzug, spans: std::mem::take(&mut aktuell) });
                             breite = 0.0;
@@ -21986,11 +21986,15 @@ impl App {
             // Bei offenem Bildschirm blaettert Vanilla die Hotbar nicht.
             // Zuschauer: das Rad stellt die Fluggeschwindigkeit wie die beiden Tasten (hoch =
             // schneller). Bleibt lokal, der Server erfaehrt davon nichts.
+            // Die Bedingungen bleiben im Arm: als Waechter fiele die Taste bei offenem
+            // Bildschirm in die folgenden Arme durch.
+            #[allow(clippy::collapsible_match)]
             KeyBindAction::HotbarPrev | KeyBindAction::HotbarNext if self.game_mode == GAME_MODE_SPECTATOR => {
                 if !self.screen_overlay_open() {
                     self.spectator_speed_step(action == KeyBindAction::HotbarPrev);
                 }
             }
+            #[allow(clippy::collapsible_match)]
             KeyBindAction::SpectatorSlower | KeyBindAction::SpectatorFaster => {
                 if self.game_mode == GAME_MODE_SPECTATOR && !self.screen_overlay_open() && self.chat_input.is_none() {
                     self.spectator_speed_step(action == KeyBindAction::SpectatorFaster);
@@ -37591,8 +37595,6 @@ impl App {
             ButtonAction::NoToolBreakReserveNext => {
                 self.settings.no_tool_break_reserve = (self.settings.no_tool_break_reserve + 1).min(NO_TOOL_BREAK_MAX_RESERVE)
             }
-            // Das Minimum ist derzeit 0 (dann wirkungslos), soll aber eine Grenze bleiben.
-            #[allow(clippy::unnecessary_min_or_max)]
             ButtonAction::ToggleModuleAutoclicker => self.settings.module_autoclicker = !self.settings.module_autoclicker,
             ButtonAction::ToggleModuleSaturationHud => self.settings.module_saturation_hud = !self.settings.module_saturation_hud,
             ButtonAction::SaturationHeightPrev => {
@@ -37628,6 +37630,8 @@ impl App {
             }
             ButtonAction::AutoclickerCpsPrev => self.settings.autoclicker_cps = self.settings.autoclicker_cps.saturating_sub(1).max(AUTOCLICKER_CPS_MIN),
             ButtonAction::AutoclickerCpsNext => self.settings.autoclicker_cps = (self.settings.autoclicker_cps + 1).min(AUTOCLICKER_CPS_MAX),
+            // Das Minimum ist derzeit 0 (dann wirkungslos), soll aber eine Grenze bleiben.
+            #[allow(clippy::unnecessary_min_or_max)]
             ButtonAction::GhostTolerancePrev => {
                 self.settings.ghost_tolerance_ms =
                     self.settings.ghost_tolerance_ms.saturating_sub(GHOST_TOLERANCE_STEP_MS).max(GHOST_TOLERANCE_MIN_MS)
@@ -38314,7 +38318,7 @@ impl App {
             sprites.push(UiSprite::quad(bx, by, brett_w, brett_h, uv, [1.0, 1.0, 1.0, 1.0], SpriteAtlas::Entity));
         }
         let farbe = rgb_to_rgba(sign_text_color(edit.color, false));
-        let blink = (edit.opened.elapsed().as_millis() / 300) % 2 == 0;
+        let blink = (edit.opened.elapsed().as_millis() / 300).is_multiple_of(2);
         let mitte_y = by + brett_h / 2.0;
         self.begin_text_area(gpu, texts, ShadowArea::Signs);
         for (i, zeile) in edit.lines.iter().enumerate() {
@@ -39595,7 +39599,7 @@ impl App {
         let auge = self.camera.view_position();
         // Die Seite im Editor zeichnet unten der Editor selbst, mit dem Text, wie er gerade
         // getippt ist.
-        let editiert = self.sign_edit_in_world(gpu).and_then(|_| self.sign_edit.as_ref());
+        let editiert = self.sign_edit_in_world(gpu).and(self.sign_edit.as_ref());
         for (&pos, text) in &self.signs {
             let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
             if (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE {
@@ -55032,7 +55036,7 @@ mod hud_split_tests {
     #[test]
     fn laengster_effekt_zuerst() {
         let e = |effect, remaining| EffectEntry { effect, ambient: false, amplifier: 0, remaining, received: remaining };
-        let mut liste = vec![e(1, 100), e(5, protocol::packets::MOB_EFFECT_INFINITE), e(3, 900), e(2, 900)];
+        let mut liste = [e(1, 100), e(5, protocol::packets::MOB_EFFECT_INFINITE), e(3, 900), e(2, 900)];
         liste.sort_by(effect_longest_first);
         assert_eq!(liste.iter().map(|e| e.effect).collect::<Vec<_>>(), [5, 2, 3, 1]);
     }

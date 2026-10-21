@@ -3655,9 +3655,7 @@ pub fn raycast_block_far(eye: DVec3, dir: DVec3, reach: f64, world: &World, shap
     let mut t = 0.0;
     while t <= reach {
         let (bx, by, bz) = (zelle[0], zelle[1], zelle[2]);
-        if world.column(bx.div_euclid(16), bz.div_euclid(16)).is_none() {
-            return None;
-        }
+        world.column(bx.div_euclid(16), bz.div_euclid(16))?;
         // Unter der Welt kommt nichts mehr; nach oben kann der Strahl wieder herunterkommen.
         if by < unten && dir.y <= 0.0 {
             return None;

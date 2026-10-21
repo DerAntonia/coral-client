@@ -68,7 +68,7 @@ impl Transactions {
                 None => zaehler.push((s, 1)),
             }
         }
-        zaehler.sort_by(|a, b| b.1.cmp(&a.1));
+        zaehler.sort_by_key(|z| std::cmp::Reverse(z.1));
         let (haupt, n) = zaehler[0];
         if n * 10 >= schritte.len() * 8 {
             format!("zählt meist um {haupt:+}, {} Sprünge", schritte.len() - n)

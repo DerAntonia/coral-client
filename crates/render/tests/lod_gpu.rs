@@ -1,6 +1,6 @@
 // Fernsicht (lod_renderer) auf der echten GPU: ein Knoten mit einem Boden wird von oben und
 // von der Seite gezeichnet und zurueckgelesen. Prueft Ecken-Aufbau und Windung (sonst fehlen
-// Flaechen), Schattierung je Seite, Spaltenmaske und Nebel.
+// Flaechen), Schattierung je Seite und Spaltenmaske.
 
 use chunk_saver::node::{voxel, Node, NodeKey, N};
 use chunk_saver::states::{LodStates, CAT_AIR, CAT_OPAQUE};
@@ -68,9 +68,9 @@ fn floor_mesh() -> chunk_saver::NodeMesh {
     chunk_saver::mesh::mesh_node(&n, &Default::default(), &LodStates::from_categories(vec![CAT_AIR, CAT_OPAQUE]), &world::biome_palette::BiomePalette::fallback())
 }
 
-fn draw(g: &Gpu, lod: &mut LodRenderer, camera: &render::Camera, fog: Option<(f32, f32, [f32; 3])>) -> Vec<[u8; 4]> {
+fn draw(g: &Gpu, lod: &mut LodRenderer, camera: &render::Camera) -> Vec<[u8; 4]> {
     let key = NodeKey::new(0, 0, 0, 0);
-    lod.prepare(&g.device, &g.queue, &LodFrame { draw: &[key], camera, aspect: 1.0, fog, mask: true, ao_strength: 1.0 });
+    lod.prepare(&g.device, &g.queue, &LodFrame { draw: &[key], camera, aspect: 1.0, mask: true, ao_strength: 1.0, clip: ((0, 0), 64) });
     let target = g.device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
@@ -123,14 +123,14 @@ fn boden_von_oben_und_von_der_seite() {
     // Von oben, mitten ueber dem Boden: die Oberseite (Schattierung 1.0) fuellt das Bild.
     let mut cam = render::Camera::new(DVec3::new(16.0, 20.0, 16.0));
     cam.pitch = -89.0;
-    let img = draw(&g, &mut lod, &cam, None);
+    let img = draw(&g, &mut lod, &cam);
     assert_eq!(px(&img, 32, 32), [255, 255, 255, 255], "Oberseite fehlt oder ist falsch schattiert");
 
     // Von der Seite, vor der Westkante (x < 0), Blick nach Osten (+x): man sieht die Westseite
     // (Schattierung 0.6) unten im Bild und darueber den Himmel.
     let mut cam = render::Camera::new(DVec3::new(-10.0, 2.0, 16.0));
     cam.yaw = -90.0;
-    let img = draw(&g, &mut lod, &cam, None);
+    let img = draw(&g, &mut lod, &cam);
     let mitte = px(&img, 32, 34);
     assert!(mitte[0] > 120 && mitte[0] < 220 && mitte[0] == mitte[2], "Westseite: {mitte:?}");
     assert_eq!(px(&img, 32, 2), [0, 0, 255, 255], "oben Himmel");
@@ -140,13 +140,9 @@ fn boden_von_oben_und_von_der_seite() {
     let mut cam = render::Camera::new(DVec3::new(24.0, 20.0, 24.0));
     cam.pitch = -89.0;
     lod.set_column_covered(1, 1, true);
-    let img = draw(&g, &mut lod, &cam, None);
+    let img = draw(&g, &mut lod, &cam);
     assert_eq!(px(&img, 32, 32), [0, 0, 255, 255], "gedeckter Chunk muss frei bleiben");
     lod.set_column_covered(1, 1, false);
-
-    // Nebel ganz nah: der Boden nimmt die Nebelfarbe an.
-    let img = draw(&g, &mut lod, &cam, Some((0.0, 1.0, [1.0, 0.0, 0.0])));
-    assert_eq!(px(&img, 32, 32), [255, 0, 0, 255]);
 
     assert!(pollster::block_on(g.device.pop_error_scope()).is_none());
 }

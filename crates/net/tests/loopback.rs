@@ -223,6 +223,8 @@ async fn join_local_server() {
                 | net::ClientEvent::HeadAt { .. }
                 | net::ClientEvent::WorldTime { .. }
                 | net::ClientEvent::EntitySleeping { .. } => {}
+                // Neuere Ereignisse sind fuer diesen Test belanglos.
+                _ => {}
             }
         }
 

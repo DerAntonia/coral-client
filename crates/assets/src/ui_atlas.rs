@@ -565,9 +565,9 @@ fn halve(p: &mut Pending) {
                 summe[3] += a;
             }
             let o = ((y * w + x) * 4) as usize;
-            if summe[3] > 0 {
-                for c in 0..3 {
-                    out[o + c] = (summe[c] / summe[3]) as u8;
+            for c in 0..3 {
+                if let Some(v) = summe[c].checked_div(summe[3]) {
+                    out[o + c] = v as u8;
                 }
             }
             out[o + 3] = (summe[3] / 4) as u8;

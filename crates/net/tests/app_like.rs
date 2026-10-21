@@ -141,6 +141,8 @@ fn app_like_polling_receives_chunks() {
                 | net::ClientEvent::HeadAt { .. }
                 | net::ClientEvent::WorldTime { .. }
                 | net::ClientEvent::EntitySleeping { .. } => {}
+                // Neuere Ereignisse sind fuer diesen Test belanglos.
+                _ => {}
             }
         }
         std::thread::sleep(Duration::from_millis(16));
