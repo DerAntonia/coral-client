@@ -1,6 +1,7 @@
 # Coral Client
 
 [![CodeFactor](https://www.codefactor.io/repository/github/derantonia/coral-client/badge)](https://www.codefactor.io/repository/github/derantonia/coral-client)
+[![Discord](https://img.shields.io/discord/1560022977494646985?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/498TEghpCE)
 
 **English** · [Deutsch](README.de.md)
 
