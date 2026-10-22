@@ -1,0 +1,13 @@
+[package]
+name = "beispiel-addon"
+version = "0.1.0"
+edition = "2021"
+
+# Eigenstaendig, nicht Teil des Client-Arbeitsbereichs.
+[workspace]
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+strip = true
