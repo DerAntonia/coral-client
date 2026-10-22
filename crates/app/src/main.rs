@@ -10356,7 +10356,7 @@ impl EditableValue {
     // statt am Geschmack: Chunk-Update-Threads (1..32, an der Kernzahl bemessen),
     // Render-Ahead (0..4), sowie alles, was gar keine Zahl ist (Projektion,
     // Fadenkreuz-Farbe, Audiogeraet).
-    const ALL: [EditableValue; 67] = [
+    const ALL: [EditableValue; 68] = [
         EditableValue::MouseSensitivity,
         EditableValue::MouseSensitivityY,
         EditableValue::CursorSensitivity,
@@ -10402,6 +10402,7 @@ impl EditableValue {
         EditableValue::UiSoundVolume(9),
         EditableValue::UiSoundVolume(10),
         EditableValue::UiSoundVolume(11),
+        EditableValue::UiSoundVolume(12),
         EditableValue::ShadowThickness(0),
         EditableValue::ShadowOpacity(0),
         EditableValue::ShadowThickness(1),
@@ -15979,7 +15980,7 @@ enum AuthEvent {
     LoggedIn { credentials: auth::Credentials, msa: Option<(String, String)>, source: accounts::Source },
     // Ein gespeichertes Konto ist geprueft (s. App::check_accounts): Schluessel und entweder
     // die frischen Credentials (bei Erneuerung mit neuem Refresh-Token) oder der Fehler.
-    AccountChecked { key: String, result: Result<(auth::Credentials, Option<(String, String)>), String> },
+    AccountChecked { key: String, result: Result<(auth::Credentials, Option<(String, String)>), auth::AuthError> },
     // Fehlgeschlagen -- Meldung fuers Log.
     Failed(String),
     // Reiner Status-/Fortschrittstext fuers Log.
@@ -24284,6 +24285,10 @@ impl App {
         // Angemeldet -> echtes Konto (Online-Mode). Sonst Offline-Mode mit "Player" (wie
         // bisher, fuer den lokalen Test-Server mit online-mode=false).
         let credentials = self.credentials.clone();
+        // Erneuerung des aktiven Kontos fuer join_refreshing: vor dem Verbinden, wenn das
+        // Token schon abgelaufen ist, sonst erst, wenn der Session-Server es ablehnt.
+        let abgelaufen = credentials.as_ref().and_then(|c| accounts::expiry(&c.access_token)).is_some_and(|exp| exp <= accounts::now_unix() + 60);
+        let mut refresh = self.token_refresh();
         // Neuer Kanal pro Verbindung: der alte (falls vorhanden) faellt mit dem alten Task
         // weg, run_play_loop dort bemerkt das an outgoing.recv() == None und stoppt das
         // Senden sauber (s. connection.rs), statt in eine Busy-Loop zu laufen.
@@ -24301,8 +24306,43 @@ impl App {
                 prev.abort();
                 let _ = prev.await;
             }
-            let _ = net::join(&address, "Player", credentials, events, outgoing_rx, rotation).await;
+            let mut credentials = credentials;
+            if abgelaufen {
+                if let Some(erneuern) = refresh.take() {
+                    let _ = events.send(net::ClientEvent::Log("Access-Token abgelaufen -- erneuere es ...".into()));
+                    match erneuern.await {
+                        Ok(c) => credentials = Some(c),
+                        Err(e) => {
+                            let _ = events.send(net::ClientEvent::Disconnected(format!("Token erneuern fehlgeschlagen: {e}")));
+                            return;
+                        }
+                    }
+                }
+            }
+            let _ = net::join_refreshing(&address, "Player", credentials, refresh, events, outgoing_rx, rotation).await;
         }));
+    }
+
+    // Holt dem angemeldeten Konto ein frisches Token ueber sein Refresh-Token und meldet es
+    // wie eine Kontopruefung zurueck (Liste und aktive Anmeldung bekommen es). None ohne
+    // Refresh-Token, dann laesst sich nichts erneuern.
+    fn token_refresh(&self) -> Option<net::TokenRefresh> {
+        let c = self.credentials.as_ref()?;
+        let (refresh_token, client_id) = match self.accounts.find(&c.profile_id).map(|i| &self.accounts.list[i]) {
+            Some(a) => (a.refresh_token.clone(), a.client_id.trim().to_string()),
+            None => (self.settings.msa_refresh_token.clone(), String::new()),
+        };
+        if refresh_token.trim().is_empty() {
+            return None;
+        }
+        let client_id = if client_id.is_empty() { AZURE_CLIENT_ID.to_string() } else { client_id };
+        let tx = self.auth_tx.clone();
+        Some(Box::pin(async move {
+            let msa = auth::refresh_msa(&client_id, refresh_token.trim()).await.map_err(|e| e.to_string())?;
+            let c = auth::msa_to_minecraft(&msa.access_token).await.map_err(|e| e.to_string())?;
+            let _ = tx.send(AuthEvent::AccountChecked { key: accounts::key(&c.profile_id), result: Ok((c.clone(), Some((msa.refresh_token, client_id)))) });
+            Ok(c)
+        }))
     }
 
     // Startet den Microsoft-Device-Code-Login als Hintergrund-Task. Der Ablauf schickt seine
@@ -24524,11 +24564,14 @@ impl App {
         self.check_accounts();
     }
 
-    // Alle gespeicherten Konten pruefen: das Token beim Profil-Endpunkt vorzeigen; ist es
-    // abgelaufen und das Konto hat ein Refresh-Token, wird es erneuert. Ein Konto hoechstens
-    // einmal je ACCOUNT_RECHECK.
+    // Alle gespeicherten Konten pruefen: das Token beim Profil-Endpunkt vorzeigen; ist das
+    // des aktiven Kontos abgelaufen, wird es erneuert. Fremde Konten mit abgelaufenem Token
+    // erneuert erst der Wechsel (use_account) -- jede Erneuerung laeuft ueber Mojangs knapp
+    // begrenzte Anmeldung (login_with_xbox), und alle auf einmal reissen das Limit. Darum auch
+    // nacheinander, das aktive zuerst. Ein Konto hoechstens einmal je ACCOUNT_RECHECK.
     fn check_accounts(&mut self) {
         let jetzt = accounts::now_unix();
+        let mut reihe = Vec::new();
         for a in self.accounts.list.clone() {
             let key = accounts::key(&a.uuid);
             if let Some((check, wann)) = self.account_checks.get(&key) {
@@ -24536,31 +24579,46 @@ impl App {
                     continue;
                 }
             }
+            let abgelaufen = accounts::expiry(&a.access_token).is_some_and(|exp| exp <= jetzt + 60);
             // Abgelaufen und nichts zum Erneuern: das steht auch ohne Netz fest.
-            if a.refresh_token.is_empty() && accounts::expiry(&a.access_token).is_some_and(|exp| exp <= jetzt) {
+            if abgelaufen && a.refresh_token.is_empty() {
                 self.account_checks.insert(key, (accounts::Check::Invalid("abgelaufen".into()), Instant::now()));
                 continue;
             }
-            self.account_checks.insert(key.clone(), (accounts::Check::Checking, Instant::now()));
-            let tx = self.auth_tx.clone();
-            self.tokio_rt.spawn(async move {
+            let aktiv = self.is_active_account(&a);
+            if abgelaufen && !aktiv {
+                continue;
+            }
+            self.account_checks.insert(key, (accounts::Check::Checking, Instant::now()));
+            if aktiv {
+                reihe.insert(0, a);
+            } else {
+                reihe.push(a);
+            }
+        }
+        if reihe.is_empty() {
+            return;
+        }
+        let tx = self.auth_tx.clone();
+        self.tokio_rt.spawn(async move {
+            for a in reihe {
                 let result = async {
                     // Ein Token kurz vor dem Ablauf gleich erneuern statt es noch vorzuzeigen.
                     if accounts::expiry(&a.access_token).is_none_or(|exp| exp > jetzt + 60) {
                         match auth::credentials_from_token(&a.access_token).await {
                             Ok(c) => return Ok((c, None)),
-                            Err(e) if a.refresh_token.is_empty() => return Err(e.to_string()),
+                            Err(e) if a.refresh_token.is_empty() => return Err(e),
                             Err(_) => {}
                         }
                     }
-                    let msa = auth::refresh_msa(&a.client_id, &a.refresh_token).await.map_err(|e| e.to_string())?;
-                    let c = auth::msa_to_minecraft(&msa.access_token).await.map_err(|e| e.to_string())?;
+                    let msa = auth::refresh_msa(&a.client_id, &a.refresh_token).await?;
+                    let c = auth::msa_to_minecraft(&msa.access_token).await?;
                     Ok((c, Some((msa.refresh_token, a.client_id.clone()))))
                 }
                 .await;
-                let _ = tx.send(AuthEvent::AccountChecked { key, result });
-            });
-        }
+                let _ = tx.send(AuthEvent::AccountChecked { key: accounts::key(&a.uuid), result });
+            }
+        });
     }
 
     // Klick auf ein Konto: damit anmelden. Ein geprueftes, noch laufendes Token wird direkt
@@ -24674,7 +24732,13 @@ impl App {
                             }
                             accounts::Check::Valid
                         }
-                        Err(e) => accounts::Check::Invalid(e),
+                        // Am Anmeldelimit sagt das nichts ueber das Konto: ungeprueft lassen.
+                        Err(e) if e.rate_limited() => {
+                            self.push_log(e.to_string());
+                            self.account_checks.remove(&key);
+                            continue;
+                        }
+                        Err(e) => accounts::Check::Invalid(e.to_string()),
                     };
                     self.account_checks.insert(key, (check, Instant::now()));
                 }
@@ -48690,7 +48754,9 @@ impl App {
         let seed = (zufallswert(self.type_pitch_seed) * i64::MAX as f32) as i64;
         let event = self.settings.ego_sound.clone();
         let Some(aufnahme) = self.vanilla_sounds.resolve(&mut self.installation, &event, seed) else { return };
-        let gain = aufnahme.volume * self.settings.ego_volume as f32 / 100.0 * self.settings.sound_gain(protocol::packets::SoundCategory::Players);
+        // Ohne die Lautstaerke aus sounds.json: manche Klaenge stehen dort sehr leise (Amethyst
+        // 0.2), hier regelt allein der eigene Regler.
+        let gain = self.settings.ego_volume as f32 / 100.0 * self.settings.sound_gain(protocol::packets::SoundCategory::Players);
         if gain > 0.0 {
             self.audio.sink().play_sample(aufnahme.sample, gain, 0.0, aufnahme.pitch);
         }
@@ -51826,6 +51892,12 @@ impl App {
         if text == ".item" {
             self.dump_main_hand_item();
             return;
+        }
+        if self.outgoing_tx.is_none() {
+            return;
+        }
+        if chat_input::sends_message(&text) {
+            self.play_ui_sound(ui_sound::UiSound::Send);
         }
         let Some(tx) = &self.outgoing_tx else { return };
         // Befehle (mit '/') muessen als Chat-Command-Paket raus, nicht als Chat-Nachricht --

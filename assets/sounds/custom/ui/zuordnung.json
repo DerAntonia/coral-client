@@ -78,6 +78,13 @@
    "minGapMs": 0,
    "lengthMs": 37,
    "peakDb": -30.4
+  },
+  "Send": {
+   "file": "ui_send.wav",
+   "spreadSemitones": 0.5,
+   "minGapMs": 0,
+   "lengthMs": 93,
+   "peakDb": -8.6
   }
  }
 }

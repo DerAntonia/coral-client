@@ -462,6 +462,29 @@ impl ChatInput {
     }
 }
 
+// Schickt diese Eingabe eine Nachricht an andere? Normaler Chat immer; ein Befehl nur, wenn er
+// eine Nachricht verschickt und auch Text dabei hat. An eine Person (/msg Name Text): Name und
+// Text; in einen Kanal (/tc Text): Text -- allein umgeschaltet ("/tc") ist nichts gesendet.
+pub fn sends_message(text: &str) -> bool {
+    // Name plus Text.
+    const AN_PERSON: [&str; 6] = ["msg", "tell", "w", "whisper", "m", "t"];
+    // Nur Text: Antwort, Team, Party, Gilde, Clan, Ally, Staff, /me, /say.
+    const IN_KANAL: [&str; 20] = [
+        "r", "reply", "teammsg", "tm", "tc", "teamchat", "pc", "partychat", "p", "gc", "guildchat", "g", "cc", "clanchat", "ac", "allychat", "sc", "staffchat", "me", "say",
+    ];
+    let Some(befehl) = text.strip_prefix('/') else { return !text.trim().is_empty() };
+    let mut teile = befehl.split_whitespace();
+    let Some(name) = teile.next() else { return false };
+    // "/minecraft:msg" und Gross-/Kleinschreibung wie der Server.
+    let name = name.rsplit(':').next().unwrap_or(name).to_ascii_lowercase();
+    let rest = teile.count();
+    if AN_PERSON.contains(&name.as_str()) {
+        rest >= 2
+    } else {
+        IN_KANAL.contains(&name.as_str()) && rest >= 1
+    }
+}
+
 // Der Text in Zeilen von hoechstens `max_width` Breite, von vorn gefuellt -- das
 // mehrzeilige Eingabefeld: ist eine Zeile voll, geht es darunter weiter. Nie leer (ein leeres
 // Feld ist eine leere Zeile). Umbrochen wird an Zeichengrenzen, bevorzugt nach einem
@@ -492,6 +515,20 @@ pub fn wrap_input_lines(text: &str, max_width: f32, width_of: impl Fn(&str) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nachricht_oder_befehl() {
+        assert!(sends_message("hallo"));
+        assert!(sends_message("/msg Steve hi du"));
+        assert!(sends_message("/W Steve hi"));
+        assert!(sends_message("/minecraft:tell Steve hi"));
+        assert!(sends_message("/tc wir pushen"));
+        assert!(sends_message("/r ok"));
+        assert!(!sends_message("/msg Steve"));
+        assert!(!sends_message("/tc"));
+        assert!(!sends_message("/gamemode creative"));
+        assert!(!sends_message("/spawn"));
+    }
 
     #[test]
     fn cursor_wandert_und_bearbeitet_an_seiner_stelle() {

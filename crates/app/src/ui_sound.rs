@@ -49,12 +49,15 @@ pub enum UiSound {
     // Ein Eintrag erscheint, wie die Zeilen der Rangliste in osu: kommt in schnellen Folgen
     // (je Zeile einer), deshalb kurz und leise.
     Popup,
+    // Eine Chat-Nachricht ging raus: normaler Chat oder ein Nachrichten-Befehl (/msg, /tc, ...,
+    // s. chat_input::sends_message) -- nicht jeder andere Befehl.
+    Send,
 }
 
 impl UiSound {
     /// Alle Klänge, in der Reihenfolge der Lautstärke-Regler im Audio-Tab (s.
     /// main.rs::Settings::ui_sound_volume).
-    pub const ALL: [UiSound; 12] = [
+    pub const ALL: [UiSound; 13] = [
         UiSound::Hover,
         UiSound::Click,
         UiSound::ToggleOn,
@@ -67,6 +70,7 @@ impl UiSound {
         UiSound::Erase,
         UiSound::Slider,
         UiSound::Popup,
+        UiSound::Send,
     ];
 
     /// Stelle in `ALL`.
@@ -89,6 +93,7 @@ impl UiSound {
             UiSound::Erase => "erase",
             UiSound::Slider => "slider",
             UiSound::Popup => "popup",
+            UiSound::Send => "send",
         }
     }
 
@@ -107,6 +112,7 @@ impl UiSound {
             UiSound::Erase => "Löschen",
             UiSound::Slider => "Slider-Tick",
             UiSound::Popup => "Aufploppen",
+            UiSound::Send => "Absenden",
         }
     }
 
@@ -125,6 +131,7 @@ impl UiSound {
             UiSound::Erase => "Lautstärke des Löschens: ein Zeichen wurde gelöscht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
             UiSound::Slider => "Lautstärke des Slider-Ticks: ein Schieberegler ändert seinen Wert, die Tonhöhe steigt mit dem Wert. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
             UiSound::Popup => "Lautstärke des Aufploppens: ein Eintrag erscheint, etwa eine Zeile einer Rangliste. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            UiSound::Send => "Lautstärke beim Absenden einer Chat-Nachricht, auch per /msg, /w, /tc und Ähnlichem. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
         }
     }
 
@@ -149,6 +156,7 @@ impl UiSound {
             UiSound::Erase => "custom/ui/ui_erase",
             UiSound::Slider => "custom/ui/ui_slider",
             UiSound::Popup => "custom/ui/ui_popup",
+            UiSound::Send => "custom/ui/ui_send",
         })
     }
 
@@ -158,6 +166,7 @@ impl UiSound {
         match self {
             UiSound::Hover | UiSound::Step => 0.75,
             UiSound::Type => 1.5,
+            UiSound::Send => 0.5,
             _ => 0.0,
         }
     }
@@ -249,7 +258,7 @@ impl UiSound {
             UiSound::Hover => Cue { hz_start: 1512.0, hz_end: 1512.0, noise: 0.25, attack: 0.001, decay: 0.024, gain: 0.055, pan: 0.0 },
             // Trocken und breitbandig. Der hohe Rauschanteil ist der Grund, warum es nach
             // Klick klingt und nicht nach Piep -- ein Klick ist ein Geräusch, kein Ton.
-            UiSound::Click => Cue { hz_start: 1260.0, hz_end: 1080.0, noise: 0.72, attack: 0.0015, decay: 0.032, gain: 0.20, pan: 0.0 },
+            UiSound::Click | UiSound::Send => Cue { hz_start: 1260.0, hz_end: 1080.0, noise: 0.72, attack: 0.0015, decay: 0.032, gain: 0.20, pan: 0.0 },
             // Schalter: derselbe trockene Anschlag, aber mit deutlicher Richtung. Steigend =
             // an, fallend = aus. Die Richtung trägt die Information, nicht die Tonhöhe --
             // deshalb reicht dasselbe Intervall in beide Richtungen.

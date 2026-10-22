@@ -45,6 +45,8 @@ const MAX_UNCOMPRESSED_LEN: i32 = 8 * 1024 * 1024;
 pub enum NetError {
     Io(io::Error),
     Protocol(String),
+    // Der Session-Server hat das Access-Token abgelehnt (403) -- s. join_refreshing.
+    SessionRejected(String),
     Timeout,
 }
 
@@ -52,7 +54,7 @@ impl std::fmt::Display for NetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NetError::Io(e) => write!(f, "IO-Fehler: {e}"),
-            NetError::Protocol(msg) => write!(f, "Protokoll-Fehler: {msg}"),
+            NetError::Protocol(msg) | NetError::SessionRejected(msg) => write!(f, "Protokoll-Fehler: {msg}"),
             NetError::Timeout => {
                 write!(f, "Timed out ({}s keine Daten vom Server)", READ_TIMEOUT.as_secs())
             }
@@ -960,9 +962,13 @@ async fn do_encryption_handshake(conn: &mut Connection, request_payload: &[u8], 
     // Bei Mojang anmelden, dass wir diesem Server beitreten (nur wenn der Server es verlangt --
     // in der Praxis immer, wenn er ueberhaupt einen EncryptionRequest schickt).
     if req.should_authenticate {
-        auth::mojang_join(&credentials.access_token, &credentials.profile_id, &hash)
-            .await
-            .map_err(|e| NetError::Protocol(e.to_string()))?;
+        auth::mojang_join(&credentials.access_token, &credentials.profile_id, &hash).await.map_err(|e| {
+            if e.join_forbidden() {
+                NetError::SessionRejected(e.to_string())
+            } else {
+                NetError::Protocol(e.to_string())
+            }
+        })?;
     }
 
     let enc_secret = crate::crypto::rsa_encrypt(&req.public_key, &secret).map_err(NetError::Protocol)?;
@@ -2269,10 +2275,36 @@ pub async fn join(
     offline_username: &str,
     credentials: Option<auth::Credentials>,
     events: Events,
+    outgoing: Outgoing,
+    rotation: SharedRotation,
+) -> Result<(), NetError> {
+    join_refreshing(address, offline_username, credentials, None, events, outgoing, rotation).await
+}
+
+// Holt frische Credentials (Token erneuern), s. join_refreshing.
+pub type TokenRefresh = std::pin::Pin<Box<dyn std::future::Future<Output = Result<auth::Credentials, String>> + Send>>;
+
+// Wie join, aber lehnt der Session-Server das Token ab (meist abgelaufen), wird es einmal mit
+// `refresh` erneuert und neu verbunden, statt gleich mit dem 403 zu trennen.
+pub async fn join_refreshing(
+    address: &str,
+    offline_username: &str,
+    mut credentials: Option<auth::Credentials>,
+    mut refresh: Option<TokenRefresh>,
+    events: Events,
     mut outgoing: Outgoing,
     rotation: SharedRotation,
 ) -> Result<(), NetError> {
-    let result = join_inner(address, offline_username, credentials.as_ref(), &events, &mut outgoing, &rotation).await;
+    let result = loop {
+        let result = join_inner(address, offline_username, credentials.as_ref(), &events, &mut outgoing, &rotation).await;
+        let Err(NetError::SessionRejected(_)) = &result else { break result };
+        let Some(erneuern) = refresh.take() else { break result };
+        log(&events, "Session-Server lehnt das Token ab -- erneuere es ...");
+        match erneuern.await {
+            Ok(c) => credentials = Some(c),
+            Err(e) => break Err(NetError::Protocol(format!("Token abgelehnt, Erneuern fehlgeschlagen: {e}"))),
+        }
+    };
     if let Err(e) = &result {
         let _ = events.send(ClientEvent::Disconnected(e.to_string()));
     }

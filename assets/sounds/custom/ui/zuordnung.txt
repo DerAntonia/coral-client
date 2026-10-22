@@ -41,5 +41,7 @@ Slider    kenney-interface/click_003.wav · Tonhöhe −15,5 HT · Tempo 75 % ·
           Klangformung: Höhen weg 3.025 Hz, Ohrenbereich (3,2 kHz) -4 dB, weicher Anschlag 3,1 ms · Limiter: Decke -10 dB, Release 1 ms
 Popup     custom/scroll_003_klick.wav · Tonhöhe +14 HT · Tempo 55 % · Lautstärke 150 %
           Klangformung: Höhen weg 4.217 Hz, Ohrenbereich (3,2 kHz) -10 dB, weicher Anschlag 0 ms
+Send      kenney-interface/drop_004.wav · Tonhöhe +10 HT · Tempo 334 % · Versatz −2 ms
+          Streuung ± 0,5 HT · Klangformung: Höhen weg 17.971 Hz, Ohrenbereich (3,2 kHz) -18 dB, weicher Anschlag 1,5 ms
 
 Slider-Anstieg +5,5 HT über die ganze Bahn

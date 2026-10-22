@@ -56,6 +56,46 @@ impl From<reqwest::Error> for AuthError {
     }
 }
 
+// Anfang der Meldungen, an denen Aufrufer zwei Faelle erkennen: der Session-Server lehnt das
+// Token ab (403, meist abgelaufen -> erneuern lohnt), und Mojangs Anmeldelimit (429 -> warten).
+const JOIN_FORBIDDEN: &str = "Session-Join abgelehnt (403";
+const LOGIN_LIMIT: &str = "Mojang-Anmeldelimit erreicht";
+
+impl AuthError {
+    pub fn join_forbidden(&self) -> bool {
+        self.0.starts_with(JOIN_FORBIDDEN)
+    }
+
+    pub fn rate_limited(&self) -> bool {
+        self.0.starts_with(LOGIN_LIMIT)
+    }
+}
+
+// Nach einem 429 von login_with_xbox: bis wann keine Anmeldung mehr versucht wird. Jeder
+// weitere Versuch vor Ablauf verlaengert bei Mojang nur die Sperre.
+static LOGIN_BLOCKED_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+// Ohne Retry-Header so lange warten.
+const LOGIN_LIMIT_FALLBACK: Duration = Duration::from_secs(120);
+
+fn login_limit_error(rest: Duration) -> AuthError {
+    let s = rest.as_secs().max(1);
+    let wann = if s >= 60 { format!("{} min", s.div_ceil(60)) } else { format!("{s} s") };
+    err(format!("{LOGIN_LIMIT} -- in {wann} erneut versuchen"))
+}
+
+// Noch gesperrt? Dann der Fehler mit der Restzeit.
+fn check_login_limit() -> Result<(), AuthError> {
+    let mut sperre = LOGIN_BLOCKED_UNTIL.lock().unwrap_or_else(|e| e.into_inner());
+    match *sperre {
+        Some(bis) if bis > std::time::Instant::now() => Err(login_limit_error(bis - std::time::Instant::now())),
+        Some(_) => {
+            *sperre = None;
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
 // Fertige Minecraft-Anmeldedaten. profile_id ist die UUID als 32-stelliger Hex-String
 // OHNE Bindestriche (so wie Mojang sie liefert und der Session-Join sie erwartet).
 #[derive(Debug, Clone)]
@@ -451,6 +491,7 @@ pub async fn refresh_msa(client_id: &str, refresh_token: &str) -> Result<MsaToke
 // --- Schritt 3-6: MSA-Access-Token -> fertige Minecraft-Credentials ---------------------
 
 pub async fn msa_to_minecraft(msa_access_token: &str) -> Result<Credentials, AuthError> {
+    check_login_limit()?;
     let http = client()?;
     let (xbl_token, _uhs) = xbox_live_auth(&http, msa_access_token).await?;
     let (xsts_token, uhs) = xsts_auth(&http, &xbl_token).await?;
@@ -538,6 +579,16 @@ async fn minecraft_login(http: &reqwest::Client, uhs: &str, xsts_token: &str) ->
     let body = serde_json::json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") });
     // Accept explizit setzen -- manche Cloudflare-WAF-Regeln erwarten es.
     let resp = http.post(MC_LOGIN_URL).header("Accept", "application/json").json(&body).send().await?;
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let warten = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(LOGIN_LIMIT_FALLBACK, Duration::from_secs);
+        *LOGIN_BLOCKED_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + warten);
+        return Err(login_limit_error(warten));
+    }
     if !resp.status().is_success() {
         let code = resp.status();
         // Body mitgeben: Cloudflare-403 liefert HTML, ein echter Mojang-Fehler JSON -- so laesst
@@ -771,6 +822,10 @@ pub async fn mojang_join(access_token: &str, profile_id: &str, server_hash: &str
     } else {
         let code = resp.status();
         let text = resp.text().await.unwrap_or_default();
+        let text = text.trim();
+        if code == reqwest::StatusCode::FORBIDDEN {
+            return Err(err(format!("{JOIN_FORBIDDEN} Forbidden): {text}")));
+        }
         Err(err(format!("Session-Join abgelehnt ({code}): {text}")))
     }
 }
