@@ -358,6 +358,19 @@ pub fn entity_transform_leaning(feet: [f32; 3], body_yaw_deg: f32, scale: f32, m
         .then(Affine::translation([0.0, -1.501, 0.0]))
 }
 
+// Ein sterbendes Lebewesen (LivingEntityRenderer.setupRotations, Zweig deathTime > 0): nach
+// der Koerperdrehung um Z gekippt, in gut 12 Ticks auf die Seite (sqrt-Kurve, bis 90 Grad).
+pub fn entity_transform_dying(feet: [f32; 3], body_yaw_deg: f32, scale: f32, model_scale: f32, death_time: f32) -> Affine {
+    let h = ((death_time - 1.0) / 20.0 * 1.6).max(0.0).sqrt().min(1.0);
+    Affine::translation(feet)
+        .then(Affine::scale([scale, scale, scale]))
+        .then(Affine::rotation_y_deg(180.0 - body_yaw_deg))
+        .then(rotation_z_deg(h * 90.0))
+        .then(Affine::scale([-1.0, -1.0, 1.0]))
+        .then(Affine::scale([model_scale, model_scale, model_scale]))
+        .then(Affine::translation([0.0, -1.501, 0.0]))
+}
+
 // Elytra-Gleitflug eines Lebewesens -- alles, was Vanilla dafuer aus dem Entity liest
 // (LivingEntityRenderState: glidingTicks, pitch, velocity; PlayerEntityRenderer.updateRenderState:
 // flyingRotation).

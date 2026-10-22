@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod accounts;
+mod addons;
 mod block_anim;
 mod block_place;
 mod book;
@@ -72,6 +73,8 @@ mod wallpaper;
 mod last_view;
 mod armor_hud;
 mod keystrokes;
+mod session_info;
+mod death_burst;
 mod ego_name;
 mod vanilla_sounds;
 mod voicechat;
@@ -887,6 +890,25 @@ fn item_attribute_value(mods: &[protocol::item::ItemAttributeModifier], attribut
         wert *= 1.0 + m.amount;
     }
     Some(wert)
+}
+
+// Zahl eines Addon-Reglers: ohne Nullen hinten, deutsches Komma ("2,5", "10").
+fn addon_number_text(v: f64) -> String {
+    let t = format!("{:.3}", (v * 1000.0).round() / 1000.0);
+    t.trim_end_matches('0').trim_end_matches('.').replace('.', ",")
+}
+
+// Lautstaerke fuers Feld: bis zu zwei Nachkommastellen mit deutschem Komma, ohne Nullen
+// hinten ("12,5 %", "100 %").
+fn volume_text(v: f32) -> String {
+    let t = format!("{:.2}", (v * 100.0).round() / 100.0);
+    format!("{} %", t.trim_end_matches('0').trim_end_matches('.').replace('.', ","))
+}
+
+// Getippte oder gespeicherte Lautstaerke (Komma oder Punkt), auf Hundertstel gerundet.
+fn parse_volume(text: &str) -> Option<f32> {
+    let v: f32 = text.trim().replace(',', ".").parse().ok()?;
+    v.is_finite().then(|| (v.max(0.0) * 100.0).round() / 100.0)
 }
 
 // Zahl mit hoechstens einer Nachkommastelle und deutschem Komma, ohne ",0".
@@ -2140,6 +2162,9 @@ const SETTINGS_CTRL_H: f32 = 36.0;
 const TOGGLE_W: f32 = 120.0;
 const STEPPER_BTN_W: f32 = 40.0;
 const STEPPER_GAP: f32 = 10.0;
+// Breite eines Modulnamens in einer Kachel des Modul-Menues (s. App::module_cols), in
+// Bildschirmpixeln wie die Schrift.
+const MODULE_TILE_NAME_PX: f32 = 140.0;
 // Breit genug fuer "Monitor-Refresh" (166px).
 const STEPPER_VALUE_W: f32 = 200.0;
 
@@ -3052,7 +3077,7 @@ const ENTITY_DISTANCE_ROW: usize = RENDER_DISTANCE_ROW + 1;
 const LOD_DISTANCE_ROW: usize = ENTITY_DISTANCE_ROW + 1;
 const LOD_DETAIL_ROW: usize = LOD_DISTANCE_ROW + 1;
 const VIDEO_CAMERA_ROW: usize = LOD_DETAIL_ROW + 1;
-const VIDEO_ROW_COUNT: usize = FIRE_DETAIL_ROW + 1;
+const VIDEO_ROW_COUNT: usize = DEATH_ANIM_ROW + 1;
 const RENDER_DISTANCE_TOOLTIP: &str = "Radius in Chunks um den Spieler, in dem geladene Chunks gezeichnet werden. Weiter draußen bleiben die Blockdaten geladen (kein Loch beim Zurückkommen), sie werden nur nicht gezeichnet. Unabhängig von der Sichtweite des Servers -- wirkt sofort, ohne neu zu verbinden. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 const LOD_DISTANCE_TOOLTIP: &str = "Wie weit die Fernsicht (LOD) reicht, in Chunks -- sie zeichnet hinter der Render-Distance vereinfacht weiter, was das Modul Chunk-Saver gespeichert hat (wie Voxy). Aus: keine Fernsicht. Ohne eingeschaltetes Modul kommt nichts Neues dazu, schon Gespeichertes wird trotzdem gezeichnet. Im Shader-Renderpfad noch ohne Wirkung.";
 const LOD_DETAIL_TOOLTIP: &str = "Wie fein die Fernsicht unterteilt wird: so groß (in Pixeln²) darf ein Fernsicht-Block auf dem Bildschirm höchstens werden, bevor eine feinere Stufe geladen wird. Kleiner = schärfer, kostet mehr Speicher und GPU-Zeit. Standard 4.";
@@ -3090,6 +3115,16 @@ const HURT_CAM_STRENGTH_ROW: usize = HURT_CAM_ROW + 1;
 // Abschnitt Feuer: Modus, darunter je nach Modus die Hoehe oder die Fadenkreuzfarbe.
 const FIRE_MODE_ROW: usize = HURT_CAM_STRENGTH_ROW + 1;
 const FIRE_DETAIL_ROW: usize = FIRE_MODE_ROW + 1;
+// Abschnitt Tod: die Todesanimation (Settings::death_animation).
+const DEATH_ANIM_ROW: usize = FIRE_DETAIL_ROW + 1;
+// Vanilla: umkippen (LivingEntityRenderer.setupRotations, deathTime) und rot. Aus: Spieler
+// verschwinden sofort. Explosion: Spieler fliegen in ihre Teile auseinander (death_burst.rs).
+// Aus und Explosion gelten nur fuer Spieler, Mobs sterben immer wie in Vanilla.
+const DEATH_ANIM_VANILLA: u8 = 0;
+const DEATH_ANIM_OFF: u8 = 1;
+const DEATH_ANIM_EXPLOSION: u8 = 2;
+const DEATH_ANIM_NAMES: [&str; 3] = ["Vanilla", "Aus", "Explosion"];
+const DEATH_ANIM_TOOLTIP: &str = "Wie sterbende Spieler aussehen: Vanilla kippt sie rot um, Aus lässt sie sofort verschwinden, Explosion lässt Kopf, Rumpf, Arme und Beine auseinanderfliegen. Mobs sterben immer wie in Vanilla.";
 // Hurt-Cam: Ausschlag bei 100 % in Grad (Vanillas bobHurt).
 const HURT_CAM_MAX_DEGREES: f32 = 14.0;
 // Feuer vor den Augen (Settings::fire_mode).
@@ -3384,6 +3419,8 @@ impl HoldUseRepeat {
         }
     }
 
+    const ALL: [Self; 3] = [Self::Always, Self::ExceptBlocks, Self::Never];
+
     fn next(self) -> Self {
         match self {
             Self::Always => Self::ExceptBlocks,
@@ -3537,6 +3574,7 @@ fn hud_config_rows(element: HudElement, set: &Settings) -> usize {
         HudElement::Armor => 8,
         // Groesse, Deckkraft.
         HudElement::Keystrokes => 2,
+        HudElement::Session => 2,
         // Die Chat-Einstellungen (s. CHAT_TOOLTIPS): Groesse, Breite, Hintergrund, Abdunkeln,
         // Zeilen im Spiel und beim Tippen, Ausblenden.
         HudElement::Chat => CHAT_TOOLTIPS.len(),
@@ -9486,6 +9524,12 @@ fn trimme_nullen(text: String) -> String {
 const ENTITY_STATUS_DEATH_PARTICLES: i8 = 60;
 // LivingEntity.handleEntityEvent, Fall 2: ein Speer-Ansturm hat etwas getroffen (onKineticHit).
 const ENTITY_STATUS_KINETIC_HIT: i8 = 2;
+// Session-Info-Tafel in HUD-Einheiten: Innenabstand, Mindestbreite, Luft zwischen den Zeilen.
+const SESSION_PAD: f32 = 4.0;
+const SESSION_MIN_W: f32 = 90.0;
+const SESSION_LINE_GAP: f32 = 2.0;
+// LivingEntity.die / ServerPlayer.die: das Entity ist gestorben (an alle, die es sehen).
+const ENTITY_STATUS_DIED: i8 = 3;
 // Hoechstens so lange bleibt der Pack-Himmel nach einem Dimensionswechsel weg, bis er geladen ist.
 const SKY_WORLD_WAIT: Duration = Duration::from_secs(3);
 // Schneeball oder Ei schlaegt auf (Snowball/ThrownEgg.handleEntityEvent, Fall 3).
@@ -9857,7 +9901,7 @@ impl MenuScreen {
             }),
             MenuScreen::SettingsVideo => Some(SettingsPage {
                 rows: VIDEO_ROW_COUNT,
-                sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Feuer", FIRE_MODE_ROW)],
+                sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Feuer", FIRE_MODE_ROW), ("Tod", DEATH_ANIM_ROW)],
             }),
             MenuScreen::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
             // Zeile 4 = Zusammenfassen bei Hover, Zeilen 5..7 = Trank-Buchstaben.
@@ -9927,11 +9971,13 @@ enum HudElement {
     Armor,
     // Die Keystrokes (Modul, s. push_keystrokes).
     Keystrokes,
+    // Die Session-Info (Modul, s. push_session_info).
+    Session,
 }
 
 impl HudElement {
     #[cfg(test)]
-    const ALL: [HudElement; 15] = [
+    const ALL: [HudElement; 16] = [
         HudElement::Perf,
         HudElement::Crosshair,
         HudElement::Title,
@@ -9947,6 +9993,7 @@ impl HudElement {
         HudElement::HeldName,
         HudElement::Armor,
         HudElement::Keystrokes,
+        HudElement::Session,
     ];
 
     fn label(self) -> &'static str {
@@ -9966,6 +10013,7 @@ impl HudElement {
             HudElement::HeldName => "Itemname",
             HudElement::Armor => "Rüstung",
             HudElement::Keystrokes => "Keystrokes",
+            HudElement::Session => "Session-Info",
         }
     }
 }
@@ -10027,10 +10075,12 @@ enum ColorTarget {
     Crit,
     Crosshair,
     SaturationHud,
-    // Modul Eigenname: 0, 1 = Farben des Verlaufs, 2 = Schatten.
+    // Modul Eigenname: 0, 1 = Farben des Verlaufs, 2, 3 = Schatten.
     EgoName(u8),
     // Fadenkreuzfarbe beim Brennen (Feuer-Modus "Fadenkreuz").
     FireCrosshair,
+    // Farb-Einstellung eines Addon-Moduls (Modul, Einstellung).
+    Addon(u16, u16),
 }
 
 // Das offene Farbfenster: wofuer, unter welchem Farbfeld (Bildschirmkoordinaten), der Stand
@@ -10042,6 +10092,44 @@ struct ColorPopup {
     hsva: [f32; 4],
     drag: Option<usize>,
 }
+
+// Eine Auswahl aus festen, benannten Werten, die als Aufklappliste (wie in osu!lazer) statt
+// als Durchschalt-Knopf erscheint -- ab drei Werten; zwei sind zwei Knoepfe nebeneinander.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Choice {
+    Projection,
+    Particles,
+    Wallpaper,
+    // Zeile im Sprach-Tab (0 = alles zusammen).
+    Language(usize),
+    HoldUseRepeat,
+    ArrowEmptyFeedback,
+    SkyMode,
+    WeatherMode,
+    DeathAnimation,
+    EgoDeco,
+    EgoShadow,
+    EgoSound,
+    AudioDevice,
+    CrosshairShape,
+    // Auswahl-Einstellung eines Addon-Moduls (Modul, Einstellung).
+    Addon(u16, u16),
+}
+
+// Die offene Aufklappliste: welche Auswahl, unter welchem Knopf (Bildschirmkoordinaten), ab
+// welchem Eintrag sie zeigt und wo sie geoeffnet wurde -- wechselt die Ansicht, gilt sie als zu.
+struct Dropdown {
+    choice: Choice,
+    anchor: Rect,
+    scroll: usize,
+    mode: AppMode,
+    screen: MenuScreen,
+    module_menu: bool,
+}
+
+const DROPDOWN_ITEM_H: f32 = 36.0;
+const DROPDOWN_MAX_ITEMS: usize = 8;
+const DROPDOWN_PAD: f32 = 6.0;
 
 // Plaetze je Seite des Server-Icon-Atlas (8x8 = 64 Server).
 const SERVER_ICON_GRID: u32 = 8;
@@ -10535,6 +10623,9 @@ impl EditableValue {
                 | EditableValue::CameraDistance(_)
                 | EditableValue::CameraYOffset(_)
                 | EditableValue::ShadowThickness(_)
+                | EditableValue::MasterVolume
+                | EditableValue::CategoryVolume(_)
+                | EditableValue::UiSoundVolume(_)
         )
     }
 
@@ -11950,12 +12041,12 @@ struct Settings {
     // bewusst NICHT fuer die Klaenge der Oberflaeche: die haben ihren eigenen, aufeinander
     // abgestimmten Pegel (s. ui_sound::UiSound::sample_gain), und wer die Welt leiser dreht,
     // will meist nicht auch den Menue-Klick verlieren.
-    master_volume: u32,
+    master_volume: f32,
     // Lautstaerke je Kategorie in Prozent, in der Reihenfolge von VOLUME_CATEGORIES.
-    category_volume: [u32; VOLUME_CATEGORIES.len()],
+    category_volume: [f32; VOLUME_CATEGORIES.len()],
     // Lautstaerke je UI-Klang in Prozent, in der Reihenfolge von ui_sound::UiSound::ALL --
     // zusaetzlich zur Kategorie UI-Sounds.
-    ui_sound_volume: [u32; ui_sound::UiSound::ALL.len()],
+    ui_sound_volume: [f32; ui_sound::UiSound::ALL.len()],
     // --- Module (s. modules.rs) ---
     // Totem-Anzeige: unterscheidet beim Pop Haupthand und Zweithand nach Farbe, Seite und
     // Ton. Standardmaessig AN -- wer das Modul-Menue nicht findet, soll trotzdem die
@@ -12088,11 +12179,19 @@ struct Settings {
     module_ego_name: bool,
     ego_alias: String,
     ego_deco: ego_name::Deco,
-    ego_colors: [[u32; 4]; 3],
-    ego_shadow: bool,
+    // Farben (Ton, Saettigung, Helligkeit, Deckkraft): Name 1 und 2, Schatten 1 und 2. Die
+    // Deckkraft gilt nur beim ersten Schatten, fuer den ganzen Schatten.
+    ego_colors: [[u32; 4]; 4],
+    ego_shadow: ego_name::Deco,
+    // Aufhellung des Regenbogens zu Weiss hin in Prozent, beim Namen und beim Schatten.
+    ego_light: u32,
+    ego_shadow_light: u32,
     ego_speed: u32,
     ego_sound: String,
-    ego_volume: u32,
+    ego_volume: f32,
+    // Einstellungen der Addon-Module (s. addons.rs) als Text, Schluessel "addon/modul/key";
+    // "addon/modul/enabled" ist ihr Hauptschalter. In der Datei als addon:<Schluessel>=Wert.
+    addon_values: std::collections::BTreeMap<String, String>,
     block_outline_hue: u32,
     block_outline_saturation: u32,
     block_outline_value: u32,
@@ -12178,6 +12277,17 @@ struct Settings {
     hud_keys_y: f32,
     hud_keys_scale: u32,
     keys_opacity: u32,
+    // Session-Info (s. ModuleId::SessionInfo, session_info.rs): obere linke Ecke normiert,
+    // Groesse und Deckkraft wie bei den Keystrokes, dazu welche Zeilen unter der Spielzeit
+    // stehen (session_info::LINE_*).
+    module_session_info: bool,
+    // Video > Tod: wie ein Lebewesen stirbt (DEATH_ANIM_*).
+    death_animation: u8,
+    hud_session_x: f32,
+    hud_session_y: f32,
+    hud_session_scale: u32,
+    session_opacity: u32,
+    session_lines: u8,
     // Rueckmeldung, wenn man ohne Munition den Bogen/die Armbrust zu spannen versucht (Vanilla:
     // es passiert schlicht nichts). Index in ARROW_EMPTY_FEEDBACK_NAMES.
     arrow_empty_feedback: u8,
@@ -13197,11 +13307,11 @@ impl Settings {
     // Die Oberflaeche haengt nur an ihrem eigenen Regler, ihre Klaenge stehen bewusst
     // ausserhalb der Hauptlautstaerke (s. master_volume).
     fn sound_gain(&self, c: protocol::packets::SoundCategory) -> f32 {
-        let kategorie = VOLUME_CATEGORIES.iter().position(|v| v.category == c).map_or(1.0, |i| self.category_volume[i] as f32 / 100.0);
+        let kategorie = VOLUME_CATEGORIES.iter().position(|v| v.category == c).map_or(1.0, |i| self.category_volume[i] / 100.0);
         if c == protocol::packets::SoundCategory::Ui {
             kategorie
         } else {
-            kategorie * self.master_volume as f32 / 100.0
+            kategorie * self.master_volume / 100.0
         }
     }
 
@@ -13463,10 +13573,10 @@ impl Settings {
         }
     }
 
-    // Formauswahl einen Schritt weiter; "Eigene" faengt beim eingebauten Kreuz an, nicht bei
-    // nichts, wenn noch nie gemalt wurde.
-    fn step_crosshair_shape(&mut self, dir: i32) {
-        let neu = (self.crosshair_shape_choice() as i32 + dir).clamp(0, CROSSHAIR_SHAPE_CUSTOM as i32) as usize;
+    // Eintrag der Formauswahl setzen (geklemmt); "Eigene" faengt beim eingebauten Kreuz an,
+    // nicht bei nichts, wenn noch nie gemalt wurde.
+    fn set_crosshair_shape_choice(&mut self, wahl: usize) {
+        let neu = wahl.min(CROSSHAIR_SHAPE_CUSTOM);
         if neu == CROSSHAIR_SHAPE_CUSTOM {
             self.use_custom_crosshair();
         } else {
@@ -13832,7 +13942,7 @@ impl Settings {
                         }
                     }
                 }
-                "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" | "hud_scoreboard_scale" | "hud_arrows_scale" | "hud_held_name_scale" | "hud_armor_scale" | "hud_keys_scale" => {
+                "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" | "hud_scoreboard_scale" | "hud_arrows_scale" | "hud_held_name_scale" | "hud_armor_scale" | "hud_keys_scale" | "hud_session_scale" => {
                     if let Ok(v) = value.parse::<u32>() {
                         let v = v.clamp(HUD_SCALE_PCT_MIN, HUD_SCALE_PCT_MAX);
                         match key {
@@ -13844,6 +13954,7 @@ impl Settings {
                             "hud_held_name_scale" => settings.hud_held_name_scale = v,
                             "hud_armor_scale" => settings.hud_armor_scale = v,
                             "hud_keys_scale" => settings.hud_keys_scale = v,
+                            "hud_session_scale" => settings.hud_session_scale = v,
                             _ => settings.hud_effects_scale = v,
                         }
                     }
@@ -13971,20 +14082,23 @@ impl Settings {
                     }
                 }
                 "master_volume" => {
-                    if let Ok(v) = value.parse::<u32>() {
-                        settings.master_volume = v.min(100);
+                    if let Some(v) = parse_volume(value) {
+                        settings.master_volume = v.min(100.0);
                     }
+                }
+                k if k.starts_with("addon:") => {
+                    settings.addon_values.insert(k["addon:".len()..].to_string(), value.to_string());
                 }
                 k if k.starts_with("ui_volume_") => {
                     let i = ui_sound::UiSound::ALL.iter().position(|s| k == format!("ui_volume_{}", s.key()));
-                    if let (Some(i), Ok(v)) = (i, value.parse::<u32>()) {
-                        settings.ui_sound_volume[i] = v.min(100);
+                    if let (Some(i), Some(v)) = (i, parse_volume(value)) {
+                        settings.ui_sound_volume[i] = v.min(100.0);
                     }
                 }
                 k if k.starts_with("volume_") => {
                     let i = VOLUME_CATEGORIES.iter().position(|c| k == format!("volume_{}", c.key));
-                    if let (Some(i), Ok(v)) = (i, value.parse::<u32>()) {
-                        settings.category_volume[i] = v.min(100);
+                    if let (Some(i), Some(v)) = (i, parse_volume(value)) {
+                        settings.category_volume[i] = v.min(100.0);
                     }
                 }
                 "inventory_cursor_to_slot" => settings.inventory_cursor_to_slot = value == "true",
@@ -14458,6 +14572,28 @@ impl Settings {
                         settings.keys_opacity = v.min(100);
                     }
                 }
+                "module_session_info" => settings.module_session_info = value == "true",
+                "death_animation" => settings.death_animation = value.parse::<u8>().ok().filter(|&v| (v as usize) < DEATH_ANIM_NAMES.len()).unwrap_or(DEATH_ANIM_VANILLA),
+                "hud_session_x" | "hud_session_y" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        let v = v.clamp(0.0, 1.0);
+                        if key == "hud_session_x" {
+                            settings.hud_session_x = v;
+                        } else {
+                            settings.hud_session_y = v;
+                        }
+                    }
+                }
+                "session_opacity" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.session_opacity = v.min(100);
+                    }
+                }
+                "session_lines" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        settings.session_lines = v & 0x0F;
+                    }
+                }
                 // Das fruehere Trails-Modul lebt jetzt als Schalter im Pfeil-Modul.
                 "module_trails" | "arrow_trail" => settings.arrow_trail = value == "true",
                 "arrow_indicator" => settings.arrow_indicator = value == "true",
@@ -14571,14 +14707,31 @@ impl Settings {
                 "ego_alias" => settings.ego_alias = value.trim().chars().take(EGO_ALIAS_MAX).collect(),
                 "ego_deco" => settings.ego_deco = ego_name::Deco::parse(value).unwrap_or(settings.ego_deco),
                 "ego_colors" => {
-                    for (i, c) in value.split(',').take(3).enumerate() {
+                    for (i, c) in value.split(',').take(4).enumerate() {
                         let teile: Vec<u32> = c.split('/').filter_map(|v| v.trim().parse().ok()).collect();
                         if let [h, s, v, a] = teile[..] {
                             settings.ego_colors[i] = [h % 360, s.min(100), v.min(100), a.min(100)];
                         }
                     }
                 }
-                "ego_shadow" => settings.ego_shadow = value == "true",
+                // Frueher ein Schalter: "true" ist der einfarbige Schatten.
+                "ego_shadow" => {
+                    settings.ego_shadow = match value {
+                        "true" => ego_name::Deco::Solid,
+                        "false" => ego_name::Deco::Off,
+                        v => ego_name::Deco::parse(v).unwrap_or(settings.ego_shadow),
+                    }
+                }
+                "ego_light" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.ego_light = v.min(100);
+                    }
+                }
+                "ego_shadow_light" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.ego_shadow_light = v.min(100);
+                    }
+                }
                 "ego_speed" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.ego_speed = v.clamp(EGO_SPEED_MIN, EGO_SPEED_MAX);
@@ -14586,8 +14739,8 @@ impl Settings {
                 }
                 "ego_sound" => settings.ego_sound = value.trim().to_string(),
                 "ego_volume" => {
-                    if let Ok(v) = value.parse::<u32>() {
-                        settings.ego_volume = v.min(100);
+                    if let Some(v) = parse_volume(value) {
+                        settings.ego_volume = v;
                     }
                 }
                 "saturation_hud_hue" => {
@@ -15222,6 +15375,11 @@ impl Settings {
             "module_keystrokes={}\nhud_keys_x={}\nhud_keys_y={}\nhud_keys_scale={}\nkeys_opacity={}\n",
             self.module_keystrokes, self.hud_keys_x, self.hud_keys_y, self.hud_keys_scale, self.keys_opacity
         ));
+        body.push_str(&format!("death_animation={}\n", self.death_animation));
+        body.push_str(&format!(
+            "module_session_info={}\nhud_session_x={}\nhud_session_y={}\nhud_session_scale={}\nsession_opacity={}\nsession_lines={}\n",
+            self.module_session_info, self.hud_session_x, self.hud_session_y, self.hud_session_scale, self.session_opacity, self.session_lines
+        ));
         body.push_str(&format!(
             "armor_trims={}\nhurt_cam={}\nhurt_cam_strength={}\nfire_mode={}\nfire_height={}\nfire_crosshair_hue={}\nfire_crosshair_saturation={}\nfire_crosshair_value={}\n",
             self.armor_trims,
@@ -15268,16 +15426,21 @@ impl Settings {
         ));
         let ego_farben: Vec<String> = self.ego_colors.iter().map(|c| format!("{}/{}/{}/{}", c[0], c[1], c[2], c[3])).collect();
         body.push_str(&format!(
-            "module_ego_name={}\nego_alias={}\nego_deco={}\nego_colors={}\nego_shadow={}\nego_speed={}\nego_sound={}\nego_volume={}\n",
+            "module_ego_name={}\nego_alias={}\nego_deco={}\nego_colors={}\nego_shadow={}\nego_light={}\nego_shadow_light={}\nego_speed={}\nego_sound={}\nego_volume={}\n",
             self.module_ego_name,
             self.ego_alias,
             self.ego_deco.key(),
             ego_farben.join(","),
-            self.ego_shadow,
+            self.ego_shadow.key(),
+            self.ego_light,
+            self.ego_shadow_light,
             self.ego_speed,
             self.ego_sound,
             self.ego_volume
         ));
+        for (k, v) in &self.addon_values {
+            body.push_str(&format!("addon:{k}={}\n", v.replace(['\n', '\r'], " ")));
+        }
         body.push_str(&format!("module_color={}\ncolor_saturation={}\n", self.module_color, self.color_saturation));
         body.push_str(&format!(
             "module_sustainability={}\nsustain_background={}\nsustain_pause={}\n",
@@ -15450,9 +15613,9 @@ impl Settings {
             chat_open_dim: 30,
             chat_fade_secs: 10,
             // Wie bisher fest verdrahtet: halb durchsichtig.
-            master_volume: 100,
-            category_volume: [100; VOLUME_CATEGORIES.len()],
-            ui_sound_volume: [100; ui_sound::UiSound::ALL.len()],
+            master_volume: 100.0,
+            category_volume: [100.0; VOLUME_CATEGORIES.len()],
+            ui_sound_volume: [100.0; ui_sound::UiSound::ALL.len()],
             inventory_transparency: 50,
             inventory_cursor_to_slot: true,
             shader_scattering_percent: 100,
@@ -15607,6 +15770,13 @@ impl Settings {
             hud_keys_y: 0.15,
             hud_keys_scale: 100,
             keys_opacity: 70,
+            module_session_info: false,
+            death_animation: DEATH_ANIM_VANILLA,
+            hud_session_x: 0.005,
+            hud_session_y: 0.3,
+            hud_session_scale: 100,
+            session_opacity: 70,
+            session_lines: session_info::LINE_KILLS | session_info::LINE_DEATHS | session_info::LINE_WINS,
             arrow_indicator: true,
             arrow_number_only: false,
             // Wie bisher: weiss (jetzt mit Kontur, damit sie auf hellem Grund lesbar bleibt).
@@ -15650,12 +15820,15 @@ impl Settings {
             module_ego_name: false,
             ego_alias: String::new(),
             ego_deco: ego_name::Deco::Flowing,
-            // Tuerkis nach Violett, Schatten fast schwarz.
-            ego_colors: [[175, 80, 100, 100], [280, 70, 100, 100], [260, 60, 20, 100]],
-            ego_shadow: false,
+            // Tuerkis nach Violett, Schatten fast schwarz nach dunklem Violett.
+            ego_colors: [[175, 80, 100, 100], [280, 70, 100, 100], [260, 60, 20, 100], [290, 70, 35, 100]],
+            ego_shadow: ego_name::Deco::Off,
+            ego_light: 0,
+            ego_shadow_light: 0,
             ego_speed: 5,
             ego_sound: "minecraft:block.note_block.pling".to_string(),
-            ego_volume: 100,
+            ego_volume: 100.0,
+            addon_values: std::collections::BTreeMap::new(),
             module_color: false,
             module_sustainability: false,
             sustain_background: true,
@@ -15996,6 +16169,8 @@ enum AuthEvent {
     // Ein Kopf-Profil ohne Skin-Daten wurde bei Mojang nachgeschlagen (s. note_head_profile):
     // Kopf-Schluessel und die gefundene Textur-Property, None wenn es keine gibt.
     HeadProfile { key: [u8; 16], textures: Option<String> },
+    // Das Nachschlagen ist gescheitert (Netz, Mojang-Limit): Kopf-Schluessel und Meldung.
+    HeadProfileFailed { key: [u8; 16], meldung: String },
     // Ein Umhang ist geladen: UUID und dekodierte 64x32-RGBA-Pixel.
     CapeLoaded { uuid: [u8; 16], url: String, rgba: Vec<u8> },
     // Server-Resourcepack geladen (Pfad im Cache) oder gescheitert (Status + Meldung).
@@ -16199,6 +16374,14 @@ enum ButtonAction {
     ToggleSettings,
     // Farbfeld angeklickt: Farbfenster fuer diese Farbe auf (s. ColorPopup).
     OpenColorPicker(ColorTarget),
+    // Aufklappliste einer Auswahl ohne eigene Durchschalt-Aktion (s. App::choice_of).
+    OpenChoice(Choice),
+    // Addon-Module (Index in ADDON_MODULES) und ihre Einstellungen (Index in der Anmeldung):
+    // Hauptschalter, Schalter, Regler (hoch?), Knopf.
+    ToggleAddonModule(u16),
+    AddonToggle(u16, u16),
+    AddonStep(u16, u16, bool),
+    AddonButton(u16, u16),
     // Theme: Preset uebernehmen (Index in theme::PRESETS), eigenes waehlen (Index in
     // custom_themes) oder ein neues anlegen ("+", oeffnet das Namensfenster).
     ApplyThemePreset(usize),
@@ -16341,8 +16524,6 @@ enum ButtonAction {
     ToggleCrosshairOutline,
     ToggleCrosshairRingOutline,
     // Form des Fadenkreuzes (s. CROSSHAIR_SHAPES, zuletzt "Eigene") und ihre Groesse.
-    CrosshairShapePrev,
-    CrosshairShapeNext,
     CrosshairSizePrev,
     CrosshairSizeNext,
     // Pixel-Editor fuers eigene Fadenkreuz (s. crosshair_editor).
@@ -16375,8 +16556,6 @@ enum ButtonAction {
     ToggleHotbarDurabilityMode,
     ChatScalePrev,
     ChatScaleNext,
-    AudioDevicePrev,
-    AudioDeviceNext,
     UiPitchDown,
     UiPitchUp,
     InventoryTransparencyPrev,
@@ -16504,6 +16683,13 @@ enum ButtonAction {
     // Deckkraft der nicht gedrueckten Keystrokes-Tasten.
     KeysOpacityPrev,
     KeysOpacityNext,
+    // Session-Info: Deckkraft der Tafel, eine Zeile an/aus (session_info::LINE_*), Zaehler auf 0.
+    SessionOpacity(bool),
+    ToggleSessionLine(u8),
+    ResetSession,
+    ToggleModuleSessionInfo,
+    // Video > Tod: Todesanimation weiterschalten (DEATH_ANIM_NAMES).
+    CycleDeathAnimation,
     // Ruestungs-HUD: Ausrichtung (armor_hud::LAYOUT_*) und Ruckrichtung (0 = oben/links,
     // 1 = unten/rechts) fuer die gerade gewaehlte Ausrichtung.
     ArmorHudLayout(u8),
@@ -16550,8 +16736,9 @@ enum ButtonAction {
     // Oeffnet das Namensfenster fuer den Alias.
     EditEgoAlias,
     CycleEgoDeco,
-    // Eigene Schattenfarbe an?
-    EgoShadow(bool),
+    CycleEgoShadow,
+    // Helligkeit des Regenbogens: (Schatten?, hoch?).
+    EgoLight(bool, bool),
     // hoch?
     EgoSpeed(bool),
     CycleEgoSound,
@@ -16653,6 +16840,7 @@ enum ModuleId {
     Arrows,
     ArmorHud,
     Keystrokes,
+    SessionInfo,
     DynamicFire,
     Zoom,
     VoiceChat,
@@ -16668,9 +16856,44 @@ enum ModuleId {
     Color,
     Sustainability,
     ChunkSaver,
+    // Modul eines Addons: Index in ADDON_MODULES.
+    Addon(u16),
 }
 
-const MODULE_IDS: [ModuleId; 34] = [
+// Was ModuleId und ModuleCategory ueber die Module der Addons wissen muessen, ohne an die App
+// zu kommen: Name und Beschreibung (einmal festgehalten, s. intern), Kategorie (Index in
+// ADDON_CATEGORIES), Schluessel in der Config und wo das Modul in App::addons steht.
+struct AddonModuleInfo {
+    label: &'static str,
+    description: &'static str,
+    category: u16,
+    key: String,
+    addon: usize,
+    module: usize,
+}
+
+static ADDON_MODULES: std::sync::RwLock<Vec<AddonModuleInfo>> = std::sync::RwLock::new(Vec::new());
+static ADDON_CATEGORIES: std::sync::RwLock<Vec<&'static str>> = std::sync::RwLock::new(Vec::new());
+
+// Text, der so lange lebt wie der Prozess. Jeder Text nur einmal -- meldet sich ein Addon neu
+// an, waechst nichts nach.
+fn intern(s: &str) -> &'static str {
+    static TEXTE: std::sync::Mutex<Option<std::collections::HashSet<&'static str>>> = std::sync::Mutex::new(None);
+    let mut texte = TEXTE.lock().unwrap_or_else(|e| e.into_inner());
+    let texte = texte.get_or_insert_with(Default::default);
+    if let Some(t) = texte.get(s) {
+        return t;
+    }
+    let t: &'static str = Box::leak(s.to_string().into_boxed_str());
+    texte.insert(t);
+    t
+}
+
+fn addon_module_info<T>(i: u16, f: impl FnOnce(&AddonModuleInfo) -> T) -> Option<T> {
+    ADDON_MODULES.read().ok()?.get(i as usize).map(f)
+}
+
+const MODULE_IDS: [ModuleId; 35] = [
     ModuleId::Totem,
     ModuleId::TotemWarning,
     ModuleId::TotemSlots,
@@ -16690,6 +16913,7 @@ const MODULE_IDS: [ModuleId; 34] = [
     ModuleId::Arrows,
     ModuleId::ArmorHud,
     ModuleId::Keystrokes,
+    ModuleId::SessionInfo,
     ModuleId::DynamicFire,
     ModuleId::Zoom,
     ModuleId::VoiceChat,
@@ -16710,6 +16934,7 @@ const MODULE_IDS: [ModuleId; 34] = [
 impl ModuleId {
     fn label(self) -> &'static str {
         match self {
+            ModuleId::Addon(i) => addon_module_info(i, |m| m.label).unwrap_or("Addon"),
             ModuleId::Totem => "Totem-Anzeige",
             ModuleId::TotemWarning => "Totem-Warnung",
             ModuleId::TotemSlots => "Totem-Vorschau",
@@ -16729,6 +16954,7 @@ impl ModuleId {
             ModuleId::Arrows => "Pfeile",
             ModuleId::ArmorHud => "Rüstung",
             ModuleId::Keystrokes => "Keystrokes",
+            ModuleId::SessionInfo => "Session-Info",
             ModuleId::DynamicFire => "Dynamisches Feuer",
             ModuleId::Zoom => "Zoom",
             ModuleId::VoiceChat => "Sprachchat",
@@ -16751,6 +16977,7 @@ impl ModuleId {
     // Unter-Einstellungen (die stehen nur rechts, im Detail des ausgewaehlten Moduls).
     fn enabled(self, settings: &Settings) -> bool {
         match self {
+            ModuleId::Addon(i) => addon_module_info(i, |m| settings.addon_values.get(&format!("{}/enabled", m.key)).is_some_and(|v| v == "true")).unwrap_or(false),
             ModuleId::Totem => settings.module_totem_indicator,
             ModuleId::TotemWarning => settings.toteming.warning,
             ModuleId::TotemSlots => settings.toteming.slots,
@@ -16770,6 +16997,7 @@ impl ModuleId {
             ModuleId::Arrows => settings.module_arrows,
             ModuleId::ArmorHud => settings.module_armor_hud,
             ModuleId::Keystrokes => settings.module_keystrokes,
+            ModuleId::SessionInfo => settings.module_session_info,
             ModuleId::DynamicFire => settings.module_dynamic_fire,
             ModuleId::Zoom => settings.module_zoom,
             ModuleId::VoiceChat => settings.module_voice_chat,
@@ -16790,6 +17018,7 @@ impl ModuleId {
 
     fn toggle_action(self) -> ButtonAction {
         match self {
+            ModuleId::Addon(i) => ButtonAction::ToggleAddonModule(i),
             ModuleId::Totem => ButtonAction::ToggleModuleTotem,
             ModuleId::TotemWarning => ButtonAction::Toteming(toteming::Action::ToggleWarning),
             ModuleId::TotemSlots => ButtonAction::Toteming(toteming::Action::ToggleSlots),
@@ -16809,6 +17038,7 @@ impl ModuleId {
             ModuleId::Arrows => ButtonAction::ToggleModuleArrows,
             ModuleId::ArmorHud => ButtonAction::ToggleModuleArmorHud,
             ModuleId::Keystrokes => ButtonAction::ToggleModuleKeystrokes,
+            ModuleId::SessionInfo => ButtonAction::ToggleModuleSessionInfo,
             ModuleId::DynamicFire => ButtonAction::ToggleModuleDynamicFire,
             ModuleId::Zoom => ButtonAction::ToggleModuleZoom,
             ModuleId::VoiceChat => ButtonAction::ToggleModuleVoiceChat,
@@ -16830,6 +17060,7 @@ impl ModuleId {
     // Einzeiler unter dem Modulnamen in der Detailspalte.
     fn description(self) -> &'static str {
         match self {
+            ModuleId::Addon(i) => addon_module_info(i, |m| m.description).unwrap_or(""),
             ModuleId::Totem => "Hotbar = gold/rechts, Zweithand = blau/links",
             ModuleId::TotemWarning => "X am Fadenkreuz, wenn ein Totem nicht an seinem Platz liegt",
             ModuleId::TotemSlots => "Zeigt schon vor dem Öffnen, wo im Inventar die Totems liegen",
@@ -16849,6 +17080,7 @@ impl ModuleId {
             ModuleId::Arrows => "Munitionsanzeige bei Bogen/Armbrust und weiße Flugbahnen hinter Pfeilen",
             ModuleId::ArmorHud => "Getragene Rüstung mit Haltbarkeit -- verschieben im HUD-Editor",
             ModuleId::Keystrokes => "Bewegungstasten, Springen und Maustasten -- verschieben im HUD-Editor",
+            ModuleId::SessionInfo => "Spielzeit seit dem Start, dazu Kills (aus der Todesmeldung im Chat), Tode und Siege -- verschieben im HUD-Editor",
             ModuleId::DynamicFire => "Mit Feuerresistenz blenden Feuerblöcke in einer Sekunde aus, danach wieder ein",
             ModuleId::Zoom => "Verengt das Sichtfeld, solange die Zoom-Taste (Steuerung) aktiv ist",
             ModuleId::VoiceChat => "Sprachchat wie Simple Voice Chat: Spieler in der Nähe hören, sprechen mit der Sprechtaste (Steuerung)",
@@ -16897,10 +17129,18 @@ enum ModuleCategory {
     Render,
     Utility,
     Debug,
+    // Die Kategorie eines Addons: Index in ADDON_CATEGORIES.
+    Addon(u16),
 }
 
 impl ModuleCategory {
     const ALL: [ModuleCategory; 4] = [ModuleCategory::CrystalPvp, ModuleCategory::Render, ModuleCategory::Utility, ModuleCategory::Debug];
+
+    // Die eingebauten Kategorien, danach je angemeldetem Addon eine.
+    fn all() -> Vec<ModuleCategory> {
+        let addons = ADDON_CATEGORIES.read().map_or(0, |c| c.len());
+        Self::ALL.into_iter().chain((0..addons as u16).map(ModuleCategory::Addon)).collect()
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -16908,11 +17148,16 @@ impl ModuleCategory {
             ModuleCategory::Render => "Render",
             ModuleCategory::Utility => "Utility",
             ModuleCategory::Debug => "Debug",
+            ModuleCategory::Addon(i) => ADDON_CATEGORIES.read().ok().and_then(|c| c.get(i as usize).copied()).unwrap_or("Addon"),
         }
     }
 
-    // Die Module dieser Kategorie, in der Reihenfolge von MODULE_IDS.
+    // Die Module dieser Kategorie, in der Reihenfolge von MODULE_IDS bzw. der Anmeldung.
     fn modules(self) -> Vec<ModuleId> {
+        if let ModuleCategory::Addon(k) = self {
+            let module = ADDON_MODULES.read().map(|m| m.iter().enumerate().filter(|(_, m)| m.category == k).map(|(i, _)| ModuleId::Addon(i as u16)).collect());
+            return module.unwrap_or_default();
+        }
         MODULE_IDS.iter().copied().filter(|id| id.category() == self).collect()
     }
 }
@@ -16920,6 +17165,7 @@ impl ModuleCategory {
 impl ModuleId {
     fn category(self) -> ModuleCategory {
         match self {
+            ModuleId::Addon(i) => ModuleCategory::Addon(addon_module_info(i, |m| m.category).unwrap_or(0)),
             ModuleId::Totem
             | ModuleId::TotemWarning
             | ModuleId::TotemSlots
@@ -16935,6 +17181,7 @@ impl ModuleId {
             | ModuleId::Arrows
             | ModuleId::ArmorHud
             | ModuleId::Keystrokes
+            | ModuleId::SessionInfo
             | ModuleId::DynamicFire
             | ModuleId::BlockOutline
             | ModuleId::SaturationHud
@@ -17543,6 +17790,12 @@ struct App {
     input_log: input_log::InputLog,
     // Debug-Modul "Autoklicker" (s. tick_autoclicker).
     autoclick: Autoclick,
+    // Modul Session-Info: zaehlt immer, auch ausgeschaltet (s. session_info.rs).
+    session: session_info::Session,
+    // Todesanimation (Video > Tod): Ticks seit dem Tod je sterbendem Lebewesen (Vanillas
+    // deathTime, bis der Server es entfernt) und die fliegenden Teile der Explosion.
+    dying: std::collections::HashMap<i32, u32>,
+    death_bursts: Vec<death_burst::Burst>,
     // Hintergrundbild des Startbildschirms: Laden im Hintergrund (s. wallpaper.rs) und wann
     // zuletzt nachgesehen wurde, ob sich der Desktop-Hintergrund geaendert hat.
     wallpaper_loader: wallpaper::Loader,
@@ -18054,6 +18307,13 @@ struct App {
     persist_paused: bool,
     // Offenes Farbfenster (s. ColorPopup).
     color_popup: Option<ColorPopup>,
+    // Offene Aufklappliste (s. Choice), liegt wie das Farbfenster ueber allem.
+    dropdown: Option<Dropdown>,
+    // Die laufenden Addons (s. addons.rs); None bis zum ersten Durchlauf der Ereignisschleife.
+    addons: Option<addons::Addons>,
+    // Letztes Tick-Ereignis an die Addons und letzte Chatzeile eines Addons (gedrosselt).
+    addon_tick_at: Instant,
+    addon_chat_at: Option<Instant>,
     // Wann der Erwaehnungston (Modul Eigenname) zuletzt klang.
     ego_sound_at: Option<Instant>,
     // Seiten-Scroll der uebrigen Einstellungsseiten (s. MenuScreen::settings_page), je
@@ -18343,7 +18603,7 @@ struct App {
     own_pop_plan: std::sync::Arc<std::sync::Mutex<toteming::OwnPopPlan>>,
     // Woraus own_pop_plan zuletzt gebaut wurde -- neu gebaut wird nur, wenn sich davon etwas
     // aendert (s. publish_own_pop_plan). None = beim naechsten Tick neu bauen.
-    own_pop_plan_key: Option<(toteming::TotemingSettings, u32, [u32; VOLUME_CATEGORIES.len()], bool, bool, bool)>,
+    own_pop_plan_key: Option<(toteming::TotemingSettings, f32, [f32; VOLUME_CATEGORIES.len()], bool, bool, bool)>,
     // Eigene Klangdateien fuer die Pop-Klaenge (~/.config/coral-client/sounds/).
     custom_pop_sounds: toteming::CustomSounds,
     // Pops je Name in dieser Verbindung (TotemPopTracker der Mod) -- fuers Log.
@@ -19307,6 +19567,9 @@ impl App {
             input_watcher,
             input_log,
             autoclick: Autoclick::default(),
+            session: session_info::Session::new(Instant::now()),
+            dying: std::collections::HashMap::new(),
+            death_bursts: Vec::new(),
             wallpaper_loader: wallpaper::Loader::default(),
             wallpaper_checked_at: Instant::now(),
             last_view_requested: false,
@@ -19535,6 +19798,10 @@ impl App {
             step_drag: None,
             persist_paused: false,
             color_popup: None,
+            dropdown: None,
+            addons: None,
+            addon_tick_at: Instant::now(),
+            addon_chat_at: None,
             ego_sound_at: None,
             page_scrolls: std::collections::BTreeMap::new(),
             section_click: None,
@@ -20511,6 +20778,10 @@ impl App {
         if self.keybind_advanced.take().is_some() {
             self.play_ui_sound(ui_sound::UiSound::Close);
             self.awaiting_keybind = None;
+            return;
+        }
+        if self.dropdown.take().is_some() {
+            self.play_ui_sound(ui_sound::UiSound::Close);
             return;
         }
         // Offenes Farbfenster oder Benachrichtigungsliste: Escape schliesst nur sie.
@@ -22321,6 +22592,8 @@ impl App {
                     }
                 }
                 net::ClientEvent::Connected => {
+                    let server = self.server_address.clone();
+                    self.addons_event("join", serde_json::json!({ "server": server }));
                     self.conn_status = ConnStatus::Connected;
                     // Mit dem Spiel beginnt ein neuer Bildschirm: Fenster aus der
                     // Konfiguration sind vorbei.
@@ -22385,6 +22658,7 @@ impl App {
                     }
                 }
                 net::ClientEvent::Disconnected(reason) => {
+                    self.addons_event("leave", serde_json::json!({ "reason": reason }));
                     self.keep_last_view();
                     self.conn_status = ConnStatus::Disconnected;
                     // Der Task hat sich selbst beendet; der Handle ist nur noch Altlast.
@@ -23017,6 +23291,10 @@ impl App {
                     if mode != self.game_mode {
                         self.previous_game_mode = Some(self.game_mode);
                     }
+                    // Session-Info: Minispiele machen Tote zu Zuschauern.
+                    if mode == GAME_MODE_SPECTATOR && matches!(self.game_mode, GAME_MODE_SURVIVAL | GAME_MODE_ADVENTURE) {
+                        self.session.became_spectator(Instant::now());
+                    }
                     self.game_mode = mode;
                     self.spectator_flight = None;
                     // GameType.updatePlayerAbilities: der Client stellt die Faehigkeiten des neuen
@@ -23135,6 +23413,10 @@ impl App {
                     }
                     if status == ENTITY_STATUS_KINETIC_HIT {
                         self.kinetic_hit_sound(entity_id);
+                    }
+                    if status == ENTITY_STATUS_DIED {
+                        self.session_death(entity_id);
+                        self.entity_died(entity_id);
                     }
                     if matches!(status, 47..=52 | 65) {
                         self.item_broken(entity_id, status);
@@ -23531,6 +23813,11 @@ impl App {
                     self.restore_held_controls();
                 }
                 net::ClientEvent::Chat(spans, overlay) => {
+                    if !overlay {
+                        let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+                        self.session_text(&text, false);
+                        self.addons_event("chat", serde_json::json!({ "text": text }));
+                    }
                     let spans = self.ego_incoming(spans, !overlay);
                     // overlay=true ist Actionbar (ueber der Hotbar), nicht die Chat-Liste.
                     if overlay {
@@ -23542,17 +23829,23 @@ impl App {
                         self.push_chat_message(spans);
                     }
                 }
+                net::ClientEvent::DeathMessage { victim, killer } => {
+                    let name = self.own_name().map(str::to_string);
+                    self.session.death_message(&victim, killer.as_deref(), name.as_deref(), Instant::now());
+                }
                 net::ClientEvent::ActionBar(spans) => {
                     let spans = self.ego_incoming(spans, false);
                     self.action_bar = Some((spans, Instant::now()));
                 }
                 net::ClientEvent::Title(text) => {
+                    self.session_text(&text.iter().map(|s| s.text.as_str()).collect::<String>(), true);
                     let text = self.ego_incoming(text, false);
                     self.title_debug("Titel", &text);
                     self.title_text = if text.iter().all(|s| s.text.is_empty()) { None } else { Some(text) };
                     self.title_set_at = Instant::now();
                 }
                 net::ClientEvent::Subtitle(text) => {
+                    self.session_text(&text.iter().map(|s| s.text.as_str()).collect::<String>(), true);
                     let text = self.ego_incoming(text, false);
                     self.title_debug("Untertitel", &text);
                     self.subtitle_text = if text.iter().all(|s| s.text.is_empty()) { None } else { Some(text) };
@@ -23773,6 +24066,7 @@ impl App {
                         self.own_hurt_ticks = world::MAX_HURT_TIME;
                         self.hurt_cam_side = -self.hurt_cam_side;
                         self.own_ticks_since_hurt = 0;
+                        self.session.hurt(Instant::now());
                         self.own_hurt_by_crit = self.own_crit_grace > 0;
                     }
                     self.own_health_initialized = true;
@@ -23781,6 +24075,7 @@ impl App {
                     if dead && !self.is_dead {
                         // Gerade gestorben: Gestorben-Screen erzwingen (egal, wo man war).
                         self.is_dead = true;
+                        self.session.own_died(Instant::now());
                         self.mode = AppMode::Menu;
                         self.screen = MenuScreen::Death;
                         self.clear_controls();
@@ -24699,6 +24994,15 @@ impl App {
                         self.request_account_heads();
                     }
                 }
+                // Bei einem Konto die Sperre loesen: sonst bliebe sein Kopf bis zum Neustart der
+                // Standard-Skin. request_account_heads (beim Oeffnen der Liste) fragt erneut.
+                // Fremde Koepfe bleiben gesperrt -- die fragen jedes Bild, das gaebe eine Flut.
+                AuthEvent::HeadProfileFailed { key, meldung } => {
+                    self.push_log(meldung);
+                    if self.accounts.list.iter().any(|a| uuid_bytes_from_hex(&a.uuid) == Some(key)) {
+                        self.head_lookups.remove(&key);
+                    }
+                }
                 AuthEvent::CapeLoaded { uuid, url, rgba } => self.apply_loaded_cape(uuid, url, rgba),
                 AuthEvent::ServerPackDownloaded { id, result } => self.server_pack_downloaded(id, result),
                 AuthEvent::SkinFailed { url, permanent, meldung } => self.note_skin_failure(url, permanent, meldung),
@@ -25615,6 +25919,12 @@ impl App {
                     100.0,
                     set.hurt_cam,
                 ));
+                out.push(Self::nav_button(
+                    ButtonAction::CycleDeathAnimation,
+                    Rect { x: SETTINGS_CTRL_X, y: settings_row_y(DEATH_ANIM_ROW), w: 220.0, h: SETTINGS_CTRL_H },
+                    DEATH_ANIM_NAMES[set.death_animation as usize],
+                    UI_SCALE_SMALL,
+                ));
                 let modi: Vec<_> = FIRE_MODE_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::FireMode(i as u8), set.fire_mode == i as u8)).collect();
                 out.extend(pick_buttons(settings_wide_rect(FIRE_MODE_ROW), &modi, true));
                 if set.fire_mode == FIRE_MODE_CROSSHAIR {
@@ -25819,15 +26129,8 @@ impl App {
             }
             MenuScreen::SettingsAudio => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
-                let device_index = self.audio_device_index();
-                let device_count = self.audio_device_options().len();
-                out.extend(Self::stepper(
-                    ButtonAction::AudioDevicePrev,
-                    ButtonAction::AudioDeviceNext,
-                    AUDIO_DEVICE_ROW,
-                    device_index > 0,
-                    device_index + 1 < device_count,
-                ));
+                let geraet = self.audio_device_options().get(self.audio_device_index()).cloned().unwrap_or_else(|| "?".to_string());
+                out.push(Self::nav_button(ButtonAction::OpenChoice(Choice::AudioDevice), settings_wide_rect(AUDIO_DEVICE_ROW), &geraet, UI_SCALE_SMALL));
                 out.push(Self::nav_button(ButtonAction::AudioTestTone, stepper_value_rect(AUDIO_TEST_TONE_ROW), "Testton abspielen", UI_SCALE_SMALL));
                 // Ohne Grenze -- beide Pfeile bleiben immer anklickbar, s. Kommentar an
                 // Settings::ui_pitch_semitones.
@@ -25839,14 +26142,14 @@ impl App {
                     ButtonAction::MasterVolumeDown,
                     ButtonAction::MasterVolumeUp,
                     AUDIO_MASTER_ROW,
-                    self.settings.master_volume > 0,
-                    self.settings.master_volume < 100,
+                    self.settings.master_volume > 0.0,
+                    self.settings.master_volume < 100.0,
                 ));
                 for (i, &v) in self.settings.category_volume.iter().enumerate() {
-                    out.extend(Self::stepper(ButtonAction::CategoryVolumeDown(i), ButtonAction::CategoryVolumeUp(i), AUDIO_CATEGORY_FIRST_ROW + i, v > 0, v < 100));
+                    out.extend(Self::stepper(ButtonAction::CategoryVolumeDown(i), ButtonAction::CategoryVolumeUp(i), AUDIO_CATEGORY_FIRST_ROW + i, v > 0.0, v < 100.0));
                 }
                 for (i, &v) in self.settings.ui_sound_volume.iter().enumerate() {
-                    out.extend(Self::stepper(ButtonAction::UiSoundVolumeDown(i), ButtonAction::UiSoundVolumeUp(i), AUDIO_UI_SOUND_FIRST_ROW + i, v > 0, v < 100));
+                    out.extend(Self::stepper(ButtonAction::UiSoundVolumeDown(i), ButtonAction::UiSoundVolumeUp(i), AUDIO_UI_SOUND_FIRST_ROW + i, v > 0.0, v < 100.0));
                 }
                 out.push(Button {
                     action: ButtonAction::AudioSpatialTest,
@@ -26100,7 +26403,7 @@ impl App {
                                 // eigenen Form stattdessen der Pixel-Editor.
                                 let zeile = crosshair_shape_row(mode);
                                 let wahl = self.settings.crosshair_shape_choice();
-                                out.extend(Self::stepper(ButtonAction::CrosshairShapePrev, ButtonAction::CrosshairShapeNext, zeile, wahl > 0, wahl < CROSSHAIR_SHAPE_CUSTOM));
+                                out.push(Self::nav_button(ButtonAction::OpenChoice(Choice::CrosshairShape), settings_wide_rect(zeile), crosshair_shape_label(wahl), UI_SCALE_SMALL));
                                 if self.settings.crosshair_custom {
                                     out.push(Self::nav_button(ButtonAction::OpenCrosshairPainter, settings_wide_rect(zeile + 1), "Pixel bearbeiten", UI_SCALE_SMALL));
                                 } else {
@@ -26253,6 +26556,27 @@ impl App {
                                     ButtonAction::KeysOpacityNext,
                                     stepper_value_rect(1),
                                     set.keys_opacity as f64,
+                                    0.0,
+                                    100.0,
+                                    true,
+                                ));
+                            }
+                            HudElement::Session => {
+                                let set = &self.settings;
+                                out.push(Self::step_slider(
+                                    ButtonAction::HudScaleStep(element, false),
+                                    ButtonAction::HudScaleStep(element, true),
+                                    stepper_value_rect(0),
+                                    set.hud_session_scale as f64,
+                                    HUD_SCALE_PCT_MIN as f64,
+                                    HUD_SCALE_PCT_MAX as f64,
+                                    true,
+                                ));
+                                out.push(Self::step_slider(
+                                    ButtonAction::SessionOpacity(false),
+                                    ButtonAction::SessionOpacity(true),
+                                    stepper_value_rect(1),
+                                    set.session_opacity as f64,
                                     0.0,
                                     100.0,
                                     true,
@@ -26631,6 +26955,7 @@ impl App {
             HudElement::HeldName => self.hud_held_name_rect(gpu),
             HudElement::Armor => self.hud_armor_rect(gpu),
             HudElement::Keystrokes => self.hud_keys_rect(gpu),
+            HudElement::Session => self.hud_session_rect(gpu),
         }
     }
 
@@ -26645,6 +26970,7 @@ impl App {
             HudElement::Arrows => set.module_arrows && set.arrow_indicator,
             HudElement::Armor => set.module_armor_hud,
             HudElement::Keystrokes => set.module_keystrokes,
+            HudElement::Session => set.module_session_info,
             _ => true,
         }
     }
@@ -26667,6 +26993,8 @@ impl App {
             Some(HudElement::Armor)
         } else if self.hud_element_shown(HudElement::Keystrokes) && hits(self.hud_keys_rect(gpu)) {
             Some(HudElement::Keystrokes)
+        } else if self.hud_element_shown(HudElement::Session) && hits(self.hud_session_rect(gpu)) {
+            Some(HudElement::Session)
         } else if self.hud_element_shown(HudElement::Perf) && hits(self.hud_perf_rect(gpu)) {
             Some(HudElement::Perf)
         } else if hits(self.hud_scoreboard_rect(gpu)) {
@@ -26806,6 +27134,12 @@ impl App {
                 self.settings.hud_keys_scale = defaults.hud_keys_scale;
                 self.settings.keys_opacity = defaults.keys_opacity;
             }
+            HudElement::Session => {
+                self.settings.hud_session_x = defaults.hud_session_x;
+                self.settings.hud_session_y = defaults.hud_session_y;
+                self.settings.hud_session_scale = defaults.hud_session_scale;
+                self.settings.session_opacity = defaults.session_opacity;
+            }
             HudElement::Armor => {
                 self.settings.hud_armor_x = defaults.hud_armor_x;
                 self.settings.hud_armor_y = defaults.hud_armor_y;
@@ -26922,6 +27256,10 @@ impl App {
                 self.settings.hud_keys_x = ((cx - ox) / sw).clamp(0.0, 1.0);
                 self.settings.hud_keys_y = ((cy - oy) / sh).clamp(0.0, 1.0);
             }
+            HudElement::Session => {
+                self.settings.hud_session_x = ((cx - ox) / sw).clamp(0.0, 1.0);
+                self.settings.hud_session_y = ((cy - oy) / sh).clamp(0.0, 1.0);
+            }
             HudElement::Armor => {
                 self.settings.hud_armor_x = ((cx - ox) / sw).clamp(0.0, 1.0);
                 self.settings.hud_armor_y = ((cy - oy) / sh).clamp(0.0, 1.0);
@@ -26966,6 +27304,12 @@ impl App {
                 return;
             };
             if action == ButtonAction::Nothing {
+                return;
+            }
+            // Auswahl ab drei Werten: Liste aufklappen statt weiterschalten.
+            if let Some(c) = Self::choice_of(action) {
+                let r = buttons.iter().find(|b| b.enabled && b.hits(qx, qy)).map_or(Rect { x: qx, y: qy, w: 0.0, h: 0.0 }, |b| b.rect);
+                self.toggle_dropdown(c, Rect { x: r.x + dx, y: r.y + dy, ..r });
                 return;
             }
             // Schieberegler: Klick setzt den Wert unter den Zeiger, Ziehen fuehrt weiter (wie
@@ -27016,6 +27360,11 @@ impl App {
             }
             let anker = treffer.as_ref().map_or(Rect { x: px, y: py, w: 0.0, h: 0.0 }, |b| b.rect);
             self.open_color_popup(t, anker);
+            return;
+        }
+        // Auswahl ab drei Werten: Liste unter dem Knopf aufklappen statt weiterschalten.
+        if let Some((c, anker)) = treffer.as_ref().and_then(|b| Self::choice_of(b.action).map(|c| (c, b.rect))) {
+            self.toggle_dropdown(c, anker);
             return;
         }
         let hit = treffer.map(|b| b.action);
@@ -27134,26 +27483,20 @@ impl App {
                 | ButtonAction::CloseModuleMenu
         );
 
-        // Vor dem &mut self.settings-Borrow unten berechnet (audio_device_options/-index
-        // brauchen &self.settings lesend, das ginge sonst nicht mehr disjunkt).
-        let audio_device_target: Option<String> = match action {
-            ButtonAction::AudioDevicePrev | ButtonAction::AudioDeviceNext => {
-                let options = self.audio_device_options();
-                let index = self.audio_device_index();
-                let target =
-                    if action == ButtonAction::AudioDevicePrev { index.saturating_sub(1) } else { (index + 1).min(options.len() - 1) };
-                Some(if target == 0 { String::new() } else { options[target].clone() })
-            }
-            _ => None,
-        };
         let set = &mut self.settings;
         match action {
             ButtonAction::Nothing => {}
+            // Klappt nur die Liste auf (s. toggle_dropdown), aendert selbst nichts.
+            ButtonAction::OpenChoice(_) => {}
             // Die Modul-Aktionen koennen hier nicht auftreten: das Modul-Menue ist ein
             // In-Welt-Overlay, seine Knoepfe stehen nicht in buttons() und laufen ueber
             // apply_module_action (s. handle_click). Der Arm ist nur da, damit das match
             // vollstaendig bleibt und ein neues Overlay-Element nicht still hier landet.
             ButtonAction::ToggleModuleTotem
+            | ButtonAction::ToggleAddonModule(_)
+            | ButtonAction::AddonToggle(..)
+            | ButtonAction::AddonStep(..)
+            | ButtonAction::AddonButton(..)
             | ButtonAction::ToggleModuleTotemSound
             | ButtonAction::Toteming(_)
             | ButtonAction::SelectModule(_)
@@ -27203,7 +27546,8 @@ impl App {
             | ButtonAction::ToggleModuleEgoName
             | ButtonAction::EditEgoAlias
             | ButtonAction::CycleEgoDeco
-            | ButtonAction::EgoShadow(_)
+            | ButtonAction::CycleEgoShadow
+            | ButtonAction::EgoLight(..)
             | ButtonAction::EgoSpeed(_)
             | ButtonAction::CycleEgoSound
             | ButtonAction::EgoVolume(_)
@@ -27240,6 +27584,9 @@ impl App {
             | ButtonAction::TeamDensity(..)
             | ButtonAction::TeamDotted(_)
             | ButtonAction::ToggleModuleKeystrokes
+            | ButtonAction::ToggleModuleSessionInfo
+            | ButtonAction::ToggleSessionLine(_)
+            | ButtonAction::ResetSession
             | ButtonAction::ToggleArrowIndicator
             | ButtonAction::ToggleArrowWhite
             | ButtonAction::ToggleArrowTrail
@@ -27487,6 +27834,7 @@ impl App {
                 set.tear_reserve_us = (set.tear_reserve_us + delta).clamp(TEAR_RESERVE_MIN_US, TEAR_RESERVE_MAX_US);
             }
             ButtonAction::CycleParticles => set.particles_mode = (set.particles_mode + 1) % PARTICLE_MODE_NAMES.len() as u8,
+            ButtonAction::CycleDeathAnimation => set.death_animation = (set.death_animation + 1) % DEATH_ANIM_NAMES.len() as u8,
             ButtonAction::ToggleStableNumbers => {
                 set.stable_numbers = !set.stable_numbers;
                 if let Some(gpu) = self.gpu.as_ref() {
@@ -27547,12 +27895,12 @@ impl App {
             }
             // In 5er-Schritten -- feiner braucht es niemand, gezielt tippen geht ueber das
             // Wertfeld (s. EditableValue::InventoryTransparency).
-            ButtonAction::MasterVolumeDown => set.master_volume = set.master_volume.saturating_sub(5),
-            ButtonAction::MasterVolumeUp => set.master_volume = (set.master_volume + 5).min(100),
-            ButtonAction::CategoryVolumeDown(i) => set.category_volume[i] = set.category_volume[i].saturating_sub(5),
-            ButtonAction::CategoryVolumeUp(i) => set.category_volume[i] = (set.category_volume[i] + 5).min(100),
-            ButtonAction::UiSoundVolumeDown(i) => set.ui_sound_volume[i] = set.ui_sound_volume[i].saturating_sub(5),
-            ButtonAction::UiSoundVolumeUp(i) => set.ui_sound_volume[i] = (set.ui_sound_volume[i] + 5).min(100),
+            ButtonAction::MasterVolumeDown => set.master_volume = (set.master_volume - 5.0).max(0.0),
+            ButtonAction::MasterVolumeUp => set.master_volume = (set.master_volume + 5.0).min(100.0),
+            ButtonAction::CategoryVolumeDown(i) => set.category_volume[i] = (set.category_volume[i] - 5.0).max(0.0),
+            ButtonAction::CategoryVolumeUp(i) => set.category_volume[i] = (set.category_volume[i] + 5.0).min(100.0),
+            ButtonAction::UiSoundVolumeDown(i) => set.ui_sound_volume[i] = (set.ui_sound_volume[i] - 5.0).max(0.0),
+            ButtonAction::UiSoundVolumeUp(i) => set.ui_sound_volume[i] = (set.ui_sound_volume[i] + 5.0).min(100.0),
             ButtonAction::InventoryTransparencyPrev => set.inventory_transparency = set.inventory_transparency.saturating_sub(5),
             ButtonAction::InventoryTransparencyNext => set.inventory_transparency = (set.inventory_transparency + 5).min(100),
             ButtonAction::GlintSpeedPrev => set.glint_speed = set.glint_speed.saturating_sub(5),
@@ -27651,8 +27999,6 @@ impl App {
             ButtonAction::ChatFadeNext => set.chat_fade_secs = chat_fade_step(set.chat_fade_secs, 1),
             ButtonAction::ToggleCrosshairOutline => set.crosshair_outline = !set.crosshair_outline,
             ButtonAction::ToggleCrosshairRingOutline => set.crosshair_ring_outline = !set.crosshair_ring_outline,
-            ButtonAction::CrosshairShapePrev => set.step_crosshair_shape(-1),
-            ButtonAction::CrosshairShapeNext => set.step_crosshair_shape(1),
             ButtonAction::CrosshairSizePrev => set.step_crosshair_size(-1),
             ButtonAction::CrosshairSizeNext => set.step_crosshair_size(1),
             ButtonAction::OpenCrosshairPainter => {
@@ -27706,18 +28052,6 @@ impl App {
             ButtonAction::CrosshairColorPrev => set.crosshair_color_mode = set.crosshair_color_mode.saturating_sub(1),
             ButtonAction::CrosshairColorNext => {
                 set.crosshair_color_mode = (set.crosshair_color_mode + 1).min(CROSSHAIR_COLOR_MODES.len() - 1)
-            }
-            // Geraetename leer = System-Standard, s. audio_device_target oben. Nur bei
-            // Erfolg uebernehmen -- schlaegt das Umschalten fehl, bleibt das alte Geraet
-            // aktiv statt eine Einstellung zu speichern, die nicht wirkt.
-            ButtonAction::AudioDevicePrev | ButtonAction::AudioDeviceNext => {
-                if let Some(name) = audio_device_target {
-                    let opt = if name.is_empty() { None } else { Some(name.as_str()) };
-                    match self.audio.set_output_device(opt) {
-                        Ok(()) => set.audio_output_device = name,
-                        Err(e) => self.push_log(format!("Ausgabegerät konnte nicht gesetzt werden: {e}")),
-                    }
-                }
             }
             ButtonAction::AudioTestTone => self.audio.play_test_tone(),
             ButtonAction::AudioSpatialTest => {
@@ -27790,6 +28124,10 @@ impl App {
             ButtonAction::FireHeightNext => self.settings.fire_height = (self.settings.fire_height + 5).min(100),
             ButtonAction::KeysOpacityPrev => self.settings.keys_opacity = self.settings.keys_opacity.saturating_sub(10),
             ButtonAction::KeysOpacityNext => self.settings.keys_opacity = (self.settings.keys_opacity + 10).min(100),
+            ButtonAction::SessionOpacity(mehr) => {
+                let o = &mut self.settings.session_opacity;
+                *o = if mehr { (*o + 10).min(100) } else { o.saturating_sub(10) };
+            }
             ButtonAction::ArmorHudSort(r) => {
                 if armor_hud::is_vertical(self.settings.armor_hud_layout) {
                     self.settings.armor_hud_sort_vertical = r;
@@ -27818,6 +28156,7 @@ impl App {
                     HudElement::HeldName => &mut self.settings.hud_held_name_scale,
                     HudElement::Armor => &mut self.settings.hud_armor_scale,
                     HudElement::Keystrokes => &mut self.settings.hud_keys_scale,
+                    HudElement::Session => &mut self.settings.hud_session_scale,
                     _ => return,
                 };
                 *wert = if groesser { *wert + HUD_SCALE_PCT_STEP } else { wert.saturating_sub(HUD_SCALE_PCT_STEP) }
@@ -28204,18 +28543,18 @@ impl App {
                 }
             }
             EditableValue::MasterVolume => {
-                if let Ok(v) = buf.parse::<u32>() {
-                    self.settings.master_volume = v.min(100);
+                if let Some(v) = parse_volume(buf) {
+                    self.settings.master_volume = v.min(100.0);
                 }
             }
             EditableValue::CategoryVolume(i) => {
-                if let (Ok(v), Some(feld)) = (buf.parse::<u32>(), self.settings.category_volume.get_mut(i)) {
-                    *feld = v.min(100);
+                if let (Some(v), Some(feld)) = (parse_volume(buf), self.settings.category_volume.get_mut(i)) {
+                    *feld = v.min(100.0);
                 }
             }
             EditableValue::UiSoundVolume(i) => {
-                if let (Ok(v), Some(feld)) = (buf.parse::<u32>(), self.settings.ui_sound_volume.get_mut(i)) {
-                    *feld = v.min(100);
+                if let (Some(v), Some(feld)) = (parse_volume(buf), self.settings.ui_sound_volume.get_mut(i)) {
+                    *feld = v.min(100.0);
                 }
             }
             EditableValue::ShadowThickness(i) => {
@@ -28257,8 +28596,8 @@ impl App {
             EditableValue::CalcMinecraftSens => s.sens_calc_mc_percent as f64,
             EditableValue::CalcDpi => s.sens_calc_dpi as f64,
             EditableValue::MasterVolume => s.master_volume as f64,
-            EditableValue::CategoryVolume(i) => s.category_volume.get(i).copied().unwrap_or(0) as f64,
-            EditableValue::UiSoundVolume(i) => s.ui_sound_volume.get(i).copied().unwrap_or(0) as f64,
+            EditableValue::CategoryVolume(i) => s.category_volume.get(i).copied().unwrap_or(0.0) as f64,
+            EditableValue::UiSoundVolume(i) => s.ui_sound_volume.get(i).copied().unwrap_or(0.0) as f64,
             EditableValue::ShadowThickness(i) => s.shadow_thickness.get(i).copied().unwrap_or(SHADOW_THICKNESS_DEFAULT) as f64 / 10.0,
             EditableValue::ShadowOpacity(i) => s.shadow_opacity.get(i).copied().unwrap_or(100) as f64,
         }
@@ -28410,6 +28749,10 @@ impl App {
         let Some(sl) = self.step_slider_of(prev) else { return };
         let uhr = self.step_slider_text(&sl).as_deref().and_then(slider_number).is_some_and(|(_, u)| u);
         let ziel = if uhr { clock_from_day_start(getippt) } else { getippt };
+        if self.set_step_value(prev, ziel) {
+            self.persist_settings();
+            return;
+        }
         let Some((mut wert, mut zahl)) = self.step_slider_reading(prev, uhr) else { return };
         self.persist_paused = true;
         for _ in 0..2000 {
@@ -28440,6 +28783,24 @@ impl App {
         }
         self.persist_paused = false;
         self.persist_settings();
+    }
+
+    // Regler, deren getippte Zahl genau so uebernommen wird statt ueber die Pfeilschritte
+    // angefahren -- dort sind Werte zwischen den Schritten (Nachkommastellen) erlaubt.
+    fn set_step_value(&mut self, prev: ButtonAction, v: f64) -> bool {
+        match prev {
+            ButtonAction::EgoVolume(false) => self.settings.ego_volume = ((v.max(0.0) * 100.0).round() / 100.0) as f32,
+            ButtonAction::AddonStep(m, k, false) => {
+                let Some(addons::SettingKind::Slider { min, max, .. }) = self.addon_setting(m, k).map(|d| d.kind) else { return false };
+                self.set_addon_value(m, k, addon_number_text(v.clamp(min, max)).replace(',', "."));
+            }
+            ButtonAction::EgoLight(schatten, false) => {
+                let feld = if schatten { &mut self.settings.ego_shadow_light } else { &mut self.settings.ego_light };
+                *feld = v.round().clamp(0.0, 100.0) as u32;
+            }
+            _ => return false,
+        }
+        true
     }
 
     // Laufende Freitext-Eingabe in einem Wertfeld: der Puffer linksbuendig mit blinkendem
@@ -28494,6 +28855,7 @@ impl App {
             | ColorTarget::FireCrosshair
             | ColorTarget::SaturationHud => 3,
             ColorTarget::EgoName(i) => if i == 2 { 4 } else { 3 },
+            ColorTarget::Addon(..) => 3,
             ColorTarget::Shield(farbe) => ShieldColor::axes(self.settings.shield_mark(farbe)).len(),
             ColorTarget::BlockOutline | ColorTarget::DamageTint | ColorTarget::Crit | ColorTarget::HitboxKind(_) => 4,
         }
@@ -28516,7 +28878,9 @@ impl App {
             ColorTarget::FireCrosshair => "Kreuz beim Brennen".to_string(),
             ColorTarget::SaturationHud => "Sättigung".to_string(),
             ColorTarget::EgoName(2) => "Namensschatten".to_string(),
+            ColorTarget::EgoName(3) => "Namensschatten 2".to_string(),
             ColorTarget::EgoName(i) => format!("Namensfarbe {}", i + 1),
+            ColorTarget::Addon(m, _) => ModuleId::Addon(m).label().to_string(),
         }
     }
 
@@ -28547,6 +28911,10 @@ impl App {
             ColorTarget::FireCrosshair => [s.fire_crosshair_hue as f32, s.fire_crosshair_saturation as f32, s.fire_crosshair_value as f32, 100.0],
             ColorTarget::SaturationHud => [s.saturation_hud_hue as f32, s.saturation_hud_saturation as f32, s.saturation_hud_value as f32, 100.0],
             ColorTarget::EgoName(i) => s.ego_colors[i as usize].map(|v| v as f32),
+            ColorTarget::Addon(m, k) => {
+                let (h, sa, v) = theme::to_hsv(addons::parse_color(&self.addon_value(m, k)).unwrap_or(0xFF_FFFF));
+                [h, sa * 100.0, v * 100.0, 100.0]
+            }
             ColorTarget::Sky => [
                 s.sky_color_of(SkyColorAxis::Hue) as f32,
                 s.sky_color_of(SkyColorAxis::Saturation) as f32,
@@ -28567,10 +28935,18 @@ impl App {
     }
 
     fn set_color_hsva(&mut self, t: ColorTarget, c: [f32; 4]) {
+        if let ColorTarget::Addon(m, k) = t {
+            let [r, g, b] = hsv_to_rgb(c[0], c[1] / 100.0, c[2] / 100.0);
+            let k8 = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u32;
+            self.set_addon_value(m, k, format!("#{:06X}", (k8(r) << 16) | (k8(g) << 8) | k8(b)));
+            return;
+        }
         let u = |i: usize| c[i].round().max(0.0) as u32;
         let h = u(0) % 360;
         let set = &mut self.settings;
         match t {
+            // Oben schon erledigt.
+            ColorTarget::Addon(..) => {}
             // Nur eigene Themes: bei einem Preset gibt es gar keine Farbfelder zum Anklicken.
             ColorTarget::Theme(slot) => {
                 if let ThemeChoice::Custom(i) = set.theme_choice {
@@ -28874,6 +29250,574 @@ impl App {
             let daumen = Rect { x: (tx - 5.0).round(), y: spur.y + spur.h / 2.0 - 10.0, w: 10.0, h: 20.0 };
             rects.push(UiRect::shadow(daumen, 3.0, 1.0, 3.0, 0.6));
             rects.push(UiRect::framed(daumen, [1.0; 4], 3.0, 2.0, [0.0, 0.0, 0.0, 1.0]));
+        }
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
+    }
+
+    // --- Addons (s. addons.rs) ---
+
+    // Addon, Moduldefinition und Config-Schluessel ("addon/modul") eines Addon-Moduls.
+    fn addon_def(&self, m: u16) -> Option<(&addons::Addon, &addons::ModuleDef, String)> {
+        let (a, mi, key) = addon_module_info(m, |i| (i.addon, i.module, i.key.clone()))?;
+        let addon = self.addons.as_ref()?.list.get(a)?;
+        Some((addon, addon.modules.get(mi)?, key))
+    }
+
+    fn addon_setting(&self, m: u16, k: u16) -> Option<addons::SettingDef> {
+        self.addon_def(m)?.1.settings.get(k as usize).cloned()
+    }
+
+    // Stand einer Einstellung als Text: gespeichert, sonst der Startwert des Addons.
+    fn addon_value(&self, m: u16, k: u16) -> String {
+        let Some((_, modul, key)) = self.addon_def(m) else { return String::new() };
+        let Some(def) = modul.settings.get(k as usize) else { return String::new() };
+        self.settings.addon_values.get(&format!("{key}/{}", def.key)).cloned().unwrap_or_else(|| def.default.clone())
+    }
+
+    // Einstellung setzen und dem Addon melden.
+    fn set_addon_value(&mut self, m: u16, k: u16, value: String) {
+        let Some((a, mi, key)) = addon_module_info(m, |i| (i.addon, i.module, i.key.clone())) else { return };
+        let Some(def) = self.addon_setting(m, k) else { return };
+        self.settings.addon_values.insert(format!("{key}/{}", def.key), value.clone());
+        if let Some(addon) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)) {
+            let modul = addon.modules.get(mi).map(|m| m.id.clone()).unwrap_or_default();
+            addon.send(&serde_json::json!({ "type": "setting", "module": modul, "key": def.key, "value": addons::value_json(&def.kind, &value) }));
+        }
+    }
+
+    fn set_addon_enabled(&mut self, m: u16, on: bool) {
+        let Some((a, mi, key)) = addon_module_info(m, |i| (i.addon, i.module, i.key.clone())) else { return };
+        self.settings.addon_values.insert(format!("{key}/enabled"), on.to_string());
+        if let Some(addon) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)) {
+            let modul = addon.modules.get(mi).map(|m| m.id.clone()).unwrap_or_default();
+            addon.send(&serde_json::json!({ "type": "enabled", "module": modul, "on": on }));
+        }
+    }
+
+    // Nach der Anmeldung: dem Addon den gespeicherten Stand aller seiner Module schicken.
+    fn send_addon_state(&mut self, a: usize) {
+        let Some(addon) = self.addons.as_ref().and_then(|x| x.list.get(a)) else { return };
+        let mut nachrichten = Vec::new();
+        for modul in &addon.modules {
+            let key = format!("{}/{}", addon.id, modul.id);
+            let an = self.settings.addon_values.get(&format!("{key}/enabled")).is_some_and(|v| v == "true");
+            nachrichten.push(serde_json::json!({ "type": "enabled", "module": modul.id, "on": an }));
+            for def in modul.settings.iter().filter(|d| !matches!(d.kind, addons::SettingKind::Button)) {
+                let wert = self.settings.addon_values.get(&format!("{key}/{}", def.key)).cloned().unwrap_or_else(|| def.default.clone());
+                nachrichten.push(serde_json::json!({ "type": "setting", "module": modul.id, "key": def.key, "value": addons::value_json(&def.kind, &wert) }));
+            }
+        }
+        if let Some(addon) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)) {
+            for n in &nachrichten {
+                addon.send(n);
+            }
+        }
+    }
+
+    // Kategorien und Module aller angemeldeten Addons fuer ModuleId/ModuleCategory.
+    fn rebuild_addon_registry(&self) {
+        let (mut kategorien, mut module) = (Vec::new(), Vec::new());
+        for (a, addon) in self.addons.iter().flat_map(|x| x.list.iter()).enumerate() {
+            if !addon.registered || addon.modules.is_empty() {
+                continue;
+            }
+            let k = kategorien.len() as u16;
+            kategorien.push(intern(&addon.name));
+            for (mi, m) in addon.modules.iter().enumerate() {
+                module.push(AddonModuleInfo { label: intern(&m.name), description: intern(&m.description), category: k, key: format!("{}/{}", addon.id, m.id), addon: a, module: mi });
+            }
+        }
+        if let Ok(mut c) = ADDON_CATEGORIES.write() {
+            *c = kategorien;
+        }
+        if let Ok(mut m) = ADDON_MODULES.write() {
+            *m = module;
+        }
+    }
+
+    // Addons beim ersten Durchlauf starten, danach ihre Nachrichten abarbeiten und das
+    // Tick-Ereignis schicken.
+    fn drain_addons(&mut self) {
+        if self.addons.is_none() {
+            let Some(dir) = assets::user_dir().map(|d| d.join("mods")) else { return };
+            let mut log = Vec::new();
+            self.addons = Some(addons::start(&dir, &mut log));
+            for zeile in log {
+                self.push_log(zeile);
+            }
+        }
+        let mut eingang = Vec::new();
+        if let Some(x) = &self.addons {
+            while let Ok(m) = x.rx.try_recv() {
+                eingang.push(m);
+            }
+        }
+        for nachricht in eingang {
+            match nachricht {
+                addons::Incoming::Request(a, anfrage) => self.addon_request(a, anfrage),
+                addons::Incoming::Log(a, text) => {
+                    let id = self.addons.as_ref().and_then(|x| x.list.get(a)).map(|x| x.id.clone()).unwrap_or_default();
+                    self.push_log(format!("[{id}] {text}"));
+                }
+                addons::Incoming::Exited(a) => {
+                    if let Some(addon) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)) {
+                        for m in &mut addon.modules {
+                            m.hud.clear();
+                        }
+                        let id = addon.id.clone();
+                        self.push_log(format!("Addon {id} beendet"));
+                    }
+                }
+            }
+        }
+        let will_tick = self.addons.as_ref().is_some_and(|x| x.list.iter().any(|a| a.registered && a.wants("tick")));
+        if will_tick && self.addon_tick_at.elapsed() >= Duration::from_millis(50) {
+            self.addon_tick_at = Instant::now();
+            let p = self.physics.pos;
+            let in_welt = self.mode == AppMode::World && self.outgoing_tx.is_some();
+            let daten = serde_json::json!({ "in_world": in_welt, "health": self.health, "food": self.food_level, "x": p.x, "y": p.y, "z": p.z, "server": self.server_address });
+            self.addons_event("tick", daten);
+        }
+    }
+
+    // Ein Ereignis an alle Addons, die es hoeren wollen.
+    fn addons_event(&mut self, name: &str, mut daten: serde_json::Value) {
+        let Some(x) = self.addons.as_mut() else { return };
+        daten["type"] = "event".into();
+        daten["event"] = name.into();
+        for addon in x.list.iter_mut().filter(|a| a.registered && a.wants(name)) {
+            addon.send(&daten);
+        }
+    }
+
+    fn addon_request(&mut self, a: usize, anfrage: addons::Request) {
+        let Some(id) = self.addons.as_ref().and_then(|x| x.list.get(a)).map(|x| x.id.clone()) else { return };
+        match anfrage {
+            addons::Request::Register { name, modules, subscribe } => {
+                let anzahl = modules.len();
+                if let Some(addon) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)) {
+                    addon.name = if name.trim().is_empty() { addon.id.clone() } else { name };
+                    addon.modules = modules;
+                    addon.subscribe = subscribe;
+                    addon.registered = true;
+                }
+                self.rebuild_addon_registry();
+                self.send_addon_state(a);
+                self.push_log(format!("Addon {id} angemeldet ({anzahl} Module)"));
+            }
+            addons::Request::Hud { module, items } => {
+                if let Some(m) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)).and_then(|x| x.modules.iter_mut().find(|m| m.id == module)) {
+                    m.hud = items;
+                }
+            }
+            addons::Request::Chat { text } => {
+                // Hoechstens zwei Zeilen je Sekunde -- ein Addon in einer Schleife soll einen
+                // nicht vom Server werfen lassen.
+                if self.addon_chat_at.is_some_and(|t| t.elapsed() < Duration::from_millis(500)) {
+                    self.push_log(format!("[{id}] Chat verworfen (zu schnell): {text}"));
+                } else if !text.trim().is_empty() {
+                    self.addon_chat_at = Some(Instant::now());
+                    self.send_chat_text(text);
+                }
+            }
+            addons::Request::Notify { title, text } => {
+                self.notify(notifications::Notification::info(title, text));
+            }
+            addons::Request::Sound { event, volume, pitch } => {
+                let event = if event.contains(':') { event } else { format!("minecraft:{event}") };
+                self.type_pitch_seed = self.type_pitch_seed.wrapping_add(1);
+                let seed = (zufallswert(self.type_pitch_seed) * i64::MAX as f32) as i64;
+                if let Some(aufnahme) = self.vanilla_sounds.resolve(&mut self.installation, &event, seed) {
+                    let gain = aufnahme.volume * volume.max(0.0) * self.settings.sound_gain(protocol::packets::SoundCategory::Master);
+                    self.audio.sink().play_sample(aufnahme.sample, gain, 0.0, aufnahme.pitch * pitch.clamp(0.5, 2.0));
+                }
+            }
+            addons::Request::Log { text } => self.push_log(format!("[{id}] {text}")),
+            addons::Request::Set { module, key, value } => {
+                // Ohne Echo: das Addon kennt den Wert schon.
+                let bekannt = self.addons.as_ref().and_then(|x| x.list.get(a)).is_some_and(|x| x.modules.iter().any(|m| m.id == module && m.settings.iter().any(|d| d.key == key)));
+                if bekannt {
+                    self.settings.addon_values.insert(format!("{id}/{module}/{key}"), value);
+                    self.persist_settings();
+                }
+            }
+        }
+    }
+
+    // Die Detailzeilen eines Addon-Moduls aus seinen angemeldeten Einstellungen.
+    fn push_addon_rows(&self, m: u16, rows: &mut Vec<ModuleRow>) {
+        let Some((_, modul, _)) = self.addon_def(m) else { return };
+        for (k, def) in modul.settings.iter().enumerate() {
+            let k = k as u16;
+            let wert = self.addon_value(m, k);
+            rows.push(match &def.kind {
+                addons::SettingKind::Toggle => ModuleRow::Toggle { label: def.label.clone(), action: ButtonAction::AddonToggle(m, k), on: wert == "true" },
+                addons::SettingKind::Slider { min, max, unit, .. } => {
+                    let v = wert.parse::<f64>().unwrap_or(*min).clamp(*min, *max);
+                    ModuleRow::Stepper {
+                        label: def.label.clone(),
+                        prev: ButtonAction::AddonStep(m, k, false),
+                        next: ButtonAction::AddonStep(m, k, true),
+                        text: format!("{} {unit}", addon_number_text(v)).trim_end().to_string(),
+                        can_prev: v > *min,
+                        can_next: v < *max,
+                        slider: Some((v, *min, *max)),
+                    }
+                }
+                addons::SettingKind::Choice { .. } => ModuleRow::Choice { label: def.label.clone(), action: ButtonAction::OpenChoice(Choice::Addon(m, k)), text: wert },
+                addons::SettingKind::Color => {
+                    let c = addons::parse_color(&wert).unwrap_or(0xFF_FFFF);
+                    let [r, g, b, _] = theme::rgba(c);
+                    ModuleRow::Swatch { label: def.label.clone(), action: ButtonAction::OpenColorPicker(ColorTarget::Addon(m, k)), rgb: [r, g, b] }
+                }
+                addons::SettingKind::Button => ModuleRow::Choice { label: def.label.clone(), action: ButtonAction::AddonButton(m, k), text: "Ausführen".to_string() },
+            });
+        }
+    }
+
+    // Klicks auf Addon-Zeilen (s. apply_module_action).
+    fn addon_action(&mut self, action: ButtonAction) {
+        match action {
+            ButtonAction::ToggleAddonModule(m) => {
+                let an = ModuleId::Addon(m).enabled(&self.settings);
+                self.set_addon_enabled(m, !an);
+            }
+            ButtonAction::AddonToggle(m, k) => {
+                let an = self.addon_value(m, k) == "true";
+                self.set_addon_value(m, k, (!an).to_string());
+            }
+            ButtonAction::AddonStep(m, k, hoch) => {
+                let Some(addons::SettingKind::Slider { min, max, step, .. }) = self.addon_setting(m, k).map(|d| d.kind) else { return };
+                let v = self.addon_value(m, k).parse::<f64>().unwrap_or(min);
+                let neu = ((v + if hoch { step } else { -step }) / step).round() * step;
+                self.set_addon_value(m, k, addon_number_text(neu.clamp(min, max)).replace(',', "."));
+            }
+            ButtonAction::AddonButton(m, k) => {
+                let Some((a, mi)) = addon_module_info(m, |i| (i.addon, i.module)) else { return };
+                let Some(def) = self.addon_setting(m, k) else { return };
+                if let Some(addon) = self.addons.as_mut().and_then(|x| x.list.get_mut(a)) {
+                    let modul = addon.modules.get(mi).map(|m| m.id.clone()).unwrap_or_default();
+                    addon.send(&serde_json::json!({ "type": "button", "module": modul, "key": def.key }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Was die Addon-Module ins HUD zeichnen, in GUI-Einheiten (mal HUD-Massstab) ab ihrer Ecke.
+    fn build_addon_hud(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        let Some(x) = self.addons.as_ref() else { return };
+        let Ok(module) = ADDON_MODULES.read() else { return };
+        let (sw, sh) = gpu.size();
+        let s = self.hud_scale((sw, sh));
+        let ort = |anker: addons::Anchor, x: f32, y: f32, w: f32, h: f32| -> (f32, f32) {
+            let (x, y) = (x * s, y * s);
+            match anker {
+                addons::Anchor::TopLeft => (x, y),
+                addons::Anchor::TopRight => (sw - x - w, y),
+                addons::Anchor::BottomLeft => (x, sh - y - h),
+                addons::Anchor::BottomRight => (sw - x - w, sh - y - h),
+                addons::Anchor::Center => ((sw - w) / 2.0 + x, (sh - h) / 2.0 + y),
+            }
+        };
+        for (i, info) in module.iter().enumerate() {
+            if !ModuleId::Addon(i as u16).enabled(&self.settings) {
+                continue;
+            }
+            let Some(modul) = x.list.get(info.addon).and_then(|a| a.modules.get(info.module)) else { continue };
+            for item in &modul.hud {
+                match item {
+                    addons::HudItem::Text { text, x, y, color, anchor } => {
+                        let (w, h) = (gpu.measure_text(text, UI_SCALE_SMALL), gpu.text_height(UI_SCALE_SMALL));
+                        let (px, py) = ort(*anchor, *x, *y, w, h);
+                        texts.push(UiText { text: text.clone(), x: px.round(), y: py.round(), color: theme::rgba(*color), scale: UI_SCALE_SMALL });
+                    }
+                    addons::HudItem::Rect { x, y, w, h, color, alpha, anchor } => {
+                        let (w, h) = (w * s, h * s);
+                        let (px, py) = ort(*anchor, *x, *y, w, h);
+                        rects.push(UiRect { rect: Rect { x: px, y: py, w, h }, color: theme::with_alpha(theme::rgba(*color), *alpha), ..UiRect::FLAT });
+                    }
+                }
+            }
+        }
+    }
+
+    // Welche Auswahl ein Knopf aufklappt, statt weiterzuschalten.
+    fn choice_of(action: ButtonAction) -> Option<Choice> {
+        Some(match action {
+            ButtonAction::CycleProjection => Choice::Projection,
+            ButtonAction::CycleParticles => Choice::Particles,
+            ButtonAction::CycleDeathAnimation => Choice::DeathAnimation,
+            ButtonAction::CycleWallpaper => Choice::Wallpaper,
+            ButtonAction::CycleLanguage(row) => Choice::Language(row),
+            ButtonAction::CycleHoldUseRepeat => Choice::HoldUseRepeat,
+            ButtonAction::CycleArrowEmptyFeedback => Choice::ArrowEmptyFeedback,
+            ButtonAction::CycleSkyMode => Choice::SkyMode,
+            ButtonAction::CycleWeatherMode => Choice::WeatherMode,
+            ButtonAction::CycleEgoDeco => Choice::EgoDeco,
+            ButtonAction::CycleEgoShadow => Choice::EgoShadow,
+            ButtonAction::CycleEgoSound => Choice::EgoSound,
+            ButtonAction::OpenChoice(c) => c,
+            _ => return None,
+        })
+    }
+
+    // Die Werte einer Auswahl und welcher gerade gilt (None: keiner, z.B. gemischte Sprachen).
+    fn choice_options(&self, c: Choice) -> (Vec<String>, Option<usize>) {
+        let s = &self.settings;
+        let namen = |l: &[&str]| l.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        match c {
+            Choice::Projection => (namen(&PROJECTION_NAMES), Some(s.projection_mode as usize)),
+            Choice::Particles => (namen(&PARTICLE_MODE_NAMES), Some(s.particles_mode as usize)),
+            Choice::DeathAnimation => (namen(&DEATH_ANIM_NAMES), Some(s.death_animation as usize)),
+            Choice::Wallpaper => (wallpaper::WallpaperMode::ALL.iter().map(|m| m.label().to_string()).collect(), Some(s.wallpaper as usize)),
+            Choice::Language(row) => (i18n::Language::ALL.iter().map(|l| l.label().to_string()).collect(), self.language_of_row(row).map(|l| l.index() as usize)),
+            Choice::HoldUseRepeat => (HoldUseRepeat::ALL.iter().map(|h| h.label().to_string()).collect(), HoldUseRepeat::ALL.iter().position(|h| *h == s.hold_use_repeat)),
+            Choice::ArrowEmptyFeedback => (namen(&ARROW_EMPTY_FEEDBACK_NAMES), Some(s.arrow_empty_feedback as usize)),
+            Choice::SkyMode => (SkyMode::ALL.iter().map(|m| m.label().to_string()).collect(), SkyMode::ALL.iter().position(|m| *m == s.sky_mode)),
+            Choice::WeatherMode => (WeatherMode::ALL.iter().map(|m| m.label().to_string()).collect(), WeatherMode::ALL.iter().position(|m| *m == s.weather_mode)),
+            Choice::EgoDeco => (ego_name::Deco::ALL.iter().map(|d| d.label().to_string()).collect(), Some(s.ego_deco as usize)),
+            Choice::EgoShadow => (ego_name::Deco::ALL.iter().map(|d| d.label_or("Standard").to_string()).collect(), Some(s.ego_shadow as usize)),
+            Choice::EgoSound => (ego_name::SOUNDS.iter().map(|(_, l)| l.to_string()).collect(), ego_name::SOUNDS.iter().position(|(e, _)| *e == s.ego_sound)),
+            Choice::AudioDevice => (self.audio_device_options(), Some(self.audio_device_index())),
+            Choice::CrosshairShape => ((0..=CROSSHAIR_SHAPE_CUSTOM).map(|i| crosshair_shape_label(i).to_string()).collect(), Some(s.crosshair_shape_choice())),
+            Choice::Addon(m, k) => match self.addon_setting(m, k).map(|d| d.kind) {
+                Some(addons::SettingKind::Choice { options }) => {
+                    let wert = self.addon_value(m, k);
+                    let jetzt = options.iter().position(|o| *o == wert);
+                    (options, jetzt)
+                }
+                _ => (Vec::new(), None),
+            },
+        }
+    }
+
+    // Wert i einer Auswahl setzen. Die Durchschalt-Auswahlen setzen den Wert davor und schalten
+    // einmal weiter -- so laeuft genau einmal, was am Weiterschalten haengt (Hintergrund laden,
+    // Sprache anwenden, Ton vorspielen).
+    fn pick_choice(&mut self, c: Choice, i: usize) {
+        let (optionen, jetzt) = self.choice_options(c);
+        let n = optionen.len();
+        if i >= n || jetzt == Some(i) {
+            return;
+        }
+        match c {
+            Choice::AudioDevice => {
+                let name = if i == 0 { String::new() } else { optionen[i].clone() };
+                let opt = (!name.is_empty()).then_some(name.as_str());
+                match self.audio.set_output_device(opt) {
+                    Ok(()) => self.settings.audio_output_device = name,
+                    Err(e) => self.push_log(format!("Ausgabegerät konnte nicht gesetzt werden: {e}")),
+                }
+                self.persist_settings();
+                return;
+            }
+            Choice::CrosshairShape => {
+                self.settings.set_crosshair_shape_choice(i);
+                self.persist_settings();
+                return;
+            }
+            Choice::Addon(m, k) => {
+                self.set_addon_value(m, k, optionen[i].clone());
+                self.persist_settings();
+                return;
+            }
+            _ => {}
+        }
+        let vorher = (i + n - 1) % n;
+        let s = &mut self.settings;
+        let weiter = match c {
+            Choice::Projection => {
+                s.projection_mode = vorher as u8;
+                ButtonAction::CycleProjection
+            }
+            Choice::Particles => {
+                s.particles_mode = vorher as u8;
+                ButtonAction::CycleParticles
+            }
+            Choice::DeathAnimation => {
+                s.death_animation = vorher as u8;
+                ButtonAction::CycleDeathAnimation
+            }
+            Choice::Wallpaper => {
+                s.wallpaper = vorher as u8;
+                ButtonAction::CycleWallpaper
+            }
+            Choice::Language(row) => {
+                // Zeile 0 schaltet von der Sprache der Oberflaeche aus alle zusammen weiter.
+                let v = i18n::Language::ALL[vorher].index();
+                match row {
+                    0 | 1 => s.lang_ui = v,
+                    2 => s.lang_items = v,
+                    3 => s.lang_effects = v,
+                    _ => s.lang_chat = v,
+                }
+                ButtonAction::CycleLanguage(row)
+            }
+            Choice::HoldUseRepeat => {
+                s.hold_use_repeat = HoldUseRepeat::ALL[vorher];
+                ButtonAction::CycleHoldUseRepeat
+            }
+            Choice::ArrowEmptyFeedback => {
+                s.arrow_empty_feedback = vorher as u8;
+                ButtonAction::CycleArrowEmptyFeedback
+            }
+            Choice::SkyMode => {
+                s.sky_mode = SkyMode::ALL[vorher];
+                ButtonAction::CycleSkyMode
+            }
+            Choice::WeatherMode => {
+                s.weather_mode = WeatherMode::ALL[vorher];
+                ButtonAction::CycleWeatherMode
+            }
+            Choice::EgoDeco => {
+                s.ego_deco = ego_name::Deco::ALL[vorher];
+                ButtonAction::CycleEgoDeco
+            }
+            Choice::EgoShadow => {
+                s.ego_shadow = ego_name::Deco::ALL[vorher];
+                ButtonAction::CycleEgoShadow
+            }
+            Choice::EgoSound => {
+                s.ego_sound = ego_name::SOUNDS[vorher].0.to_string();
+                ButtonAction::CycleEgoSound
+            }
+            Choice::AudioDevice | Choice::CrosshairShape | Choice::Addon(..) => return,
+        };
+        if matches!(c, Choice::ArrowEmptyFeedback | Choice::SkyMode | Choice::WeatherMode | Choice::EgoDeco | Choice::EgoShadow | Choice::EgoSound) {
+            self.apply_module_action(weiter);
+            self.persist_settings();
+        } else {
+            self.run_menu_action(weiter);
+        }
+    }
+
+    // Die offene Liste, sofern sie noch zur Ansicht passt, in der sie aufging.
+    fn dropdown_active(&self) -> Option<&Dropdown> {
+        self.dropdown.as_ref().filter(|d| d.mode == self.mode && d.screen == self.screen && d.module_menu == self.module_menu_shown())
+    }
+
+    // Knopf einer Auswahl angeklickt: Liste darunter auf, ein zweiter Klick schliesst sie.
+    fn toggle_dropdown(&mut self, choice: Choice, anchor: Rect) {
+        if self.dropdown_active().is_some_and(|d| d.choice == choice) {
+            self.dropdown = None;
+            self.play_ui_sound(ui_sound::UiSound::Close);
+            return;
+        }
+        let (optionen, jetzt) = self.choice_options(choice);
+        let sichtbar = optionen.len().min(DROPDOWN_MAX_ITEMS);
+        // Der gewaehlte Eintrag steht moeglichst in der Mitte.
+        let scroll = jetzt.unwrap_or(0).saturating_sub(sichtbar / 2).min(optionen.len() - sichtbar);
+        self.dropdown = Some(Dropdown { choice, anchor, scroll, mode: self.mode, screen: self.screen, module_menu: self.module_menu_shown() });
+        self.play_ui_sound(ui_sound::UiSound::Open);
+    }
+
+    // Kasten der Liste und die sichtbaren Eintraege (Index, Flaeche), in Bildschirmkoordinaten:
+    // unter dem Knopf, passt sie dort nicht hin, darueber.
+    fn dropdown_layout(&self, d: &Dropdown) -> (Rect, Vec<(usize, Rect)>) {
+        let Some(gpu) = self.gpu.as_ref() else { return (Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Vec::new()) };
+        let (sw, sh) = gpu.size();
+        let optionen = self.choice_options(d.choice).0;
+        let sichtbar = optionen.len().min(DROPDOWN_MAX_ITEMS);
+        let breiteste = optionen.iter().map(|o| gpu.measure_text(o, UI_SCALE_SMALL)).fold(0.0, f32::max);
+        let w = d.anchor.w.max(breiteste + 2.0 * DROPDOWN_PAD + 40.0).min(sw - 16.0);
+        let h = sichtbar as f32 * DROPDOWN_ITEM_H + 2.0 * DROPDOWN_PAD;
+        let unten = d.anchor.y + d.anchor.h + 4.0;
+        let y = if unten + h <= sh - 8.0 { unten } else { (d.anchor.y - 4.0 - h).max(8.0) };
+        let x = d.anchor.x.min(sw - w - 8.0).max(8.0);
+        let kasten = Rect { x, y, w, h };
+        let eintraege = (0..sichtbar)
+            .map(|k| {
+                let r = Rect { x: x + DROPDOWN_PAD, y: y + DROPDOWN_PAD + k as f32 * DROPDOWN_ITEM_H, w: w - 2.0 * DROPDOWN_PAD, h: DROPDOWN_ITEM_H };
+                (d.scroll + k, r)
+            })
+            .collect();
+        (kasten, eintraege)
+    }
+
+    // Linke Taste bei offener Liste: Eintrag waehlen oder daneben schliessen. Die Liste liegt ueber
+    // allem; der Klick daneben tut sonst nichts (wie beim Farbfenster). true = verbraucht.
+    fn dropdown_press(&mut self) -> bool {
+        let Some(d) = self.dropdown_active() else {
+            self.dropdown = None;
+            return false;
+        };
+        let choice = d.choice;
+        let (kasten, eintraege) = self.dropdown_layout(d);
+        let (cx, cy) = self.cursor_pos;
+        if let Some(&(i, _)) = eintraege.iter().find(|(_, r)| r.contains(cx, cy)) {
+            self.dropdown = None;
+            self.play_ui_sound(ui_sound::UiSound::Click);
+            self.pick_choice(choice, i);
+        } else if !kasten.contains(cx, cy) {
+            self.dropdown = None;
+            self.play_ui_sound(ui_sound::UiSound::Close);
+        }
+        true
+    }
+
+    // Mausrad ueber offener Liste: eine Zeile je Raste.
+    fn dropdown_scroll(&mut self, rasten: f32) {
+        let Some(choice) = self.dropdown_active().map(|d| d.choice) else { return };
+        let n = self.choice_options(choice).0.len();
+        let max = n.saturating_sub(DROPDOWN_MAX_ITEMS);
+        if let Some(d) = self.dropdown.as_mut() {
+            let schritt = rasten.abs().round().max(1.0) as usize;
+            d.scroll = if rasten > 0.0 { d.scroll.saturating_sub(schritt) } else { (d.scroll + schritt).min(max) };
+        }
+    }
+
+    // Geschlossener Knopf einer Auswahl: Wert linksbuendig, rechts ein Pfeil (offen nach oben),
+    // offen mit Akzentrand -- wie die Aufklapplisten in osu!lazer.
+    #[allow(clippy::too_many_arguments)]
+    fn push_dropdown_face(&self, gpu: &GpuState, rect: Rect, label: &str, color: [f32; 4], scale: f32, offen: bool, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        if offen {
+            rects.push(UiRect::framed(rect, [0.0; 4], 6.0, 1.5, theme::get(theme::Slot::Accent)));
+        }
+        let text = Self::fit_text(gpu, label, rect.w - 12.0 - 32.0, scale);
+        let y = (rect.y + (rect.h - gpu.text_height(scale)) / 2.0).round();
+        texts.push(UiText { text, x: rect.x + 12.0, y, color, scale });
+        // Pfeil aus kleinen Quadraten: V, offen ^.
+        let (cx, cy) = ((rect.x + rect.w - 20.0).round(), (rect.y + rect.h / 2.0).round());
+        for k in 0..5 {
+            let dy = if offen { 2.0 - k as f32 } else { k as f32 - 2.0 };
+            for dx in [-4.0 + k as f32, 4.0 - k as f32] {
+                rects.push(UiRect { rect: Rect { x: cx + dx - 1.0, y: cy + dy - 1.0, w: 2.0, h: 2.0 }, color, ..UiRect::FLAT });
+            }
+        }
+    }
+
+    // Offene Liste zeichnen: Kasten mit Akzentrand, der gewaehlte Eintrag hinterlegt, der unter
+    // dem Zeiger hell (mit demselben Nachleuchten wie die Knoepfe), bei Ueberlaenge ein Balken.
+    fn build_dropdown(&self, overlay: &mut UiOverlay) {
+        let (Some(gpu), Some(d)) = (self.gpu.as_ref(), self.dropdown_active()) else { return };
+        use theme::Slot;
+        let g = theme::get;
+        let (optionen, jetzt) = self.choice_options(d.choice);
+        let (kasten, eintraege) = self.dropdown_layout(d);
+        let mut rects = vec![UiRect::shadow(kasten, 8.0, 8.0, 24.0, 0.55), UiRect::framed(kasten, g(Slot::BgPanel), 8.0, 1.5, g(Slot::Accent))];
+        let mut texts = Vec::new();
+        let (cx, cy) = self.cursor_pos;
+        for (i, r) in eintraege {
+            let k = self.hover_level(r, r.contains(cx, cy)).min(1.0);
+            if jetzt == Some(i) {
+                rects.push(UiRect::rounded(r, mix_color(g(Slot::AccentSurface), g(Slot::AccentSurfaceHover), k), 6.0));
+            } else if k > 0.0 {
+                rects.push(UiRect::rounded(r, theme::with_alpha(g(Slot::Surface3), k), 6.0));
+            }
+            let Some(name) = optionen.get(i) else { continue };
+            let text = Self::fit_text(gpu, name, r.w - 24.0, UI_SCALE_SMALL);
+            let y = (r.y + (r.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+            let farbe = if jetzt == Some(i) { g(Slot::AccentText) } else { theme::text() };
+            texts.push(UiText { text, x: r.x + 12.0, y, color: farbe, scale: UI_SCALE_SMALL });
+        }
+        let n = optionen.len();
+        if n > DROPDOWN_MAX_ITEMS {
+            let bahn = Rect { x: kasten.x + kasten.w - 5.0, y: kasten.y + DROPDOWN_PAD, w: 3.0, h: kasten.h - 2.0 * DROPDOWN_PAD };
+            let anteil = DROPDOWN_MAX_ITEMS as f32 / n as f32;
+            let daumen_h = (bahn.h * anteil).max(12.0);
+            let daumen_y = bahn.y + (bahn.h - daumen_h) * (d.scroll as f32 / (n - DROPDOWN_MAX_ITEMS) as f32);
+            rects.push(UiRect::rounded(Rect { y: daumen_y, h: daumen_h, ..bahn }, g(Slot::Border2), 1.5));
         }
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
     }
@@ -30621,6 +31565,9 @@ impl App {
                 // Als Bild bei den Partikeln, s. experience_orb_vertices.
             } else if e.falling_block.is_some() || world::entity_type_name(e.entity_type) == Some("tnt") {
                 // Als echter Block im Block-Atlas, s. display_block_vertices.
+            } else if is_player_like(e.entity_type) && self.dying.contains_key(_id) && matches!(self.settings.death_animation, DEATH_ANIM_OFF | DEATH_ANIM_EXPLOSION) {
+                // Todesanimation Aus oder Explosion: die Leiche wird nicht gezeichnet (die
+                // Teile der Explosion zeichnet die Schleife unten).
             } else if is_player_like(e.entity_type) {
                 // ECHTER BUG gewesen: hier stand `false` fest -- ein fremder Spieler blieb
                 // beim Schleichen kerzengerade stehen, obwohl die Pose vom Server ankam und
@@ -30674,6 +31621,15 @@ impl App {
                 );
                 let (model, tex) = self.player_model_and_texture(&e.uuid);
                 let base = match &glide {
+                    // Sterbend: umkippen statt Flug oder Neigung (setupRotations prueft den Tod
+                    // zuerst).
+                    _ if self.death_time(*_id).is_some() => world::entity_model::entity_transform_dying(
+                        feet,
+                        body_yaw,
+                        e.scale,
+                        world::entity_model::PLAYER_MODEL_SCALE,
+                        self.death_time(*_id).unwrap_or_default(),
+                    ),
                     // LivingEntityRenderer: das ganze Modell mal SCALE (s. Entity::scale).
                     Some(glide) => world::entity_transform_gliding(feet, body_yaw, e.scale, world::entity_model::PLAYER_MODEL_SCALE, glide),
                     None => world::entity_transform_leaning(feet, body_yaw, e.scale, world::entity_model::PLAYER_MODEL_SCALE, &lean),
@@ -30768,7 +31724,10 @@ impl App {
                         if !matches!(kind, ModelKind::Biped | ModelKind::Enderman) {
                             apply_item_arm_poses(&mut pose, e.arm_items().0.is_some(), e.arm_items().1.is_some());
                         }
-                        let base = world::entity_transform(feet, body_yaw, e.scale, model_scale);
+                        let base = match self.death_time(*_id) {
+                            Some(t) => world::entity_model::entity_transform_dying(feet, body_yaw, e.scale, model_scale, t),
+                            None => world::entity_transform(feet, body_yaw, e.scale, model_scale),
+                        };
                         let start = out.len();
                         world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
                         haut.push(start..out.len());
@@ -30835,7 +31794,8 @@ impl App {
             // Pfeile-Modul "Weisser Pfeil": die Faerbung mischt nach Textur und Licht voll auf
             // Weiss (s. block.wgsl::fs_entity) -- der Pfeil ist dann eine weisse Silhouette.
             let weisser_pfeil = self.settings.module_arrows && self.settings.arrow_white && arrow_texture(e.entity_type).is_some();
-            let faerbung = match (e.damage_flash(blitz_ticks), crit_tint) {
+            // Sterbend: rot bis zum Ende (LivingEntityRenderer: hasRedOverlay mit deathTime > 0).
+            let faerbung = match (e.damage_flash(blitz_ticks) || self.death_time(*_id).is_some(), crit_tint) {
                 _ if weisser_pfeil => [1.0, 1.0, 1.0, 1.0],
                 (false, _) => KEINE_FAERBUNG,
                 (true, Some(crit)) if e.hurt_by_crit() => crit,
@@ -30871,6 +31831,23 @@ impl App {
         }
         self.emit_trails(eye, self.tick_progress(), &mut out);
         tints.resize(out.len(), KEINE_FAERBUNG);
+        if lit {
+            lights.resize(out.len(), UNBELEUCHTET);
+        }
+        for b in &self.death_bursts {
+            let start = out.len();
+            let (model, tex) = self.player_model_and_texture(&b.uuid);
+            let pose = b.pose(self.tick_progress());
+            let feet = DVec3::new(b.feet.0, b.feet.1, b.feet.2);
+            let base = world::entity_model::entity_transform(rel(feet), b.yaw, b.scale, world::entity_model::PLAYER_MODEL_SCALE);
+            world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
+            self.emit_armor(&b.armor, &self.armor_models, &pose, base, &mut out);
+            haut.push(start..out.len());
+            tints.resize(out.len(), KEINE_FAERBUNG);
+            if lit {
+                lights.resize(out.len(), self.light_near(feet + DVec3::new(0.0, 0.5, 0.0)));
+            }
+        }
         if lit {
             lights.resize(out.len(), UNBELEUCHTET);
         }
@@ -32732,6 +33709,9 @@ impl App {
                 if self.settings.module_keystrokes && self.conn_status == ConnStatus::Connected {
                     self.push_keystrokes(gpu, &mut rects, &mut texts);
                 }
+                if self.settings.module_session_info && self.conn_status == ConnStatus::Connected {
+                    self.push_session_info(gpu, &mut rects, &mut texts);
+                }
                 self.build_toteming_hud(gpu, &mut rects, &mut hud_lines, &mut sprites, &mut texts);
                 self.build_gamemode_wheel(gpu, &mut hud_lines, &mut sprites, &mut texts);
                 // Gui.renderHotbarAndDecorations: Herzen, Ruestung, Hunger und Luft nur, wenn
@@ -32781,6 +33761,10 @@ impl App {
         // geschrieben: ein Namensschild eines Spielers hinter dem Menue wurde dadurch MITTEN
         // INS Menue gezeichnet, ebenso jede eintreffende Chatzeile.
         //
+        // Was Addon-Module zeichnen (s. build_addon_hud), unter Menues und Overlays.
+        if self.settings.show_hud {
+            self.build_addon_hud(gpu, &mut rects, &mut texts);
+        }
         // Das Abdunkeln des Menues (s. build_module_menu) deckt jetzt ebenfalls Chat und
         // Namensschilder mit ab -- genau so soll es sein: ein Overlay verdeckt die Welt
         // vollstaendig, nicht nur die Haelfte davon.
@@ -33327,7 +34311,7 @@ impl App {
                     let _ = tx.send(AuthEvent::HeadProfile { key, textures });
                 }
                 Err(e) => {
-                    let _ = tx.send(AuthEvent::Status(format!("Kopf-Profil nicht geladen: {e}")));
+                    let _ = tx.send(AuthEvent::HeadProfileFailed { key, meldung: format!("Kopf-Profil nicht geladen: {e}") });
                 }
             }
         });
@@ -33632,7 +34616,7 @@ impl App {
         // in jeder Config gleich klingen.
         let regler = if sound == ui_sound::UiSound::Type { 0.0 } else { self.settings.ui_pitch_semitones as f32 };
         let pitch = audio::semitone_factor(regler + halbtoene + zufall);
-        let einzeln = self.settings.ui_sound_volume.get(i).copied().unwrap_or(100) as f32 / 100.0;
+        let einzeln = self.settings.ui_sound_volume.get(i).copied().unwrap_or(100.0) / 100.0;
         let gain = sound.sample_gain() * self.settings.sound_gain(protocol::packets::SoundCategory::Ui) * einzeln;
         sound_log::sound("ui", &format!("{sound:?}"), protocol::packets::SoundCategory::Ui, "-", None, 1.0, pitch, &format!("gespielt  pegel={gain:.3}"));
         self.audio.sink().play_sample(aufnahme, gain, 0.0, pitch);
@@ -35558,9 +36542,9 @@ impl App {
     // Kategorienspalte links, Kachelraster rechts (s. module_menu_rect).
     const MODULE_CAT_W: f32 = 45.0;
     const MODULE_PAD: f32 = 8.0;
-    const MODULE_TILE_COLS: usize = 3;
+    const MODULE_TILE_COLS: usize = 4;
     const MODULE_TILE_W: f32 = 110.0;
-    const MODULE_TILE_H: f32 = 36.0;
+    const MODULE_TILE_H: f32 = 26.0;
     const MODULE_TILE_GAP: f32 = 6.0;
     // Hoehe der Uebersicht; die Detailansicht waechst darueber hinaus (s. module_menu_rect).
     const MODULE_PANEL_H: f32 = 280.0;
@@ -35614,6 +36598,19 @@ impl App {
         }
     }
 
+    // "Helligkeit" des Regenbogens beim Namen bzw. Schatten: wie weit er zu Weiss hin geht.
+    fn ego_light_row(schatten: bool, wert: u32) -> ModuleRow {
+        ModuleRow::Stepper {
+            label: "Helligkeit".to_string(),
+            prev: ButtonAction::EgoLight(schatten, false),
+            next: ButtonAction::EgoLight(schatten, true),
+            text: format!("{wert} %"),
+            can_prev: wert > 0,
+            can_next: wert < 100,
+            slider: Some((wert as f64, 0.0, 100.0)),
+        }
+    }
+
     // Die Detailzeilen des ausgewaehlten Moduls, als Daten statt als fertige Knoepfe/Texte.
     // Zeile 0 ist immer der Hauptschalter (s. module_master_row), danach kommen die
     // modul-eigenen Einstellungen.
@@ -35621,6 +36618,7 @@ impl App {
         let set = &self.settings;
         let mut rows = vec![self.module_master_row()];
         match self.module_menu_selected {
+            ModuleId::Addon(m) => self.push_addon_rows(m, &mut rows),
             ModuleId::Totem => rows.push(ModuleRow::Toggle {
                 label: "Signalton".to_string(),
                 action: ButtonAction::ToggleModuleTotemSound,
@@ -35784,6 +36782,13 @@ impl App {
             }
             ModuleId::Keystrokes => {
                 rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Keystrokes), text: "Im HUD-Editor".to_string() });
+            }
+            ModuleId::SessionInfo => {
+                for (bit, label) in session_info::LINES {
+                    rows.push(ModuleRow::Toggle { label: label.to_string(), action: ButtonAction::ToggleSessionLine(bit), on: set.session_lines & bit != 0 });
+                }
+                rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Session), text: "Im HUD-Editor".to_string() });
+                rows.push(ModuleRow::Choice { label: "Zähler".to_string(), action: ButtonAction::ResetSession, text: "Auf null setzen".to_string() });
             }
             ModuleId::Shields => {
                 // Wie Countdown bzw. Kreis aussehen, stellt der HUD-Editor ein: der Countdown
@@ -36085,7 +37090,10 @@ impl App {
                 if set.ego_deco.two_colors() {
                     rows.push(ModuleRow::Swatch { label: "Farbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(1)), rgb: set.ego_rgb(1) });
                 }
-                if set.ego_deco.moves() {
+                if set.ego_deco == Deco::Rainbow {
+                    rows.push(Self::ego_light_row(false, set.ego_light));
+                }
+                if set.ego_deco.moves() || set.ego_shadow.moves() {
                     rows.push(ModuleRow::Stepper {
                         label: "Tempo".to_string(),
                         prev: ButtonAction::EgoSpeed(false),
@@ -36096,11 +37104,22 @@ impl App {
                         slider: Some((set.ego_speed as f64, EGO_SPEED_MIN as f64, EGO_SPEED_MAX as f64)),
                     });
                 }
-                rows.push(ModuleRow::Pick {
-                    label: "Schatten".to_string(),
-                    options: vec![("Standard", ButtonAction::EgoShadow(false), !set.ego_shadow), ("Einfarbig", ButtonAction::EgoShadow(true), set.ego_shadow)],
-                    swatch: Some((ButtonAction::OpenColorPicker(ColorTarget::EgoName(2)), set.ego_rgb(2))),
-                });
+                rows.push(ModuleRow::Choice { label: "Schatten".to_string(), action: ButtonAction::CycleEgoShadow, text: set.ego_shadow.label_or("Standard").to_string() });
+                if set.ego_shadow != Deco::Off {
+                    // Die erste Schattenfarbe traegt die Deckkraft -- auch beim Regenbogen.
+                    let erste = match set.ego_shadow {
+                        Deco::Rainbow => "Schatten-Deckkraft",
+                        d if d.two_colors() => "Schattenfarbe 1",
+                        _ => "Schattenfarbe",
+                    };
+                    rows.push(ModuleRow::Swatch { label: erste.to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(2)), rgb: set.ego_rgb(2) });
+                }
+                if set.ego_shadow.two_colors() {
+                    rows.push(ModuleRow::Swatch { label: "Schattenfarbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(3)), rgb: set.ego_rgb(3) });
+                }
+                if set.ego_shadow == Deco::Rainbow {
+                    rows.push(Self::ego_light_row(true, set.ego_shadow_light));
+                }
                 rows.push(ModuleRow::Choice {
                     label: "Ton bei Erwähnung".to_string(),
                     action: ButtonAction::CycleEgoSound,
@@ -36111,10 +37130,11 @@ impl App {
                         label: "Lautstärke".to_string(),
                         prev: ButtonAction::EgoVolume(false),
                         next: ButtonAction::EgoVolume(true),
-                        text: format!("{} %", set.ego_volume),
-                        can_prev: set.ego_volume > 0,
-                        can_next: set.ego_volume < 100,
-                        slider: Some((set.ego_volume as f64, 0.0, 100.0)),
+                        text: volume_text(set.ego_volume),
+                        can_prev: set.ego_volume > 0.0,
+                        // Ohne Obergrenze; der Regler reicht bis 200 %, darueber tippen oder Pfeile.
+                        can_next: true,
+                        slider: Some((set.ego_volume as f64, 0.0, set.ego_volume.max(200.0) as f64)),
                     });
                 }
             }
@@ -36236,17 +37256,29 @@ impl App {
     }
 
     // Zeilenzahl der aktuellen Ansicht (Kachelreihen bzw. Einstellungszeilen).
-    fn module_total_rows(&self) -> usize {
+    fn module_total_rows(&self, gpu: &GpuState) -> usize {
         if self.module_menu_detail {
             self.module_detail_rows().len()
         } else {
-            self.module_menu_category.modules().len().div_ceil(Self::MODULE_TILE_COLS)
+            self.module_menu_category.modules().len().div_ceil(self.module_cols(gpu))
         }
+    }
+
+    // Kachelspalten: bis zu MODULE_TILE_COLS, weniger, wenn eine Kachel sonst zu schmal fuer
+    // ihren Namen neben dem Schalter wuerde (4:3- und 5:4-Bildschirme, kleine Fenster).
+    fn module_cols(&self, gpu: &GpuState) -> usize {
+        let panel = self.module_menu_rect(gpu);
+        let scale = self.module_scale(gpu);
+        let gap = Self::MODULE_TILE_GAP * scale;
+        let raster = panel.w - (Self::MODULE_CAT_W + 2.0 * Self::MODULE_PAD) * scale;
+        // Platz fuer einen Namen wie "Hitbox display" (Schrift in festen Pixeln) plus Schalter.
+        let min_w = MODULE_TILE_NAME_PX + (6.0 + 30.0 + 3.0 + 2.0) * scale;
+        (((raster + gap) / (min_w + gap)).floor() as usize).clamp(1, Self::MODULE_TILE_COLS)
     }
 
     // Um wie viele Zeilen sich die Ansicht hoechstens verschieben laesst.
     fn module_max_scroll(&self, gpu: &GpuState) -> usize {
-        self.module_total_rows().saturating_sub(self.module_visible_rows(gpu))
+        self.module_total_rows(gpu).saturating_sub(self.module_visible_rows(gpu))
     }
 
     // Der wirksame Scroll-Stand, gedeckelt auf das aktuell Moegliche. Der gespeicherte Wert
@@ -36285,8 +37317,14 @@ impl App {
         // stand ringsum ein dunkler Rand.
         if let Some((bereich_w, bereich_h)) = self.module_settings_area(gpu) {
             let oben = SETTINGS_FIRST_Y - 44.0;
-            let (w, h) = (w.min(bereich_w), h.min(bereich_h - oben));
-            return Rect { x: (SETTINGS_LABEL_X - 8.0 * scale).round(), y: oben, w, h };
+            // Die Kacheln fuellen den ganzen Platz bis zur rechten Leiste (s. module_tiles).
+            let x = (SETTINGS_LABEL_X - 8.0 * scale).round();
+            let (w, h) = if self.module_menu_detail {
+                (w.min(bereich_w), h.min(bereich_h - oben))
+            } else {
+                (bereich_w + SETTINGS_LABEL_X - x - Self::MODULE_SCREEN_MARGIN, bereich_h - oben)
+            };
+            return Rect { x, y: oben, w, h };
         }
         Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h }
     }
@@ -36301,14 +37339,19 @@ impl App {
         Some((sw - dx - self.side_strip_w(sw) - SETTINGS_LABEL_X, sh - dy - Self::MODULE_SCREEN_MARGIN))
     }
 
-    // GUI-Massstab der Tafel: der des Inventars, auf der Einstellungsseite aber hoechstens so
-    // gross, dass sie ganz in den Platz neben Leiste und Kategorien passt.
+    // GUI-Massstab der Tafel: der des Inventars, aber hoechstens so gross, dass sie ganz in
+    // ihren Platz passt (Einstellungsseite: neben Leiste und Kategorien, sonst der Bildschirm).
+    // Nicht auf ganze Zahlen gerundet: auf 4:3 fiele sie sonst von 3 auf 1, mit winzigen
+    // Schaltern neben unveraendert grosser Schrift.
     fn module_scale(&self, gpu: &GpuState) -> f32 {
-        let scale = self.inventory_scale(gpu.size());
-        let Some((bereich_w, bereich_h)) = self.module_settings_area(gpu) else { return scale };
+        let (sw, sh) = gpu.size();
+        let scale = self.inventory_scale((sw, sh));
+        let (bereich_w, bereich_h) = self
+            .module_settings_area(gpu)
+            .unwrap_or((sw - 2.0 * Self::MODULE_SCREEN_MARGIN, sh - 2.0 * Self::MODULE_SCREEN_MARGIN));
         let grid_w = Self::MODULE_TILE_COLS as f32 * Self::MODULE_TILE_W + (Self::MODULE_TILE_COLS as f32 - 1.0) * Self::MODULE_TILE_GAP;
         let passt = (bereich_w / (Self::MODULE_CAT_W + 2.0 * Self::MODULE_PAD + grid_w)).min(bereich_h / Self::MODULE_PANEL_H);
-        scale.min(passt.floor().max(1.0))
+        scale.min(passt).max(1.0)
     }
 
     // Geometrie der Detailansicht: eine Einstellungsspalte mittig im ganzen Fenster.
@@ -36336,7 +37379,8 @@ impl App {
         let scale = self.module_scale(gpu);
         let x0 = panel.x + (Self::MODULE_CAT_W + Self::MODULE_PAD) * scale;
         let gap = Self::MODULE_TILE_GAP * scale;
-        let cols = Self::MODULE_TILE_COLS as f32;
+        let spalten = self.module_cols(gpu);
+        let cols = spalten as f32;
         // Die Breite folgt der Tafel -- auf kleinen Bildschirmen wird sie gekappt.
         let tile_w = ((panel.x + panel.w - Self::MODULE_PAD * scale - x0) - (cols - 1.0) * gap) / cols;
         let tile_h = Self::MODULE_TILE_H * scale;
@@ -36348,7 +37392,7 @@ impl App {
             .into_iter()
             .enumerate()
             .filter_map(|(i, id)| {
-                let (reihe, spalte) = (i / Self::MODULE_TILE_COLS, i % Self::MODULE_TILE_COLS);
+                let (reihe, spalte) = (i / spalten, i % spalten);
                 if reihe < scroll || reihe >= scroll + visible {
                     return None;
                 }
@@ -36358,9 +37402,10 @@ impl App {
             .collect()
     }
 
-    // An/Aus-Schalter oben rechts in einer Kachel.
+    // An/Aus-Schalter rechts in einer Kachel, ueber ihre ganze Hoehe.
     fn module_tile_toggle_rect(tile: Rect, scale: f32) -> Rect {
-        Rect { x: tile.x + tile.w - 30.0 * scale, y: tile.y + 4.0 * scale, w: 26.0 * scale, h: 14.0 * scale }
+        let rand = 3.0 * scale;
+        Rect { x: tile.x + tile.w - 30.0 * scale - rand, y: tile.y + rand, w: 30.0 * scale, h: tile.h - 2.0 * rand }
     }
 
     // Die klickbaren Elemente des Modul-Menues. Eine Quelle fuer Zeichnen UND
@@ -36382,7 +37427,7 @@ impl App {
 
         if !self.module_menu_detail {
             // Kategorien links: eine Zeile je Kategorie, die gewaehlte hervorgehoben.
-            for (i, &kategorie) in ModuleCategory::ALL.iter().enumerate() {
+            for (i, &kategorie) in ModuleCategory::all().iter().enumerate() {
                 out.push(Button {
                     action: ButtonAction::SelectModuleCategory(kategorie),
                     rect: Rect {
@@ -36394,7 +37439,9 @@ impl App {
                     },
                     label: String::new(),
                     enabled: true,
-                    color: if kategorie == self.module_menu_category { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::BgPanel) },
+                    // Surface2 wie die Knoepfe der Einstellungsseiten: nur dafuer leuchtet die
+                    // Flaeche beim Hover auf (s. styled_button).
+                    color: if kategorie == self.module_menu_category { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::Surface2) },
                     scale: UI_SCALE_SMALL,
                     slider: None,
                 });
@@ -36637,36 +37684,45 @@ impl App {
             for button in &buttons {
                 if let ButtonAction::SelectModuleCategory(kategorie) = button.action {
                     // Die gewaehlte wie der aktive Eintrag der Seitenleiste (Theme-Farbe).
+                    // Rand und Hover wie die Knoepfe der Einstellungsseiten (styled_button).
                     let flaeche = Rect { h: button.rect.h - 2.0 * scale, ..button.rect };
-                    rects.push(UiRect::rounded(flaeche, button.color, 6.0));
+                    let (px, py) = self.pointer();
+                    let (stil, schrift) = styled_button(button, self.hover_level(button.rect, button.hits(px, py)));
+                    rects.push(UiRect { rect: flaeche, ..stil });
                     texts.push(UiText {
                         text: Self::fit_text(gpu, kategorie.label(), button.rect.w - 6.0 * scale, UI_SCALE_SMALL),
-                        x: button.rect.x + 4.0 * scale,
-                        y: button.rect.y + 3.0 * scale,
-                        color: theme::text(),
+                        x: button.rect.x + 6.0 * scale,
+                        y: (flaeche.y + (flaeche.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round(),
+                        color: schrift,
                         scale: UI_SCALE_SMALL,
                     });
                 }
             }
+            let (px, py) = self.pointer();
             for (id, tile) in self.module_tiles(gpu) {
                 let on = id.enabled(&self.settings);
-                rects.push(UiRect { rect: tile, color: theme::get(theme::Slot::Surface2), ..UiRect::FLAT });
-                // Linker Streifen: an = gruen, aus = unauffaellig -- man sieht den Stand der
-                // ganzen Kategorie auf einen Blick.
-                rects.push(UiRect { rect: Rect { w: 2.0 * scale, ..tile }, color: if on { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::SurfaceSunken) }, ..UiRect::FLAT });
+                // Wie ein Knopf der Einstellungsseiten: Rand, beim Hover heller (s. styled_button).
+                // Eingeschaltete mit Akzentrand -- man sieht den Stand der ganzen Kategorie auf
+                // einen Blick.
+                let k = self.hover_level(tile, tile.contains(px, py));
+                let g = theme::get;
+                let flaeche = mix_color(g(theme::Slot::Surface2), g(theme::Slot::Surface3), k);
+                let rand = if on { g(theme::Slot::Accent) } else { mix_color(g(theme::Slot::Border2), g(theme::Slot::BorderStrong), k.min(1.0)) };
+                rects.push(UiRect::framed(tile, flaeche, 6.0, 1.0, rand));
                 let text_x = tile.x + 6.0 * scale;
                 let schalter = Self::module_tile_toggle_rect(tile, scale);
+                // Nur der Name, mittig in der Hoehe: die Beschreibung passte nie ganz hinein und
+                // steht in der Detailansicht ohnehin.
                 let name = Self::fit_text(gpu, id.label(), schalter.x - text_x - 2.0 * scale, UI_SCALE_SMALL);
-                texts.push(UiText { text: name, x: text_x, y: tile.y + 5.0 * scale, color: theme::text(), scale: UI_SCALE_SMALL });
-                let beschreibung = Self::fit_text(gpu, id.description(), tile.x + tile.w - text_x - 4.0 * scale, UI_SCALE_SMALL);
-                texts.push(UiText { text: beschreibung, x: text_x, y: tile.y + 22.0 * scale, color: theme::text_disabled(), scale: UI_SCALE_SMALL });
+                let y = (tile.y + (tile.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                texts.push(UiText { text: name, x: text_x, y, color: theme::text(), scale: UI_SCALE_SMALL });
             }
             if self.module_menu_category.modules().is_empty() {
                 texts.push(UiText {
                     text: "Keine Module".to_string(),
                     x: panel.x + (Self::MODULE_CAT_W + Self::MODULE_PAD) * scale,
                     y: panel.y + Self::MODULE_TOP_H * scale,
-                    color: theme::text_disabled(),
+                    color: theme::text(),
                     scale: UI_SCALE_SMALL,
                 });
             }
@@ -36804,6 +37860,11 @@ impl App {
             let (px, py) = self.pointer();
             let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, button.hits(px, py)));
             rects.push(flaeche);
+            if let Some(c) = Self::choice_of(button.action) {
+                let offen = self.dropdown_active().is_some_and(|d| d.choice == c);
+                self.push_dropdown_face(gpu, button.rect, &button.label, color, button.scale, offen, rects, texts);
+                continue;
+            }
             let label = Self::fit_text(gpu, &button.label, button.rect.w - 12.0, button.scale);
             texts.push(gpu.centered_text(button.rect, label, color, button.scale));
         }
@@ -36820,7 +37881,7 @@ impl App {
         let scroll = self.module_scroll(gpu);
         let bar = Rect { x: panel.x + panel.w - 4.0 * scale, y: top, w: 3.0 * scale, h: hoehe };
         rects.push(UiRect { rect: bar, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
-        let anteil = self.module_visible_rows(gpu) as f32 / self.module_total_rows().max(1) as f32;
+        let anteil = self.module_visible_rows(gpu) as f32 / self.module_total_rows(gpu).max(1) as f32;
         let thumb_h = (bar.h * anteil).max(6.0 * scale);
         let thumb_y = bar.y + (bar.h - thumb_h) * (scroll as f32 / max_scroll as f32);
         let color = if scroll > 0 { theme::accent() } else { theme::get(theme::Slot::Border2) };
@@ -37420,6 +38481,7 @@ impl App {
     // hier aus module_menu_buttons kommen und nicht aus buttons().
     fn apply_module_action(&mut self, action: ButtonAction) {
         match action {
+            ButtonAction::ToggleAddonModule(_) | ButtonAction::AddonToggle(..) | ButtonAction::AddonStep(..) | ButtonAction::AddonButton(..) => self.addon_action(action),
             // Modulwechsel setzt Scroll und offenen Farbeditor zurueck: beide gehoeren zum
             // vorherigen Modul und ergaeben im neuen keinen Sinn.
             // Kachel angeklickt: dessen Einstellungen fuellen das Fenster.
@@ -37565,6 +38627,9 @@ impl App {
                 st.dotted = !st.dotted;
             }
             ButtonAction::ToggleModuleKeystrokes => self.settings.module_keystrokes = !self.settings.module_keystrokes,
+            ButtonAction::ToggleModuleSessionInfo => self.settings.module_session_info = !self.settings.module_session_info,
+            ButtonAction::ToggleSessionLine(bit) => self.settings.session_lines ^= bit,
+            ButtonAction::ResetSession => self.session.reset(Instant::now()),
             ButtonAction::ToggleArrowIndicator => self.settings.arrow_indicator = !self.settings.arrow_indicator,
             ButtonAction::ToggleArrowNumberOnly => self.settings.arrow_number_only = !self.settings.arrow_number_only,
             ButtonAction::ToggleArrowWhite => self.settings.arrow_white = !self.settings.arrow_white,
@@ -37679,7 +38744,11 @@ impl App {
                 });
             }
             ButtonAction::CycleEgoDeco => self.settings.ego_deco = self.settings.ego_deco.next(),
-            ButtonAction::EgoShadow(an) => self.settings.ego_shadow = an,
+            ButtonAction::CycleEgoShadow => self.settings.ego_shadow = self.settings.ego_shadow.next(),
+            ButtonAction::EgoLight(schatten, hoch) => {
+                let feld = if schatten { &mut self.settings.ego_shadow_light } else { &mut self.settings.ego_light };
+                *feld = if hoch { (*feld + 5).min(100) } else { feld.saturating_sub(5) };
+            }
             ButtonAction::EgoSpeed(hoch) => {
                 let v = self.settings.ego_speed;
                 self.settings.ego_speed = if hoch { (v + 1).min(EGO_SPEED_MAX) } else { v.saturating_sub(1).max(EGO_SPEED_MIN) };
@@ -37690,7 +38759,7 @@ impl App {
             }
             ButtonAction::EgoVolume(hoch) => {
                 let v = self.settings.ego_volume;
-                self.settings.ego_volume = if hoch { (v + 10).min(100) } else { v.saturating_sub(10) };
+                self.settings.ego_volume = if hoch { v + 10.0 } else { (v - 10.0).max(0.0) };
             }
             ButtonAction::AutoclickerCpsPrev => self.settings.autoclicker_cps = self.settings.autoclicker_cps.saturating_sub(1).max(AUTOCLICKER_CPS_MIN),
             ButtonAction::AutoclickerCpsNext => self.settings.autoclicker_cps = (self.settings.autoclicker_cps + 1).min(AUTOCLICKER_CPS_MAX),
@@ -39143,6 +40212,169 @@ impl App {
         let abklingen = 1.0 - seit / ARROW_EMPTY_SHAKE_SECS;
         let px = self.gpu.as_ref().map_or(2.0, |g| self.hud_scale(g.size()));
         (seit * std::f32::consts::TAU * 12.0).sin() * 3.0 * px * abklingen
+    }
+
+    // Entity-Event 3: ein Lebewesen ist gestorben. Ab jetzt laeuft seine deathTime; bei
+    // Spielern mit Todesanimation Explosion fliegen die Teile los (aus der Haltung im Stand),
+    // dazu eine Explosionswolke wie bei TNT. Wurfgeschosse schicken dasselbe Event beim
+    // Aufprall -- sie haben kein Modell und zaehlen nicht.
+    fn entity_died(&mut self, entity_id: i32) {
+        if self.own_entity_id == Some(entity_id) || self.dying.contains_key(&entity_id) {
+            return;
+        }
+        let Some(e) = self.entities.get(entity_id) else { return };
+        if !is_player_like(e.entity_type) && self.model_for_type(e.entity_type).is_none() {
+            return;
+        }
+        self.dying.insert(entity_id, 0);
+        if self.settings.death_animation != DEATH_ANIM_EXPLOSION || !is_player_like(e.entity_type) || e.invisible {
+            return;
+        }
+        let progress = self.tick_progress();
+        let feet = e.render_pos(progress);
+        // Starb er in der Luft, fallen die Teile bis zum Boden darunter (hoechstens 8 Bloecke).
+        let (bx, bz) = (feet.0.floor() as i32, feet.2.floor() as i32);
+        let fuss = feet.1.floor() as i32;
+        let drop = (0..8)
+            .map(|d| fuss - d)
+            .find(|&y| self.world.block_at(bx, y, bz) != world::STATE_AIR)
+            .map_or(0.0, |y| (feet.1 - (y + 1) as f64).max(0.0) as f32);
+        let model_scale = e.scale * world::entity_model::PLAYER_MODEL_SCALE;
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64) ^ entity_id as u64;
+        let burst = death_burst::Burst::new(e.uuid, feet, e.render_yaw(progress), e.scale, model_scale, e.armor, drop, seed);
+        let (breite, hoehe) = e.hit_size();
+        let mitte = DVec3::new(feet.0, feet.1 + hoehe * 0.5, feet.2);
+        self.death_bursts.push(burst);
+        let knall = protocol::particle::ParticleEffect { type_id: protocol::particle::PARTICLE_EXPLOSION, options: protocol::particle::ParticleOptions::None };
+        self.with_particles(|p, ctx, _| {
+            p.add_world_particle(&knall, mitte, DVec3::ZERO, ctx);
+            p.add_death_poof(particles::EmitterBody { pos: DVec3::new(feet.0, feet.1, feet.2), width: breite, height: hoehe }, ctx);
+        });
+    }
+
+    fn tick_death_bursts(&mut self) {
+        self.death_bursts.retain_mut(death_burst::Burst::tick);
+        // Entfernte Leichen vergessen (Entity-IDs werden nicht so bald neu vergeben).
+        let entities = &self.entities;
+        self.dying.retain(|id, _| entities.get(*id).is_some());
+        for t in self.dying.values_mut() {
+            *t += 1;
+        }
+    }
+
+    // Vanillas deathTime samt Zwischentick (LivingEntityRenderState.deathTime), nur mit
+    // Todesanimation Vanilla -- sonst kippt nichts.
+    fn death_time(&self, entity_id: i32) -> Option<f32> {
+        let t = *self.dying.get(&entity_id)?;
+        (self.settings.death_animation == DEATH_ANIM_VANILLA).then(|| t as f32 + 1.0 + self.tick_progress())
+    }
+
+    // Session-Info: alle anderen Spieler im Umkreis gelten als gerade getroffen.
+    fn session_engage_near(&mut self, at: (f64, f64, f64), radius: f64) {
+        let now = Instant::now();
+        let own = self.own_entity_id;
+        let ids: Vec<i32> = self
+            .entities
+            .iter()
+            .filter(|(id, e)| Some(**id) != own && world::entity_type_name(e.entity_type) == Some("player"))
+            .filter(|(_, e)| {
+                let (x, y, z) = e.target_pos();
+                (x - at.0).powi(2) + (y - at.1).powi(2) + (z - at.2).powi(2) <= radius * radius
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.session.engage(id, now);
+        }
+    }
+
+    // Entity-Event 3: man selbst oder ein anderer Spieler ist gestorben.
+    fn session_death(&mut self, entity_id: i32) {
+        let now = Instant::now();
+        if self.own_entity_id == Some(entity_id) {
+            self.session.own_died(now);
+        } else if let Some(e) = self.entities.get(entity_id).filter(|e| world::entity_type_name(e.entity_type) == Some("player")) {
+            let name = self.player_names.get(&e.uuid).map(String::as_str);
+            self.session.player_died(entity_id, name, now);
+        }
+    }
+
+    // Titel (`addressed`) oder Chatzeile -- ungefaerbt und VOR dem Eigennamen-Umschreiben,
+    // sonst stuende dort der Alias statt des Namens.
+    fn session_text(&mut self, text: &str, addressed: bool) {
+        let name = self.own_name().map(str::to_string);
+        self.session.text(text, name.as_deref(), addressed, Instant::now());
+    }
+
+    // Groesse einer HUD-Einheit der Session-Info in Bildschirmpixeln (wie keys_unit).
+    fn session_unit(&self, gpu: &GpuState) -> f32 {
+        let u = self.hud_scale(gpu.size()) * self.settings.hud_session_scale as f32 / 100.0;
+        (u * 4.0).round().max(2.0) / 4.0
+    }
+
+    // Was auf der Tafel steht: (Beschriftung, Wert) je eingeschalteter Zeile.
+    fn session_lines(&self) -> Vec<(&'static str, String)> {
+        let s = &self.session;
+        session_info::LINES
+            .iter()
+            .filter(|(bit, _)| self.settings.session_lines & bit != 0)
+            .map(|&(bit, label)| {
+                let wert = match bit {
+                    session_info::LINE_KILLS => s.kills.to_string(),
+                    session_info::LINE_DEATHS => s.deaths.to_string(),
+                    session_info::LINE_KD => s.kd_text(),
+                    _ => s.wins.to_string(),
+                };
+                (label, wert)
+            })
+            .collect()
+    }
+
+    // Masse der Tafel in HUD-Einheiten: Kopfzeile, die grosse Uhr, darunter je Zeile eine.
+    // Die Breite waechst mit der Uhr (ab 100 Stunden), sonst steht sie still.
+    fn session_size(&self, gpu: &GpuState) -> (f32, f32) {
+        let u = self.session_unit(gpu);
+        let klein = gpu.text_height(u) / u;
+        let gross = gpu.text_height(u * 1.5) / u;
+        let uhr = gpu.measure_text(&session_info::clock_text(self.session.start.elapsed()), u * 1.5) / u;
+        let w = (uhr + 2.0 * SESSION_PAD).max(SESSION_MIN_W);
+        let h = SESSION_PAD + klein + 2.0 * SESSION_PAD + gross + SESSION_PAD + self.session_lines().len() as f32 * (klein + SESSION_LINE_GAP) + SESSION_PAD;
+        (w, h)
+    }
+
+    fn hud_session_rect(&self, gpu: &GpuState) -> Rect {
+        let (sw, sh) = gpu.size();
+        let u = self.session_unit(gpu);
+        let (w, h) = self.session_size(gpu);
+        let (w, h) = ((w * u).round(), (h * u).round());
+        let x = (self.settings.hud_session_x * sw).clamp(0.0, (sw - w).max(0.0)).round();
+        let y = (self.settings.hud_session_y * sh).clamp(0.0, (sh - h).max(0.0)).round();
+        Rect { x, y, w, h }
+    }
+
+    // Die Tafel: Kopfzeile "Session-Info" in der Akzentfarbe auf eigener Flaeche, darunter
+    // die Spielzeit gross und je Zeile links die Beschriftung, rechts der Wert.
+    fn push_session_info(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        let rect = self.hud_session_rect(gpu);
+        let u = self.session_unit(gpu);
+        let alpha = self.settings.session_opacity as f32 / 100.0;
+        let mit_alpha = |c: [f32; 4]| [c[0], c[1], c[2], c[3] * alpha];
+        let pad = (SESSION_PAD * u).round();
+        let klein = gpu.text_height(u);
+        rects.push(UiRect { rect, color: mit_alpha(theme::get(theme::Slot::BgPanel)), radius: 3.0 * u, ..UiRect::FLAT });
+        let kopf = Rect { x: rect.x, y: rect.y, w: rect.w, h: (klein + 2.0 * pad).round() };
+        rects.push(UiRect { rect: kopf, color: mit_alpha(theme::get(theme::Slot::Surface2)), radius: 3.0 * u, ..UiRect::FLAT });
+        texts.push(gpu.centered_text(kopf, "Session-Info".to_string(), theme::get(theme::Slot::AccentText), u));
+        let mut y = kopf.y + kopf.h + pad;
+        let uhr = session_info::clock_text(self.session.start.elapsed());
+        texts.push(UiText { text: uhr, x: rect.x + pad, y: y.round(), color: theme::text(), scale: u * 1.5 });
+        y += gpu.text_height(u * 1.5) + pad;
+        for (label, wert) in self.session_lines() {
+            texts.push(UiText { text: label.to_string(), x: rect.x + pad, y: y.round(), color: theme::text(), scale: u });
+            let breite = gpu.measure_text(&wert, u);
+            texts.push(UiText { text: wert, x: (rect.x + rect.w - pad - breite).round(), y: y.round(), color: theme::get(theme::Slot::AccentText), scale: u });
+            y += klein + SESSION_LINE_GAP * u;
+        }
     }
 
     // Groesse einer HUD-Einheit der Keystrokes in Bildschirmpixeln.
@@ -42966,7 +44198,7 @@ impl App {
             // etwas passiert, hakt es zwischen Paket und Datei -- und genau das sieht man
             // sonst nirgends, weil ein fehlender Klang keine Fehlermeldung ist.
             if self.vanilla_sounds.is_ready() {
-                format!("Ton: {} Aufnahmen geladen  |  Hauptlautstärke {} %", self.vanilla_sounds.cached(), self.settings.master_volume)
+                format!("Ton: {} Aufnahmen geladen  |  Hauptlautstärke {}", self.vanilla_sounds.cached(), volume_text(self.settings.master_volume))
             } else {
                 "Ton: sounds.json nicht gelesen -- Weltgeräusche stumm".to_string()
             },
@@ -43424,6 +44656,11 @@ impl App {
             // Zurueck in Inhaltskoordinaten, die Verschiebung folgt unten fuer alles zusammen.
             let rect = Rect { x: button.rect.x - dx, y: button.rect.y - dy, ..button.rect };
             rects.push(UiRect { rect, ..flaeche });
+            if let Some(c) = Self::choice_of(button.action) {
+                let offen = self.dropdown_active().is_some_and(|d| d.choice == c);
+                self.push_dropdown_face(gpu, rect, &button.label, color, button.scale, offen, &mut rects, &mut texts);
+                continue;
+            }
             texts.push(gpu.centered_text(rect, button.label, color, button.scale));
         }
         let (dx, dy) = self.content_offset();
@@ -43631,6 +44868,8 @@ impl App {
                     Some(BLOCK_ROTATION_TOOLTIP)
                 } else if settings_row_hover_rect(ARMOR_TRIMS_ROW).contains(cx, cy) {
                     Some(ARMOR_TRIMS_TOOLTIP)
+                } else if settings_row_hover_rect(DEATH_ANIM_ROW).contains(cx, cy) {
+                    Some(DEATH_ANIM_TOOLTIP)
                 } else if settings_row_hover_rect(RENDER_DISTANCE_ROW).contains(cx, cy) {
                     Some(RENDER_DISTANCE_TOOLTIP)
                 } else if settings_row_hover_rect(ENTITY_DISTANCE_ROW).contains(cx, cy) {
@@ -43929,10 +45168,7 @@ impl App {
                 let zeile = crosshair_shape_row(self.settings.crosshair_color_mode);
                 let zeile_y = |row: usize| (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                 texts.push(UiText { text: "Form".to_string(), x: HUD_CONFIG_LABEL_X, y: zeile_y(zeile), color: theme::text(), scale: UI_SCALE_SMALL });
-                let form_rect = stepper_value_rect(zeile);
-                rects.push(UiRect { rect: form_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-                let form = crosshair_shape_label(self.settings.crosshair_shape_choice());
-                texts.push(gpu.centered_text(form_rect, form.to_string(), theme::text(), UI_SCALE_SMALL));
+                // Die Form selbst ist eine Aufklappliste aus buttons().
                 if !self.settings.crosshair_custom {
                     texts.push(UiText { text: "Größe".to_string(), x: HUD_CONFIG_LABEL_X, y: zeile_y(zeile + 1), color: theme::text(), scale: UI_SCALE_SMALL });
                     let groesse_rect = stepper_value_rect(zeile + 1);
@@ -44069,8 +45305,13 @@ impl App {
                     }
                 }
             }
-            HudElement::Keystrokes => {
-                for (row, (text, wert)) in [("Größe", self.settings.hud_keys_scale), ("Deckkraft", self.settings.keys_opacity)].into_iter().enumerate() {
+            HudElement::Keystrokes | HudElement::Session => {
+                let werte = if element == HudElement::Session {
+                    [("Größe", self.settings.hud_session_scale), ("Deckkraft", self.settings.session_opacity)]
+                } else {
+                    [("Größe", self.settings.hud_keys_scale), ("Deckkraft", self.settings.keys_opacity)]
+                };
+                for (row, (text, wert)) in werte.into_iter().enumerate() {
                     let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                     texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                     let value_rect = stepper_value_rect(row);
@@ -44242,6 +45483,14 @@ impl App {
                 ..UiRect::FLAT
             });
             self.push_keystrokes(gpu, rects, texts);
+        }
+
+        // Session-Info: Griff-Rahmen und die Tafel selbst, wie im Spiel.
+        if self.hud_element_shown(HudElement::Session) {
+            let rect = self.hud_session_rect(gpu);
+            let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
+            rects.push(UiRect { rect: frame, color: if dragging == Some(HudElement::Session) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE }, ..UiRect::FLAT });
+            self.push_session_info(gpu, rects, texts);
         }
 
         // Actionbar: Griff-Rahmen + Text-Vorschau (echter Text nur bei Verbindung).
@@ -45428,8 +46677,8 @@ impl App {
         match self.screen {
             MenuScreen::SettingsFont => 2.0 * w,
             // Die Partikel-Tabelle braucht die ganze Breite und hat keine Erklaerungen, ebenso
-            // Aussehen (Kacheln und Farben nebeneinander).
-            MenuScreen::SettingsParticles | MenuScreen::SettingsDesign => 0.0,
+            // Aussehen (Kacheln und Farben nebeneinander) und die Module (Kacheln, ohne Tooltips).
+            MenuScreen::SettingsParticles | MenuScreen::SettingsDesign | MenuScreen::SettingsModules => 0.0,
             _ => w,
         }
     }
@@ -45611,7 +46860,7 @@ impl App {
 
         let set = &self.settings;
         let detail = if set.fire_mode == FIRE_MODE_CROSSHAIR { "Farbe" } else { "Höhe" };
-        for (row, label) in [(HURT_CAM_ROW, "Hurt-Cam"), (HURT_CAM_STRENGTH_ROW, "Stärke"), (FIRE_MODE_ROW, "Modus"), (FIRE_DETAIL_ROW, detail)] {
+        for (row, label) in [(HURT_CAM_ROW, "Hurt-Cam"), (HURT_CAM_STRENGTH_ROW, "Stärke"), (FIRE_MODE_ROW, "Modus"), (FIRE_DETAIL_ROW, detail), (DEATH_ANIM_ROW, "Todesanimation")] {
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
         }
         let mut werte = vec![(HURT_CAM_STRENGTH_ROW, set.hurt_cam_strength)];
@@ -45823,11 +47072,7 @@ impl App {
     fn build_settings_audio_tab(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         let y0 = (settings_row_y(AUDIO_DEVICE_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         texts.push(UiText { text: "Ausgabegerät".to_string(), x: SETTINGS_LABEL_X, y: y0, color: theme::text(), scale: UI_SCALE_SMALL });
-        let options = self.audio_device_options();
-        let device_label = options.get(self.audio_device_index()).cloned().unwrap_or_else(|| "?".to_string());
-        let value_rect = stepper_value_rect(AUDIO_DEVICE_ROW);
-        rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
-        texts.push(gpu.centered_text(value_rect, device_label, theme::text(), UI_SCALE_SMALL));
+        // Das Geraet selbst ist eine Aufklappliste aus buttons().
 
         let y1 = (settings_row_y(AUDIO_TEST_TONE_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         texts.push(UiText { text: "Testton".to_string(), x: SETTINGS_LABEL_X, y: y1, color: theme::text(), scale: UI_SCALE_SMALL });
@@ -45854,7 +47099,7 @@ impl App {
         // Hauptlautstaerke (echt, s. Settings::master_volume) -- Pfeile aus buttons().
         let y4 = (settings_row_y(AUDIO_MASTER_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         texts.push(UiText { text: "Hauptlautstärke".to_string(), x: SETTINGS_LABEL_X, y: y4, color: theme::text(), scale: UI_SCALE_SMALL });
-        let volume_label = format!("{} %", self.settings.master_volume);
+        let volume_label = volume_text(self.settings.master_volume);
         self.draw_editable_value(gpu, stepper_value_rect(AUDIO_MASTER_ROW), EditableValue::MasterVolume, volume_label, rects, texts);
 
         // Je Kategorie ein Regler (s. VOLUME_CATEGORIES), Pfeile aus buttons().
@@ -45862,14 +47107,14 @@ impl App {
             let row = AUDIO_CATEGORY_FIRST_ROW + i;
             let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: kategorie.label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
-            self.draw_editable_value(gpu, stepper_value_rect(row), EditableValue::CategoryVolume(i), format!("{wert} %"), rects, texts);
+            self.draw_editable_value(gpu, stepper_value_rect(row), EditableValue::CategoryVolume(i), volume_text(wert), rects, texts);
         }
         // Je UI-Klang ein Regler (s. ui_sound::UiSound::ALL), Pfeile aus buttons().
         for (i, (klang, wert)) in ui_sound::UiSound::ALL.iter().zip(self.settings.ui_sound_volume).enumerate() {
             let row = AUDIO_UI_SOUND_FIRST_ROW + i;
             let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: klang.label().to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
-            self.draw_editable_value(gpu, stepper_value_rect(row), EditableValue::UiSoundVolume(i), format!("{wert} %"), rects, texts);
+            self.draw_editable_value(gpu, stepper_value_rect(row), EditableValue::UiSoundVolume(i), volume_text(wert), rects, texts);
         }
     }
 
@@ -46753,6 +47998,9 @@ impl App {
     }
 
     fn wheel_scrolls_list(&self) -> bool {
+        if self.dropdown_active().is_some() {
+            return true;
+        }
         let (px, py) = self.pointer();
         match self.mode {
             AppMode::Menu => {
@@ -46816,7 +48064,7 @@ impl App {
     // (s. tick_volume_keys), statt zwanzigmal je Sekunde.
     fn adjust_volume(&mut self, delta: i32, speichern: bool) {
         let vorher = self.settings.master_volume;
-        self.settings.master_volume = (vorher as i32 + delta).clamp(0, 100) as u32;
+        self.settings.master_volume = (vorher + delta as f32).clamp(0.0, 100.0);
         // Auch am Anschlag anzeigen: sonst wirkt die Eingabe dort kaputt.
         let jetzt = Instant::now();
         // Einfahren nur, wenn die Anzeige gerade nicht zu sehen ist. Steht sie schon (oder
@@ -46904,10 +48152,10 @@ impl App {
         g.rects.push(UiRect::framed(Rect { x, y, w, h }, a(theme::with_alpha(tg(Slot::BgPanel), 0.94)), 6.0, 1.0, a(tg(Slot::Border1))));
         g.texts.push(UiText { text: "Lautstärke".to_string(), x: x + pad, y: y + pad, color: a(tg(Slot::AccentText)), scale: UI_SCALE_SMALL });
         let wert = self.settings.master_volume;
-        g.texts.push(UiText { text: format!("{wert} %"), x: x + pad, y: y + pad + klein + 6.0, color: a(theme::text()), scale: UI_SCALE_NORMAL });
+        g.texts.push(UiText { text: volume_text(wert), x: x + pad, y: y + pad + klein + 6.0, color: a(theme::text()), scale: UI_SCALE_NORMAL });
         let balken = Rect { x: x + pad, y: y + h - pad - VOLUME_BAR_H, w: w - 2.0 * pad, h: VOLUME_BAR_H };
         g.rects.push(UiRect { rect: balken, color: a(tg(Slot::SurfaceSunken)), ..UiRect::FLAT });
-        g.rects.push(UiRect { rect: Rect { w: balken.w * wert as f32 / 100.0, ..balken }, color: a(theme::accent()), ..UiRect::FLAT });
+        g.rects.push(UiRect { rect: Rect { w: balken.w * wert / 100.0, ..balken }, color: a(theme::accent()), ..UiRect::FLAT });
         overlay.groups.push(g);
     }
 
@@ -47342,6 +48590,7 @@ impl App {
             let mut overlay = self.build_notifications();
             // Im Modul-Menue im Spiel gibt es ebenfalls Farbfelder und das Namensfenster.
             self.build_color_popup(&mut overlay);
+            self.build_dropdown(&mut overlay);
             self.build_theme_name_dialog(&mut overlay);
             (overlay, self.build_hud())
         } else {
@@ -48232,6 +49481,7 @@ impl App {
             self.tick_block_lids();
             self.tick_enchant_book();
             self.tick_trails();
+            self.tick_death_bursts();
             self.tick_custom_sky();
             self.tick_weather();
             self.world.border.tick();
@@ -48599,6 +49849,16 @@ impl App {
             let _ = tx.send(protocol::packets::attack_entity_payload(entity_id, self.sneak_held));
         }
         let _ = tx.send(protocol::packets::swing_payload());
+        // Session-Info: wer jetzt stirbt, zaehlt als eigener Kill -- der Getroffene selbst bzw.
+        // beim Kristall jeder in Reichweite der Explosion.
+        if let Some((id, e)) = target.and_then(|id| Some((id, self.entities.get(id)?))) {
+            let pos = e.target_pos();
+            match world::entity_type_name(e.entity_type) {
+                Some("player") => self.session.engage(id, Instant::now()),
+                Some("end_crystal") => self.session_engage_near(pos, session_info::CRYSTAL_RADIUS),
+                _ => {}
+            }
+        }
         // Crystal-Optimizer (s. crystal_optimizer.rs): ein getroffener End-Kristall verschwindet
         // sofort, statt eine Rundreise lang auf das Entfernen-Paket zu warten -- aber nur, wenn
         // der Schlag ihn auch zerstoeren kann (Schwaeche).
@@ -48702,7 +49962,7 @@ impl App {
         if !set.module_ego_name {
             return None;
         }
-        let r = ego_name::Rewrite { name: self.own_name()?, alias: &set.ego_alias, deco: set.ego_deco != ego_name::Deco::Off, shadow: set.ego_shadow };
+        let r = ego_name::Rewrite { name: self.own_name()?, alias: &set.ego_alias, deco: set.ego_deco != ego_name::Deco::Off, shadow: set.ego_shadow != ego_name::Deco::Off };
         ego_name::rewrite(spans, &r)
     }
 
@@ -48729,17 +49989,11 @@ impl App {
     // Stand fuer paint()/shadow(), einmal je Durchlauf der Ereignisschleife.
     fn publish_ego_look(&self) {
         let set = &self.settings;
-        let look = set.module_ego_name.then(|| {
-            let [h, sa, v, a] = set.ego_colors[2];
-            let [r, g, b] = hsv_to_rgb(h as f32, sa as f32 / 100.0, v as f32 / 100.0);
-            let k = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u32;
-            ego_name::Look {
-                deco: set.ego_deco,
-                a: set.ego_rgb(0),
-                b: set.ego_rgb(1),
-                speed: set.ego_speed as f32 / 10.0,
-                shadow: set.ego_shadow.then_some((k(a as f32 / 100.0) << 24) | (k(r) << 16) | (k(g) << 8) | k(b)),
-            }
+        let look = set.module_ego_name.then(|| ego_name::Look {
+            name: ego_name::Paint { deco: set.ego_deco, a: set.ego_rgb(0), b: set.ego_rgb(1), light: set.ego_light as f32 / 100.0 },
+            speed: set.ego_speed as f32 / 10.0,
+            shadow: ego_name::Paint { deco: set.ego_shadow, a: set.ego_rgb(2), b: set.ego_rgb(3), light: set.ego_shadow_light as f32 / 100.0 },
+            shadow_alpha: set.ego_colors[2][3] as f32 / 100.0,
         });
         ego_name::set_look(look);
     }
@@ -48756,7 +50010,7 @@ impl App {
         let Some(aufnahme) = self.vanilla_sounds.resolve(&mut self.installation, &event, seed) else { return };
         // Ohne die Lautstaerke aus sounds.json: manche Klaenge stehen dort sehr leise (Amethyst
         // 0.2), hier regelt allein der eigene Regler.
-        let gain = self.settings.ego_volume as f32 / 100.0 * self.settings.sound_gain(protocol::packets::SoundCategory::Players);
+        let gain = self.settings.ego_volume / 100.0 * self.settings.sound_gain(protocol::packets::SoundCategory::Players);
         if gain > 0.0 {
             self.audio.sink().play_sample(aufnahme.sample, gain, 0.0, aufnahme.pitch);
         }
@@ -50030,6 +51284,12 @@ impl App {
                 self.block_sequence = self.block_sequence.wrapping_add(1);
                 let sequence = self.block_sequence;
                 interaktions_log_pos("use_item_on", hit.block);
+                // Session-Info: Anker und Betten explodieren ausserhalb ihrer Dimension -- wer
+                // dabei stirbt, zaehlt als eigener Kill (s. send_attack).
+                let (bx, by, bz) = hit.block;
+                if world::block_name(self.world.block_at(bx, by, bz)).is_some_and(|n| n == "respawn_anchor" || n.ends_with("_bed")) {
+                    self.session_engage_near((bx as f64 + 0.5, by as f64 + 0.5, bz as f64 + 0.5), session_info::BLOCK_EXPLOSION_RADIUS);
+                }
                 if let Some(tx) = &self.outgoing_tx {
                     let _ = tx.send(protocol::packets::use_item_on_payload(
                         hand,
@@ -51893,6 +53153,12 @@ impl App {
             self.dump_main_hand_item();
             return;
         }
+        self.send_chat_text(text);
+    }
+
+    // Eine Zeile an den Server: Befehl oder (signierte) Chatnachricht -- aus dem Chatfeld oder
+    // von einem Addon.
+    fn send_chat_text(&mut self, text: String) {
         if self.outgoing_tx.is_none() {
             return;
         }
@@ -52100,6 +53366,7 @@ impl App {
         let t = Instant::now();
         self.drain_auth_events();
         self.drain_server_status();
+        self.drain_addons();
         self.profiler.add(Phase::DrainAuth, t);
         let t = Instant::now();
         self.update_hover_sound();
@@ -52511,6 +53778,10 @@ impl App {
                     self.dialog_scroll(rasten * 40.0);
                     return;
                 }
+                if self.dropdown_active().is_some() {
+                    self.dropdown_scroll(rasten);
+                    return;
+                }
                 if self.awaiting_keybind.is_some() {
                     if rasten.abs() > 0.01 {
                         let Some((target, slot)) = self.awaiting_keybind.take() else { return };
@@ -52781,6 +54052,10 @@ impl App {
                         }
                         ElementState::Released => self.color_popup_release(),
                     }
+                }
+                // Aufklappliste: wie das Farbfenster ueber allem, ein Druck daneben schliesst sie nur.
+                if button == MouseButton::Left && state == ElementState::Pressed && self.dropdown.is_some() && self.dropdown_press() {
+                    return;
                 }
                 // Offene Benachrichtigungsliste: ein Klick daneben (nicht auf die Glocke) schliesst sie.
                 if button == MouseButton::Left && state == ElementState::Pressed && self.notification_panel_open {
@@ -53144,6 +54419,8 @@ impl App {
                                                 let allow_dot = ev.allows_decimal();
                                                 let allow_minus = ev.allows_negative();
                                                 for ch in text.chars() {
+                                                    // Komma ist der deutsche Dezimalpunkt.
+                                                    let ch = if ch == ',' { '.' } else { ch };
                                                     let is_dot = ch == '.' && allow_dot && !buf.contains('.');
                                                     // Minus nur ganz vorn und nur, wo "-1" ueberhaupt eine
                                                     // Bedeutung hat -- sonst koennte man eine negative
@@ -53600,6 +54877,7 @@ impl App {
                         self.build_notification_panel(&mut overlay);
                         self.build_keybind_advanced(&mut overlay);
                         self.build_color_popup(&mut overlay);
+                        self.build_dropdown(&mut overlay);
                         self.build_quick_connect(&mut overlay);
                         self.build_theme_name_dialog(&mut overlay);
                         self.build_theme_delete(&mut overlay);
@@ -53785,6 +55063,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CycleTearPosition
         | ButtonAction::CycleRenderPath
         | ButtonAction::CycleParticles
+        | ButtonAction::CycleDeathAnimation
         | ButtonAction::CycleHoldUseRepeat
         | ButtonAction::CycleWallpaper
         | ButtonAction::CycleLanguage(_)
@@ -53800,8 +55079,6 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CrosshairColorNext
         | ButtonAction::CrosshairBoostPrev
         | ButtonAction::CrosshairBoostNext
-        | ButtonAction::CrosshairShapePrev
-        | ButtonAction::CrosshairShapeNext
         | ButtonAction::CrosshairSizePrev
         | ButtonAction::CrosshairSizeNext
         | ButtonAction::InventoryScalePrev
@@ -53829,8 +55106,6 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::EffectsTimerColor(_)
         | ButtonAction::ChatScalePrev
         | ButtonAction::ChatScaleNext
-        | ButtonAction::AudioDevicePrev
-        | ButtonAction::AudioDeviceNext
         | ButtonAction::UiPitchDown
         | ButtonAction::UiPitchUp
         | ButtonAction::InventoryTransparencyPrev
@@ -53955,7 +55230,10 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::TeamNametag(..) => UiSound::Click,
         ButtonAction::TeamOpacity(..) | ButtonAction::TeamDensity(..) => UiSound::Step,
         ButtonAction::ToggleModuleKeystrokes => umschalten(settings.module_keystrokes),
-        ButtonAction::KeysOpacityPrev | ButtonAction::KeysOpacityNext => UiSound::Step,
+        ButtonAction::KeysOpacityPrev | ButtonAction::KeysOpacityNext | ButtonAction::SessionOpacity(_) => UiSound::Step,
+        ButtonAction::ToggleModuleSessionInfo => umschalten(settings.module_session_info),
+        ButtonAction::ToggleSessionLine(bit) => umschalten(settings.session_lines & bit != 0),
+        ButtonAction::ResetSession => UiSound::Click,
         ButtonAction::ArmorHudGapPrev
         | ButtonAction::ArmorHudGapNext
         | ButtonAction::ArmorHudNumberScalePrev
@@ -53975,8 +55253,8 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleSaturationHud => umschalten(settings.module_saturation_hud),
         ButtonAction::SaturationHeightPrev | ButtonAction::SaturationHeightNext | ButtonAction::SaturationAlpha(..) => UiSound::Step,
         ButtonAction::ToggleModuleEgoName => umschalten(settings.module_ego_name),
-        ButtonAction::EditEgoAlias | ButtonAction::CycleEgoDeco | ButtonAction::EgoShadow(_) | ButtonAction::CycleEgoSound => UiSound::Click,
-        ButtonAction::EgoSpeed(_) | ButtonAction::EgoVolume(_) => UiSound::Step,
+        ButtonAction::EditEgoAlias | ButtonAction::CycleEgoDeco | ButtonAction::CycleEgoShadow | ButtonAction::CycleEgoSound => UiSound::Click,
+        ButtonAction::EgoSpeed(_) | ButtonAction::EgoLight(..) | ButtonAction::EgoVolume(_) => UiSound::Step,
         ButtonAction::AutoclickerCpsPrev | ButtonAction::AutoclickerCpsNext => UiSound::Step,
         ButtonAction::ToggleModuleColor => umschalten(settings.module_color),
         ButtonAction::ToggleModuleSustainability => umschalten(settings.module_sustainability),
@@ -54707,21 +55985,22 @@ mod damage_tint_tests {
     fn kategorie_lautstaerke_wird_gespeichert_und_verrechnet() {
         use protocol::packets::SoundCategory as C;
         let mut set = Settings::base();
-        set.master_volume = 50;
+        set.master_volume = 50.5;
         let spieler = VOLUME_CATEGORIES.iter().position(|c| c.category == C::Players).unwrap();
         let ui = VOLUME_CATEGORIES.iter().position(|c| c.category == C::Ui).unwrap();
-        set.category_volume[spieler] = 40;
-        set.category_volume[ui] = 30;
+        set.category_volume[spieler] = 40.0;
+        set.category_volume[ui] = 12.25;
         let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.category_volume, set.category_volume);
-        assert!((geladen.sound_gain(C::Players) - 0.2).abs() < 1e-6);
-        assert!((geladen.sound_gain(C::Blocks) - 0.5).abs() < 1e-6);
+        assert_eq!(geladen.master_volume, 50.5);
+        assert!((geladen.sound_gain(C::Players) - 0.202).abs() < 1e-6);
+        assert!((geladen.sound_gain(C::Blocks) - 0.505).abs() < 1e-6);
         // Die Oberflaeche haengt nicht an der Hauptlautstaerke.
-        assert!((geladen.sound_gain(C::Ui) - 0.3).abs() < 1e-6);
+        assert!((geladen.sound_gain(C::Ui) - 0.1225).abs() < 1e-6);
         // Die Lautstaerke je UI-Klang uebersteht Speichern und Laden.
         let mut set = Settings::base();
-        set.ui_sound_volume[ui_sound::UiSound::Erase.index()] = 35;
-        set.ui_sound_volume[ui_sound::UiSound::Hover.index()] = 0;
+        set.ui_sound_volume[ui_sound::UiSound::Erase.index()] = 35.5;
+        set.ui_sound_volume[ui_sound::UiSound::Hover.index()] = 0.0;
         assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).ui_sound_volume, set.ui_sound_volume);
     }
 
@@ -57132,7 +58411,7 @@ mod tests {
     #[test]
     fn fadenkreuz_form_und_groessen_werden_gespeichert() {
         let mut set = Settings::base();
-        set.step_crosshair_shape(1);
+        set.set_crosshair_shape_choice(CROSSHAIR_SHAPE_DOT);
         set.step_crosshair_size(3);
         let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
         assert_eq!(geladen.crosshair_shape, CROSSHAIR_SHAPE_DOT);
@@ -57144,12 +58423,10 @@ mod tests {
         assert_eq!(unsinn.crosshair_sizes[1], CROSSHAIR_SHAPES[1].2);
         // Die Auswahl endet bei "Eigene" und schaltet dort den Pixel-Editor-Stand ein.
         let mut set = Settings::base();
-        for _ in 0..10 {
-            set.step_crosshair_shape(1);
-        }
+        set.set_crosshair_shape_choice(10);
         assert!(set.crosshair_custom);
         assert_eq!(set.crosshair_shape_choice(), CROSSHAIR_SHAPE_CUSTOM);
-        set.step_crosshair_shape(-1);
+        set.set_crosshair_shape_choice(CROSSHAIR_SHAPE_OPEN);
         assert!(!set.crosshair_custom);
     }
 

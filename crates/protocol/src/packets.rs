@@ -812,6 +812,14 @@ pub fn read_system_chat_spans(payload: &[u8]) -> Result<(Vec<crate::nbt::TextSpa
     Ok((spans, overlay))
 }
 
+// Opfer und Taeter, wenn die System-Chat-Zeile eine Vanilla-Todesmeldung ist (s.
+// nbt::death_message).
+pub fn read_system_chat_death(payload: &[u8]) -> Result<Option<(String, Option<String>)>, ReadError> {
+    let mut r = PacketReader::new(payload);
+    let _id = r.read_varint()?;
+    Ok(nbt::read_root(&mut r)?.as_ref().and_then(nbt::death_message))
+}
+
 // Ein Text-Component als farbige Abschnitte statt als nackter String.
 fn read_text_spans(r: &mut PacketReader) -> Result<Vec<crate::nbt::TextSpan>, ReadError> {
     Ok(nbt::read_root(r)?.as_ref().map(nbt::text_to_spans).unwrap_or_default())

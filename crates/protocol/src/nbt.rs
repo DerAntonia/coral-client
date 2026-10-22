@@ -879,6 +879,24 @@ fn split_translation(pattern: &str) -> Vec<TranslationPart> {
     out
 }
 
+// Vanillas Todesmeldung (ServerPlayer.die -> CombatTracker.getDeathMessage): Schluessel
+// "death.*", erstes Argument das Opfer, zweites -- wenn es einen gibt -- der Taeter
+// ("death.attack.arrow": Opfer, Schuetze). Als reiner Text, Teampraefixe inklusive. Server mit
+// eigenem Wortlaut schicken fertigen Text, dann None.
+pub fn death_message(value: &NbtValue) -> Option<(String, Option<String>)> {
+    let key = value.get("translate").and_then(NbtValue::as_str)?;
+    if !key.starts_with("death.") {
+        return None;
+    }
+    let Some(NbtValue::List(args)) = value.get("with") else { return None };
+    let text = |arg: &NbtValue| {
+        let mut spans = Vec::new();
+        collect_arg_spans(arg, &Style::default(), &mut spans);
+        spans.into_iter().map(|s| s.text).collect::<String>()
+    };
+    Some((text(args.first()?), args.get(1).map(text)))
+}
+
 // Ein Argument von "with": meist ein Text-Component, aber Zahlen stehen auch direkt da
 // (z.B. die Stufe in "commands.enchant.success.single").
 fn collect_arg_spans(arg: &NbtValue, style: &Style, out: &mut Vec<TextSpan>) {

@@ -340,6 +340,9 @@ pub enum ClientEvent {
     // Die Nachricht MIT ihren Farben (s. packets::read_system_chat_spans) -- im Chat traegt
     // Farbe Bedeutung: Teamfarben, Warnungen, Serverpraefixe.
     Chat(Vec<protocol::nbt::TextSpan>, bool),
+    // Die Chat-Zeile davor war eine Vanilla-Todesmeldung: Opfer und (wenn genannt) Taeter,
+    // als reiner Text (s. nbt::death_message).
+    DeathMessage { victim: String, killer: Option<String> },
     // Wer sitzt auf wem (s. packets::read_set_passengers). Eine leere Liste = alle sind
     // abgestiegen.
     Passengers { vehicle: i32, passengers: Vec<i32> },
@@ -1956,6 +1959,9 @@ async fn handle_play_packet(
     } else if id == packets::CB_PLAY_SYSTEM_CHAT {
         if let Ok((spans, overlay)) = packets::read_system_chat_spans(payload) {
             let _ = events.send(ClientEvent::Chat(spans, overlay));
+        }
+        if let Ok(Some((victim, killer))) = packets::read_system_chat_death(payload) {
+            let _ = events.send(ClientEvent::DeathMessage { victim, killer });
         }
     } else if id == packets::CB_PLAY_SET_ACTION_BAR_TEXT {
         if let Ok(spans) = packets::read_action_bar_spans(payload) {

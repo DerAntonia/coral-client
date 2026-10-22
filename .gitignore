@@ -14,3 +14,5 @@ __pycache__/
 
 # Dekompilat Minecraft 1.21.11 (Mojang-Code, nur lokal zum Nachschauen)
 /decompiled/
+/addons/template/target/
+/addons/template/Cargo.lock

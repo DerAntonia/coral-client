@@ -14,8 +14,9 @@ use std::time::Instant;
 
 const MARK: u32 = 0x8000_0000;
 // Schattenfarbe "vom Modul": Alpha 0, also ohne Aufloesung gar kein Schatten statt eines
-// falschen.
-const SHADOW_MARK: u32 = 0x00E6_0A11;
+// falschen. In den unteren 7 Bits die Lage des Zeichens im Namen (Verlauf, Regenbogen).
+const SHADOW_MARK: u32 = 0x00E6_0A00;
+const SHADOW_MARK_MASK: u32 = 0xFFFF_FF80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Deco {
@@ -30,8 +31,13 @@ impl Deco {
     pub const ALL: [Deco; 5] = [Deco::Off, Deco::Solid, Deco::Gradient, Deco::Flowing, Deco::Rainbow];
 
     pub fn label(self) -> &'static str {
+        self.label_or("Aus")
+    }
+
+    // Beschriftung, bei der "Aus" anders heisst (beim Schatten: der uebliche).
+    pub fn label_or(self, aus: &'static str) -> &'static str {
         match self {
-            Deco::Off => "Aus",
+            Deco::Off => aus,
             Deco::Solid => "Einfarbig",
             Deco::Gradient => "Verlauf",
             Deco::Flowing => "Verlauf bewegt",
@@ -91,16 +97,25 @@ pub fn next_sound(event: &str) -> &'static str {
     SOUNDS[i % SOUNDS.len()].0
 }
 
-// Was paint() und shadow() zum Aufloesen brauchen. sRGB 0..1.
+// Eine Faerbung: Art, die beiden Farben (sRGB 0..1) und beim Regenbogen, wie weit er zu
+// Weiss hin aufgehellt ist (0..1).
 #[derive(Clone, Copy)]
-pub struct Look {
+pub struct Paint {
     pub deco: Deco,
     pub a: [f32; 3],
     pub b: [f32; 3],
-    // Umlaeufe je Sekunde (bewegter Verlauf, Regenbogen).
+    pub light: f32,
+}
+
+// Was paint() und shadow() zum Aufloesen brauchen.
+#[derive(Clone, Copy)]
+pub struct Look {
+    pub name: Paint,
+    // Umlaeufe je Sekunde (bewegter Verlauf, Regenbogen), fuer Name und Schatten.
     pub speed: f32,
-    // ARGB, None = der uebliche Schatten.
-    pub shadow: Option<u32>,
+    // Faerbung des Schattens und seine Deckkraft (0..1); Deco::Off = der uebliche Schatten.
+    pub shadow: Paint,
+    pub shadow_alpha: f32,
 }
 
 static LOOK: RwLock<Option<Look>> = RwLock::new(None);
@@ -139,35 +154,41 @@ fn hue(h: f32) -> [f32; 3] {
     }
 }
 
+// Farbe an Stelle t (0..1) im Namen; None bei Deco::Off.
+fn color_at(p: &Paint, t: f32, speed: f32) -> Option<[f32; 3]> {
+    let phase = START.get_or_init(Instant::now).elapsed().as_secs_f32() * speed;
+    Some(match p.deco {
+        Deco::Off => return None,
+        Deco::Solid => p.a,
+        Deco::Gradient => mix(p.a, p.b, t),
+        // Ueber den Namen ein halber Umlauf: im Stand genau a bis b, dann wandert es hin und her.
+        Deco::Flowing => {
+            let u = (t * 0.5 - phase).rem_euclid(1.0);
+            mix(p.a, p.b, 1.0 - (2.0 * u - 1.0).abs())
+        }
+        Deco::Rainbow => mix(hue(t * 0.6 - phase), [1.0; 3], p.light),
+    })
+}
+
 // Die Farbe (0xRRGGBB), die eine Textfarbe tatsaechlich zeigt -- ungezeichnete Farben bleiben.
 pub fn paint(rgb: u32) -> u32 {
     if rgb & MARK == 0 {
         return rgb;
     }
     let alt = rgb & 0xFF_FFFF;
-    let Some(l) = look() else { return alt };
     let t = ((rgb >> 24) & 0x7F) as f32 / 127.0;
-    let phase = START.get_or_init(Instant::now).elapsed().as_secs_f32() * l.speed;
-    let c = match l.deco {
-        Deco::Off => return alt,
-        Deco::Solid => l.a,
-        Deco::Gradient => mix(l.a, l.b, t),
-        // Ueber den Namen ein halber Umlauf: im Stand genau a bis b, dann wandert es hin und her.
-        Deco::Flowing => {
-            let u = (t * 0.5 - phase).rem_euclid(1.0);
-            mix(l.a, l.b, 1.0 - (2.0 * u - 1.0).abs())
-        }
-        Deco::Rainbow => hue(t * 0.6 - phase),
-    };
-    to_u32(c)
+    look().and_then(|l| color_at(&l.name, t, l.speed)).map_or(alt, to_u32)
 }
 
 // Schattenfarbe eines Abschnitts: die Marke wird zur eingestellten, None = der uebliche.
 pub fn shadow(argb: u32) -> Option<u32> {
-    if argb != SHADOW_MARK {
+    if argb & SHADOW_MARK_MASK != SHADOW_MARK {
         return Some(argb);
     }
-    look().and_then(|l| l.shadow)
+    let t = (argb & 0x7F) as f32 / 127.0;
+    let l = look()?;
+    let c = color_at(&l.shadow, t, l.speed)?;
+    Some(((l.shadow_alpha.clamp(0.0, 1.0) * 255.0).round() as u32) << 24 | to_u32(c))
 }
 
 // Wie der Name umgeschrieben und markiert wird.
@@ -241,16 +262,17 @@ pub fn rewrite(spans: &[TextSpan], r: &Rewrite) -> Option<Vec<TextSpan>> {
 }
 
 fn push_name(out: &mut Vec<TextSpan>, stil: &TextSpan, text: &str, r: &Rewrite) {
-    let shadow = if r.shadow { Some(SHADOW_MARK) } else { stil.shadow };
-    if !r.deco {
-        out.push(TextSpan { text: text.to_string(), shadow, ..stil.clone() });
+    if !r.deco && !r.shadow {
+        out.push(TextSpan { text: text.to_string(), ..stil.clone() });
         return;
     }
     let alt = stil.color.unwrap_or(0xFF_FFFF);
     let n = text.chars().count();
     for (i, c) in text.chars().enumerate() {
         let lage = if n <= 1 { 0 } else { (i * 127 / (n - 1)) as u32 };
-        out.push(TextSpan { text: c.to_string(), color: Some(MARK | (lage << 24) | alt), shadow, ..stil.clone() });
+        let color = if r.deco { Some(MARK | (lage << 24) | alt) } else { stil.color };
+        let shadow = if r.shadow { Some(SHADOW_MARK | lage) } else { stil.shadow };
+        out.push(TextSpan { text: c.to_string(), color, shadow, ..stil.clone() });
     }
 }
 
@@ -295,7 +317,8 @@ mod tests {
         assert_eq!(text(&neu), "<abc> x");
         let marken: Vec<u32> = neu[1..4].iter().map(|s| s.color.unwrap()).collect();
         assert_eq!(marken, vec![MARK | 0x123456, MARK | (63 << 24) | 0x123456, MARK | (127 << 24) | 0x123456]);
-        assert!(neu[1..4].iter().all(|s| s.shadow == Some(SHADOW_MARK)));
+        let schatten: Vec<u32> = neu[1..4].iter().map(|s| s.shadow.unwrap()).collect();
+        assert_eq!(schatten, vec![SHADOW_MARK, SHADOW_MARK | 63, SHADOW_MARK | 127]);
         assert_eq!(paint(0x123456), 0x123456);
     }
 
