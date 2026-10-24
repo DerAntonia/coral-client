@@ -179,6 +179,7 @@ dependencies = [
  "chunk_saver",
  "coral-addon",
  "evdev",
+ "flate2",
  "glam",
  "image",
  "libc",
@@ -2388,7 +2389,6 @@ version = "26.10.8"
 dependencies = [
  "assets",
  "eframe",
- "image",
  "reqwest",
  "serde",
  "serde_json",
