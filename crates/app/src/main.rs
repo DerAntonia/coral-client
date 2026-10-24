@@ -7527,6 +7527,14 @@ impl GpuState {
                 Err(e) => println!("[gpu] Surface neu anlegen fehlgeschlagen: {e}"),
             }
         }
+        // Exklusives Vollbild stellt den Bildschirmmodus um; zusammen mit Aufnahme-Hooks lehnt
+        // DXGI die Swapchain dann teils ab (DXGI_ERROR_INVALID_CALL). Randlos geht dort. Die
+        // neue Groesse kommt per Resized (resize -> configure_surface), sonst greift der
+        // naechste Versuch von acquire_frame.
+        if !self.surface_ok && matches!(self.window.fullscreen(), Some(Fullscreen::Exclusive(_))) {
+            println!("[gpu] Rueckfall auf randloses Vollbild");
+            self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
         if !self.surface_ok {
             println!("[gpu] Swapchain weiter nicht einrichtbar, neuer Versuch in 2 s");
             self.surface_retry_at = Instant::now() + Duration::from_secs(2);
