@@ -12,9 +12,9 @@
 //   - seinen Ess- und Ruelpsklang, die wir schon gespielt haben.
 // Die Wirkung (Absorption, Regeneration, Saettigung) setzt weiter allein der Server.
 //
-// Bis der Server das Ende bestaetigt (hoechstens 500 ms), bleibt die Bewegung wie beim Essen
-// verlangsamt -- der Server haelt uns bis dahin noch fuer essend, und ein Anticheat erwartet
-// genau diese Geschwindigkeit.
+// Die Ess-Verlangsamung endet mit dem lokalen Ende, ohne auf den Server zu warten -- auch wenn
+// er (und mit ihm Grim, s. PacketSelfMetadataListener) uns bis zu seiner Meldung noch fuer
+// essend haelt. Auf pvphq kam diese Meldung gemessen nie innerhalb von 500 ms.
 //
 // Server duerfen die Mod abschalten: beim Beitreten meldet sich der Client auf
 // `consumable_optimizer:handshake_payload`, ein Plugin antwortet auf

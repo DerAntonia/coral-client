@@ -14,7 +14,8 @@ use crate::dialog::{self, ActionButton, AfterAction, Body, Control, Dialog, Even
 use crate::item_icons::UiSprite;
 use crate::text_field::TextField;
 use crate::{
-    dialog_dim, push_typed_marker, rgb_to_rgba, styled_button, theme, ui_sound, vanilla_text, wrap_spans, App, AppMode, Button, ButtonAction, ChatLine, ConnStatus,
+    dialog_dim, push_styled_piece, push_typed_marker, rgb_to_rgba, span_lines, styled_button, styled_text, theme, ui_sound, vanilla_text, wrap_spans,
+    wrap_spans_styled, App, AppMode, Button, ButtonAction, ChatLine, ConnStatus,
     GpuState, Rect, UiOverlay, UiOverlayGroup, UiRect, UiText, UI_SCALE_NORMAL, UI_SCALE_SMALL,
 };
 
@@ -66,8 +67,9 @@ enum ButtonRef {
 }
 
 enum Part {
-    // Text, mittig je Zeile (PlainMessage).
-    Text(Vec<ChatLine>),
+    // Text, mittig je Zeile (PlainMessage), gesetzt wie Vanilla: GUI-Einheiten mal dem
+    // Faktor, Minecraft-Breiten, 9 Einheiten je Zeile (s. vanilla_spans).
+    Text(Vec<ChatLine>, f32),
     // Beschriftung einer Eingabe, linksbuendig.
     Label(Vec<ChatLine>),
     // Geschachtelt: ein Stapel ist gross, die uebrigen Teile klein.
@@ -145,15 +147,50 @@ fn fit_line(gpu: &GpuState, spans: &[TextSpan], max_w: f32) -> ChatLine {
     ChatLine { indent: 0.0, spans: out }
 }
 
+// Server setzen ihre Dialoge auf Vanillas Masse (Bilder und Abstaende als Zeichen eigener
+// Schriften, Zeile fuer Zeile auf den Pixel ausgerichtet). FocusableTextWidget: 4 Einheiten
+// Rand, 9 je Zeile, jede Zeile mittig (TextAlignment.CENTER: Mitte minus halbe Breite,
+// ganzzahlig).
+const TEXT_PADDING: f32 = 4.0;
+const TEXT_LINE: f32 = 9.0;
+
+fn vanilla_line_w(gpu: &GpuState, line: &ChatLine) -> f32 {
+    line.indent + line.spans.iter().map(|s| gpu.vanilla_width(&s.text, s.style)).sum::<f32>()
+}
+
+// Die Zeilen eines Textteils, umbrochen wie Vanilla (Font.split mit maxWidth minus Rand).
+fn vanilla_wrap(gpu: &GpuState, spans: &[TextSpan], width: f32) -> Vec<ChatLine> {
+    wrap_spans_styled(spans, (width - 2.0 * TEXT_PADDING).max(1.0), |t, stil| gpu.vanilla_width(t, stil), 0.0)
+}
+
+fn vanilla_text_h(lines: usize) -> f32 {
+    lines as f32 * TEXT_LINE + 2.0 * TEXT_PADDING
+}
+
+// Wo Zeile `i` steht und wo jeder ihrer Abschnitte beginnt: (y, [(x, Breite, Abschnitt)]).
+fn vanilla_spans<'a>(gpu: &GpuState, rect: Rect, line: &'a ChatLine, i: usize, v: f32) -> (f32, Vec<(f32, f32, &'a TextSpan)>) {
+    let mitte = ((rect.x + rect.w / 2.0) / v).floor();
+    let mut x = mitte - (vanilla_line_w(gpu, line) / 2.0).floor() + line.indent;
+    let y = rect.y + (TEXT_PADDING + i as f32 * TEXT_LINE) * v;
+    let abschnitte = line
+        .spans
+        .iter()
+        .map(|span| {
+            let w = gpu.vanilla_width(&span.text, span.style);
+            let hier = x;
+            x += w;
+            (hier * v, w * v, span)
+        })
+        .collect();
+    (y, abschnitte)
+}
+
 // Links und Klick-Aktionen in einem Textteil: (Flaeche, Ereignis).
-fn text_hits(gpu: &GpuState, rect: Rect, lines: &[ChatLine]) -> Vec<(Rect, Event)> {
-    let lh = line_h(gpu);
+fn text_hits(gpu: &GpuState, rect: Rect, lines: &[ChatLine], v: f32) -> Vec<(Rect, Event)> {
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        let mut x = rect.x + (rect.w - spans_width(gpu, line)) / 2.0 + line.indent;
-        let y = rect.y + i as f32 * lh;
-        for span in &line.spans {
-            let w = gpu.measure_raw(&span.text, UI_SCALE_SMALL);
+        let (y, abschnitte) = vanilla_spans(gpu, rect, line, i, v);
+        for (x, w, span) in abschnitte {
             let ereignis = span.link.clone().map(Event::OpenUrl).or_else(|| {
                 span.action.as_ref().and_then(|a| a.click.as_ref()).map(|k| match k {
                     protocol::nbt::ClickAction::RunCommand(c) => Event::RunCommand(c.clone()),
@@ -162,9 +199,8 @@ fn text_hits(gpu: &GpuState, rect: Rect, lines: &[ChatLine]) -> Vec<(Rect, Event
                 })
             });
             if let Some(e) = ereignis {
-                out.push((Rect { x, y, w, h: lh }, e));
+                out.push((Rect { x, y, w, h: TEXT_LINE * v }, e));
             }
-            x += w;
         }
     }
     out
@@ -453,15 +489,16 @@ impl App {
         let innen_max = (sw - 32.0 - 2.0 * PAD).max(200.0);
         let lh = line_h(gpu);
         let gui = |w: f32| (w * GUI_PX).min(innen_max).round();
+        let v = self.hud_scale((sw, sh));
 
         // Erst Groessen sammeln (ohne Lage), dann stapeln.
         let mut stapel: Vec<((f32, f32), Part, f32)> = Vec::new(); // ((Breite, Hoehe), Teil, Abstand davor)
         for b in &d.body {
             match b {
                 Body::Text { spans, width } => {
-                    let zeilen = wrap(gpu, spans, gui(*width));
-                    let w = zeilen.iter().map(|z| spans_width(gpu, z)).fold(0.0, f32::max);
-                    stapel.push(((w, zeilen.len() as f32 * lh), Part::Text(zeilen), GAP));
+                    let zeilen = vanilla_wrap(gpu, spans, *width);
+                    let w = (width * v).min(innen_max);
+                    stapel.push(((w, vanilla_text_h(zeilen.len()) * v), Part::Text(zeilen, v), GAP));
                 }
                 Body::Item { id, count, description, decorations, width, height } => {
                     let name = id.strip_prefix("minecraft:").unwrap_or(id);
@@ -469,9 +506,9 @@ impl App {
                     let groesse = (width.max(*height) * 2.0).min(innen_max);
                     stapel.push(((groesse, groesse), Part::Item { stack: Box::new(protocol::item::ItemStack::new(item_id, *count)), decorations: *decorations }, GAP));
                     if let Some((spans, w)) = description {
-                        let zeilen = wrap(gpu, spans, gui(*w));
-                        let w = zeilen.iter().map(|z| spans_width(gpu, z)).fold(0.0, f32::max);
-                        stapel.push(((w, zeilen.len() as f32 * lh), Part::Text(zeilen), 4.0));
+                        let zeilen = vanilla_wrap(gpu, spans, *w);
+                        let w = (w * v).min(innen_max);
+                        stapel.push(((w, vanilla_text_h(zeilen.len()) * v), Part::Text(zeilen, v), 4.0));
                     }
                 }
             }
@@ -684,17 +721,22 @@ impl App {
         let mut tooltip: Option<Vec<TextSpan>> = None;
         let lh = line_h(gpu);
         for (r, teil) in &l.parts {
-            if !sichtbar(r) {
+            // Text zeilenweise (s. unten), alles andere nur ganz.
+            if !matches!(teil, Part::Text(..)) && !sichtbar(r) {
                 continue;
             }
             match teil {
-                Part::Text(zeilen) => {
+                Part::Text(zeilen, v) => {
                     for (i, z) in zeilen.iter().enumerate() {
-                        let x = r.x + (r.w - spans_width(gpu, z)) / 2.0;
-                        push_line(gpu, texts, z, x, r.y + i as f32 * lh);
-                    }
-                    for (hit, _) in text_hits(gpu, *r, zeilen) {
-                        rects.push(UiRect { rect: Rect { x: hit.x.round(), y: (hit.y + gpu.text_height(UI_SCALE_SMALL)).round(), w: hit.w.round(), h: 1.0 }, color: theme::text_2(), ..UiRect::FLAT });
+                        let (y, abschnitte) = vanilla_spans(gpu, *r, z, i, *v);
+                        if y < l.body.y - 1.0 || y + TEXT_LINE * v > l.body.y + l.body.h + 1.0 {
+                            continue;
+                        }
+                        for (x, w, span) in abschnitte {
+                            let farbe = span_color(span);
+                            span_lines(gpu, span.style, x, x + w, y, farbe, *v, &mut |l| rects.push(UiRect { rect: l, color: farbe, ..UiRect::FLAT }));
+                            push_styled_piece(span.style, span.shadow, styled_text(span).into_owned(), x.round(), y.round(), farbe, *v, texts);
+                        }
                     }
                 }
                 Part::Label(zeilen) => {
@@ -876,13 +918,13 @@ impl App {
         if !l.body.contains(cx, cy) {
             return;
         }
-        let treffer = l.parts.iter().find(|(r, _)| r.contains(cx, cy) && r.y >= l.body.y - 1.0 && r.y + r.h <= l.body.y + l.body.h + 1.0);
+        let treffer = l.parts.iter().find(|(r, teil)| r.contains(cx, cy) && (matches!(teil, Part::Text(..)) || (r.y >= l.body.y - 1.0 && r.y + r.h <= l.body.y + l.body.h + 1.0)));
         let Some((r, teil)) = treffer else { return };
         let r = *r;
         match teil {
             Part::Button(br) if !rechts => self.press_dialog_button(*br),
-            Part::Text(zeilen) if !rechts => {
-                let klick = text_hits(gpu, r, zeilen).into_iter().find(|(h, _)| h.contains(cx, cy)).map(|(_, e)| e);
+            Part::Text(zeilen, v) if !rechts => {
+                let klick = text_hits(gpu, r, zeilen, *v).into_iter().find(|(h, _)| h.contains(cx, cy)).map(|(_, e)| e);
                 if let Some(e) = klick {
                     // Wie runActionOnParent: das Ereignis mit der after_action des Dialogs.
                     let after = self.dialog.as_ref().map_or(AfterAction::Close, |o| o.dialog.after_action);

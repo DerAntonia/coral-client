@@ -68,7 +68,7 @@ impl TeamHitbox {
         let teile: Vec<&str> = text.split(',').map(str::trim).collect();
         let [on, nametag, h, s, v, a, d, dotted] = teile[..] else { return default };
         let zahl = |t: &str, min: u32, max: u32| t.parse::<u32>().ok().map(|n| n.clamp(min, max));
-        match (zahl(h, 0, 359), zahl(s, 0, 100), zahl(v, 0, 100), zahl(a, 0, 100), zahl(d, 1, 10)) {
+        match (zahl(h, 0, 359), zahl(s, 0, 100), zahl(v, 0, 100), zahl(a, 0, u32::MAX), zahl(d, 0, u32::MAX)) {
             (Some(hue), Some(saturation), Some(value), Some(opacity), Some(density_px)) => TeamHitbox {
                 on: on == "true",
                 nametag: nametag == "true",

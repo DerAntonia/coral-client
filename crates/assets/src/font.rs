@@ -84,6 +84,9 @@ pub struct BitmapFont {
     // Vorschub des Leerzeichens; kommt aus einem eigenen "space"-Provider, weil die
     // zugehoerige Bitmap-Zelle leer ist und sonst die Breite 1 ergaebe.
     pub space_advance: f32,
+    // Die uebrigen Zeichen des space-Providers mit ihrem Vorschub. Bei Vanilla nur U+200C
+    // (Zero Width Non-Joiner) mit 0 -- ohne den Eintrag kaeme es als Unifont-Kaestchen "ZW NJ".
+    pub spaces: Vec<(char, f32)>,
 }
 
 impl BitmapFont {
@@ -120,7 +123,9 @@ impl AltFontGlyphs {
 
 impl MinecraftInstallation {
     pub fn load_default_font(&mut self) -> Result<BitmapFont, AssetsError> {
-        let space_advance = self.load_space_advance().unwrap_or(4.0);
+        let spaces = self.load_space_advances().unwrap_or_default();
+        let space_advance = spaces.iter().find(|(c, _)| *c == ' ').map_or(4.0, |&(_, a)| a);
+        let spaces = spaces.into_iter().filter(|(c, _)| *c != ' ').collect();
 
         let definition: Value = serde_json::from_slice(&self.load_bytes("minecraft/font/include/default.json")?)?;
         let providers = definition
@@ -143,7 +148,7 @@ impl MinecraftInstallation {
         if pages.is_empty() {
             return Err(AssetsError::FontFormat("kein brauchbarer bitmap-Provider in include/default.json".into()));
         }
-        Ok(BitmapFont { pages, space_advance })
+        Ok(BitmapFont { pages, space_advance, spaces })
     }
 
     // Die Zauberschrift (font/alt.json, "Standard Galactic Alphabet"): EINE Bitmap-Seite
@@ -193,16 +198,30 @@ impl MinecraftInstallation {
     }
 
     fn load_space_advance(&mut self) -> Option<f32> {
+        self.load_space_advances()?.into_iter().find(|(c, _)| *c == ' ').map(|(_, a)| a)
+    }
+
+    fn load_space_advances(&mut self) -> Option<Vec<(char, f32)>> {
         let value: Value = serde_json::from_slice(&self.load_bytes("minecraft/font/include/space.json").ok()?).ok()?;
-        value
+        let advances = value
             .get("providers")?
             .as_array()?
             .iter()
             .find(|p| p.get("type").and_then(Value::as_str) == Some("space"))?
             .get("advances")?
-            .get(" ")?
-            .as_f64()
-            .map(|v| v as f32)
+            .as_object()?;
+        Some(
+            advances
+                .iter()
+                .filter_map(|(k, a)| {
+                    let mut it = k.chars();
+                    match (it.next(), it.next(), a.as_f64()) {
+                        (Some(c), None, Some(a)) => Some((c, a as f32)),
+                        _ => None,
+                    }
+                })
+                .collect(),
+        )
     }
 }
 

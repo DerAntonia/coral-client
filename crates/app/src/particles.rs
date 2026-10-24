@@ -1387,6 +1387,7 @@ impl Particles {
             world::biome_tint::TintKind::GrassAll => farben().grass,
             world::biome_tint::TintKind::FoliageAll => farben().foliage,
             world::biome_tint::TintKind::DryFoliageAll => farben().dry_foliage,
+            world::biome_tint::TintKind::Fixed(rgb) => [((rgb >> 16) & 0xff) as f32 / 255.0, ((rgb >> 8) & 0xff) as f32 / 255.0, (rgb & 0xff) as f32 / 255.0],
             world::biome_tint::TintKind::None | world::biome_tint::TintKind::GrassTop => [1.0; 3],
         };
         p.color = [0.6 * r, 0.6 * g, 0.6 * b, 1.0];

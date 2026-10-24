@@ -29,7 +29,7 @@ const PADDING: u32 = 1;
 
 // Die GUI-Sheets, die die Oberflaeche kennt. Schluessel = der Name, unter dem die App das
 // Rechteck abfragt (s. UiAtlas::rect), Wert = Pfad in der Installation.
-pub const GUI_SHEETS: [(&str, &str); 151] = [
+pub const GUI_SHEETS: [(&str, &str); 164] = [
     ("hud/hotbar", "minecraft/textures/gui/sprites/hud/hotbar.png"),
     ("hud/hotbar_selection", "minecraft/textures/gui/sprites/hud/hotbar_selection.png"),
     ("hud/hotbar_offhand_left", "minecraft/textures/gui/sprites/hud/hotbar_offhand_left.png"),
@@ -48,6 +48,19 @@ pub const GUI_SHEETS: [(&str, &str); 151] = [
     ("hud/heart/withered_half", "minecraft/textures/gui/sprites/hud/heart/withered_half.png"),
     ("hud/heart/absorbing_full", "minecraft/textures/gui/sprites/hud/heart/absorbing_full.png"),
     ("hud/heart/absorbing_half", "minecraft/textures/gui/sprites/hud/heart/absorbing_half.png"),
+    ("hud/heart/frozen_full", "minecraft/textures/gui/sprites/hud/heart/frozen_full.png"),
+    ("hud/heart/frozen_half", "minecraft/textures/gui/sprites/hud/heart/frozen_half.png"),
+    ("hud/heart/container_hardcore", "minecraft/textures/gui/sprites/hud/heart/container_hardcore.png"),
+    ("hud/heart/hardcore_full", "minecraft/textures/gui/sprites/hud/heart/hardcore_full.png"),
+    ("hud/heart/hardcore_half", "minecraft/textures/gui/sprites/hud/heart/hardcore_half.png"),
+    ("hud/heart/poisoned_hardcore_full", "minecraft/textures/gui/sprites/hud/heart/poisoned_hardcore_full.png"),
+    ("hud/heart/poisoned_hardcore_half", "minecraft/textures/gui/sprites/hud/heart/poisoned_hardcore_half.png"),
+    ("hud/heart/withered_hardcore_full", "minecraft/textures/gui/sprites/hud/heart/withered_hardcore_full.png"),
+    ("hud/heart/withered_hardcore_half", "minecraft/textures/gui/sprites/hud/heart/withered_hardcore_half.png"),
+    ("hud/heart/frozen_hardcore_full", "minecraft/textures/gui/sprites/hud/heart/frozen_hardcore_full.png"),
+    ("hud/heart/frozen_hardcore_half", "minecraft/textures/gui/sprites/hud/heart/frozen_hardcore_half.png"),
+    ("hud/heart/absorbing_hardcore_full", "minecraft/textures/gui/sprites/hud/heart/absorbing_hardcore_full.png"),
+    ("hud/heart/absorbing_hardcore_half", "minecraft/textures/gui/sprites/hud/heart/absorbing_hardcore_half.png"),
     ("hud/armor_empty", "minecraft/textures/gui/sprites/hud/armor_empty.png"),
     ("hud/armor_half", "minecraft/textures/gui/sprites/hud/armor_half.png"),
     ("hud/armor_full", "minecraft/textures/gui/sprites/hud/armor_full.png"),

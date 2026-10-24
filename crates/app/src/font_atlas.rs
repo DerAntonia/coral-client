@@ -124,6 +124,13 @@ fn has_bold(ch: char) -> bool {
     matches!(ch as u32, 0x20..=0x17F | 0x370..=0x3FF | 0x400..=0x45F | 0x2010..=0x205F | 0x20A0..=0x20CF | 0x2190..=0x2195) || is_small_capital(ch)
 }
 
+// Zeichen mit Subpixel-Fassungen (s. SUBPIXEL_STEPS): Latein bis Extended-A, Satzzeichen,
+// Kapitaelchen. Griechisch und Kyrillisch nicht -- mit ihnen passte Noto Sans nicht mehr in eine
+// Textur.
+fn has_subpixel(ch: char) -> bool {
+    matches!(ch as u32, 0x20..=0x17F | 0x2010..=0x205F) || is_small_capital(ch)
+}
+
 // Kapitaelchen als eigene Unicode-Zeichen (ᴀʙᴄᴅᴇꜰɢʜɪ...), wie Server sie fuer "Small Caps"
 // schreiben -- keine OpenType-Funktion, sondern Buchstaben aus dem IPA- und Lautschrift-
 // Block. Kaum eine Schrift hat sie; fehlen sie, kommen sie aus Noto Sans statt aus der
@@ -134,6 +141,32 @@ fn is_small_capital(ch: char) -> bool {
         0x01EB | 0x0262 | 0x026A | 0x0274 | 0x0276 | 0x0280 | 0x0281 | 0x028F | 0x0299 | 0x029B | 0x029C | 0x029F
             | 0x1D00..=0x1D22 | 0x1D26..=0x1D2B | 0xA730 | 0xA731 | 0xA7AF
     )
+}
+
+// Server schreiben "Small Caps" oft mit normalem s (ᴘᴠᴘ ꜱᴇʀᴠᴇʀ mit "s"): in der Minecraft-
+// Schrift ist ꜱ dasselbe Bild wie s, in einer Vektorschrift faellt das kleine s heraus. In einem
+// Wort aus Kapitaelchen (Grossbuchstaben duerfen dabei sein) wird es deshalb als ꜱ gezeichnet;
+// nur fuer die Darstellung, der Text selbst bleibt.
+pub(crate) fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('s') || !text.chars().any(is_small_capital) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let zeichen: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 2);
+    let mut i = 0;
+    while i < zeichen.len() {
+        if !zeichen[i].is_alphabetic() {
+            out.push(zeichen[i]);
+            i += 1;
+            continue;
+        }
+        let ende = zeichen[i..].iter().position(|c| !c.is_alphabetic()).map_or(zeichen.len(), |n| i + n);
+        let wort = &zeichen[i..ende];
+        let kapitaelchen = wort.iter().any(|&c| is_small_capital(c)) && wort.iter().all(|&c| c == 's' || c.is_uppercase() || is_small_capital(c));
+        out.extend(wort.iter().map(|&c| if kapitaelchen && c == 's' { '\u{A731}' } else { c }));
+        i = ende;
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 // Versalhoehe jeder TTF-Schrift in Font-Pixeln: die 7 Pixel der Minecraft-Grossbuchstaben.
@@ -153,7 +186,17 @@ const DM_SANS_QUARTERS: std::ops::RangeInclusive<u8> = 4..=20;
 // Abstand zwischen zwei Glyphen im Atlas: lineares Sampling bei krummen Faktoren darf nicht
 // in den Nachbarn greifen.
 const DM_SANS_PADDING: u32 = 2;
+// Subpixel-Fassungen: lateinische Buchstaben, Satzzeichen und Kapitaelchen (s. has_subpixel)
+// werden zusaetzlich um
+// 1/4, 2/4 und 3/4 Pixel nach rechts verschoben gerastert. Beim Zeichnen nimmt snap_x die
+// Fassung, die zum Nachkomma-Anteil der Stiftposition passt -- sonst rundete jeder Buchstabe
+// seinen Start auf ganze Pixel, und schmale wie "l" rueckten je nach Lage einen Pixel an den
+// Nachbarn heran. Abgelegt unter (Faktor mal 4 + SUBPIXEL_KEY * Stufe, Zeichen).
+const SUBPIXEL_STEPS: u8 = 4;
+const SUBPIXEL_KEY: u8 = 32;
 const ATLAS_MAX_WIDTH: u32 = 4096;
+// Groesste Kantenlaenge einer Textur (wgpu-Standardgrenze).
+const ATLAS_MAX_SIDE: u32 = 8192;
 
 pub struct FontAtlas {
     pub bind_group: wgpu::BindGroup,
@@ -341,6 +384,42 @@ impl FontAtlas {
             aus_pack().or_else(aus_basis)
         } else {
             aus_basis().or_else(aus_pack)
+        }
+    }
+
+    pub fn has_small_capital_s(&self) -> bool {
+        self.glyph('\u{A731}').is_some()
+    }
+
+    // Text mit ꜱ statt s in Kapitaelchen-Woertern (s. small_caps_s) -- nur, wenn die Schrift ꜱ
+    // auch hat, sonst fiele das Zeichen ganz weg.
+    pub fn display_text<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.has_small_capital_s() {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        small_caps_s(text)
+    }
+
+    // Startpunkt eines genau gerasterten Zeichens (p.snap) auf dem Pixelraster: die
+    // Subpixel-Fassung zum Nachkomma-Anteil von `x` samt ganzzahligem Ursprung, ohne passende
+    // Fassung wie bisher auf den naechsten ganzen Pixel gerundet.
+    pub fn snap_x(&self, ch: char, scale: f32, bold: bool, p: PlacedGlyph, x: f32) -> (PlacedGlyph, f32) {
+        if !p.snap {
+            return (p, x);
+        }
+        let ganz = x.floor();
+        let stufe = ((x - ganz) * SUBPIXEL_STEPS as f32).round() as u8;
+        if stufe == SUBPIXEL_STEPS {
+            return (p, ganz + 1.0);
+        }
+        if stufe == 0 {
+            return (p, ganz);
+        }
+        let karte = if bold { &self.placed_bold } else { &self.placed };
+        let viertel = (scale * 4.0).round() as u8;
+        match karte.get(&(viertel + SUBPIXEL_KEY * stufe, ch)) {
+            Some(v) => (*v, ganz),
+            None => (p, x.round()),
         }
     }
 
@@ -592,6 +671,11 @@ fn build_minecraft(installation: &mut assets::MinecraftInstallation) -> Result<A
         }
         page_y += page.texture.height;
     }
+    // Zeichen ohne Bild aus dem space-Provider (U+200C): nur Vorschub. Sonst fiele es auf das
+    // Unifont-Kaestchen zurueck.
+    for &(ch, advance) in &font.spaces {
+        glyphs.entry(ch).or_insert(GlyphInfo { uv_min: [0.0; 2], uv_max: [0.0; 2], size_px: [0.0; 2], offset_px: [0.0; 2], advance_px: advance });
+    }
 
     Ok(AtlasPixels {
         levels: vec![coverage],
@@ -674,9 +758,10 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
         let ps = px_scale(em_font_px * f);
         // Mitte der 8 in Pixeln (y nach unten) -- dort sitzt das ∞.
         let mitte = -mitte_acht * em_font_px * f / units_per_em;
-        for &(id, ch) in &ids {
+        for (&(id, ch), stufe) in ids.iter().flat_map(|e| (0..SUBPIXEL_STEPS).filter(move |&s| s == 0 || has_subpixel(e.1)).map(move |s| (e, s))) {
             let k = groesse(ch);
-            let glyph = id.with_scale_and_position(PxScale { x: ps.x * k.0, y: ps.y * k.1 }, ab_glyph::point(0.0, 0.0));
+            let x = stufe as f32 / SUBPIXEL_STEPS as f32;
+            let glyph = id.with_scale_and_position(PxScale { x: ps.x * k.0, y: ps.y * k.1 }, ab_glyph::point(x, 0.0));
             let Some(outline) = font.outline_glyph(glyph) else { continue };
             let mut b = outline.px_bounds();
             if k != (1.0, 1.0) {
@@ -693,7 +778,7 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
             });
             // px_bounds ist ganzzahlig und relativ zum Grundlinien-Ursprung (y nach unten) --
             // genau die Konvention von PlacedGlyph::offset.
-            bitmaps.push(Bitmap { scale, ch, bold, w, h, coverage, offset: [b.min.x, b.min.y] });
+            bitmaps.push(Bitmap { scale: scale + SUBPIXEL_KEY * stufe, ch, bold, w, h, coverage, offset: [b.min.x, b.min.y] });
         }
     }
 }
@@ -752,20 +837,29 @@ fn build_ttf(minecraft: &AtlasPixels, spec: TtfSpec) -> AtlasPixels {
     // Regal-Packer: Hoehe absteigend, mit etwas Abstand fuer das lineare Sampling.
     bitmaps.sort_by_key(|b| (std::cmp::Reverse(b.h), b.scale, b.ch, b.bold));
     let pad = DM_SANS_PADDING;
-    let width = ATLAS_MAX_WIDTH;
-    let mut spots = Vec::with_capacity(bitmaps.len());
-    let (mut x, mut y, mut row_h) = (pad, pad, 0u32);
-    for b in &bitmaps {
-        if x + b.w + pad > width {
-            x = pad;
-            y += row_h + pad;
-            row_h = 0;
+    let packen = |width: u32| {
+        let mut spots = Vec::with_capacity(bitmaps.len());
+        let (mut x, mut y, mut row_h) = (pad, pad, 0u32);
+        for b in &bitmaps {
+            if x + b.w + pad > width {
+                x = pad;
+                y += row_h + pad;
+                row_h = 0;
+            }
+            spots.push((x, y));
+            x += b.w + pad;
+            row_h = row_h.max(b.h);
         }
-        spots.push((x, y));
-        x += b.w + pad;
-        row_h = row_h.max(b.h);
+        (spots, y + row_h + pad)
+    };
+    // Erst schmal; wird es hoeher als eine Textur sein darf (mit den Subpixel-Fassungen bei
+    // Schriften mit vielen Zeichen), doppelt so breit.
+    let mut width = ATLAS_MAX_WIDTH;
+    let (mut spots, mut height) = packen(width);
+    if height > ATLAS_MAX_SIDE {
+        width = ATLAS_MAX_SIDE;
+        (spots, height) = packen(width);
     }
-    let height = y + row_h + pad;
 
     let mut coverage = vec![0u8; (width * height) as usize];
     let mut placed = HashMap::default();
@@ -936,6 +1030,15 @@ fn upload_atlas(device: &wgpu::Device, queue: &wgpu::Queue, pixels: &AtlasPixels
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s_in_kapitaelchen_woertern() {
+        assert_eq!(small_caps_s("ᴘᴠᴘ sᴇʀᴠᴇʀ"), "ᴘᴠᴘ ꜱᴇʀᴠᴇʀ");
+        assert_eq!(small_caps_s("Pʟᴀʏᴇʀs: 5"), "Pʟᴀʏᴇʀꜱ: 5");
+        // Normale Woerter daneben bleiben.
+        assert_eq!(small_caps_s("ᴘᴠᴘ servers"), "ᴘᴠᴘ servers");
+        assert_eq!(small_caps_s("sss"), "sss");
+    }
 
     #[test]
     // Ohne Installation: nur der DM-Sans-Teil, mit leerer Minecraft-Vorlage.

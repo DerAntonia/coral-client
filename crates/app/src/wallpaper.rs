@@ -17,10 +17,12 @@ pub enum WallpaperMode {
     None,
     File,
     Desktop,
+    // Das Bild der Launcher-Szene (s. hero_scene.rs), mit den Texturen der eigenen Installation.
+    Coral,
 }
 
 impl WallpaperMode {
-    pub const ALL: [WallpaperMode; 3] = [WallpaperMode::None, WallpaperMode::File, WallpaperMode::Desktop];
+    pub const ALL: [WallpaperMode; 4] = [WallpaperMode::None, WallpaperMode::File, WallpaperMode::Desktop, WallpaperMode::Coral];
 
     pub fn from_index(i: u8) -> Self {
         Self::ALL.get(i as usize).copied().unwrap_or(WallpaperMode::None)
@@ -35,6 +37,7 @@ impl WallpaperMode {
             WallpaperMode::None => "Keins",
             WallpaperMode::File => "Eigenes Bild",
             WallpaperMode::Desktop => "Linux-Desktop",
+            WallpaperMode::Coral => "Coral",
         }
     }
 }
@@ -45,6 +48,7 @@ pub fn stored_path(config_dir: &Path) -> PathBuf {
 }
 
 /// Das fertig dekodierte, schon auf Bildschirmgroesse verkleinerte Bild (RGBA8, sRGB).
+#[derive(Clone)]
 pub struct Decoded {
     pub rgba: Vec<u8>,
     pub width: u32,
@@ -358,7 +362,8 @@ impl Default for Loader {
 impl Loader {
     /// Die Quelle (neu) laden. `force = false`: nur, wenn sich Pfad oder Datei geaendert
     /// haben -- fuer das regelmaessige Nachsehen beim Desktop-Hintergrund.
-    pub fn request(&mut self, mode: WallpaperMode, stored: Option<PathBuf>, ziel: (u32, u32), force: bool) {
+    // `coral`: wo das Bild der Launcher-Szene liegt (s. hero_scene::path).
+    pub fn request(&mut self, mode: WallpaperMode, stored: Option<PathBuf>, coral: Option<PathBuf>, ziel: (u32, u32), force: bool) {
         self.generation += 1;
         let generation = self.generation;
         let bisher = if force { None } else { self.stand.clone() };
@@ -368,6 +373,7 @@ impl Loader {
                 WallpaperMode::None => None,
                 WallpaperMode::File => stored.filter(|p| p.is_file()),
                 WallpaperMode::Desktop => desktop_wallpaper(),
+                WallpaperMode::Coral => coral.filter(|p| p.is_file()),
             };
             let Some(pfad) = pfad else {
                 let _ = tx.send((generation, Event::Cleared, None));

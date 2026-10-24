@@ -427,6 +427,7 @@ pub fn mesh_column_ao_fading(
                             TintKind::GrassAll => (colors.grass, false),
                             TintKind::FoliageAll => (colors.foliage, false),
                             TintKind::DryFoliageAll => (colors.dry_foliage, false),
+                            TintKind::Fixed(rgb) => (rgb_f32(rgb), false),
                         }
                     };
 
@@ -1438,6 +1439,11 @@ pub fn block_ghost_vertices_at(
     out
 }
 
+// 0xRRGGBB als Farbe 0..1.
+fn rgb_f32(rgb: u32) -> [f32; 3] {
+    [((rgb >> 16) & 0xff) as f32 / 255.0, ((rgb >> 8) & 0xff) as f32 / 255.0, (rgb & 0xff) as f32 / 255.0]
+}
+
 // Ein Block fuer ein block_display (BlockRenderManager.renderBlockAsEntity): die echte Form des
 // States im Einheitswuerfel 0..1, ohne Welt -- also ohne Culling und ohne Biom. Die Faerbung
 // ist deshalb Vanillas Vorgabe ohne Welt (BlockColors mit world == null): Gras 0x91BD59,
@@ -1453,6 +1459,9 @@ pub fn block_display_vertices(state: u32, uvs: &BlockUvs, shapes: &BlockShapes, 
         TintKind::GrassAll => (farbe(0x91BD59), false),
         TintKind::FoliageAll => (farbe(0x48B518), false),
         TintKind::DryFoliageAll => (farbe(0xA0A69C), false),
+        // Ohne Welt nimmt Vanilla fuer die Seerose ihre Item-Farbe.
+        TintKind::Fixed(0x208030) => (farbe(0x71C35C), false),
+        TintKind::Fixed(rgb) => (farbe(rgb), false),
     };
     let mut out = Vec::new();
     if cross.is_cross(state) {

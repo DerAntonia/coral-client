@@ -97,6 +97,9 @@ pub struct DisplayInfo {
     pub interp_from: Option<DisplayTransform>,
     pub interp_start: f32,
     pub interp_duration: i32,
+    // Ueber wie viele Ticks das Display einer neuen Position folgt (teleport_duration,
+    // Display.interpolation). 0 = springt sofort -- Vanillas Vorgabe fuer Displays.
+    pub teleport_duration: i32,
 }
 
 // Die vier Teile der AffineTransformation eines Displays.
@@ -165,6 +168,7 @@ impl DisplayInfo {
             interp_from: None,
             interp_start: 0.0,
             interp_duration: 0,
+            teleport_duration: 0,
         }
     }
 }
@@ -1531,7 +1535,13 @@ impl Entity {
         // interaction-Entity (Baelle auf mcpvp.club) laege die Trefferbox sonst bis zu drei
         // Ticks hinter der Stelle, die der Server kennt -- ein schneller Ball wurde dann dort
         // geschlagen, wo er gar nicht mehr war.
-        if self.projectile.is_some() || self.item_physics || self.block_physics || (self.display.is_none() && !has_interpolator(self.entity_type)) {
+        // Displays haben einen eigenen Interpolator mit der Laenge teleport_duration (Vorgabe 0).
+        let display_schritte = self.display.as_ref().map(|d| d.teleport_duration.max(0) as u32);
+        let springt = match display_schritte {
+            Some(n) => n == 0,
+            None => !has_interpolator(self.entity_type),
+        };
+        if self.projectile.is_some() || self.item_physics || self.block_physics || springt {
             if let Some(pos) = pos {
                 self.pos = pos;
                 self.target_pos = pos;
@@ -1549,6 +1559,13 @@ impl Entity {
             self.interp_steps = 0;
             return;
         }
+        // InterpolationHandler.interpolateTo: dasselbe Ziel bei laufender Angleichung faengt sie
+        // nicht von vorn an. Bei Displays zaehlt das -- ein Tor, das ueber 20 Ticks zurueckfaehrt,
+        // bekommt das Ziel oft mehrmals.
+        let gleiches_ziel = self.interp_steps > 0
+            && pos.is_none_or(|p| p == self.target_pos)
+            && yaw.is_none_or(|y| y == self.target_yaw_deg)
+            && pitch.is_none_or(|p| p == self.target_pitch_deg);
         if let Some(pos) = pos {
             self.target_pos = pos;
             self.note_update_interval(now);
@@ -1559,7 +1576,11 @@ impl Entity {
         if let Some(pitch) = pitch {
             self.target_pitch_deg = pitch;
         }
-        self.interp_steps = INTERPOLATION_STEPS;
+        match display_schritte {
+            Some(_) if gleiches_ziel => {}
+            Some(n) => self.interp_steps = n,
+            None => self.interp_steps = INTERPOLATION_STEPS,
+        }
     }
 
     // Reine Diagnose (F3): Abstand zwischen zwei Positions-Updates mitschreiben.
@@ -2207,6 +2228,9 @@ impl Entities {
         let alter = e.age_ticks;
         if let Some(v) = update.display_interp_duration {
             display.interp_duration = v;
+        }
+        if let Some(v) = update.display_teleport_duration {
+            display.teleport_duration = v;
         }
         if let Some(v) = update.display_interp_start {
             display.interp_start = alter + v as f32;
@@ -3650,6 +3674,30 @@ mod tests {
         );
         let content = &entities.get(1).unwrap().display.as_ref().unwrap().content;
         assert!(matches!(content, DisplayContent::Item(Some(item)) if item.item_id == 936));
+    }
+
+    // Displays springen ohne teleport_duration sofort (Vanillas Vorgabe 0) und gleiten mit ihr
+    // ueber genau so viele Ticks -- ein zurueckfahrendes Tor sprang vorher nach drei Ticks.
+    #[test]
+    fn display_folgt_teleport_duration() {
+        let (welt, formen) = leer();
+        let mut entities = Entities::new();
+        entities.spawn(1, [0u8; 16], typ("block_display"), (0.0, 64.0, 0.0), 0.0, 0.0, (0.0, 0.0, 0.0));
+        entities.set_position(1, 10.0, 64.0, 0.0);
+        assert_eq!(entities.get(1).unwrap().pos.0, 10.0, "ohne Dauer sofort da");
+
+        entities.apply_metadata(1, &protocol::packets::EntityDataUpdate { display_teleport_duration: Some(10), ..Default::default() });
+        entities.set_position(1, 0.0, 64.0, 0.0);
+        let mut wege = Vec::new();
+        for _ in 0..10 {
+            // Das Ziel noch einmal: darf die laufende Angleichung nicht neu starten.
+            entities.set_position(1, 0.0, 64.0, 0.0);
+            entities.tick(&welt, &formen, None);
+            wege.push(entities.get(1).unwrap().pos.0);
+        }
+        assert!((wege[0] - 9.0).abs() < 1e-9, "erster Tick ein Zehntel: {wege:?}");
+        assert!((wege[4] - 5.0).abs() < 1e-9, "gleichmaessig: {wege:?}");
+        assert_eq!(wege[9], 0.0);
     }
 
     // Ein Display-Entity darf den Angriffs-Raycast nicht abfangen: in Vanilla ist es nicht

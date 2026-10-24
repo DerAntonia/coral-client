@@ -218,6 +218,8 @@ pub enum ClientEvent {
     RangeAttributes { id: i32, block: Option<f64>, entity: Option<f64> },
     // Eigener Spielmodus: aus Login/Respawn und aus dem Game Event GAME_MODE_CHANGED.
     GameMode(u8),
+    // Hardcore-Welt (aus dem Login): die Herzen bekommen ihre Hardcore-Sprites.
+    Hardcore(bool),
     // Eigene Faehigkeiten (Flug, Kreativ), s. packets::read_player_abilities.
     Abilities(packets::PlayerAbilities),
     // Aus wessen Augen der Client sieht (Zuschauer), s. packets::read_set_camera.
@@ -343,6 +345,9 @@ pub enum ClientEvent {
     // Die Chat-Zeile davor war eine Vanilla-Todesmeldung: Opfer und (wenn genannt) Taeter,
     // als reiner Text (s. nbt::death_message).
     DeathMessage { victim: String, killer: Option<String> },
+    // Ein Play-Paket, wie es ankam (samt Packet-ID), als Kopie fuer Addons -- nur bei
+    // gesetztem Events::with_raw. Verarbeitet wird es trotzdem normal.
+    RawPacket(Vec<u8>),
     // Wer sitzt auf wem (s. packets::read_set_passengers). Eine leere Liste = alle sind
     // abgestiegen.
     Passengers { vehicle: i32, passengers: Vec<i32> },
@@ -429,11 +434,36 @@ pub enum ClientEvent {
 pub struct Events {
     tx: std::sync::mpsc::Sender<ClientEvent>,
     immediate: Option<std::sync::Arc<dyn Fn(&ClientEvent) + Send + Sync>>,
+    // Gesetzt, solange ein Addon rohe Play-Pakete sehen will (s. ClientEvent::RawPacket).
+    raw: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    // Gesetzt, solange die Verbindung in einem Hintergrund-Tab liegt: dann gehen nur KeepAlive
+    // und Pong raus, die uebrigen Pflichtantworten warten in Connection::held.
+    background: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Events {
     pub fn new(tx: std::sync::mpsc::Sender<ClientEvent>) -> Self {
-        Self { tx, immediate: None }
+        Self { tx, immediate: None, raw: None, background: None }
+    }
+
+    // Schalter fuer ClientEvent::RawPacket; die App setzt ihn, wenn ein Addon packet_in hoert.
+    pub fn with_raw(mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.raw = Some(flag);
+        self
+    }
+
+    // Schalter fuer Hintergrund-Tabs (s. Connection::reply).
+    pub fn with_background(mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.background = Some(flag);
+        self
+    }
+
+    fn in_background(&self) -> bool {
+        self.background.as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn wants_raw(&self) -> bool {
+        self.raw.as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Haken, der JEDES Event sofort im Netzwerk-Task sieht -- vor dem Einreihen in die
@@ -605,7 +635,10 @@ async fn resolve_address(address: &str) -> (String, u16) {
 // Kapselt Stream + Kompressions-Zustand. Kompression ist symmetrisch: sobald der Server
 // Set Compression schickt, nutzen sowohl Lesen als auch Schreiben das komprimierte Format.
 struct Connection {
-    stream: TcpStream,
+    // Der Socket, oder auf erlaubten Servern die Verzoegerungsschicht davor (s. crate::lag).
+    stream: Box<dyn crate::lag::Io>,
+    // Gegenstelle des Sockets (fuer ClientEvent::Route), None wenn unbekannt.
+    peer: Option<std::net::SocketAddr>,
     // None = keine Kompression, Some(threshold) = aktiv ab dieser Payload-Groesse.
     compression: Option<i32>,
     // Sobald der Online-Mode-Handshake abgeschlossen ist (s. do_login, EncryptionRequest),
@@ -631,6 +664,10 @@ struct Connection {
     // stehen und NICHT auf die Platte wandern. Ein Server fragt sie im selben Zug wieder ab
     // (auch nach einem Transfer), genau darauf bauen Proxy- und Anticheat-"Verbindungstests".
     cookies: std::collections::HashMap<String, Vec<u8>>,
+    // Pflichtantworten (Teleport-Bestaetigung, Chunk-Quittung ...), die ein
+    // Hintergrund-Tab zurueckhaelt. Sie gehen in Reihenfolge raus, sobald der Tab wieder vorn
+    // ist, vor dem ersten Paket der App.
+    held: Vec<Vec<u8>>,
 }
 
 impl Connection {
@@ -649,15 +686,36 @@ impl Connection {
         if let Err(e) = stream.set_nodelay(true) {
             eprintln!("[net] TCP_NODELAY konnte nicht gesetzt werden ({e}) -- Ping kann dadurch hoeher ausfallen");
         }
+        let peer = stream.peer_addr().ok();
+        let stream: Box<dyn crate::lag::Io> = if crate::lag::allowed(host) { Box::new(crate::lag::wrap(stream)) } else { Box::new(stream) };
         Ok(Self {
             stream,
+            peer,
             compression: None,
             encryptor: None,
             decryptor: None,
             rbuf: Vec::new(),
             log: crate::pktlog::PacketLog::new(),
             cookies: std::collections::HashMap::new(),
+            held: Vec::new(),
         })
+    }
+
+    // Automatische Antwort des Netz-Tasks. Im Hintergrund-Tab zurueckgehalten (s. held).
+    async fn reply(&mut self, events: &Events, payload: &[u8]) -> Result<(), NetError> {
+        if events.in_background() {
+            self.held.push(payload.to_vec());
+            return Ok(());
+        }
+        self.flush_held().await?;
+        self.send(payload).await
+    }
+
+    async fn flush_held(&mut self) -> Result<(), NetError> {
+        for payload in std::mem::take(&mut self.held) {
+            self.send(&payload).await?;
+        }
+        Ok(())
     }
 
     // Schaltet ab sofort auf Verschluesselung: Schluessel = IV = Shared Secret. Muss GENAU nach
@@ -1278,7 +1336,15 @@ async fn run_play_loop(
         let _ = events.send(ClientEvent::PacketStall { outgoing, millis: d.as_millis().min(u32::MAX as u128) as u32 });
     };
 
+    let mut war_hinten = false;
     loop {
+        // Im Hintergrund-Tab schickt die App keine Ticks: die Luecke bis zum ersten Tick danach
+        // ist keine Stockung. Mitmessen erst wieder ab dem Moment, in dem der Tab vorn ist.
+        let hinten = events.in_background();
+        if hinten || war_hinten {
+            stockung = crate::stall::StallWatch::default();
+        }
+        war_hinten = hinten;
         tokio::select! {
             // biased + Sendezweig ZUERST: die Reihenfolge auf der Leitung darf nicht vom
             // Zufall abhaengen.
@@ -1303,6 +1369,7 @@ async fn run_play_loop(
             msg = outgoing.recv(), if !outgoing_closed => {
                 match msg {
                     Some(payload) => {
+                        conn.flush_held().await?;
                         let start = std::time::Instant::now();
                         conn.send(&payload).await?;
                         let jetzt = std::time::Instant::now();
@@ -1323,7 +1390,11 @@ async fn run_play_loop(
                 if let Some(pause) = stockung.incoming(std::time::Instant::now()) {
                     melde(false, pause);
                 }
-                match handle_play_packet(conn, events, &payload, &mut stats, &mut chunk_batch, rotation).await? {
+                let flow = handle_play_packet(conn, events, &payload, &mut stats, &mut chunk_batch, rotation).await?;
+                if !events.in_background() {
+                    conn.flush_held().await?;
+                }
+                match flow {
                     PlayFlow::Continue => {}
                     PlayFlow::Transfer(ziel) => return Ok(ziel),
                     PlayFlow::Reconfigure => {
@@ -1348,7 +1419,7 @@ async fn run_play_loop(
             }
             _ = watchdog.tick() => {
                 let wartet = play_start.elapsed();
-                if stats.chunks_ok == 0 && wartet >= CHUNK_WATCHDOG_GRACE {
+                if stats.chunks_ok == 0 && wartet >= CHUNK_WATCHDOG_GRACE && !events.in_background() {
                     log(events, stats.chunk_stall_report(wartet));
                     // Erneut bestaetigen: bleibt beim Server auch nur EINE Bestaetigung aus,
                     // steht die Chunk-Lieferung fuer immer (ChunkDataSender.sendChunkBatches
@@ -1518,6 +1589,9 @@ async fn handle_play_packet(
 ) -> Result<PlayFlow, NetError> {
     let id = packets::peek_packet_id(payload).map_err(|_| NetError::Protocol("leeres Play-Packet".into()))?;
     stats.packets += 1;
+    if events.wants_raw() {
+        let _ = events.send(ClientEvent::RawPacket(payload.to_vec()));
+    }
 
     if sound_debug() {
         *stats.id_counts.entry(id).or_default() += 1;
@@ -1612,7 +1686,7 @@ async fn handle_play_packet(
             log(events, format!("Chunk-Stapel {} bestaetigt ({batch_size} Chunks, Wunsch {desired:.1}/Tick)", stats.batches));
         }
         stats.acks_sent += 1;
-        conn.send(&packets::chunk_batch_received_payload(desired)).await?;
+        conn.reply(events, &packets::chunk_batch_received_payload(desired)).await?;
     } else if id == packets::CB_PLAY_LOGIN {
         if let Ok(entity_id) = packets::read_login_player_id(payload) {
             let _ = events.send(ClientEvent::OwnEntityId(entity_id));
@@ -1627,6 +1701,9 @@ async fn handle_play_packet(
         }
         if let Ok(mode) = packets::read_login_game_mode(payload) {
             let _ = events.send(ClientEvent::GameMode(mode));
+        }
+        if let Ok(hardcore) = packets::read_login_hardcore(payload) {
+            let _ = events.send(ClientEvent::Hardcore(hardcore));
         }
     } else if id == packets::CB_PLAY_RESPAWN {
         // Die Dimension entscheidet, ob es ein Weltwechsel war (s. packets::CB_PLAY_RESPAWN).
@@ -1722,6 +1799,12 @@ async fn handle_play_packet(
     } else if id == packets::CB_PLAY_PING {
         let ping = packets::read_ping_id(payload).map_err(|_| NetError::Protocol("Ping".into()))?;
         interaktions_log("pong");
+        // Auch im Hintergrund-Tab sofort: Anticheats (TotemGuard, Grim) kicken mit "Timed
+        // out", wenn ihre Pings zu lange unbeantwortet bleiben -- KeepAlive allein reicht
+        // ihnen nicht. Vorn geht Zurueckgehaltenes trotzdem zuerst raus.
+        if !events.in_background() {
+            conn.flush_held().await?;
+        }
         conn.send(&packets::pong_play_payload(ping)).await?;
         let _ = events.send(ClientEvent::TransactionPing(ping));
     } else if id == packets::CB_PLAY_PLAYER_POSITION {
@@ -1730,7 +1813,7 @@ async fn handle_play_packet(
         // annimmt, setzt seine Per-Tick-Merker NICHT zurueck (Check.isTickPacket ->
         // !lastPacketWasTeleport). Zwei unserer Ticks fallen dann fuer ihn in einen zusammen.
         interaktions_log("teleport(server)");
-        conn.send(&packets::confirm_teleport_payload(tp)).await?;
+        conn.reply(events, &packets::confirm_teleport_payload(tp)).await?;
 
         // Position erst nach dem Bestaetigen melden: die Teleport-Bestaetigung ist
         // Pflicht, ein Parse-Fehler in der Position darf sie nicht verhindern.
@@ -1780,7 +1863,7 @@ async fn handle_play_packet(
                 let sitzt = rotation.riding();
                 let send_yaw = if sitzt { cur_yaw } else if flags & packets::POSITION_FLAG_REL_YAW != 0 { cur_yaw + yaw } else { yaw };
                 let send_pitch = if sitzt { cur_pitch } else if flags & packets::POSITION_FLAG_REL_PITCH != 0 { cur_pitch + pitch } else { pitch };
-                conn.send(&packets::move_player_pos_rot_payload(x, y, z, send_yaw, send_pitch, false, false)).await?;
+                conn.reply(events, &packets::move_player_pos_rot_payload(x, y, z, send_yaw, send_pitch, false, false)).await?;
             }
 
             let _ = events.send(ClientEvent::PlayerPosition(sync));
@@ -1811,7 +1894,7 @@ async fn handle_play_packet(
             let neu_yaw = if relative_yaw { cur_yaw + yaw } else { yaw };
             let neu_pitch = if relative_pitch { cur_pitch + pitch } else { pitch };
             interaktions_log("server_rotation");
-            conn.send(&packets::move_player_rot_payload(neu_yaw, neu_pitch, false, false)).await?;
+            conn.reply(events, &packets::move_player_rot_payload(neu_yaw, neu_pitch, false, false)).await?;
             // Erst NACH dem Senden in den geteilten Wert schreiben: kaeme die App vorher dazu,
             // ein eigenes Bewegungspaket zu schicken, stuende dort schon die neue Rotation,
             // bevor der Server sie bestaetigt bekommen hat.
@@ -2351,7 +2434,7 @@ async fn join_inner(
         log(events, format!("Verbinde zu {host}:{port} ..."));
         let mut conn = Connection::connect(&host, port).await?;
         conn.cookies = std::mem::take(&mut cookies);
-        if let Ok(gegenueber) = conn.stream.peer_addr() {
+        if let Some(gegenueber) = conn.peer {
             let ziel = if host == eingegeben { gegenueber.to_string() } else { format!("{host}/{gegenueber}") };
             let _ = events.send(ClientEvent::Route(ziel));
         }

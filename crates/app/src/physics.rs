@@ -431,6 +431,8 @@ pub struct Input {
     pub levitation: Option<i32>,
     pub jump_boost: Option<i32>,
     pub dolphins_grace: bool,
+    // Weben: Spinnennetze bremsen nur halb so stark (s. world::slow_movement_multiplier).
+    pub weaving: bool,
     // Modul Botcheck-Pass: die Reibungsfaktoren als Vanillas float-Konstanten (0.98F, 0.91F,
     // 0.8F, 0.9F, als double gelesen) statt exakter doubles. Der Unterschied liegt bei 1e-9 je
     // Tick -- Grim stoert das nicht, der Fallcheck von anticheat-test.com (LimboAPI)
@@ -1675,7 +1677,7 @@ impl PlayerPhysics {
                 for bz in min.z.floor() as i32..=max.z.floor() as i32 {
                     let state = world.block_at(bx, by, bz);
                     if netz.is_none() {
-                        netz = world::slow_movement_multiplier(state);
+                        netz = world::slow_movement_multiplier(state, input.weaving);
                     }
                     if world::block_registry::block_name(state) == Some("honey_block") {
                         honig.push((bx, by, bz));
@@ -4182,6 +4184,7 @@ mod tests {
             levitation: None,
             jump_boost: None,
             dolphins_grace: false,
+            weaving: false,
             float_drag: false,
             yaw_rad,
             look_dir_y: 0.0,
@@ -7523,6 +7526,7 @@ mod step_tests {
             levitation: None,
             jump_boost: None,
             dolphins_grace: false,
+            weaving: false,
             float_drag: false,
             yaw_rad,
             look_dir_y: 0.0,

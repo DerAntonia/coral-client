@@ -1,0 +1,17 @@
+# Die Schnittstelle zwischen Coral Client und seinen Addons (s. src/lib.rs). Der Client nimmt
+# daraus die Typen; ein Addon haengt als Abhaengigkeit daran und bekommt zusaetzlich die
+# Anbindung fuer wasm32 (export!, client::*).
+[package]
+name = "coral-addon"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "coral_addon"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+[lints]
+workspace = true

@@ -59,6 +59,8 @@ impl From<reqwest::Error> for AuthError {
 // Anfang der Meldungen, an denen Aufrufer zwei Faelle erkennen: der Session-Server lehnt das
 // Token ab (403, meist abgelaufen -> erneuern lohnt), und Mojangs Anmeldelimit (429 -> warten).
 const JOIN_FORBIDDEN: &str = "Session-Join abgelehnt (403";
+// Weitere Versuche nach einer 5xx-Antwort des Session-Servers (s. mojang_join).
+const JOIN_RETRIES: u32 = 2;
 const LOGIN_LIMIT: &str = "Mojang-Anmeldelimit erreicht";
 
 impl AuthError {
@@ -810,13 +812,26 @@ fn parse_launcher_accounts(bytes: &[u8]) -> Vec<LauncherAccount> {
 // den Server-Hash aus SHA-1(serverId + shared_secret + public_key)) beitreten. Der Server
 // fragt anschliessend bei Mojang nach und laesst uns nur rein, wenn dieser Eintrag da ist.
 // Erwartet 204 No Content.
+//
+// Mojangs Session-Server antwortet gelegentlich mit 503 (gemessen beim Transfer auf pvphq und
+// beim normalen Beitreten auf actest), beim naechsten Versuch geht es. Bei 5xx deshalb noch
+// zweimal nach kurzer Pause, bevor der Fehler durchgeht -- der Server wartet auf die
+// Encryption-Response bis zu 30 s.
 pub async fn mojang_join(access_token: &str, profile_id: &str, server_hash: &str) -> Result<(), AuthError> {
     let body = serde_json::json!({
         "accessToken": access_token,
         "selectedProfile": profile_id,
         "serverId": server_hash,
     });
-    let resp = client()?.post(SESSION_JOIN_URL).json(&body).send().await?;
+    let mut versuch = 0;
+    let resp = loop {
+        let resp = client()?.post(SESSION_JOIN_URL).json(&body).send().await?;
+        if !resp.status().is_server_error() || versuch == JOIN_RETRIES {
+            break resp;
+        }
+        versuch += 1;
+        tokio::time::sleep(Duration::from_millis(500 * versuch as u64)).await;
+    };
     if resp.status() == reqwest::StatusCode::NO_CONTENT || resp.status().is_success() {
         Ok(())
     } else {
@@ -941,8 +956,14 @@ pub struct SkinRef {
 // Die Skin-Referenz aus der Base64-Property herausziehen. None, wenn die Property kein
 // gueltiges Base64/JSON ist oder gar keinen SKIN-Eintrag hat (z.B. ein Spieler ohne Skin).
 pub fn parse_textures_property(property: &str) -> Option<SkinRef> {
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
     use base64::Engine;
-    let json = base64::engine::general_purpose::STANDARD.decode(property.trim()).ok()?;
+    // Mit oder ohne "="-Auffuellung, wie Javas Base64-Decoder in Vanilla: Server-Koepfe (etwa
+    // der Golden Head auf pvphq) schicken die Property oft ohne -- streng dekodiert blieb der
+    // Kopf fuer immer ohne Skin.
+    const LOCKER: GeneralPurpose =
+        GeneralPurpose::new(&base64::alphabet::STANDARD, GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent));
+    let json = LOCKER.decode(property.trim()).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&json).ok()?;
     let skin = value.get("textures")?.get("SKIN")?;
     let url = skin.get("url")?.as_str()?.to_string();
@@ -1195,6 +1216,15 @@ mod skin_tests {
         assert!(parse_textures_property("das ist kein base64!!!").is_none());
         assert!(parse_textures_property(&property("{kein json")).is_none());
         assert!(parse_textures_property("").is_none());
+    }
+
+    // Ohne "="-Auffuellung, wie Javas Decoder: die Property des Golden Heads auf pvphq.
+    #[test]
+    fn property_ohne_auffuellung() {
+        let p = "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvNzU2NmYyZjg3Y2NkYzU4ZjY3ODI5ZDQ2Njc3ZjIyYmUyNWRmMTdjMDFlMmQ5NDRlZmE3ZWJlNjI2MjI5ZjgyZSJ9fX0";
+        let skin = parse_textures_property(p).expect("ohne Auffuellung lesbar");
+        assert_eq!(skin.url, "http://textures.minecraft.net/texture/7566f2f87ccdc58f67829d46677f22be25df17c01e2d944efa7ebe626229f82e");
+        assert!(parse_textures_property(&format!("{p}=")).is_some(), "mit Auffuellung ebenso");
     }
 
     // Winziger Blocking-Helfer, damit der Host-Test ohne Tokio-Runtime laeuft.

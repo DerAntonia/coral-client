@@ -685,7 +685,61 @@ pub fn decode_skin_png(png: &[u8]) -> Option<Vec<u8>> {
     let mut out = vec![0u8; (64 * 64 * 4) as usize];
     let copy_rows = height.min(64) as usize;
     out[..copy_rows * 64 * 4].copy_from_slice(&src[..copy_rows * 64 * 4]);
+    prepare_skin(&mut out, height == 32);
     Some(out)
+}
+
+// Was Vanilla nach dem Laden mit jedem Skin macht (SkinTextureDownloader):
+//   - Alte 64x32-Skins haben keine eigenen linken Gliedmassen. Sie bekommen die rechten,
+//     gespiegelt, in die untere Haelfte -- sonst fehlten linker Arm und linkes Bein ganz.
+//   - Die Grundschicht (Kopf, Koerper, Arme, Beine) ist immer deckend: ein Alpha darin wird
+//     verworfen, sonst waeren NPC-Skins mit durchsichtiger Grundschicht unsichtbar.
+//   - Bei 64x32 eine ganz deckende Hutschicht (alte Skins ohne Transparenz) ganz entfernen.
+fn prepare_skin(rgba: &mut [u8], legacy: bool) {
+    let idx = |x: usize, y: usize| (y * 64 + x) * 4;
+    if legacy {
+        // (Quelle x, y, Ziel x, y, Breite, Hoehe): Bein- und Armseiten, je waagrecht gespiegelt.
+        const SPIEGEL: [(usize, usize, usize, usize, usize, usize); 12] = [
+            (4, 16, 20, 48, 4, 4),
+            (8, 16, 24, 48, 4, 4),
+            (0, 20, 24, 52, 4, 12),
+            (4, 20, 20, 52, 4, 12),
+            (8, 20, 16, 52, 4, 12),
+            (12, 20, 28, 52, 4, 12),
+            (44, 16, 36, 48, 4, 4),
+            (48, 16, 40, 48, 4, 4),
+            (40, 20, 40, 52, 4, 12),
+            (44, 20, 36, 52, 4, 12),
+            (48, 20, 32, 52, 4, 12),
+            (52, 20, 44, 52, 4, 12),
+        ];
+        for (sx, sy, zx, zy, w, h) in SPIEGEL {
+            for y in 0..h {
+                for x in 0..w {
+                    let (q, z) = (idx(sx + x, sy + y), idx(zx + w - 1 - x, zy + y));
+                    let px: [u8; 4] = rgba[q..q + 4].try_into().unwrap_or_default();
+                    rgba[z..z + 4].copy_from_slice(&px);
+                }
+            }
+        }
+    }
+    let deckend = |rgba: &mut [u8], (x0, y0, x1, y1): (usize, usize, usize, usize)| {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                rgba[idx(x, y) + 3] = 255;
+            }
+        }
+    };
+    deckend(rgba, (0, 0, 32, 16));
+    if legacy && (0..32).all(|y| (32..64).all(|x| rgba[idx(x, y) + 3] >= 128)) {
+        for y in 0..32 {
+            for x in 32..64 {
+                rgba[idx(x, y) + 3] = 0;
+            }
+        }
+    }
+    deckend(rgba, (0, 16, 64, 32));
+    deckend(rgba, (16, 48, 48, 64));
 }
 
 #[cfg(test)]
@@ -712,6 +766,26 @@ mod tests {
         // Nur ganze Namen: "textures/bl" schaltet "textures/block" nicht mit aus.
         assert!(layer(&["textures/bl"]).read("assets/minecraft/textures/block/dirt.png").is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn alter_skin_bekommt_linke_gliedmassen() {
+        let mut rgba = vec![0u8; 64 * 64 * 4];
+        // Rechtes Bein, Vorderseite (4..8, 20..32) links rot, rechts gruen.
+        for y in 20..32 {
+            for x in 4..8 {
+                let i = (y * 64 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(if x == 4 { &[255, 0, 0, 255] } else { &[0, 255, 0, 255] });
+            }
+        }
+        prepare_skin(&mut rgba, true);
+        // Linkes Bein, Vorderseite (20..24, 52..64): gespiegelt, rot also rechts.
+        let px = |x: usize, y: usize| rgba[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();
+        assert_eq!(px(23, 52), vec![255, 0, 0, 255]);
+        assert_eq!(px(20, 52), vec![0, 255, 0, 255]);
+        // Grundschicht deckend, auch wo der Skin durchsichtig war.
+        assert_eq!(px(40, 20)[3], 255);
+        assert_eq!(px(0, 0)[3], 255);
     }
 
     // Alte Blockstates ("normal", Modell ohne "block/") verdecken die darunter nicht.

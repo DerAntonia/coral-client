@@ -153,12 +153,12 @@ impl VoiceSettings {
         let zahl = |v: &str| v.trim().parse::<i64>().ok();
         let b = value.trim() == "true";
         match key {
-            "voice_volume_percent" => self.volume_percent = zahl(value).map_or(self.volume_percent, |v| v.clamp(0, VOLUME_MAX as i64) as u32),
-            "voice_mic_gain_db" => self.mic_gain_db = zahl(value).map_or(self.mic_gain_db, |v| v.clamp(GAIN_DB_MIN as i64, GAIN_DB_MAX as i64) as i32),
+            "voice_volume_percent" => self.volume_percent = zahl(value).map_or(self.volume_percent, |v| v.clamp(0, u32::MAX as i64) as u32),
+            "voice_mic_gain_db" => self.mic_gain_db = zahl(value).map_or(self.mic_gain_db, |v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
             "voice_activation" => self.voice_activation = value.trim() == "voice",
-            "voice_threshold_db" => self.threshold_db = zahl(value).map_or(self.threshold_db, |v| v.clamp(THRESHOLD_DB_MIN as i64, 0) as i32),
-            "voice_delay_frames" => self.voice_delay_frames = zahl(value).map_or(self.voice_delay_frames, |v| v.clamp(0, DELAY_MAX_FRAMES as i64) as u32),
-            "voice_ptt_delay_frames" => self.ptt_delay_frames = zahl(value).map_or(self.ptt_delay_frames, |v| v.clamp(0, DELAY_MAX_FRAMES as i64) as u32),
+            "voice_threshold_db" => self.threshold_db = zahl(value).map_or(self.threshold_db, |v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+            "voice_delay_frames" => self.voice_delay_frames = zahl(value).map_or(self.voice_delay_frames, |v| v.clamp(0, u32::MAX as i64) as u32),
+            "voice_ptt_delay_frames" => self.ptt_delay_frames = zahl(value).map_or(self.ptt_delay_frames, |v| v.clamp(0, u32::MAX as i64) as u32),
             "voice_agc" => self.agc = b,
             "voice_denoise" => self.denoise = b,
             "voice_audio_type" => {
@@ -168,8 +168,8 @@ impl VoiceSettings {
                     _ => AudioType::Normal,
                 }
             }
-            "voice_output_buffer" => self.output_buffer_frames = zahl(value).map_or(self.output_buffer_frames, |v| v.clamp(1, BUFFER_MAX_FRAMES as i64) as u32),
-            "voice_packet_threshold" => self.packet_threshold = zahl(value).map_or(self.packet_threshold, |v| v.clamp(0, PACKET_THRESHOLD_MAX as i64) as u32),
+            "voice_output_buffer" => self.output_buffer_frames = zahl(value).map_or(self.output_buffer_frames, |v| v.clamp(0, u32::MAX as i64) as u32),
+            "voice_packet_threshold" => self.packet_threshold = zahl(value).map_or(self.packet_threshold, |v| v.clamp(0, u32::MAX as i64) as u32),
             "voice_mic_device" => self.mic_device = value.trim().to_string(),
             "voice_muted" => self.muted = b,
             "voice_disabled" => self.disabled = b,
@@ -349,8 +349,8 @@ mod tests {
     }
 
     #[test]
-    // Speichern und Laden ergeben dieselben Einstellungen; Werte ausserhalb der Grenzen
-    // werden geklemmt.
+    // Speichern und Laden ergeben dieselben Einstellungen; Werte ausserhalb der Regler
+    // bleiben stehen.
     fn einstellungen_ueberleben_das_speichern() {
         let mut a = VoiceSettings { mic_gain_db: -7, voice_activation: true, audio_type: AudioType::Reduced, mic_device: "pulse".into(), denoise: true, ..Default::default() };
         a.threshold_db = -33;
@@ -361,7 +361,7 @@ mod tests {
         }
         assert_eq!(a, b);
         assert!(b.parse_line("voice_mic_gain_db", "99"));
-        assert_eq!(b.mic_gain_db, GAIN_DB_MAX);
+        assert_eq!(b.mic_gain_db, 99);
         assert!(!b.parse_line("fremd", "1"));
     }
 

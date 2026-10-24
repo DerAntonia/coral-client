@@ -346,6 +346,10 @@ pub struct BlockRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     atlas_bind_group: wgpu::BindGroup,
+    // Derselbe Atlas ohne Mip-Stufen (nur volle Aufloesung), s. mipmapping.
+    atlas_bind_group_flat: wgpu::BindGroup,
+    // Einstellung Mipmapping: aus = Gelaende und Bloecke immer aus der vollen Aufloesung.
+    pub mipmapping: bool,
     entity_bind_group: wgpu::BindGroup,
     // Bleibt als Handle liegen, damit nachgeladene Skins per write_texture hineingeschrieben
     // werden koennen (s. upload_skin).
@@ -598,11 +602,11 @@ impl BlockRenderer {
         });
 
         let atlas_bind_group_layout = create_atlas_bind_group_layout(device);
-        let (atlas_bind_group, atlas_texture) =
+        let (atlas_bind_group, atlas_bind_group_flat, atlas_texture) =
             create_atlas_texture_and_bind_group(device, queue, atlas_mips, atlas_size, &atlas_bind_group_layout);
         // Derselbe Layout -- deshalb laesst sich die Entity-Textur ohne zweite Pipeline
         // einfach an derselben Stelle binden.
-        let (entity_bind_group, entity_atlas_texture) = create_atlas_texture_and_bind_group(
+        let (entity_bind_group, _, entity_atlas_texture) = create_atlas_texture_and_bind_group(
             device,
             queue,
             std::slice::from_ref(&entity_atlas_rgba.to_vec()),
@@ -610,7 +614,7 @@ impl BlockRenderer {
             &atlas_bind_group_layout,
         );
 
-        let (particle_bind_group, _particle_atlas_texture) = create_atlas_texture_and_bind_group(
+        let (particle_bind_group, _, _particle_atlas_texture) = create_atlas_texture_and_bind_group(
             device,
             queue,
             std::slice::from_ref(&particle_atlas_rgba.to_vec()),
@@ -1606,6 +1610,8 @@ impl BlockRenderer {
             camera_buffer,
             camera_bind_group,
             atlas_bind_group,
+            atlas_bind_group_flat,
+            mipmapping: true,
             entity_bind_group,
             vanilla: crate::vanilla_draw::VanillaDraw::new(device, queue, surface_format, &entity_atlas_texture),
             entity_atlas_texture,
@@ -1738,7 +1744,7 @@ impl BlockRenderer {
     // Resourcepack-Wechsel: der Partikel-Atlas kann dabei die Groesse aendern, deshalb eine neue
     // Textur samt Bindgroup statt eines write_texture in die alte.
     pub fn rebuild_particle_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rgba: &[u8], size: u32) {
-        let (bind_group, _texture) =
+        let (bind_group, _, _texture) =
             create_atlas_texture_and_bind_group(device, queue, std::slice::from_ref(&rgba.to_vec()), size, &self.atlas_bind_group_layout);
         self.particle_bind_group = bind_group;
     }
@@ -1775,10 +1781,19 @@ impl BlockRenderer {
     // uv_of-Kommentar) -- der Aufrufer mesht trotzdem sicherheitshalber alles neu (falls das
     // neue Pack zusaetzlich Modelle/Blockstates aendert, was die Index-Reihenfolge verschieben
     // koennte).
+    fn atlas_group(&self) -> &wgpu::BindGroup {
+        if self.mipmapping {
+            &self.atlas_bind_group
+        } else {
+            &self.atlas_bind_group_flat
+        }
+    }
+
     pub fn rebuild_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas_mips: &[Vec<u8>], atlas_size: u32) {
-        let (atlas_bind_group, atlas_texture) =
+        let (atlas_bind_group, atlas_bind_group_flat, atlas_texture) =
             create_atlas_texture_and_bind_group(device, queue, atlas_mips, atlas_size, &self.atlas_bind_group_layout);
         self.atlas_bind_group = atlas_bind_group;
+        self.atlas_bind_group_flat = atlas_bind_group_flat;
         self.atlas_texture = std::sync::Arc::new(atlas_texture);
     }
 
@@ -2562,7 +2577,7 @@ impl BlockRenderer {
             return;
         }
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+        pass.set_bind_group(1, self.atlas_group(), &[]);
         self.draw_terrain(pass, &self.terrain_pipeline, mark);
         self.draw_after_terrain(pass, mark, false);
     }
@@ -2570,7 +2585,7 @@ impl BlockRenderer {
     // Shader-Pfad, Teil 1: nur das opake Gelaende, in den G-Buffer (Albedo + Normale).
     pub fn render_gbuffer<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, mark: &mut dyn FnMut(&mut wgpu::RenderPass<'a>, &'static str)) {
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+        pass.set_bind_group(1, self.atlas_group(), &[]);
         self.draw_terrain(pass, &self.gbuffer_terrain_pipeline, mark);
         if self.gbuffer_ghosts() {
             mark(pass, "Sonstiges");
@@ -2593,7 +2608,7 @@ impl BlockRenderer {
     // Partikel, ...), ins fertig beleuchtete Bild und gegen die Tiefe aus dem G-Buffer-Pass.
     pub fn render_forward_rest<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, mark: &mut dyn FnMut(&mut wgpu::RenderPass<'a>, &'static str)) {
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+        pass.set_bind_group(1, self.atlas_group(), &[]);
         self.draw_after_terrain(pass, mark, true);
     }
 
@@ -2670,7 +2685,7 @@ impl BlockRenderer {
             pass.set_bind_group(1, &self.particle_bind_group, &[]);
             pass.set_vertex_buffer(0, particle_bytes(0, d.opaque));
             pass.draw(0..d.opaque, 0..1);
-            pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+            pass.set_bind_group(1, self.atlas_group(), &[]);
         }
 
         // Wasser NACH allem Opaken (s. translucent_pipeline-Kommentar): eigener
@@ -2719,7 +2734,7 @@ impl BlockRenderer {
             // noch gebunden ist (die Maske sampelt ihn).
             self.draw_glint(pass, &self.entity_glint);
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+            pass.set_bind_group(1, self.atlas_group(), &[]);
         }
 
         // Items ueber das Programm eines Resourcepacks (rendertype_item_entity_translucent_cull)
@@ -2728,7 +2743,7 @@ impl BlockRenderer {
         if self.vanilla.draw_items(pass) {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+            pass.set_bind_group(1, self.atlas_group(), &[]);
         }
 
         // Die Weltgrenze, immer ueber Vanillas Programm (aus dem Pack oder dem Jar). Additiv und
@@ -2736,7 +2751,7 @@ impl BlockRenderer {
         if self.vanilla.draw_border(pass) {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+            pass.set_bind_group(1, self.atlas_group(), &[]);
         }
 
         // Hitbox-Anzeige (Modul): zeichnet gar keine Textur, die Farbe kommt aus dem Vertex
@@ -2765,7 +2780,7 @@ impl BlockRenderer {
                 pass.set_bind_group(1, &self.particle_bind_group, &[]);
                 pass.set_vertex_buffer(0, particle_bytes(d.opaque, d.translucent));
                 pass.draw(0..d.translucent, 0..1);
-                pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+                pass.set_bind_group(1, self.atlas_group(), &[]);
             }
         }
 
@@ -2785,7 +2800,7 @@ impl BlockRenderer {
                     }
                     start += anzahl;
                 }
-                pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+                pass.set_bind_group(1, self.atlas_group(), &[]);
             }
         }
     }
@@ -2977,7 +2992,7 @@ fn create_atlas_texture_and_bind_group(
     mips: &[Vec<u8>],
     size: u32,
     layout: &wgpu::BindGroupLayout,
-) -> (wgpu::BindGroup, wgpu::Texture) {
+) -> (wgpu::BindGroup, wgpu::BindGroup, wgpu::Texture) {
     let mip_level_count = mips.len() as u32;
     let extent = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -3020,15 +3035,25 @@ fn create_atlas_texture_and_bind_group(
         ..Default::default()
     });
 
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("atlas bind group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-        ],
+    // Fuer die Einstellung Mipmapping aus: dieselbe Textur, auf Stufe 0 festgehalten.
+    let sampler_flat = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("block atlas sampler ohne mips"),
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        lod_max_clamp: 0.0,
+        ..Default::default()
     });
-    (bind_group, texture)
+    let gruppe = |sampler: &wgpu::Sampler| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("atlas bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            ],
+        })
+    };
+    (gruppe(&sampler), gruppe(&sampler_flat), texture)
 }
 
 // Blockumriss in der Gegenfarbe des Bildes darunter (wie das Fadenkreuz im Modus

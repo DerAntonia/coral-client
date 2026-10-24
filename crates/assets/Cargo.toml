@@ -11,6 +11,14 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 png = "0.18"
 
+# Java eines gerade laufenden Minecraft finden (s. storage.rs, running_java).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+] }
+
 # Nur fuer die Installations-Tests (ui_atlas_smoke): die Block-/Item-Registry liegt im
 # world-Crate. Die Bibliothek selbst haengt bewusst NICHT davon ab.
 [dev-dependencies]

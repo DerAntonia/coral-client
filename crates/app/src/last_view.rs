@@ -14,10 +14,20 @@ pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join("last-view.png")
 }
 
+/// Der letzte Blick je Servereintrag (die Adresse aus der Liste, nicht die eines Transfers):
+/// das Bild hinter dem Verbindungsbildschirm.
+pub fn server_path(config_dir: &Path, server: &str) -> PathBuf {
+    let name: String = server.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c.to_ascii_lowercase() } else { '_' }).collect();
+    config_dir.join("server-views").join(format!("{name}.png"))
+}
+
 /// Bild im Hintergrund als PNG schreiben -- erst in eine Nebendatei, dann umbenennen, damit ein
 /// Abbruch mitten im Schreiben nie ein halbes Bild hinterlaesst.
 pub fn save(path: PathBuf, bild: Decoded) {
     std::thread::spawn(move || {
+        if let Some(ordner) = path.parent() {
+            let _ = std::fs::create_dir_all(ordner);
+        }
         let neu = path.with_extension("png.neu");
         match image::save_buffer_with_format(&neu, &bild.rgba, bild.width, bild.height, image::ColorType::Rgba8, image::ImageFormat::Png) {
             Ok(()) => {

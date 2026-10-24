@@ -477,6 +477,14 @@ pub fn read_login_player_id(payload: &[u8]) -> Result<i32, ReadError> {
     r.read_i32()
 }
 
+// Hardcore-Welt? Das Feld direkt nach der Entity-ID (nur im Login, nicht im Respawn).
+pub fn read_login_hardcore(payload: &[u8]) -> Result<bool, ReadError> {
+    let mut r = PacketReader::new(payload);
+    let _id = r.read_varint()?;
+    let _player_id = r.read_i32()?;
+    r.read_bool()
+}
+
 // Die Dimension (Welt-RegistryKey, z.B. "minecraft:the_nether") aus einem
 // CommonPlayerSpawnInfo -- dem gemeinsamen Block, mit dem sowohl Login (play) als auch
 // Respawn beginnen bzw. enden. Aus CommonPlayerSpawnInfo.<init> des 1.21.11-Jars
@@ -2375,11 +2383,15 @@ pub const MOB_EFFECT_SPEED: i32 = 0;
 pub const MOB_EFFECT_SLOWNESS: i32 = 1;
 pub const MOB_EFFECT_BLINDNESS: i32 = 14;
 pub const MOB_EFFECT_FIRE_RESISTANCE: i32 = 11;
+// Faerben die Herzen ein (Gui.HeartType.forPlayer).
+pub const MOB_EFFECT_POISON: i32 = 18;
+pub const MOB_EFFECT_WITHER: i32 = 19;
 // Effekte mit Wirkung auf die eigene Bewegung (s. app physics::Input).
 pub const MOB_EFFECT_JUMP_BOOST: i32 = 7;
 pub const MOB_EFFECT_LEVITATION: i32 = 24;
 pub const MOB_EFFECT_SLOW_FALLING: i32 = 27;
 pub const MOB_EFFECT_DOLPHINS_GRACE: i32 = 29;
+pub const MOB_EFFECT_WEAVING: i32 = 36;
 
 /// Alle Statuseffekte in REGISTRY-REIHENFOLGE -- der Index IST die Zahl auf der Leitung.
 ///
@@ -2572,6 +2584,8 @@ const ENTITY_DATA_INDEX_FLAGS: u8 = 0;
 // im HUD -- der Server schickt den Wert nur, wenn er sich aendert.
 const ENTITY_DATA_INDEX_AIR: u8 = 1;
 const ENTITY_DATA_INDEX_POSE: u8 = 6;
+// Entity.FROZEN_TICKS (Int): Ticks im Pulverschnee, ab 140 komplett eingefroren.
+const ENTITY_DATA_INDEX_FROZEN_TICKS: u8 = 7;
 // LivingEntity.SLEEPING_POSITION. Der Index folgt der REIHENFOLGE DER STATISCHEN
 // registerData-Felder (nicht der von initDataTracker!): Entity belegt 0..7, LivingEntity
 // deklariert dann LIVING_FLAGS(8), HEALTH(9), POTION_SWIRLS(10), POTION_SWIRLS_AMBIENT(11),
@@ -2625,6 +2639,8 @@ const ARMOR_STAND_POSE_COUNT: u8 = 6;
 // registerData-Aufrufe, nicht die des Builders.
 const DISPLAY_INDEX_START_INTERPOLATION: u8 = 8;
 const DISPLAY_INDEX_INTERPOLATION_DURATION: u8 = 9;
+const DISPLAY_INDEX_TELEPORT_DURATION: u8 = 10;
+const _: () = assert!(ITEM_FRAME_INDEX_ROTATION == DISPLAY_INDEX_TELEPORT_DURATION);
 const DISPLAY_INDEX_TRANSLATION: u8 = 11;
 const DISPLAY_INDEX_SCALE: u8 = 12;
 const DISPLAY_INDEX_LEFT_ROTATION: u8 = 13;
@@ -2804,6 +2820,8 @@ pub struct EntityDataUpdate {
     pub flags: Option<u8>,
     // Restluft in Ticks (s. ENTITY_DATA_INDEX_AIR).
     pub air: Option<i32>,
+    // Frost-Ticks (s. ENTITY_DATA_INDEX_FROZEN_TICKS).
+    pub frozen_ticks: Option<i32>,
     // Doppeltes Option mit Absicht: das AEUSSERE None heisst "stand nicht im Paket", das
     // innere None heisst "der Server hat das Feld geleert" -- also aufgewacht.
     pub sleeping_pos: Option<Option<(i32, i32, i32)>>,
@@ -2850,6 +2868,8 @@ pub struct EntityDataUpdate {
     // Bei gezuendetem TNT steht hier die Zuendzeit (PrimedTnt.DATA_FUSE_ID).
     pub orb_value: Option<i32>,
     pub display_interp_duration: Option<i32>,
+    // Ueber wie viele Ticks ein Display einer neuen Position folgt (teleport_duration).
+    pub display_teleport_duration: Option<i32>,
     pub item_display_mode: Option<u8>,
     pub display_view_range: Option<f32>,
     // Der Inhalt eines Display-Entities (Index 23), unterschieden am Serializer.
@@ -2937,6 +2957,7 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                 let v = r.read_varint()?;
                 match index {
                     ENTITY_DATA_INDEX_AIR => out.air = Some(v),
+                    ENTITY_DATA_INDEX_FROZEN_TICKS => out.frozen_ticks = Some(v),
                     // Bei anderen Typen stehen hier andere Ints (Boot: Wackel-Ticks) -- der
                     // Empfaenger nimmt sie nur bei einem Display.
                     DISPLAY_INDEX_START_INTERPOLATION => {
@@ -2944,7 +2965,11 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                         out.orb_value = Some(v);
                     }
                     DISPLAY_INDEX_INTERPOLATION_DURATION => out.display_interp_duration = Some(v),
-                    ITEM_FRAME_INDEX_ROTATION => out.frame_rotation = Some(v),
+                    // Beim Bilderrahmen steht an derselben Stelle seine Drehung.
+                    DISPLAY_INDEX_TELEPORT_DURATION => {
+                        out.display_teleport_duration = Some(v);
+                        out.frame_rotation = Some(v);
+                    }
                     TEXT_DISPLAY_INDEX_LINE_WIDTH => out.text_line_width = Some(v),
                     TEXT_DISPLAY_INDEX_BACKGROUND => out.text_background = Some(v),
                     _ => {}

@@ -468,9 +468,10 @@ impl ChatInput {
 pub fn sends_message(text: &str) -> bool {
     // Name plus Text.
     const AN_PERSON: [&str; 6] = ["msg", "tell", "w", "whisper", "m", "t"];
-    // Nur Text: Antwort, Team, Party, Gilde, Clan, Ally, Staff, /me, /say.
-    const IN_KANAL: [&str; 20] = [
-        "r", "reply", "teammsg", "tm", "tc", "teamchat", "pc", "partychat", "p", "gc", "guildchat", "g", "cc", "clanchat", "ac", "allychat", "sc", "staffchat", "me", "say",
+    // Nur Text: Antwort, Team, Party, Gilde, Clan, Ally, Staff, /me, /say. Ohne "ac": das ist
+    // auf vielen Servern der Anticheat-Befehl ("/ac grim"), kein Chat.
+    const IN_KANAL: [&str; 19] = [
+        "r", "reply", "teammsg", "tm", "tc", "teamchat", "pc", "partychat", "p", "gc", "guildchat", "g", "cc", "clanchat", "allychat", "sc", "staffchat", "me", "say",
     ];
     let Some(befehl) = text.strip_prefix('/') else { return !text.trim().is_empty() };
     let mut teile = befehl.split_whitespace();
@@ -527,6 +528,7 @@ mod tests {
         assert!(!sends_message("/msg Steve"));
         assert!(!sends_message("/tc"));
         assert!(!sends_message("/gamemode creative"));
+        assert!(!sends_message("/ac grim"), "Anticheat-Befehl, kein Chat");
         assert!(!sends_message("/spawn"));
     }
 

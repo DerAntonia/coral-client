@@ -153,6 +153,17 @@ impl ServerPacks {
         melden
     }
 
+    // Tab-Wechsel: die Packs des alten Tabs nach `alt`, die des neuen aus `neu` hierher. Der
+    // geladene Stapel bleibt, bis neu geladen ist; dafuer reicht schon ein Unterschied.
+    pub fn switch_tab(&mut self, alt: &mut ServerPacks, neu: &mut ServerPacks) {
+        std::mem::swap(&mut self.entries, &mut alt.entries);
+        std::mem::swap(&mut self.address, &mut alt.address);
+        std::mem::swap(&mut self.entries, &mut neu.entries);
+        std::mem::swap(&mut self.address, &mut neu.address);
+        let fertig: Vec<[u8; 16]> = self.ready().into_iter().map(|(id, _)| id).collect();
+        self.dirty = fertig != self.applied;
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.applied.is_empty()
@@ -185,6 +196,31 @@ mod tests {
         assert!(!s.wants_reload());
         // Erneutes Neuladen meldet nichts doppelt.
         assert!(s.end_reload(&ids, true).is_empty());
+    }
+
+    #[test]
+    fn tabwechsel_laedt_nur_bei_anderen_packs() {
+        let mut s = ServerPacks::default();
+        s.push([1; 16], bereit(1));
+        let ids: Vec<_> = s.begin_reload().iter().map(|(id, _)| *id).collect();
+        s.end_reload(&ids, true);
+        // Neuer Tab ohne Packs: der geladene Stapel muss weg.
+        let (mut alt, mut neu) = (ServerPacks::default(), ServerPacks::default());
+        s.switch_tab(&mut alt, &mut neu);
+        assert!(s.wants_reload());
+        assert_eq!(alt.ready().len(), 1, "die Packs des alten Tabs liegen bei ihm");
+        s.end_reload(&[], true);
+        // Zurueck: dieselben Packs wie vorher kommen wieder, also neu laden.
+        let mut leer = ServerPacks::default();
+        s.switch_tab(&mut leer, &mut alt);
+        assert!(s.wants_reload());
+        s.end_reload(&ids, true);
+        // Zwei Tabs mit gleichen Packs: kein Neuladen.
+        let mut gleich = ServerPacks::default();
+        gleich.push([1; 16], bereit(1));
+        let mut ablage = ServerPacks::default();
+        s.switch_tab(&mut ablage, &mut gleich);
+        assert!(!s.wants_reload());
     }
 
     #[test]

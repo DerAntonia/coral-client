@@ -158,6 +158,15 @@ impl App {
                 can_next: set.chunk_saver_threads < THREADS_MAX,
                 slider: Some((set.chunk_saver_threads as f64, 1.0, THREADS_MAX as f64)),
             },
+            ModuleRow::Stepper {
+                label: "LOD-Weite".to_string(),
+                prev: ButtonAction::ChunkSaverDistancePrev,
+                next: ButtonAction::ChunkSaverDistanceNext,
+                text: distance_label(set.lod_render_distance),
+                can_prev: set.lod_render_distance > DISTANCE_OFF,
+                can_next: set.lod_render_distance < DISTANCE_MAX,
+                slider: Some((set.lod_render_distance as f64, DISTANCE_OFF as f64, DISTANCE_MAX as f64)),
+            },
             ModuleRow::Toggle {
                 label: "Gespeicherte Chunks zeichnen".to_string(),
                 action: ButtonAction::ToggleChunkSaverRenderSaved,
@@ -171,8 +180,11 @@ impl App {
     }
 
     // Wie weit die Fernsicht zeichnet, in Chunks: die LOD-Render-Distance, mit "Gespeicherte
-    // Chunks zeichnen" mindestens die normale Sichtweite.
+    // Chunks zeichnen" mindestens die normale Sichtweite. LOD-Weite aus = gar keine Fernsicht.
     fn lod_radius_chunks(&self) -> u32 {
+        if self.settings.lod_render_distance == DISTANCE_OFF {
+            return DISTANCE_OFF;
+        }
         let gespeichert = if self.render_saved() { self.settings.max_render_distance } else { DISTANCE_OFF };
         self.settings.lod_render_distance.max(gespeichert)
     }
@@ -277,6 +289,21 @@ impl App {
         }
         self.lod.dirty_columns.clear();
         self.lod.dirty_saved_at = Some(Instant::now());
+    }
+
+    // Tab-Wechsel (s. app/tabs.rs): die Welt dieses Tabs speichern und schliessen, die
+    // Fernsicht auf der GPU verwerfen. Zurueck kommt, welche Welt es war.
+    pub(crate) fn lod_leave_tab(&mut self) -> Option<(String, i64)> {
+        self.lod_save_dirty();
+        self.lod_remember_pose();
+        if let Some(saver) = self.lod.saver.as_mut() {
+            saver.close_world();
+        }
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.lod_active = false;
+            gpu.lod = None;
+        }
+        self.lod.identity.take()
     }
 
     // Beim Beenden: der Chunk-Saver schreibt alles weg und beendet seine Threads (Drop).

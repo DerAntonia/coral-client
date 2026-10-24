@@ -140,6 +140,8 @@ struct LodOut {
     @location(1) tex: vec2<f32>,
     @location(2) @interpolate(flat) rect: vec4<f32>,
     @location(3) color: vec3<f32>,
+    // Ein Viertelblock von der Flaeche in ihren eigenen Block hinein (s. covered).
+    @location(4) @interpolate(flat) inward: vec3<f32>,
 };
 
 @vertex
@@ -182,6 +184,7 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> L
     var out: LodOut;
     out.clip_position = project(camera.view * vec4<f32>(rel, 1.0));
     out.rel = rel;
+    out.inward = an * select(0.25, -0.25, f.plus);
     // Seitenflaechen: Texturoberkante oben (v zaehlt nach unten).
     let bu = dot(blocks, au);
     let bv = dot(blocks, av);
@@ -213,6 +216,9 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 // Liegt die Stelle in einem Chunk, den das echte Gelaende zeichnet? Die Maske ist ringfoermig
 // (256 Chunks), geprueft wird deshalb nur in der Naehe des Auges -- geladen ist ohnehin nur
 // dort etwas.
+// Gefragt wird ein Viertelblock innerhalb des Blocks, dem die Flaeche gehoert: eine Seite auf
+// einer Chunkgrenze laege sonst je nach Rundung mal im einen, mal im anderen Chunk und
+// blinkte beim Bewegen an der Grenze zum echten Gelaende.
 fn covered(rel: vec3<f32>) -> bool {
     if (camera.eye_chunk.z == 0) {
         return false;
@@ -249,7 +255,7 @@ fn sample_face(in: LodOut) -> vec4<f32> {
 @fragment
 fn fs_lod(in: LodOut) -> @location(0) vec4<f32> {
     let tex = sample_face(in);
-    if (covered(in.rel) || beyond_radius(in.rel)) {
+    if (covered(in.rel + in.inward) || beyond_radius(in.rel + in.inward)) {
         discard;
     }
     // Deckend wie das nahe Gelaende: Alpha zaehlt hier nicht (Laub hat im Atlas ohnehin volle
@@ -261,7 +267,7 @@ fn fs_lod(in: LodOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_lod_translucent(in: LodOut) -> @location(0) vec4<f32> {
     let tex = sample_face(in);
-    if (covered(in.rel) || beyond_radius(in.rel)) {
+    if (covered(in.rel + in.inward) || beyond_radius(in.rel + in.inward)) {
         discard;
     }
     let rgb = srgb_to_linear(linear_to_srgb(tex.rgb) * in.color);

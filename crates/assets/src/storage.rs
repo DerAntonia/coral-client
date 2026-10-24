@@ -101,10 +101,77 @@ fn find_java(launch: &JavaLaunch, component: Option<&str>) -> PathBuf {
             }
         }
     }
+    // Sicherheitsnetz, falls ein Launcher seine Laufzeiten woanders ablegt: das Java eines
+    // gerade laufenden Minecraft. Neben javaw (ohne Konsole) liegt immer auch java.
+    for laufend in running_java() {
+        if let Some(bin) = laufend.parent() {
+            kandidaten.push(bin.join(exe));
+        }
+        kandidaten.push(laufend);
+    }
     if let Some(home) = std::env::var_os("JAVA_HOME") {
         kandidaten.push(PathBuf::from(home).join("bin").join(exe));
     }
     kandidaten.into_iter().find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(exe))
+}
+
+// Programmdateien laufender Java-Prozesse, die Minecraft ausfuehren.
+#[cfg(target_os = "linux")]
+fn running_java() -> Vec<PathBuf> {
+    let Ok(prozesse) = std::fs::read_dir("/proc") else { return Vec::new() };
+    prozesse
+        .flatten()
+        .filter(|p| std::fs::read(p.path().join("cmdline")).is_ok_and(|c| c.windows(13).any(|w| w == b"net.minecraft")))
+        .filter_map(|p| std::fs::read_link(p.path().join("exe")).ok())
+        .filter(|exe| exe.file_name().is_some_and(|n| n == "java"))
+        .collect()
+}
+
+// Windows: die Befehlszeile fremder Prozesse ist ohne Umwege nicht lesbar, deshalb jedes
+// java/javaw -- ein falsches faellt spaeter beim Start der Dumper auf.
+#[cfg(windows)]
+fn running_java() -> Vec<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let mut gefunden = Vec::new();
+    // SAFETY: Snapshot und Prozess-Handles werden nur hier benutzt und wieder geschlossen;
+    // die Puffer sind so gross, wie den Funktionen gesagt wird.
+    unsafe {
+        let schnappschuss = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if schnappschuss == INVALID_HANDLE_VALUE {
+            return gefunden;
+        }
+        let mut eintrag: PROCESSENTRY32W = std::mem::zeroed();
+        eintrag.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut weiter = Process32FirstW(schnappschuss, &mut eintrag) != 0;
+        while weiter {
+            let laenge = eintrag.szExeFile.iter().position(|&c| c == 0).unwrap_or(eintrag.szExeFile.len());
+            let name = String::from_utf16_lossy(&eintrag.szExeFile[..laenge]).to_ascii_lowercase();
+            if name == "javaw.exe" || name == "java.exe" {
+                let prozess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, eintrag.th32ProcessID);
+                if !prozess.is_null() {
+                    let mut puffer = [0u16; 1024];
+                    let mut n = puffer.len() as u32;
+                    if QueryFullProcessImageNameW(prozess, 0, puffer.as_mut_ptr(), &mut n) != 0 {
+                        gefunden.push(PathBuf::from(OsString::from_wide(&puffer[..n as usize])));
+                    }
+                    CloseHandle(prozess);
+                }
+            }
+            weiter = Process32NextW(schnappschuss, &mut eintrag) != 0;
+        }
+        CloseHandle(schnappschuss);
+    }
+    gefunden
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn running_java() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 

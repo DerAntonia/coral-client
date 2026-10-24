@@ -27,6 +27,9 @@ pub enum TintKind {
     // Pixel R=G=B, per PIL gegen die echte leaf_litter.png verifiziert), macht ohne diesen
     // Tint immer denselben grauen Eindruck, unabhaengig vom Biom.
     DryFoliageAll,
+    // Feste Farbe 0xRRGGBB auf allen Flaechen, unabhaengig vom Biom: Fichten- und Birkenlaub,
+    // Seerose (BlockColors gibt ihr in der Welt 0x208030, ohne Welt 0x71C35C).
+    Fixed(u32),
 }
 
 pub fn tint_kind(block_name: &str) -> TintKind {
@@ -35,9 +38,12 @@ pub fn tint_kind(block_name: &str) -> TintKind {
         // Busch und Zuckerrohr faerbt Vanillas BlockColors ebenfalls mit der Grasfarbe
         // (ihre Textur ist grau, ohne Tint haetten sie keine Farbe).
         "short_grass" | "fern" | "tall_grass" | "large_fern" | "bush" | "sugar_cane" => TintKind::GrassAll,
-        "acacia_leaves" | "birch_leaves" | "dark_oak_leaves" | "jungle_leaves" | "oak_leaves" | "spruce_leaves" | "mangrove_leaves"
-        | "vine" | "glow_lichen" => TintKind::FoliageAll,
+        "acacia_leaves" | "dark_oak_leaves" | "jungle_leaves" | "oak_leaves" | "mangrove_leaves" | "vine" | "glow_lichen" => TintKind::FoliageAll,
+        // Fichte und Birke faerbt Vanilla fest, nicht nach Biom (BlockColors).
+        "spruce_leaves" => TintKind::Fixed(0x619961),
+        "birch_leaves" => TintKind::Fixed(0x80A755),
         "leaf_litter" => TintKind::DryFoliageAll,
+        "lily_pad" => TintKind::Fixed(0x208030),
         _ => TintKind::None,
     }
 }
@@ -57,10 +63,12 @@ mod tests {
     fn bekannte_klassifikation_stimmt() {
         assert!(matches!(tint_kind("grass_block"), TintKind::GrassTop));
         assert!(matches!(tint_kind("oak_leaves"), TintKind::FoliageAll));
-        assert!(matches!(tint_kind("spruce_leaves"), TintKind::FoliageAll));
+        assert!(matches!(tint_kind("spruce_leaves"), TintKind::Fixed(0x619961)), "Fichte: feste Farbe");
+        assert!(matches!(tint_kind("birch_leaves"), TintKind::Fixed(0x80A755)), "Birke: feste Farbe");
         assert!(matches!(tint_kind("azalea_leaves"), TintKind::None), "Azalee hat eine feste Farbe, keine Biom-Toenung");
         assert!(matches!(tint_kind("stone"), TintKind::None));
         assert!(matches!(tint_kind("bush"), TintKind::GrassAll));
+        assert!(matches!(tint_kind("lily_pad"), TintKind::Fixed(0x208030)), "Seerose: feste Farbe statt grauer Textur");
         assert!(is_water("water"));
         assert!(!is_water("stone"));
     }

@@ -88,6 +88,24 @@ pub struct JavaLaunch {
     pub runtime_dirs: Vec<PathBuf>,
 }
 
+// Der offizielle Launcher legt seine Java-Laufzeiten unter Windows meist NICHT in
+// .minecraft/runtime ab: der aktuelle Installer (Xbox-App/Store-Paket) nimmt seinen
+// Paketordner unter %LOCALAPPDATA%, der alte MSI-Launcher seinen Programmordner.
+fn official_runtime_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![dir.join("runtime")];
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            dirs.push(local.join("Packages").join("Microsoft.4297127D64EC6_8wekyb3d8bbwe").join("LocalCache").join("Local").join("runtime"));
+        }
+        for var in ["ProgramFiles(x86)", "ProgramFiles"] {
+            if let Some(programme) = std::env::var_os(var).map(PathBuf::from) {
+                dirs.push(programme.join("Minecraft Launcher").join("runtime"));
+            }
+        }
+    }
+    dirs
+}
+
 impl GameSource {
     /// Pfade fuer einen Java-Start gegen das Client-Jar von `version`.
     pub fn java_launch(&self, version: &str) -> JavaLaunch {
@@ -98,7 +116,7 @@ impl GameSource {
                     version_json: version_dir.join(format!("{version}.json")),
                     client_jar: version_dir.join(format!("{version}.jar")),
                     libraries_dir: dir.join("libraries"),
-                    runtime_dirs: vec![dir.join("runtime")],
+                    runtime_dirs: official_runtime_dirs(dir),
                 }
             }
             GameSource::Prism { root, .. } => JavaLaunch {

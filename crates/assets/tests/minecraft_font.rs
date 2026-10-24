@@ -14,6 +14,7 @@ fn laedt_ascii_font_mit_plausiblen_metriken() {
     assert_eq!(page.cell_size(), (8, 8), "16x16-Raster auf 128x128 ergibt 8x8-Zellen");
     assert_eq!(page.ascent, 7, "Vanilla-ascent fuer ascii.png");
     assert_eq!(font.space_advance, 4.0, "Leerzeichen kommt aus dem space-Provider");
+    assert!(font.spaces.contains(&('\u{200c}', 0.0)), "U+200C hat Vorschub 0 statt Unifont-Kaestchen");
 
     // Zeile 4 des Rasters ist '@ABCDEFGHIJKLMNO'.
     assert_eq!(page.chars[4][1], 'A', "Rasterzuordnung stimmt nicht");

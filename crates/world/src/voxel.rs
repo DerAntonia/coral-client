@@ -230,6 +230,8 @@ impl VoxelClasses {
                     crate::biome_tint::TintKind::GrassAll => 1,
                     crate::biome_tint::TintKind::FoliageAll => 2,
                     crate::biome_tint::TintKind::DryFoliageAll => 3,
+                    // Feste Farben passen nicht in die zwei Bit: in der Fernsicht wie Laub.
+                    crate::biome_tint::TintKind::Fixed(_) => 2,
                     _ => 0,
                 };
                 info[12] |= tint << (2 * face);

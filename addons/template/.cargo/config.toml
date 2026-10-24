@@ -1,0 +1,3 @@
+# Immer fuer WebAssembly bauen, damit ein schlichtes `cargo build --release` reicht.
+[build]
+target = "wasm32-unknown-unknown"

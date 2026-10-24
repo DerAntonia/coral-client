@@ -20,12 +20,15 @@ pub struct Transactions {
     ids: VecDeque<(Instant, i32)>,
     first: Option<i32>,
     total: u64,
-    // Zuletzt gemeldetes Muster -- eine Log-Zeile nur, wenn es sich aendert.
-    reported: Option<String>,
+    // Schon gemeldete Musterarten (s. kind) -- jede nur EINMAL je Verbindung. Frueher stand
+    // hier nur die letzte Beschreibung samt Zaehlern ("13 verschiedene Schritte"), die sich
+    // fast mit jedem Ping aendern und zwischen zwei Arten hin- und herspringen: das Log lief
+    // mit Hunderten Zeilen voll.
+    reported: Vec<String>,
 }
 
 impl Transactions {
-    /// Neue ID. Liefert eine Log-Zeile beim ersten Ping und wenn sich das Muster aendert.
+    /// Neue ID. Liefert eine Log-Zeile beim ersten Ping und bei einer neuen Musterart.
     pub fn push(&mut self, id: i32, now: Instant) -> Option<String> {
         if self.ids.len() == HISTORY {
             self.ids.pop_front();
@@ -36,9 +39,10 @@ impl Transactions {
             self.first = Some(id);
             return Some(format!("[transaktion] erste ID {id}"));
         }
-        let muster = self.pattern();
-        if self.ids.len() > STEADY_STEPS && self.reported.as_deref() != Some(muster.as_str()) {
-            self.reported = Some(muster.clone());
+        let art = self.kind();
+        if self.ids.len() > STEADY_STEPS && !self.reported.contains(&art) {
+            self.reported.push(art);
+            let muster = self.pattern();
             return Some(format!("[transaktion] Muster: {muster} (erste ID {}, jetzt {id}, {} gesamt)", self.first.unwrap_or(id), self.total));
         }
         None
@@ -46,6 +50,17 @@ impl Transactions {
 
     fn steps(&self) -> impl Iterator<Item = i64> + '_ {
         self.ids.iter().zip(self.ids.iter().skip(1)).map(|(a, b)| b.1 as i64 - a.1 as i64)
+    }
+
+    /// Die Art des Musters ohne die Zaehler, die sich laufend aendern: "zählt meist um -1, 12
+    /// Sprünge" und "... 13 Sprünge" sind dieselbe Art, "wechselnd (13 ...)" und "(14 ...)"
+    /// auch.
+    fn kind(&self) -> String {
+        let muster = self.pattern();
+        match muster.find([',', '(']) {
+            Some(i) => muster[..i].trim_end().to_string(),
+            None => muster,
+        }
     }
 
     /// Grob: fester Schritt, Schritt mit Ruecksprung (Ueberlauf/Neustart des Zaehlers),
@@ -124,5 +139,22 @@ mod tests {
         let zeilen: Vec<_> = (1..30).filter_map(|i| t.push(5 - i, jetzt)).collect();
         assert_eq!(zeilen.len(), 1, "{zeilen:?}");
         assert!(zeilen[0].contains("zählt um -1"));
+    }
+
+    #[test]
+    fn jede_art_nur_einmal() {
+        let mut t = Transactions::default();
+        let jetzt = Instant::now();
+        // Wild wechselnde IDs, dazwischen immer wieder lange gleiche Schritte -- wie im Log.
+        let mut id = 0;
+        let mut zeilen = Vec::new();
+        for runde in 0..20 {
+            for i in 0..40 {
+                id += if runde % 2 == 0 { -1 } else { [7000, -7003, 5, -9][i % 4] };
+                zeilen.extend(t.push(id, jetzt));
+            }
+        }
+        // Erste ID plus hoechstens eine Zeile je Art.
+        assert!(zeilen.len() <= 5, "{zeilen:#?}");
     }
 }

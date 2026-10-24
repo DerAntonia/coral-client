@@ -392,18 +392,17 @@ pub fn camera_collision_boxes(state: u32, shapes: &BlockShapes) -> Vec<ShapeBox>
 //
 // Bislang nur das Spinnennetz (CobwebBlock.onEntityCollision, 1.21.11 nachgesehen): Faktor
 // (0.25, 0.05 als float, 0.25), mit Weaving-Effekt (0.5, 0.25, 0.5).
-// Der WEAVING-Fall (0.5/0.25/0.5) fehlt hier, weil der Client keine Statuseffekte fuehrt --
-// mit Weaving-Effekt weicht die Simulation also ab. Das ist eine bekannte Luecke, kein
-// uebersehener Fall.
+// `weaving`: der Effekt Weben (WebBlock.entityInside, nur fuer das Netz).
 //
 // Andere Bloecke mit slowMovement (Pulverschnee 0.9/1.5/0.9, Suessbeerenstrauch 0.8/0.75/0.8)
 // gehoeren hier ebenfalls hin, sind aber nicht verifiziert und deshalb bewusst NICHT geraten
 // -- ein falscher Multiplikator waere schlimmer als gar keiner, weil er still danebenliegt.
-pub fn slow_movement_multiplier(state: u32) -> Option<[f64; 3]> {
+pub fn slow_movement_multiplier(state: u32, weaving: bool) -> Option<[f64; 3]> {
     match block_name(state) {
         // 0.05 steht im Jar als float-Literal (0.05F) im ansonsten double-Konstruktor -- der
         // Wert ist also der f32-gerundete, nicht 0.05 in f64. Genau so uebernommen, weil sich
         // die Differenz ueber viele Ticks in der Position aufsummiert.
+        Some("cobweb") if weaving => Some([0.5, 0.25, 0.5]),
         Some("cobweb") => Some([0.25, 0.05f32 as f64, 0.25]),
         // SweetBerryBushBlock.entityInside: makeStuckInBlock mit (0.8, 0.75, 0.8)
         // fuer jedes Lebewesen ausser Fuchs und Biene, in JEDEM Wachstumsalter (nur der Schaden
@@ -549,12 +548,13 @@ mod tests {
     // Der Bremsfaktor selbst -- die Zahlen stehen so in CobwebBlock.onEntityCollision.
     #[test]
     fn spinnennetz_bremst_mit_den_vanilla_faktoren() {
-        let m = slow_movement_multiplier(state_of("cobweb")).expect("Netz bremst");
+        let m = slow_movement_multiplier(state_of("cobweb"), false).expect("Netz bremst");
         assert_eq!(m[0], 0.25);
         assert_eq!(m[2], 0.25);
         // 0.05F, nicht 0.05 -- im Jar steht ein float-Literal im double-Konstruktor.
         assert_eq!(m[1], 0.05f32 as f64);
-        assert!(slow_movement_multiplier(state_of("stone")).is_none());
+        assert!(slow_movement_multiplier(state_of("stone"), false).is_none());
+        assert_eq!(slow_movement_multiplier(state_of("cobweb"), true), Some([0.5, 0.25, 0.5]));
     }
 
     // Umrisse von Pflanzen OHNE den Versatz der Position (den legt der Aufrufer an): Blumen und

@@ -224,7 +224,7 @@ impl SoundSlot {
         }
     }
 
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         self as usize
     }
 
@@ -287,10 +287,10 @@ impl SoundSetting {
             self.sound = sound.to_string();
         }
         if let Some(v) = teile.next().and_then(|v| v.trim().parse::<u32>().ok()) {
-            self.volume = v.min(VOLUME_MAX);
+            self.volume = v;
         }
         if let Some(v) = teile.next().and_then(|v| v.trim().parse::<u32>().ok()) {
-            self.pitch = v.clamp(PITCH_MIN, PITCH_MAX);
+            self.pitch = v;
         }
     }
 }
@@ -478,12 +478,12 @@ impl TotemingSettings {
             "warning_hotbar_color" => self.hotbar_color = IndicatorColor::from_key(value).unwrap_or(self.hotbar_color),
             "warning_offset" => {
                 if let Ok(v) = value.parse::<u32>() {
-                    self.offset = v.clamp(MIN_OFFSET, MAX_OFFSET);
+                    self.offset = v;
                 }
             }
             "warning_size" => {
                 if let Ok(v) = value.parse::<u32>() {
-                    self.size = v.clamp(MIN_SIZE, MAX_SIZE);
+                    self.size = v;
                 }
             }
             "warning_shadow" => self.shadow = flag,
@@ -726,12 +726,12 @@ mod tests {
     }
 
     #[test]
-    fn kaputte_werte_werden_geklemmt() {
+    fn werte_bleiben_wie_gespeichert() {
         let mut s = TotemingSettings::default();
         s.parse_line("toteming_warning_offset", "999");
         s.parse_line("toteming_sound_own_main", "x|5000|1");
-        assert_eq!(s.offset, MAX_OFFSET);
-        assert_eq!(s.slot(SoundSlot::OwnMain), &SoundSetting::new("x", VOLUME_MAX, PITCH_MIN));
+        assert_eq!(s.offset, 999);
+        assert_eq!(s.slot(SoundSlot::OwnMain), &SoundSetting::new("x", 5000, 1));
         assert!(!s.parse_line("fov", "90"), "fremde Schlüssel gehören nicht hierher");
     }
 

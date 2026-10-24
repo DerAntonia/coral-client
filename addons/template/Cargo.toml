@@ -6,8 +6,15 @@ edition = "2021"
 # Eigenstaendig, nicht Teil des Client-Arbeitsbereichs.
 [workspace]
 
-[dependencies]
-serde_json = "1"
+# Ein Addon ist eine WebAssembly-Bibliothek; der Client laedt die .wasm-Datei.
+[lib]
+crate-type = ["cdylib"]
 
+[dependencies]
+coral-addon = { path = "../../crates/addon_api" }
+
+# Klein und schnell geladen.
 [profile.release]
+opt-level = "s"
+lto = true
 strip = true

@@ -89,6 +89,36 @@ struct Launcher {
     config: String,
     config_edit: Option<ConfigEdit>,
     game_data: GameData,
+    log: ClientLog,
+}
+
+/// Was der Client nach stdout/stderr schreibt (client.log, s. play), zum Mitlesen im Launcher.
+/// Neu gelesen wird nur, wenn sich Groesse oder Aenderungszeit der Datei geaendert haben.
+#[derive(Default)]
+struct ClientLog {
+    stand: Option<(u64, std::time::SystemTime)>,
+    zeilen: Vec<String>,
+}
+
+// So viele letzte Zeilen zeigt der Log-Bereich; aeltere stehen weiter in der Datei.
+const LOG_ZEILEN: usize = 2000;
+
+impl ClientLog {
+    fn refresh(&mut self) {
+        let Ok(meta) = std::fs::metadata(log_path()) else {
+            self.stand = None;
+            self.zeilen.clear();
+            return;
+        };
+        let stand = (meta.len(), meta.modified().unwrap_or(std::time::UNIX_EPOCH));
+        if self.stand == Some(stand) {
+            return;
+        }
+        self.stand = Some(stand);
+        let text = std::fs::read(log_path()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let alle: Vec<&str> = text.lines().collect();
+        self.zeilen = alle[alle.len().saturating_sub(LOG_ZEILEN)..].iter().map(|z| z.to_string()).collect();
+    }
 }
 
 /// Stand der extrahierten Spieldaten (s. game_data_section).
@@ -158,6 +188,7 @@ impl Launcher {
             config: assets::startup_config(None),
             config_edit: None,
             game_data: GameData::Status(assets::game_data_status(MC_VERSION)),
+            log: ClientLog::default(),
         };
         launcher.reload_configs();
         launcher.rescan();
@@ -533,6 +564,8 @@ impl Launcher {
         for flag in &self.conf.flags {
             if flag == "CORAL_PKTLOG" {
                 command.env(flag, log_path().with_file_name("pktlog.txt"));
+            } else if flag == "CORAL_PKTRAW" {
+                command.env(flag, log_path().with_file_name("pktraw.bin"));
             } else if flag == "CORAL_SOUNDLOG" {
                 command.env(flag, log_path().with_file_name("soundlog.txt"));
             } else if DEBUG_FLAGS.iter().any(|(name, _, _)| name == flag) {
@@ -799,6 +832,30 @@ impl Launcher {
             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), status);
         }
     }
+
+    // Das Log des Clients (frueher ein Panel auf seiner Server-Seite): Verbindungsphasen,
+    // Addons, Fehler. Folgt dem Ende, solange man nicht hochscrollt.
+    fn log_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.log.refresh();
+        ui.horizontal(|ui| {
+            ui.heading("Log");
+            if ui.small_button("Kopieren").clicked() {
+                ctx.copy_text(self.log.zeilen.join("\n"));
+            }
+            ui.label(egui::RichText::new(log_path().display().to_string()).small());
+        });
+        ui.add_space(4.0);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            egui::ScrollArea::both().id_salt("client_log").max_height(320.0).auto_shrink([false, true]).stick_to_bottom(true).show(ui, |ui| {
+                if self.log.zeilen.is_empty() {
+                    ui.label("Noch nichts -- der Client schreibt hierher, sobald er laeuft.");
+                }
+                for zeile in &self.log.zeilen {
+                    ui.add(egui::Label::new(egui::RichText::new(zeile).monospace()).extend());
+                }
+            });
+        });
+    }
 }
 
 impl eframe::App for Launcher {
@@ -809,7 +866,8 @@ impl eframe::App for Launcher {
         if matches!(self.update, UpdateState::Downloading { .. }) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         } else if self.client.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            // Haeufig genug, dass das Log beim Verbinden fluessig mitlaeuft.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -826,6 +884,8 @@ impl eframe::App for Launcher {
                 self.flags_section(ui);
                 ui.separator();
                 self.play_section(ui);
+                ui.separator();
+                self.log_section(ui, ctx);
             });
         });
     }
@@ -956,6 +1016,7 @@ const DEBUG_FLAGS: &[(&str, &str, &str)] = &[
     ("CORAL_PERFORMANCE", "Hohe Prioritaet", "Den Client mit erhoehter Prozess-Prioritaet starten (fuer Latenzmessungen)."),
     ("CORAL_SOUNDLOG", "Klang-Mitschnitt", "Jeden abgespielten Klang (vom Server und vom Client selbst) mit Zeit, Verursacher und Abstand in soundlog.txt neben dem Client-Log mitschreiben."),
     ("CORAL_PKTLOG", "Paket-Mitschnitt", "Jedes Paket in pktlog.txt neben dem Client-Log mitschreiben (wird gross)."),
+    ("CORAL_PKTRAW", "Roh-Mitschnitt", "Jedes Paket mit allen Bytes in pktraw.bin neben dem Client-Log mitschreiben (wird sehr gross)."),
 ];
 
 impl LauncherConf {

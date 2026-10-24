@@ -13,6 +13,7 @@ members = [
     "crates/launcher",
     "crates/voice",
     "crates/chunk_saver",
+    "crates/addon_api",
 ]
 # Das Spiel ist das Standardziel des Arbeitsbereichs. Ohne diese Zeile ist ein schlichtes
 # `cargo run --release` mehrdeutig, seit pktproxy (das Byte-MITM-Werkzeug fuer die
@@ -22,7 +23,7 @@ default-members = ["crates/app"]
 
 [workspace.package]
 edition = "2021"
-version = "26.10.7"
+version = "26.10.8"
 
 # Clippy fuer alle Crates (je Crate "[lints] workspace = true"). Ausgeschaltet nur, was gegen den
 # Stil des Codes laeuft statt Fehler zu finden: GPU-/Mesh-Funktionen nehmen viele Parameter und
