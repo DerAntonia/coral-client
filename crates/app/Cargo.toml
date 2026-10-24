@@ -32,6 +32,8 @@ rustc-hash.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Die Launcher-Szene ist zlib-gepackt (s. src/hero_scene.rs).
 flate2 = "1"
+# Fehlermeldungen von wgpu ins client.log (s. WgpuLog in main.rs).
+log = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
 # Die Kreativ-Tabs nennen Server-Registry-Verweise als JSON (s. creative.rs).
 serde_json = "1"

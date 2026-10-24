@@ -6141,7 +6141,14 @@ fn create_crosshair_bind_group(
 }
 
 struct GpuState {
+    // Fuer eine frische Surface, wenn sich die alte nicht mehr einrichten laesst (s.
+    // configure_surface).
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
+    // false: das letzte configure ist gescheitert, acquire_frame versucht es ab
+    // surface_retry_at erneut.
+    surface_ok: bool,
+    surface_retry_at: Instant,
     // Arc: der Animations-Thread laedt selbst in den Atlas hoch (s. block_anim::UploadTarget).
     device: std::sync::Arc<wgpu::Device>,
     queue: std::sync::Arc<wgpu::Queue>,
@@ -6599,7 +6606,7 @@ impl GpuState {
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
-        surface.configure(&device, &config);
+        // configure erst am Ende, s. configure_surface.
 
         // Offscreen-Farbtextur, in die render_world tatsaechlich zeichnet (Welt, HUD-Text,
         // Crosshair) -- NICHT direkt in die Swapchain-Textur. Grund: das Crosshair-
@@ -7389,8 +7396,11 @@ impl GpuState {
         let queue = std::sync::Arc::new(queue);
         let pack_glyphs = Some(Arc::new(font_atlas::PackGlyphCache::new(&device, queue.clone(), pack_fonts)));
         font_atlas.set_pack(&device, pack_glyphs.clone());
-        Self {
+        let mut state = Self {
+            instance,
             surface,
+            surface_ok: false,
+            surface_retry_at: Instant::now(),
             device,
             queue,
             config,
@@ -7489,7 +7499,39 @@ impl GpuState {
             block_softness_deg: 6.0,
             lightmap_debug: 0,
             present_at_ns: None,
+        };
+        state.configure_surface();
+        state
+    }
+
+    // surface.configure mit Rueckfall. wgpu 22 macht aus jedem Fehler dabei einen Panic; unter
+    // Windows kann DXGI das Anlegen oder Anpassen der Swapchain aber ablehnen, etwa wenn ein
+    // Aufnahme- oder Overlay-Programm (Medal, Discord-Stream) noch Bilder der alten haelt. Dann
+    // eine frische Surface mit neuer Swapchain; klappt auch das nicht, bleibt das Bild stehen
+    // und acquire_frame versucht es spaeter erneut, statt den Client zu beenden. Den Grund
+    // schreibt wgpu ueber `log` ins client.log (s. WgpuLog).
+    fn configure_surface(&mut self) -> bool {
+        let versuch = |surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| surface.configure(device, config))).is_ok()
+        };
+        self.surface_ok = versuch(&self.surface, &self.device, &self.config);
+        if !self.surface_ok {
+            println!("[gpu] Swapchain liess sich nicht einrichten, lege die Surface neu an");
+            match self.instance.create_surface(self.window.clone()) {
+                // Erst zuweisen, dann einrichten: die alte Swapchain muss weg sein, ein Fenster
+                // traegt nur eine.
+                Ok(neu) => {
+                    self.surface = neu;
+                    self.surface_ok = versuch(&self.surface, &self.device, &self.config);
+                }
+                Err(e) => println!("[gpu] Surface neu anlegen fehlgeschlagen: {e}"),
+            }
         }
+        if !self.surface_ok {
+            println!("[gpu] Swapchain weiter nicht einrichtbar, neuer Versuch in 2 s");
+            self.surface_retry_at = Instant::now() + Duration::from_secs(2);
+        }
+        self.surface_ok
     }
 
     fn gpu_label(&self) -> String {
@@ -7523,7 +7565,7 @@ impl GpuState {
         let swapchain_value = value.max(1);
         if self.config.desired_maximum_frame_latency != swapchain_value {
             self.config.desired_maximum_frame_latency = swapchain_value;
-            self.surface.configure(&self.device, &self.config);
+            self.configure_surface();
         }
         self.fence_wait_zero = wants_zero_mode;
         println!("[gpu] Render-Ahead-Limit -> {value} (Swapchain-Wert {swapchain_value}, Zero-Modus {})", self.fence_wait_zero);
@@ -7548,7 +7590,7 @@ impl GpuState {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        self.configure_surface();
         self.block_renderer.resize(&self.device, width, height);
         if let Some(lod) = self.lod.as_mut() {
             lod.resize(&self.device, width, height);
@@ -8467,10 +8509,14 @@ impl GpuState {
         // Wartezeit im HUD unsichtbar.
         let acquire_started = Instant::now();
         self.wait_for_previous_frame_if_zero_mode();
+        // Ohne eingerichtete Swapchain wuerde get_current_texture in wgpu panicken.
+        if !self.surface_ok && (Instant::now() < self.surface_retry_at || !self.configure_surface()) {
+            return None;
+        }
         match self.surface.get_current_texture() {
             Ok(frame) => Some((frame, acquire_started.elapsed().as_secs_f32() * 1000.0)),
             Err(_) => {
-                self.surface.configure(&self.device, &self.config);
+                self.configure_surface();
                 None
             }
         }
@@ -21384,9 +21430,30 @@ mod model_face_tests {
     }
 }
 
+// wgpu nennt den eigentlichen Grund eines Fehlers (etwa das DXGI-HRESULT, wenn die Swapchain
+// nicht angelegt werden kann) nur ueber `log`; ohne Logger fehlte er im client.log.
+struct WgpuLog;
+
+impl log::Log for WgpuLog {
+    fn enabled(&self, meta: &log::Metadata) -> bool {
+        meta.level() <= log::Level::Error && meta.target().starts_with("wgpu")
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            println!("[{}] {}", record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 fn main() {
     // Vor allem anderen: alte mc-client-Ordner auf den neuen Namen umziehen (s. assets::source).
     assets::migrate_legacy_dirs();
+    if log::set_logger(&WgpuLog).is_ok() {
+        log::set_max_level(log::LevelFilter::Error);
+    }
 
     // nice -10 nur, wenn ueber scripts/run-with-performance.sh gestartet (das setzt
     // CORAL_PERFORMANCE=1). Im normalen Entwicklungs-Alltag laeuft der Client damit
