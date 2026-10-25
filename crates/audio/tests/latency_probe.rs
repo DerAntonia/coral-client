@@ -27,7 +27,7 @@ fn berichtet_die_echte_puffergroesse() {
 
     // Dieselbe Auswahl wie audio::low_latency_config -- der Test misst also den Weg, den der
     // Client wirklich nimmt, nicht einen daneben.
-    const TARGET: u32 = 256;
+    const TARGET: u32 = audio::DEFAULT_BUFFER_FRAMES;
     const TARGET_RATE: u32 = 48_000;
     let mut gewaehlt = None;
     let mut rate = rate;

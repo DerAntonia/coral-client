@@ -27,6 +27,7 @@ impl App {
         self.update_hover_sound();
         self.tick_ui_anim();
         self.advance_orbit_test();
+        self.pipewire_tick();
         self.update_tracked_sounds();
         self.voice_tick();
         self.profiler.add(Phase::LoopMisc, t);

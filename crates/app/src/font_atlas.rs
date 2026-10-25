@@ -42,6 +42,10 @@ pub struct PlacedGlyph {
     // Farbiges Bild aus einem Resourcepack (s. PackGlyphCache): liegt im Glyphenblatt
     // (Binding 2), nicht im Deckungsatlas, und behaelt seine Farben.
     pub pack: bool,
+    // Wie unscharf diese gerasterte Fassung ist: Summe c * (1 - c) ueber ihre Pixel, also
+    // halb gedeckte Pixel. Ein Strich, der zwischen zwei Pixel faellt, zaehlt viel, einer
+    // genau auf dem Raster wenig (s. sharpest_shift). 0 fuer nicht vorgerasterte Zeichen.
+    pub unschaerfe: f32,
 }
 
 // Welche Schrift gezeichnet wird. Index = Settings::font.
@@ -146,9 +150,12 @@ fn is_small_capital(ch: char) -> bool {
 // Server schreiben "Small Caps" oft mit normalem s (ᴘᴠᴘ ꜱᴇʀᴠᴇʀ mit "s"): in der Minecraft-
 // Schrift ist ꜱ dasselbe Bild wie s, in einer Vektorschrift faellt das kleine s heraus. In einem
 // Wort aus Kapitaelchen (Grossbuchstaben duerfen dabei sein) wird es deshalb als ꜱ gezeichnet;
-// nur fuer die Darstellung, der Text selbst bleibt.
+// nur fuer die Darstellung, der Text selbst bleibt. Manche nehmen statt s das kyrillische ѕ
+// (DonutSMP: "ѕᴜʀᴠɪᴠᴀʟ"), das einer Vektorschrift ohne Kyrillisch genauso fehlt und dann blockig
+// aus der Pixelschrift kaeme -- es wird ebenso zu ꜱ.
 pub(crate) fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
-    if !text.contains('s') || !text.chars().any(is_small_capital) {
+    let ist_s = |c: char| c == 's' || c == '\u{0455}';
+    if !text.contains(ist_s) || !text.chars().any(is_small_capital) {
         return std::borrow::Cow::Borrowed(text);
     }
     let zeichen: Vec<char> = text.chars().collect();
@@ -162,8 +169,8 @@ pub(crate) fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
         }
         let ende = zeichen[i..].iter().position(|c| !c.is_alphabetic()).map_or(zeichen.len(), |n| i + n);
         let wort = &zeichen[i..ende];
-        let kapitaelchen = wort.iter().any(|&c| is_small_capital(c)) && wort.iter().all(|&c| c == 's' || c.is_uppercase() || is_small_capital(c));
-        out.extend(wort.iter().map(|&c| if kapitaelchen && c == 's' { '\u{A731}' } else { c }));
+        let kapitaelchen = wort.iter().any(|&c| is_small_capital(c)) && wort.iter().all(|&c| ist_s(c) || c.is_uppercase() || is_small_capital(c));
+        out.extend(wort.iter().map(|&c| if kapitaelchen && ist_s(c) { '\u{A731}' } else { c }));
         i = ende;
     }
     std::borrow::Cow::Owned(out)
@@ -173,6 +180,12 @@ pub(crate) fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
 // Die Geviertgroesse folgt daraus je Schrift (bei DM Sans mit 0.7 em genau 10) -- so fuellen
 // alle Schriften dieselbe Zeile gleich aus, egal wie gross ihr Geviert gezeichnet ist.
 const CAP_HEIGHT_FONT_PX: f32 = 7.0;
+
+// Anteil des Randes links und rechts, den die Kapitaelchen aus Noto Sans behalten. Sie stammen aus
+// der Lautschrift und sind fuer einzelne Zeichen gesetzt, nicht fuer Woerter: zwei gerade Striche
+// (ᴜʀ) standen weit auseinander, schraege Paare (ᴠᴀ) beruehrten sich fast. Kerning hat Noto fuer
+// sie keins (GPOS geprueft).
+const NOTO_KAPITAELCHEN_RAND: f32 = 0.6;
 // DM Sans wird fuer JEDEN Zeichenfaktor (UI_SCALE_*: 1 bis 5 Bildschirmpixel je Font-Pixel)
 // einzeln gerastert und 1:1 gezeichnet. Die fruehere Fassung rasterte einmal gross und
 // verkleinerte ueber eine Mip-Kette -- das war sichtbar unscharf, und die beim Verkleinern
@@ -407,20 +420,19 @@ impl FontAtlas {
         if !p.snap {
             return (p, x);
         }
-        let ganz = x.floor();
-        let stufe = ((x - ganz) * SUBPIXEL_STEPS as f32).round() as u8;
-        if stufe == SUBPIXEL_STEPS {
-            return (p, ganz + 1.0);
-        }
-        if stufe == 0 {
-            return (p, ganz);
-        }
-        let karte = if bold { &self.placed_bold } else { &self.placed };
-        let viertel = (scale * 4.0).round() as u8;
-        match karte.get(&(viertel + SUBPIXEL_KEY * stufe, ch)) {
-            Some(v) => (*v, ganz),
-            None => (p, x.round()),
-        }
+        snap_in(if bold { &self.placed_bold } else { &self.placed }, ch, scale, p, x)
+    }
+
+    // Um wie viel ein Text verschoben gezeichnet wird, damit er am schaerfsten aussieht.
+    //
+    // Mit den Subpixel-Fassungen stimmen die Abstaende, aber je nach Lage auf dem Raster faellt
+    // ein schmaler Strich (das l) zwischen zwei Pixel und wird links blass, rechts kraeftig --
+    // derselbe Name sah so an einer Stelle sauber und an der anderen schief aus.
+    // Die Lage mit der kleinsten Unschaerfe-Summe haengt nur am Text, nicht an der Stelle
+    // (s. sharpest_shift_in). Hoechstens einen halben Pixel, die Abstaende im Text bleiben.
+    // `positionen`: wie aus char_positions, je Zeichen von `text`.
+    pub fn sharpest_shift(&self, text: &str, positionen: &[f32], x: f32, scale: f32) -> f32 {
+        sharpest_shift_in(&self.placed, text, positionen, x, scale, |ch| self.place(ch, scale))
     }
 
     // Wo und wie gross ein Zeichen bei Faktor `scale` gezeichnet wird.
@@ -436,6 +448,7 @@ impl FontAtlas {
                     size: [g.cell[2] as f32 * g.scale * scale, g.cell[3] as f32 * g.scale * scale],
                     snap: false,
                     pack: true,
+                    unschaerfe: 0.0,
                 });
             }
         };
@@ -450,6 +463,7 @@ impl FontAtlas {
             size: [g.size_px[0] * scale, g.size_px[1] * scale],
             snap: false,
             pack: false,
+            unschaerfe: 0.0,
         })
     }
 
@@ -460,6 +474,75 @@ impl FontAtlas {
         let Resolved::Base(ch) = self.resolve(ch)? else { return None };
         Some((pick_placed(&self.placed_bold, ch, scale)?, *self.bold_advance.get(&ch)?))
     }
+}
+
+// Kern von FontAtlas::snap_x, auf einer Karte der gerasterten Fassungen.
+fn snap_in(karte: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32, p: PlacedGlyph, x: f32) -> (PlacedGlyph, f32) {
+    let ganz = x.floor();
+    let stufe = ((x - ganz) * SUBPIXEL_STEPS as f32).round() as u8;
+    if stufe == SUBPIXEL_STEPS {
+        return (p, ganz + 1.0);
+    }
+    if stufe == 0 {
+        return (p, ganz);
+    }
+    let viertel = (scale * 4.0).round() as u8;
+    match karte.get(&(viertel + SUBPIXEL_KEY * stufe, ch)) {
+        Some(v) => (*v, ganz),
+        None => (p, x.round()),
+    }
+}
+
+// Kern von FontAtlas::sharpest_shift; `place` liefert die ungeschobene Fassung eines Zeichens.
+//
+// Wie der Text aussieht, haengt nur an u, dem Nachkomma-Anteil seines Anfangs: jedes Zeichen
+// nimmt die Fassung zu u + seiner Lage im Text (s. snap_in). Ueber u in [0, 1) wechselt
+// Zeichen i seine Fassung genau viermal; dazwischen bleibt das Bild gleich. Abgelaufen werden
+// alle diese Stuecke, je Wechsel aendert sich nur der Beitrag eines Zeichens. Genommen wird
+// das schaerfste Stueck, bei Gleichstand das erste -- beides haengt nicht an `x`, derselbe
+// Text sieht also an jeder Stelle gleich aus. Verschoben wird um hoechstens einen halben Pixel.
+fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, positionen: &[f32], x: f32, scale: f32, place: impl Fn(char) -> Option<PlacedGlyph>) -> f32 {
+    let viertel = (scale * 4.0).round() as u8;
+    let steps = SUBPIXEL_STEPS as usize;
+    // Je Zeichen: Nachkomma-Anteil seiner Lage und die Unschaerfe seiner vier Fassungen.
+    let mut zeichen: Vec<(f32, [f32; SUBPIXEL_STEPS as usize])> = Vec::new();
+    for (ch, &rel) in text.chars().zip(positionen) {
+        let Some(p) = place(ch).filter(|p| p.snap) else { continue };
+        let mut u = [p.unschaerfe; SUBPIXEL_STEPS as usize];
+        for (stufe, wert) in u.iter_mut().enumerate().skip(1) {
+            if let Some(v) = placed.get(&(viertel + SUBPIXEL_KEY * stufe as u8, ch)) {
+                *wert = v.unschaerfe;
+            }
+        }
+        zeichen.push((rel.rem_euclid(1.0), u));
+    }
+    if zeichen.is_empty() {
+        return 0.0;
+    }
+    let fassung = |anteil: f32| ((anteil * SUBPIXEL_STEPS as f32).round() as usize) % steps;
+    // Wechsel: bei u + f = (k + 1/2) / 4 springt das Zeichen eine Fassung weiter.
+    let mut wechsel: Vec<(f32, usize)> = zeichen
+        .iter()
+        .enumerate()
+        .flat_map(|(i, &(f, _))| (0..steps).map(move |k| (((k as f32 + 0.5) / SUBPIXEL_STEPS as f32 - f).rem_euclid(1.0), i)))
+        .collect();
+    wechsel.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Das erste Stueck [0, erster Wechsel) direkt ausrechnen, dann weiterzaehlen.
+    let mitte0 = wechsel[0].0 / 2.0;
+    let mut stufen: Vec<usize> = zeichen.iter().map(|&(f, _)| fassung((mitte0 + f).rem_euclid(1.0))).collect();
+    let mut summe: f32 = zeichen.iter().zip(&stufen).map(|(z, &s)| z.1[s]).sum();
+    let (mut beste, mut beste_summe) = (mitte0, summe);
+    for (n, &(ab, i)) in wechsel.iter().enumerate() {
+        summe -= zeichen[i].1[stufen[i]];
+        stufen[i] = (stufen[i] + 1) % steps;
+        summe += zeichen[i].1[stufen[i]];
+        let bis = wechsel.get(n + 1).map_or(1.0 + wechsel[0].0, |w| w.0);
+        if bis - ab > 1e-4 && summe < beste_summe - 1e-3 {
+            (beste, beste_summe) = ((ab + bis) / 2.0, summe);
+        }
+    }
+    // Von der jetzigen Lage zur besten, auf kuerzestem Weg.
+    (beste.rem_euclid(1.0) - x.rem_euclid(1.0) + 0.5).rem_euclid(1.0) - 0.5
 }
 
 // Die fuer Faktor `scale` gerasterte Fassung, sonst die naechstgroessere (verkleinern ist
@@ -736,6 +819,13 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
         _ => ((1.0, 1.0), 0.0),
     };
     let groesse = |ch: char| if ch == '\u{221E}' { unendlich } else { (1.0, 1.0) };
+    // Wie viel Rand links und rechts ein Zeichen abgibt (Font-Einheiten), s. NOTO_KAPITAELCHEN_RAND.
+    let noto = spec.bytes == NOTO_SANS.bytes || spec.bytes == NOTO_SANS_BOLD.bytes;
+    let kuerzung = |id: ab_glyph::GlyphId, ch: char| -> (f32, f32) {
+        let Some(b) = font.outline(id).map(|o| o.bounds).filter(|_| noto && is_small_capital(ch)) else { return (0.0, 0.0) };
+        let weg = 1.0 - NOTO_KAPITAELCHEN_RAND;
+        (weg * b.min.x.max(0.0), weg * (font.h_advance_unscaled(id) - b.max.x).max(0.0))
+    };
 
     // Vorschuebe in Font-Pixeln (fuer Layout und Breitenmessung), unabhaengig vom Faktor.
     let unit = font.as_scaled(px_scale(em_font_px));
@@ -744,9 +834,10 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
         if ch.is_control() || glyphs.contains_key(&ch) || !nehmen(ch) {
             continue;
         }
-        let advance_px = unit.h_advance(id) * groesse(ch).0;
+        let (links, rechts) = kuerzung(id, ch);
+        let advance_px = unit.h_advance(id) * groesse(ch).0 - (links + rechts) * unit.h_scale_factor();
         glyphs.insert(ch, GlyphInfo { uv_min: [0.0; 2], uv_max: [0.0; 2], size_px: [0.0; 2], offset_px: [0.0; 2], advance_px });
-        ids.push((id, ch));
+        ids.push((id, ch, links));
     }
 
     // KEINE Tabellenziffern: DM Sans hat kein "tnum"-Feature (GSUB geprueft), und ein Nachbau
@@ -758,9 +849,10 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
         let ps = px_scale(em_font_px * f);
         // Mitte der 8 in Pixeln (y nach unten) -- dort sitzt das ∞.
         let mitte = -mitte_acht * em_font_px * f / units_per_em;
-        for (&(id, ch), stufe) in ids.iter().flat_map(|e| (0..SUBPIXEL_STEPS).filter(move |&s| s == 0 || has_subpixel(e.1)).map(move |s| (e, s))) {
+        let links_px = font.as_scaled(ps).h_scale_factor();
+        for (&(id, ch, links), stufe) in ids.iter().flat_map(|e| (0..SUBPIXEL_STEPS).filter(move |&s| s == 0 || has_subpixel(e.1)).map(move |s| (e, s))) {
             let k = groesse(ch);
-            let x = stufe as f32 / SUBPIXEL_STEPS as f32;
+            let x = stufe as f32 / SUBPIXEL_STEPS as f32 - links * links_px;
             let glyph = id.with_scale_and_position(PxScale { x: ps.x * k.0, y: ps.y * k.1 }, ab_glyph::point(x, 0.0));
             let Some(outline) = font.outline_glyph(glyph) else { continue };
             let mut b = outline.px_bounds();
@@ -879,6 +971,7 @@ fn build_ttf(minecraft: &AtlasPixels, spec: TtfSpec) -> AtlasPixels {
                 size: [b.w as f32, b.h as f32],
                 snap: true,
                 pack: false,
+                unschaerfe: b.coverage.iter().map(|&c| c as f32 * (255 - c) as f32).sum::<f32>() / (255.0 * 255.0),
             },
         );
     }
@@ -1038,6 +1131,9 @@ mod tests {
         // Normale Woerter daneben bleiben.
         assert_eq!(small_caps_s("ᴘᴠᴘ servers"), "ᴘᴠᴘ servers");
         assert_eq!(small_caps_s("sss"), "sss");
+        // Kyrillisches ѕ (U+0455) ebenso, aber nur in Kapitaelchen-Woertern.
+        assert_eq!(small_caps_s("\u{0455}ᴜʀᴠɪᴠᴀʟ"), "ꜱᴜʀᴠɪᴠᴀʟ");
+        assert_eq!(small_caps_s("ᴘᴠᴘ \u{0455}ad"), "ᴘᴠᴘ \u{0455}ad");
     }
 
     #[test]
@@ -1131,6 +1227,60 @@ mod tests {
         assert!(atlas.descent_px > 1.5 && atlas.descent_px < 4.0, "Unterlänge {}", atlas.descent_px);
         // Keine Mip-Kette mehr.
         assert_eq!(atlas.levels.len(), 1);
+    }
+
+    // Derselbe Text soll an jeder Lage auf dem Raster gleich aussehen (s. sharpest_shift):
+    // mit der gewaehlten Verschiebung gezeichnet, ist die Deckung je Bildschirmspalte bis auf
+    // ganze Pixel Versatz dieselbe. Vorher sah "slopcore" je nach Lage verschieden aus, das l
+    // mal mittig, mal schief.
+    #[test]
+    fn text_an_jeder_lage_gleich() {
+        let leer = AtlasPixels {
+            levels: vec![vec![0]],
+            width: 1,
+            height: 1,
+            glyphs: HashMap::default(),
+            placed: HashMap::default(),
+            placed_bold: HashMap::default(),
+            bold_advance: HashMap::default(),
+            vanilla_advance: Arc::default(),
+            cell_height_px: 8.0,
+            ascent_px: 7.0,
+            descent_px: 1.0,
+        };
+        let atlas = build_ttf(&leer, FontKind::Outfit.ttf().unwrap());
+        let scale = 2.0f32;
+        for text in ["slopcore", "DerAntonia", "CoralClient", "Illinois"] {
+            let mut pos = Vec::new();
+            let mut pen = 0.0;
+            for ch in text.chars() {
+                pos.push(pen);
+                pen += atlas.glyphs[&ch].advance_px * scale;
+            }
+            let mut profile = Vec::new();
+            for start in (0..16).map(|i| 100.0 + i as f32 / 16.0 + 0.01) {
+                let d = sharpest_shift_in(&atlas.placed, text, &pos, start, scale, |c| pick_placed(&atlas.placed, c, scale));
+                let mut spalten: Vec<(i32, u8)> = Vec::new();
+                for (ch, &rel) in text.chars().zip(&pos) {
+                    let p = pick_placed(&atlas.placed, ch, scale).unwrap();
+                    let (p, x) = snap_in(&atlas.placed, ch, scale, p, start + d + rel);
+                    let (x0, y0) = ((p.uv_min[0] * atlas.width as f32).round() as u32, (p.uv_min[1] * atlas.height as f32).round() as u32);
+                    for dx in 0..p.size[0] as u32 {
+                        let m = (0..p.size[1] as u32).map(|dy| atlas.levels[0][((y0 + dy) * atlas.width + x0 + dx) as usize]).max().unwrap_or(0);
+                        spalten.push(((x + p.offset[0]) as i32 + dx as i32, m));
+                    }
+                }
+                let links = spalten.iter().map(|s| s.0).min().unwrap();
+                let mut prof = vec![0u8; 200];
+                for (sp, m) in spalten {
+                    let k = (sp - links) as usize;
+                    prof[k] = prof[k].max(m);
+                }
+                profile.push(prof);
+            }
+            let verschieden: std::collections::HashSet<_> = profile.iter().collect();
+            assert_eq!(verschieden.len(), 1, "{text}: {} verschiedene Bilder bei 16 Lagen", verschieden.len());
+        }
     }
 }
 

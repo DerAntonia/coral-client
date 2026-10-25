@@ -404,6 +404,45 @@ impl App {
         self.audio.sink().play_sample(aufnahme.sample, gain, 0.0, pitch);
     }
 
+    // PipeWire messen, solange der Audio-Tab offen ist; nach einem Neustart von pipewire-pulse
+    // den eigenen Strom neu oeffnen (der alte ist mit dem Dienst gestorben).
+    pub(crate) fn pipewire_tick(&mut self) {
+        if self.pipewire.strom_neu_oeffnen() {
+            if let Err(e) = self.audio.set_buffer_frames(audio_buffer_request(self.settings.audio_buffer_frames)) {
+                self.push_log(format!("Audio nach PipeWire-Neustart nicht wieder geöffnet: {e}"));
+            }
+        }
+        if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsAudio {
+            self.pipewire.messen_wenn_faellig();
+        }
+    }
+
+    // Zeile "PipeWire aktiv": die gemessene Blockgroesse des Treibers.
+    pub(crate) fn pipewire_text(&self) -> String {
+        match self.pipewire.messung() {
+            Some(m) => format!("{} Frames · {} ms", m.quantum, format!("{:.1}", m.ms()).replace('.', ",")),
+            None if self.pipewire.beschaeftigt() => "misst".to_string(),
+            None => "kein PipeWire gefunden".to_string(),
+        }
+    }
+
+    // Was die Zeile "PipeWire-Grenze" zeigt. Ziel ist der eingestellte Puffer, solange er unter
+    // der Vorgabe von pipewire-pulse liegt, auf eine Zweierpotenz aufgerundet (s.
+    // pipewire::grenze_fuer).
+    pub(crate) fn pipewire_knopf(&self) -> PipewireKnopf {
+        let Some(m) = self.pipewire.messung() else { return PipewireKnopf::Text(self.pipewire_text()) };
+        if let Some(f) = self.pipewire.fehler() {
+            return PipewireKnopf::Knopf(format!("Fehlgeschlagen: {f}"), m.eigene_grenze);
+        }
+        let puffer = self.settings.audio_buffer_frames;
+        let ziel = (puffer != 0 && puffer < PIPEWIRE_PULSE_MIN).then(|| pipewire::grenze_fuer(puffer, m.min_quantum));
+        match (m.eigene_grenze, ziel) {
+            (Some(e), z) if z.is_none() || z == Some(e) => PipewireKnopf::Knopf(format!("{e} Frames gesetzt · entfernen"), None),
+            (_, Some(z)) => PipewireKnopf::Knopf(format!("Auf {z} Frames senken"), Some(z)),
+            _ => PipewireKnopf::Text("Vorgabe reicht für diesen Puffer".to_string()),
+        }
+    }
+
     // Den Raumklang-Hoertest um einen Frame weiterdrehen (s. spatial_sound::OrbitTest).
     pub(crate) fn advance_orbit_test(&mut self) {
         let now = Instant::now();

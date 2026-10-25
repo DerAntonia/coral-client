@@ -2,6 +2,7 @@
 // Infrastruktur (Geraete-Auswahl + Testton) -- echte Spielgeraeusche (Schritte, Bloecke,
 // ...) sind eine eigene, spaetere Aufgabe (s. Placeholder-Texte in den Audio-Einstellungen).
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub mod bank;
@@ -350,6 +351,38 @@ pub struct AudioEngine {
     stream: Option<cpal::Stream>,
     state: Arc<Mutex<MixerState>>,
     current_device_name: Option<String>,
+    buffer: Option<BufferInfo>,
+    // Was zuletzt an set_output_device ging (None = System-Standard) -- set_buffer_frames
+    // baut den Stream damit neu, ohne aus "System-Standard" ein festes Geraet zu machen.
+    requested_device: Option<String>,
+    // Angefragte Puffergroesse in Frames, None = Vorgabe des Backends (s. low_latency_config).
+    buffer_frames: Option<u32>,
+}
+
+/// Puffergroesse, mit der die Engine startet, solange nichts anderes gesetzt ist.
+pub const DEFAULT_BUFFER_FRAMES: u32 = 256;
+
+/// Puffer des laufenden Ausgabe-Streams, fuer die Anzeige in den Audio-Einstellungen.
+///
+/// `requested_frames` ist, was low_latency_config beim Backend angefragt hat (None = Vorgabe
+/// des Backends). Was das Backend daraus macht, sagt cpal nicht -- daher zusaetzlich die
+/// gemessene Callback-Groesse: so viele Frames hat der letzte Callback tatsaechlich gefuellt.
+#[derive(Clone)]
+pub struct BufferInfo {
+    pub requested_frames: Option<u32>,
+    pub sample_rate: u32,
+    callback_frames: Arc<AtomicU32>,
+}
+
+impl BufferInfo {
+    /// 0, solange noch kein Callback gelaufen ist.
+    pub fn callback_frames(&self) -> u32 {
+        self.callback_frames.load(Ordering::Relaxed)
+    }
+
+    pub fn frames_to_ms(&self, frames: u32) -> f32 {
+        frames as f32 * 1000.0 / self.sample_rate.max(1) as f32
+    }
 }
 
 // cpal::Stream haelt auf manchen Backends nicht-Send-Handles; die Engine wird nur vom
@@ -360,6 +393,12 @@ impl AudioEngine {
     /// Startet sofort auf dem Standard-Ausgabegeraet, falls eines existiert. Wenn nicht
     /// (z.B. headless CI), bleibt die Engine stumm nutzbar statt zu paniken.
     pub fn new() -> Self {
+        Self::with_buffer_frames(Some(DEFAULT_BUFFER_FRAMES))
+    }
+
+    /// Wie new(), aber gleich mit dieser Puffergroesse -- spart den zweiten Stream-Aufbau,
+    /// wenn die Einstellung schon beim Start feststeht.
+    pub fn with_buffer_frames(buffer_frames: Option<u32>) -> Self {
         let state = Arc::new(Mutex::new(MixerState {
             test_tone_phase: 0.0,
             test_tone_active: false,
@@ -369,15 +408,45 @@ impl AudioEngine {
             streams: (0..stream::MAX_STREAMS).map(|_| stream::StreamSlot::new()).collect(),
             stream_start_fill: stream::DEFAULT_START_FILL,
         }));
-        let mut engine = AudioEngine { stream: None, state, current_device_name: None };
+        let mut engine = AudioEngine { stream: None, state, current_device_name: None, buffer: None, requested_device: None, buffer_frames };
         if let Some(name) = default_output_device_name() {
-            let _ = engine.set_output_device(Some(&name));
+            if let Err(e) = engine.set_output_device(Some(&name)) {
+                // Ein gespeicherter Puffer, den das Geraet nicht kann, soll den Client nicht
+                // stumm starten lassen -- dann eben mit der Vorgabe des Backends.
+                if engine.buffer_frames.is_some() {
+                    eprintln!("[audio] Puffer {:?} geht nicht ({e}), nehme die Backend-Vorgabe", engine.buffer_frames);
+                    engine.buffer_frames = None;
+                    let _ = engine.set_output_device(Some(&name));
+                }
+            }
+            // Gestartet wurde mit dem Namen, gemeint war das System-Standardgeraet:
+            // set_buffer_frames soll spaeter wieder dem Standard folgen, nicht diesem Namen.
+            engine.requested_device = None;
         }
         engine
     }
 
     pub fn current_device_name(&self) -> Option<&str> {
         self.current_device_name.as_deref()
+    }
+
+    pub fn buffer_info(&self) -> Option<&BufferInfo> {
+        self.buffer.as_ref()
+    }
+
+    /// Neue Puffergroesse (None = Backend-Vorgabe), der Stream wird sofort neu gebaut. Schlaegt
+    /// das fehl, laeuft der alte Stream mit der alten Groesse weiter.
+    pub fn set_buffer_frames(&mut self, frames: Option<u32>) -> Result<(), AudioError> {
+        let alt = std::mem::replace(&mut self.buffer_frames, frames);
+        if self.stream.is_none() {
+            return Ok(());
+        }
+        let geraet = self.requested_device.clone();
+        let ergebnis = self.set_output_device(geraet.as_deref());
+        if ergebnis.is_err() {
+            self.buffer_frames = alt;
+        }
+        ergebnis
     }
 
     /// `name = None` waehlt das System-Standardgeraet.
@@ -392,22 +461,29 @@ impl AudioEngine {
             None => host.default_output_device().ok_or(AudioError::NoOutputDevice)?,
         };
 
-        let (config, sample_format) = low_latency_config(&device)?;
+        let (config, sample_format) = low_latency_config(&device, self.buffer_frames)?;
         let state = Arc::clone(&self.state);
         let channels = config.channels as usize;
         let sample_rate = config.sample_rate.0 as f32;
+        let callback_frames = Arc::new(AtomicU32::new(0));
+        let gemessen = Arc::clone(&callback_frames);
+        let melde = move |len: usize| gemessen.store((len / channels.max(1)) as u32, Ordering::Relaxed);
 
         let err_fn = |e| eprintln!("[audio] Stream-Fehler: {e}");
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
                 &config,
-                move |data: &mut [f32], _| fill_buffer(data, channels, sample_rate, &state),
+                move |data: &mut [f32], _| {
+                    melde(data.len());
+                    fill_buffer(data, channels, sample_rate, &state)
+                },
                 err_fn,
                 None,
             ),
             SampleFormat::I16 => device.build_output_stream(
                 &config,
                 move |data: &mut [i16], _| {
+                    melde(data.len());
                     let mut tmp = vec![0.0f32; data.len()];
                     fill_buffer(&mut tmp, channels, sample_rate, &state);
                     for (o, i) in data.iter_mut().zip(tmp.iter()) {
@@ -420,6 +496,7 @@ impl AudioEngine {
             SampleFormat::U16 => device.build_output_stream(
                 &config,
                 move |data: &mut [u16], _| {
+                    melde(data.len());
                     let mut tmp = vec![0.0f32; data.len()];
                     fill_buffer(&mut tmp, channels, sample_rate, &state);
                     for (o, i) in data.iter_mut().zip(tmp.iter()) {
@@ -435,8 +512,14 @@ impl AudioEngine {
 
         stream.play().map_err(|e| AudioError::PlayStream(e.to_string()))?;
 
+        self.requested_device = name.map(str::to_string);
         self.current_device_name = Some(device.name().unwrap_or_else(|_| "unbekannt".to_string()));
         self.stream = Some(stream);
+        let requested_frames = match config.buffer_size {
+            BufferSize::Fixed(n) => Some(n),
+            BufferSize::Default => None,
+        };
+        self.buffer = Some(BufferInfo { requested_frames, sample_rate: config.sample_rate.0, callback_frames });
         Ok(())
     }
 
@@ -1040,8 +1123,7 @@ const PREFERRED_SAMPLE_RATE: u32 = 48_000;
 ///
 /// Beides nur, WENN das Geraet es hergibt: die Vorgaben des Backends bleiben der Rueckfall.
 /// Ein Geraet, das 48 kHz nicht kann, soll stumm bleiben duerfen war nie die Absicht.
-fn low_latency_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), AudioError> {
-    const TARGET_BUFFER_FRAMES: u32 = 256;
+fn low_latency_config(device: &cpal::Device, buffer_frames: Option<u32>) -> Result<(StreamConfig, SampleFormat), AudioError> {
 
     let default = device.default_output_config().map_err(|_| AudioError::NoSupportedConfig)?;
     let sample_format = default.sample_format();
@@ -1053,8 +1135,8 @@ fn low_latency_config(device: &cpal::Device) -> Result<(StreamConfig, SampleForm
             if range.min_sample_rate().0 <= PREFERRED_SAMPLE_RATE && PREFERRED_SAMPLE_RATE <= range.max_sample_rate().0 {
                 config.sample_rate = cpal::SampleRate(PREFERRED_SAMPLE_RATE);
             }
-            if let cpal::SupportedBufferSize::Range { min, max } = range.buffer_size() {
-                let frames = TARGET_BUFFER_FRAMES.clamp(*min, *max);
+            if let (Some(ziel), cpal::SupportedBufferSize::Range { min, max }) = (buffer_frames, range.buffer_size()) {
+                let frames = ziel.clamp(*min, *max);
                 config.buffer_size = BufferSize::Fixed(frames);
             }
         }

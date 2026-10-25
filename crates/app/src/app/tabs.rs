@@ -411,7 +411,7 @@ impl App {
         let y = 8.0;
         let h = TOPBAR_H - y;
         let links = l.gear_hit.x + l.gear_hit.w + 12.0;
-        let rechts = l.konto.x - 16.0 - h;
+        let rechts = l.konto_links - 16.0 - h;
         let n = self.tabs.len() as f32;
         let w = ((rechts - links - TAB_GAP * n) / n).clamp(TAB_MIN_W, TAB_MAX_W).floor();
         let tabs: Vec<TabRect> = (0..self.tabs.len())

@@ -66,6 +66,7 @@ mod server_status;
 mod theme;
 mod toteming;
 mod sysstats;
+mod pipewire;
 mod system_info;
 mod ui_sound;
 mod vblank;
@@ -1478,10 +1479,11 @@ fn vanilla_shadow_color(c: [f32; 4]) -> [f32; 4] {
     [viertel(c[0]), viertel(c[1]), viertel(c[2]), c[3]]
 }
 
-// Schwarz (lineare Farbe, bis etwa sRGB 25/255): ein schwarzer Rand um schwarze Schrift macht
-// sie nur dicker und unscharf, deshalb bekommt sie keinen (s. shape_text_in, world_text_border).
-fn is_black(c: [f32; 4]) -> bool {
-    c[0].max(c[1]).max(c[2]) < 0.01
+// Dunkel (lineare Farbe, jeder Kanal bis etwa sRGB 56/255): ein schwarzer Rand um dunkle Schrift
+// macht sie nur dicker und unscharf, deshalb bekommt sie keinen (s. shape_text_in,
+// world_text_border). Auch der fast schwarze Text auf Akzent-Knoepfen (TextOnAccent) zaehlt.
+fn is_dark(c: [f32; 4]) -> bool {
+    c[0].max(c[1]).max(c[2]) < 0.04
 }
 
 // `staerke`: bei der Kontur ihre Dicke in Bildschirmpixeln, sonst die Deckkraft (0..1) des
@@ -3246,6 +3248,29 @@ const AUDIO_DEVICE_ROW: usize = AUDIO_UI_SOUND_FIRST_ROW + ui_sound::UiSound::AL
 const AUDIO_TEST_TONE_ROW: usize = AUDIO_DEVICE_ROW + 1;
 const AUDIO_SPATIAL_ROW: usize = AUDIO_TEST_TONE_ROW + 1;
 const AUDIO_PITCH_ROW: usize = AUDIO_SPATIAL_ROW + 1;
+// Puffer des Ausgabe-Streams: Auswahl plus Anzeige, was laeuft (s. audio::BufferInfo).
+const AUDIO_BUFFER_ROW: usize = AUDIO_PITCH_ROW + 1;
+const AUDIO_BUFFER_INFO_ROW: usize = AUDIO_BUFFER_ROW + 1;
+// PipeWire (s. pipewire-Modul): womit der Graph laeuft, darunter dessen Untergrenze senken
+// oder wieder entfernen.
+const AUDIO_PIPEWIRE_ROW: usize = AUDIO_BUFFER_INFO_ROW + 1;
+const AUDIO_PIPEWIRE_SET_ROW: usize = AUDIO_PIPEWIRE_ROW + 1;
+// Waehlbare Puffergroessen in Frames, 0 = Vorgabe des Systems (bei ALSA rund 100 ms). Was das
+// Geraet nicht kann, klemmt audio::low_latency_config auf seinen Bereich; was wirklich laeuft,
+// zeigt die Zeile darunter.
+const AUDIO_BUFFER_CHOICES: [u32; 15] = [16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 0];
+
+fn audio_buffer_request(frames: u32) -> Option<u32> {
+    (frames != 0).then_some(frames)
+}
+
+fn audio_buffer_label(frames: u32) -> String {
+    if frames == 0 {
+        "System-Vorgabe".to_string()
+    } else {
+        format!("{frames} Frames")
+    }
+}
 
 // Chat-Einstellungen im Fenster des Chats im HUD-Editor (Rechtsklick auf den Chat), je Zeile
 // die Erklaerung beim Draufzeigen: Aussehen, dann Verlauf.
@@ -4533,6 +4558,8 @@ struct OverlayRange {
     text: std::ops::Range<u32>,
     // Laeufe wie bei shape_sprites, Anfang relativ zu den Overlay-Sprites.
     sprites: Vec<(SpriteAtlas, u32, u32)>,
+    // Schriftwechsel wie bei shape_text, Vertex relativ zum Anfang des Gruppentexts.
+    schriften: Vec<(u32, FontKind)>,
 }
 
 // Was overlay_vertices fuer alle Gruppen zusammen liefert.
@@ -7655,6 +7682,7 @@ impl GpuState {
 
     // Ohne Uebersetzung: fuer Text, der schon uebersetzt ist (Umbruch, Kuerzen).
     fn measure_raw(&self, text: &str, scale: f32) -> f32 {
+        let _klein = self.small_label_font(scale);
         let text = &*self.layout_atlas().display_text(text);
         if self.plain_numbers.get() {
             return text.chars().map(|c| self.advance(c)).sum::<f32>() * scale;
@@ -7673,6 +7701,7 @@ impl GpuState {
     // bestehen (Farbabschnitte, s. App::build_server_hud) und trotzdem als EINE Zeile
     // ausgerichtet werden muessen.
     fn char_positions(&self, text: &str, scale: f32) -> (Vec<f32>, f32) {
+        let _klein = self.small_label_font(scale);
         let text = &*self.layout_atlas().display_text(text);
         if self.plain_numbers.get() {
             let mut x = 0.0;
@@ -7797,6 +7826,7 @@ impl GpuState {
                 self.set_layout_font(neu);
                 continue;
             }
+            let _klein = self.small_label_font(t.scale);
             let atlas = self.layout_atlas();
             if atlas.kind() != aktuell {
                 aktuell = atlas.kind();
@@ -7827,7 +7857,7 @@ impl GpuState {
                     rand = TextShadow::Off;
                 }
             }
-            if is_black(t.color) && is_black(randfarbe) {
+            if is_dark(t.color) && is_dark(randfarbe) {
                 rand = TextShadow::Off;
             }
             // Erst alle Raender, dann alle Glyphen: sonst laege der Rand des naechsten Zeichens
@@ -7842,9 +7872,12 @@ impl GpuState {
             // (Minecraft-Schrift, Symbole) wie Vanilla zweimal, bei 0 und +1 Pixel.
             let fett = std::mem::take(&mut fett_naechster);
             let mehr = if fett { scale } else { 0.0 };
+            // Die schaerfste Lage auf dem Pixelraster (s. FontAtlas::sharpest_shift). Fett
+            // bleibt, wo es ist: dort sitzen die Zeichen mittig im verbreiterten Vorschub.
+            let x = if fett { t.x } else { t.x + atlas.sharpest_shift(&atlas.display_text(&t.text), &positionen, t.x, scale) };
             for &ist_rand in durchgaenge {
                 for (k, (ch, &rel)) in atlas.display_text(&t.text).chars().zip(&positionen).enumerate() {
-                    let pen_x = t.x + rel + k as f32 * mehr;
+                    let pen_x = x + rel + k as f32 * mehr;
                     if out.len() + VERTS_PER_QUAD * 2 > MAX_UI_GLYPHS * VERTS_PER_QUAD {
                         runs.push(TextRun { top: t.y, bottom: t.y + self.text_height(scale), glyphs, group });
                         return; // Buffer-Limit erreicht -- Rest weglassen statt ueberlaufen
@@ -7992,7 +8025,7 @@ impl GpuState {
                 [r, g, b, a * color[3]]
             }
         };
-        (rand[3] > 0.0 && !(is_black(color) && is_black(rand))).then_some(rand)
+        (rand[3] > 0.0 && !(is_dark(color) && is_dark(rand))).then_some(rand)
     }
 
     // UiSprites zu Vertices. Rueckgabe: die zusammenhaengenden Laeufe (Atlas, Startvertex,
@@ -8311,7 +8344,7 @@ impl GpuState {
             let laeufe = Self::shape_sprites(&g.sprites, screen_px, &mut sprites);
             let t0 = text.len();
             let mut glyphen = Vec::new();
-            self.shape_text(&g.texts, screen_px, &mut glyphen);
+            let schriften = self.shape_text(&g.texts, screen_px, &mut glyphen);
             text.extend(glyphen);
             if g.angle != 0.0 {
                 for v in &mut quads[q0..] {
@@ -8324,7 +8357,7 @@ impl GpuState {
                     v.position = rotate_ndc(v.position, g.pivot, g.angle, screen_px);
                 }
             }
-            ranges.push(OverlayRange { quads: q0 as u32..quads.len() as u32, text: t0 as u32..text.len() as u32, sprites: laeufe });
+            ranges.push(OverlayRange { quads: q0 as u32..quads.len() as u32, text: t0 as u32..text.len() as u32, sprites: laeufe, schriften });
         }
         OverlayVertices { quads, text, sprites, ranges }
     }
@@ -8385,10 +8418,23 @@ impl GpuState {
             }
             let t = klemmen(&g.text, text);
             if !t.is_empty() {
+                // Wie oben Abschnitt fuer Abschnitt mit dem Atlas seiner Schrift -- sonst
+                // landen Glyphen einer anderen Schrift (kleine Beschriftungen in Outfit, s.
+                // small_label_font) mit ihren UVs auf dem allgemeinen Atlas.
                 pass.set_pipeline(&self.text_pipeline);
-                pass.set_bind_group(0, &self.font_atlas.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.text_vertex_buffer.slice(..));
-                pass.draw(t, 0..1);
+                let anfang = text.0 + g.text.start;
+                let mut von = t.start;
+                let mut kind = self.font_atlas.kind();
+                for &(ab, naechste) in g.schriften.iter().chain(std::iter::once(&(u32::MAX - anfang, kind))) {
+                    let ab = (anfang + ab).clamp(t.start, t.end);
+                    if ab > von {
+                        pass.set_bind_group(0, &self.hud_font(kind).bind_group, &[]);
+                        pass.draw(von..ab, 0..1);
+                        von = ab;
+                    }
+                    kind = naechste;
+                }
             }
         }
         if cursor {
@@ -8443,6 +8489,17 @@ impl GpuState {
 
     fn set_layout_font(&self, font: Option<FontKind>) {
         self.layout_font.set(font);
+    }
+
+    // Kleine Beschriftungen (TOPBAR_SUB_SCALE) nie in der Minecraft-Schrift: 1,5-fach zerlegt
+    // sie die Font-Pixel ungleich (mal ein, mal zwei Bildschirmpixel), das sieht fett und
+    // zerhackt aus. Dort Outfit, fuers Messen wie fuers Zeichnen.
+    fn small_label_font(&self, scale: f32) -> Option<LayoutFontScope<'_>> {
+        (scale == TOPBAR_SUB_SCALE && self.layout_atlas().kind() == FontKind::Minecraft).then(|| {
+            let scope = LayoutFontScope { gpu: self, vorher: self.layout_font.get(), ruhig_vorher: self.plain_numbers.get() };
+            self.set_layout_font(Some(FontKind::Outfit));
+            scope
+        })
     }
 
     // Eine HUD-Zahl als Glyphen-Vierecke fuer den Fadenkreuz-Pass, um ihre Mitte gesetzt.
@@ -9673,6 +9730,32 @@ fn format_ui_pitch(halbtoene: i32) -> String {
     }
 }
 
+// "256 Frames · 5,3 ms", dahinter in Klammern die gemessene Callback-Groesse, wenn sie von
+// der Anfrage abweicht -- das Backend darf die Anfrage umbiegen (Windows tut es meist).
+// Zeile "PipeWire-Grenze": ein Knopf mit Beschriftung und Aktion, oder nur ein Text, warum es
+// nichts zu tun gibt (s. App::pipewire_knopf).
+enum PipewireKnopf {
+    Knopf(String, Option<u32>),
+    Text(String),
+}
+
+// Ab dieser Groesse greift die Vorgabe von pipewire-pulse (128/48000) nicht mehr ein.
+const PIPEWIRE_PULSE_MIN: u32 = 128;
+
+fn format_audio_buffer(info: Option<&audio::BufferInfo>) -> String {
+    let Some(info) = info else { return "kein Stream".to_string() };
+    let ms = |frames: u32| format!("{:.1}", info.frames_to_ms(frames)).replace('.', ",");
+    let gemessen = info.callback_frames();
+    let mut text = match info.requested_frames {
+        Some(n) => format!("{n} Frames · {} ms", ms(n)),
+        None => "Backend-Vorgabe".to_string(),
+    };
+    if gemessen != 0 && Some(gemessen) != info.requested_frames {
+        text.push_str(&format!(" (Callback {gemessen} · {} ms)", ms(gemessen)));
+    }
+    text
+}
+
 // Erklaert, was man hoeren soll -- und was nicht. Ohne den letzten Satz wuerde die fehlende
 // Vorne/Hinten-Unterscheidung fuer einen Fehler gehalten, obwohl sie eine bewusste Grenze des
 // Modells ist (s. audio::spatial-Modulkommentar).
@@ -10009,7 +10092,7 @@ impl MenuScreen {
             MenuScreen::SettingsInventory => Some(SettingsPage { rows: 8, sections: &[("Allgemein", 0), ("Tränke", 5)] }),
             MenuScreen::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[] }),
             MenuScreen::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
-            MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_PITCH_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
+            MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_PIPEWIRE_SET_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
             MenuScreen::SettingsFont => Some(SettingsPage { rows: STABLE_NUMBERS_ROW + 1, sections: &[("Standard", 0), ("Ausnahmen", FONT_EXCEPTIONS_ROW), ("Zahlen", STABLE_NUMBERS_ROW)] }),
             MenuScreen::SettingsLanguage => Some(SettingsPage { rows: LOANWORDS_ROW + 1, sections: &[("Sprachen", 0), ("Schreibweise", LATIN_MACRONS_ROW)] }),
@@ -10211,6 +10294,7 @@ enum Choice {
     EgoShadow,
     EgoSound,
     AudioDevice,
+    AudioBuffer,
     CrosshairShape,
     // Auswahl-Einstellung eines Addon-Moduls (Modul, Einstellung).
     Addon(u16, u16),
@@ -12140,6 +12224,9 @@ struct Settings {
     // Name des gewaehlten Ausgabegeraets (s. audio-Crate). Leer = System-Standard --
     // absichtlich kein Index, denn welche Geraete es gibt, weiss erst der naechste Start.
     audio_output_device: String,
+    // Angefragter Ausgabepuffer in Frames, 0 = Vorgabe des Systems (s. AUDIO_BUFFER_CHOICES).
+    // Privat wie das Geraet: was ohne Knacksen geht, haengt an Rechner und Kopfhoerer.
+    audio_buffer_frames: u32,
     // Master-Tonhoehe fuer UI-Klaenge aus Aufnahmen, in Halbtoenen (s. audio::semitone_factor).
     // Wirkt NUR auf den Aufnahme-Pfad von play_ui_sound, nicht auf Signaltoene wie den
     // Totem-Pop (audio::CueSink::play) -- der Regler ist zum Durchprobieren von
@@ -12680,6 +12767,7 @@ fn is_private_setting(key: &str) -> bool {
             | "tear_reserve_us"
             | "fps_limit_hz"
             | "audio_output_device"
+            | "audio_buffer_frames"
             | "voice_mic_device"
             | "chunk_update_threads"
             | "chunk_saver_threads"
@@ -14501,6 +14589,13 @@ impl Settings {
                 }
                 "cmaa2_enabled" => settings.cmaa2_enabled = value == "true",
                 "audio_output_device" => settings.audio_output_device = value.to_string(),
+                "audio_buffer_frames" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        if AUDIO_BUFFER_CHOICES.contains(&v) {
+                            settings.audio_buffer_frames = v;
+                        }
+                    }
+                }
                 "ui_pitch_semitones" => {
                     if let Ok(v) = value.parse::<i32>() {
                         settings.ui_pitch_semitones = v;
@@ -15196,7 +15291,7 @@ impl Settings {
              hud_actionbar_x={}\nhud_actionbar_y={}\nhud_scoreboard_x={}\nhud_scoreboard_y={}\n\
              hud_hotbar_x={}\nhud_hotbar_y={}\nhud_hotbar_scale={}\nhud_bossbar_x={}\nhud_bossbar_y={}\nhud_bossbar_scale={}\n\
              hud_chat_x={}\nhud_chat_y={}\nchat_scale_percent={}\nchat_width={}\nchat_lines={}\nchat_lines_open={}\nchat_background={}\nchat_open_dim={}\nchat_fade_secs={}\n\
-             master_volume={}\ninventory_transparency={}\ninventory_cursor_to_slot={}\ninventory_scale={}\ncrosshair_color_mode={}\ncrosshair_hue={}\ncrosshair_saturation={}\ncrosshair_value={}\ncrosshair_brightness_boost={}\ncrosshair_outline={}\ncrosshair_ring_outline={}\nfov={}\nfov_third_back={}\nfov_third_front={}\ncamera_distance_back={}\ncamera_distance_front={}\ncamera_y_offset_back={}\ncamera_y_offset_front={}\nprojection_mode={}\nparticles_mode={}\nfont={}\ntext_shadow={}\nwallpaper={}\ncmaa2_enabled={}\naudio_output_device={}\nui_pitch_semitones={}\nmodule_totem_indicator={}\nmodule_totem_sound={}\nmodule_ghost_tolerance={}\nghost_tolerance_ms={}\n\
+             master_volume={}\ninventory_transparency={}\ninventory_cursor_to_slot={}\ninventory_scale={}\ncrosshair_color_mode={}\ncrosshair_hue={}\ncrosshair_saturation={}\ncrosshair_value={}\ncrosshair_brightness_boost={}\ncrosshair_outline={}\ncrosshair_ring_outline={}\nfov={}\nfov_third_back={}\nfov_third_front={}\ncamera_distance_back={}\ncamera_distance_front={}\ncamera_y_offset_back={}\ncamera_y_offset_front={}\nprojection_mode={}\nparticles_mode={}\nfont={}\ntext_shadow={}\nwallpaper={}\ncmaa2_enabled={}\naudio_output_device={}\naudio_buffer_frames={}\nui_pitch_semitones={}\nmodule_totem_indicator={}\nmodule_totem_sound={}\nmodule_ghost_tolerance={}\nghost_tolerance_ms={}\n\
              module_hitbox_enabled={}\nmodule_hitbox_show_smoothed={}\nmodule_hitbox_show_raw={}\nmodule_hitbox_dotted={}\nmodule_hitbox_items={}\nmodule_hitbox_self={}\nmodule_hitbox_density_px={}\nmodule_hitbox_opacity={}\n\
              module_hitbox_smoothed_hue={}\nmodule_hitbox_smoothed_saturation={}\nmodule_hitbox_smoothed_value={}\n\
              module_hitbox_raw_hue={}\nmodule_hitbox_raw_saturation={}\nmodule_hitbox_raw_value={}\n\
@@ -15268,6 +15363,7 @@ impl Settings {
             self.wallpaper,
             self.cmaa2_enabled,
             self.audio_output_device,
+            self.audio_buffer_frames,
             self.ui_pitch_semitones,
             self.module_totem_indicator,
             self.module_totem_sound,
@@ -15827,6 +15923,7 @@ impl Settings {
             wallpaper: 0,       // keins
             cmaa2_enabled: false,
             audio_output_device: String::new(), // System-Standard
+            audio_buffer_frames: audio::DEFAULT_BUFFER_FRAMES,
             ui_pitch_semitones: 0,
             module_totem_indicator: true,
             module_totem_sound: true,
@@ -16518,9 +16615,11 @@ enum VoiceFlag {
 
 // Was unter dem Zeiger klingt (s. update_hover_sound): ein Knopf, oder im Skin-Tab ein Ziel
 // ohne Knopf -- Kachel (auf dem Bild mit dem Zahnrad eigenes Ziel), Zeile des Dateifensters
-// (bei Ordnern Kaestchen und Rest getrennt), "Alles an", "Fertig".
+// (bei Ordnern Kaestchen und Rest getrennt), "Alles an", "Fertig". Sonst eine mit Hover
+// gezeichnete Flaeche (s. App::hover_level).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HoverTarget {
+    Drawn((i32, i32, i32, i32)),
     Button(ButtonAction),
     SkinTile(skin_tab::Column, usize, bool),
     SkinFileRow(usize, bool),
@@ -16751,6 +16850,8 @@ enum ButtonAction {
     EntityDistanceNext,
     AudioTestTone,
     AudioSpatialTest,
+    // Eigene Untergrenze von pipewire-pulse in Frames setzen, None = entfernen.
+    PipewireLimit(Option<u32>),
     MasterVolumeDown,
     MasterVolumeUp,
     // Index in VOLUME_CATEGORIES.
@@ -17599,6 +17700,9 @@ struct TopbarLayout {
     uhr: Rect,
     kopf: Rect,
     konto: Rect,
+    // Linke Kante des Konto-Knopfs ohne die Verbreiterung bei offener Kontenliste: daran
+    // richten sich die Tabs, sonst schrumpften sie beim Oeffnen der Liste.
+    konto_links: f32,
     name: String,
 }
 
@@ -18515,6 +18619,9 @@ struct App {
     selection_sound_deselect: bool,
     // Hover-Animation der Knoepfe, nach ihrer Flaeche (s. hover_level).
     hover_anims: std::cell::RefCell<rustc_hash::FxHashMap<(i32, i32, i32, i32), HoverAnim>>,
+    // Zuletzt mit Hover gezeichnete Flaeche und wann (s. hover_level): Hover-Klang auch fuer
+    // Elemente, die nicht in buttons() stehen (Dialoge, Kontextmenues, Kontenliste ...).
+    hover_drawn: std::cell::Cell<Option<((i32, i32, i32, i32), Instant)>>,
     chat_slide: std::cell::RefCell<Option<ChatSlide>>,
     chat_gap: std::cell::RefCell<Option<ChatGap>>,
     chat_recall: Option<ChatRecall>,
@@ -18955,6 +19062,8 @@ struct App {
     settings_status: Option<SaveStatus>,
     // Low-Latency-Audio-Engine (cpal), fuer alle Klaenge der Welt und der Oberflaeche.
     audio: audio::AudioEngine,
+    // Womit PipeWire den Ton wirklich bedient (nur gemessen, solange der Audio-Tab offen ist).
+    pipewire: pipewire::Status,
     // Beim Betreten des Audio-Tabs neu abgefragte Geraeteliste (s. ButtonAction::OpenScreen).
     // Nicht jeden Frame neu abfragen -- waere unnoetige Arbeit, waehrend das Menue offen ist.
     audio_devices: Vec<String>,
@@ -19703,7 +19812,7 @@ impl App {
         // hier einmal mit dem geladenen/Default-Settingswert synchronisieren, sonst bliebe er
         // beim harten Default (an) haengen, egal was in der Konfigdatei steht.
         block_uvs.set_rng_rotation_enabled(settings.block_rng_rotation);
-        let mut audio = audio::AudioEngine::new();
+        let mut audio = audio::AudioEngine::with_buffer_frames(audio_buffer_request(settings.audio_buffer_frames));
         if !settings.audio_output_device.is_empty() {
             if let Err(e) = audio.set_output_device(Some(&settings.audio_output_device)) {
                 // Gespeichertes Geraet nicht mehr da (z.B. USB-Headset ab) -- Engine bleibt
@@ -20059,6 +20168,7 @@ impl App {
             selection_sound_hint: None,
             selection_sound_deselect: false,
             hover_anims: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
+            hover_drawn: std::cell::Cell::new(None),
             chat_slide: std::cell::RefCell::new(None),
             chat_gap: std::cell::RefCell::new(None),
             chat_recall: None,
@@ -20228,6 +20338,7 @@ impl App {
             settings,
             settings_status: None,
             audio,
+            pipewire: pipewire::Status::default(),
             audio_devices,
             orbit_test: None,
             tracked_sounds: Vec::new(),
@@ -23147,11 +23258,16 @@ mod tests {
         }
     }
 
-    // Schwarze Schrift bekommt keinen Rand, dunkelgraue (Vanilla §8) schon.
+    // Schwarze und fast schwarze Schrift bekommt keinen Rand, dunkelgraue (Vanilla §8) schon.
     #[test]
     fn schwarz_ohne_rand() {
-        assert!(is_black([0.0, 0.0, 0.0, 1.0]));
-        assert!(!is_black([0.09, 0.09, 0.09, 1.0]));
+        assert!(is_dark([0.0, 0.0, 0.0, 1.0]));
+        assert!(!is_dark([0.09, 0.09, 0.09, 1.0]));
+        // TextOnAccent der Voreinstellungen Rosa und Nord.
+        assert!(is_dark(theme::rgba(0x22040F)));
+        assert!(is_dark(theme::rgba(0x1E2430)));
+        // Vanilla-Dunkelblau (§1) behaelt ihn.
+        assert!(!is_dark(theme::rgba(0x0000AA)));
     }
 
     // Der Ring liegt um die Mitte des Punkts, auch wenn die bei ungerader Groesse mitten auf

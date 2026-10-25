@@ -1415,6 +1415,31 @@ impl App {
         rects.push(UiRect { rect: pitch_rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
         texts.push(gpu.centered_text(pitch_rect, format_ui_pitch(self.settings.ui_pitch_semitones), theme::text(), UI_SCALE_SMALL));
 
+        // Puffer: die Auswahl ist eine Aufklappliste aus buttons(), darunter nur Anzeige, womit
+        // der Stream gerade laeuft (s. format_audio_buffer).
+        let y5 = (settings_row_y(AUDIO_BUFFER_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "Puffer".to_string(), x: SETTINGS_LABEL_X, y: y5, color: theme::text(), scale: UI_SCALE_SMALL });
+        let y6 = (settings_row_y(AUDIO_BUFFER_INFO_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "Puffer aktiv".to_string(), x: SETTINGS_LABEL_X, y: y6, color: theme::text(), scale: UI_SCALE_SMALL });
+        let buffer_rect = settings_wide_rect(AUDIO_BUFFER_INFO_ROW);
+        rects.push(UiRect { rect: buffer_rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(buffer_rect, format_audio_buffer(self.audio.buffer_info()), theme::text(), UI_SCALE_SMALL));
+
+        // PipeWire: gemessene Blockgroesse, darunter die Grenze. Deren Knopf kommt aus buttons(),
+        // wenn es etwas zu tun gibt; sonst steht hier, warum nicht.
+        let y7 = (settings_row_y(AUDIO_PIPEWIRE_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "PipeWire aktiv".to_string(), x: SETTINGS_LABEL_X, y: y7, color: theme::text(), scale: UI_SCALE_SMALL });
+        let pw_rect = settings_wide_rect(AUDIO_PIPEWIRE_ROW);
+        rects.push(UiRect { rect: pw_rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(pw_rect, self.pipewire_text(), theme::text(), UI_SCALE_SMALL));
+        let y8 = (settings_row_y(AUDIO_PIPEWIRE_SET_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "PipeWire-Grenze".to_string(), x: SETTINGS_LABEL_X, y: y8, color: theme::text(), scale: UI_SCALE_SMALL });
+        if let PipewireKnopf::Text(text) = self.pipewire_knopf() {
+            let rect = settings_wide_rect(AUDIO_PIPEWIRE_SET_ROW);
+            rects.push(UiRect { rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
+            texts.push(gpu.centered_text(rect, text, theme::text(), UI_SCALE_SMALL));
+        }
+
         // Raumklang-Hoertest (echt, s. spatial_sound::OrbitTest) -- der Knopf selbst kommt
         // aus buttons(), hier nur die Beschriftung davor.
         let y3 = (settings_row_y(AUDIO_SPATIAL_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();

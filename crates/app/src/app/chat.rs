@@ -732,6 +732,11 @@ impl App {
             *a = HoverAnim { hovered: hover, since: jetzt, from: a.level(jetzt), seen: jetzt };
         }
         a.seen = jetzt;
+        if hover {
+            self.hover_drawn.set(Some((key, jetzt)));
+        } else if self.hover_drawn.get().is_some_and(|(k, _)| k == key) {
+            self.hover_drawn.set(None);
+        }
         a.level(jetzt)
     }
 

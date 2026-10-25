@@ -67,6 +67,16 @@ fn coverage(p: vec2<f32>, b: vec4<f32>, pack: bool) -> f32 {
     return select(0.0, c, innen);
 }
 
+// Die Oberflaeche ist sRGB, gemischt wird also linear: eine halb deckende Kante dunkler
+// Schrift auf hellem Grund (Akzent-Knoepfe) wird so nur gut ein Viertel dunkler statt halb,
+// die Schrift wirkt vom Grund aufgefressen. Fuer schwarze Schrift ergibt 1 - (1 - a)^2,2 genau
+// die Mischung im sRGB-Raum, unabhaengig vom Grund; zu hellerer Schrift hin laeuft der
+// Ausgleich aus. Helle Schrift bleibt wie sie ist.
+fn dunkel_deckung(a: f32, farbe: vec3<f32>) -> f32 {
+    let dunkel = clamp(1.0 - max(max(farbe.r, farbe.g), farbe.b) / 0.2, 0.0, 1.0);
+    return 1.0 - pow(1.0 - a, 1.0 + 1.2 * dunkel);
+}
+
 // Kontur und Schatten sind je EIN Viereck, dessen Deckung hier ausgerechnet wird -- ohne den
 // Glyphen selbst. Jeder Pixel bekommt so genau eine Lage (Rand ODER Glyph) mit der Deckkraft
 // des Textes. Frueher waren es acht verschobene Kopien, die sich beim Ausblenden zu fast
@@ -81,7 +91,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Wie Vanilla: Bildfarbe mal Textfarbe -- weisser Text zeigt das Bild unveraendert.
             return pack_texel(in.uv) * in.color;
         }
-        return vec4<f32>(in.color.rgb, in.color.a * glyph);
+        return vec4<f32>(in.color.rgb, in.color.a * dunkel_deckung(glyph, in.color.rgb));
     }
     let px = in.mode.yz;
     let selbst = coverage(in.uv, in.bounds, pack);

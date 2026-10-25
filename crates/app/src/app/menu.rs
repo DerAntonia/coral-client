@@ -1013,6 +1013,11 @@ impl App {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
                 let geraet = self.audio_device_options().get(self.audio_device_index()).cloned().unwrap_or_else(|| "?".to_string());
                 out.push(Self::nav_button(ButtonAction::OpenChoice(Choice::AudioDevice), settings_wide_rect(AUDIO_DEVICE_ROW), &geraet, UI_SCALE_SMALL));
+                let puffer = audio_buffer_label(self.settings.audio_buffer_frames);
+                out.push(Self::nav_button(ButtonAction::OpenChoice(Choice::AudioBuffer), settings_wide_rect(AUDIO_BUFFER_ROW), &puffer, UI_SCALE_SMALL));
+                if let PipewireKnopf::Knopf(text, ziel) = self.pipewire_knopf() {
+                    out.push(Self::nav_button(ButtonAction::PipewireLimit(ziel), settings_wide_rect(AUDIO_PIPEWIRE_SET_ROW), &text, UI_SCALE_SMALL));
+                }
                 out.push(Self::nav_button(ButtonAction::AudioTestTone, stepper_value_rect(AUDIO_TEST_TONE_ROW), "Testton abspielen", UI_SCALE_SMALL));
                 // Ohne Grenze -- beide Pfeile bleiben immer anklickbar, s. Kommentar an
                 // Settings::ui_pitch_semitones.
@@ -1794,6 +1799,7 @@ impl App {
                 | ButtonAction::Respawn
                 | ButtonAction::HudDeselect
                 | ButtonAction::AudioTestTone
+                | ButtonAction::PipewireLimit(_)
                 | ButtonAction::AudioSpatialTest
                 | ButtonAction::OpenSkinFolder
                 | ButtonAction::ReloadSkins
@@ -2389,6 +2395,10 @@ impl App {
                 set.crosshair_color_mode = (set.crosshair_color_mode + 1).min(CROSSHAIR_COLOR_MODES.len() - 1)
             }
             ButtonAction::AudioTestTone => self.audio.play_test_tone(),
+            ButtonAction::PipewireLimit(frames) => {
+                let rate = self.pipewire.messung().map_or(48_000, |m| m.rate);
+                self.pipewire.grenze_setzen(frames, rate);
+            }
             ButtonAction::AudioSpatialTest => {
                 // Uhr mit zuruecksetzen, sonst zaehlt die Zeit seit dem letzten Frame als
                 // schon vergangene Testzeit und der erste Klick kaeme verschoben.
@@ -3241,6 +3251,12 @@ impl App {
                 }
             }
             ButtonAction::LagDelayPrev => self.sync_lag_delay(),
+            // Gezogen oder getippt: wie bei den Pfeilen steckt sie im Mesh (s. run_menu_action).
+            ButtonAction::SmoothLightingDown => {
+                for (cx, cz) in self.world.column_keys().collect::<Vec<_>>() {
+                    self.world.mark_dirty(cx, cz);
+                }
+            }
             _ => {}
         }
     }
@@ -3736,6 +3752,10 @@ impl App {
             Choice::EgoShadow => (ego_name::Deco::ALL.iter().map(|d| d.label_or("Standard").to_string()).collect(), Some(s.ego_shadow as usize)),
             Choice::EgoSound => (ego_name::SOUNDS.iter().map(|(_, l)| l.to_string()).collect(), ego_name::SOUNDS.iter().position(|(e, _)| *e == s.ego_sound)),
             Choice::AudioDevice => (self.audio_device_options(), Some(self.audio_device_index())),
+            Choice::AudioBuffer => (
+                AUDIO_BUFFER_CHOICES.iter().map(|&f| audio_buffer_label(f)).collect(),
+                AUDIO_BUFFER_CHOICES.iter().position(|&f| f == s.audio_buffer_frames),
+            ),
             Choice::CrosshairShape => ((0..=CROSSHAIR_SHAPE_CUSTOM).map(|i| crosshair_shape_label(i).to_string()).collect(), Some(s.crosshair_shape_choice())),
             Choice::Addon(m, k) => match self.addon_setting(m, k).map(|d| d.kind) {
                 Some(addons::SettingKind::Choice { options }) => {
@@ -3764,6 +3784,15 @@ impl App {
                 match self.audio.set_output_device(opt) {
                     Ok(()) => self.settings.audio_output_device = name,
                     Err(e) => self.push_log(format!("Ausgabegerät konnte nicht gesetzt werden: {e}")),
+                }
+                self.persist_settings();
+                return;
+            }
+            Choice::AudioBuffer => {
+                let frames = AUDIO_BUFFER_CHOICES[i];
+                match self.audio.set_buffer_frames(audio_buffer_request(frames)) {
+                    Ok(()) => self.settings.audio_buffer_frames = frames,
+                    Err(e) => self.push_log(format!("Puffer {} geht mit diesem Gerät nicht: {e}", audio_buffer_label(frames))),
                 }
                 self.persist_settings();
                 return;
@@ -3838,7 +3867,7 @@ impl App {
                 s.ego_sound = ego_name::SOUNDS[vorher].0.to_string();
                 ButtonAction::CycleEgoSound
             }
-            Choice::AudioDevice | Choice::CrosshairShape | Choice::Addon(..) => return,
+            Choice::AudioDevice | Choice::AudioBuffer | Choice::CrosshairShape | Choice::Addon(..) => return,
         };
         if matches!(c, Choice::ArrowEmptyFeedback | Choice::SkyMode | Choice::WeatherMode | Choice::EgoDeco | Choice::EgoShadow | Choice::EgoSound) {
             self.apply_module_action(weiter);
@@ -4230,7 +4259,9 @@ impl App {
         let mut fonts: Vec<FontKind> = Vec::new();
         // Der Schrift-Tab zeigt jede Schrift zur Probe.
         let probe = (self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsFont).then_some(FontKind::ALL).into_iter().flatten();
-        for f in ShadowArea::ALL.into_iter().filter_map(|a| set.font_of(a)).chain(probe) {
+        // Kleine Beschriftungen stehen nie in der Minecraft-Schrift (s. GpuState::small_label_font).
+        let klein = (allgemein == FontKind::Minecraft).then_some(FontKind::Outfit);
+        for f in ShadowArea::ALL.into_iter().filter_map(|a| set.font_of(a)).chain(probe).chain(klein) {
             if f != allgemein && !fonts.contains(&f) {
                 fonts.push(f);
             }
@@ -4416,11 +4447,20 @@ impl App {
             None => self.credentials.as_ref().map_or_else(|| "Nicht angemeldet".to_string(), |c| c.username.clone()),
         };
         let name_w = gpu.measure_text(&name, UI_SCALE_SMALL);
-        let konto = Rect { x: kopf.x - 10.0 - name_w - 10.0, y, w: name_w + 10.0 + kopf.w + 20.0, h: TOPBAR_ICON };
+        let mut konto = Rect { x: kopf.x - 10.0 - name_w - 10.0, y, w: name_w + 10.0 + kopf.w + 20.0, h: TOPBAR_ICON };
+        let konto_links = konto.x;
+        // Bei offener Kontenliste steht "Acc-Manager" im Knopf (in Englisch laenger als ein
+        // kurzer Name): dann nach links verbreitern, rechts bleibt er stehen.
+        if self.account_menu_open {
+            let noetig = gpu.measure_text("Acc-Manager", UI_SCALE_SMALL) + 32.0;
+            if noetig > konto.w {
+                konto = Rect { x: konto.x + konto.w - noetig, w: noetig, ..konto };
+            }
+        }
         let gear = Rect { x: 12.0, y, w: TOPBAR_ICON, h: TOPBAR_ICON };
         let gear_hit = Rect { x: 0.0, y: 0.0, w: gear.x + gear.w, h: TOPBAR_H };
         let bell_hit = Rect { x: bell.x, y: 0.0, w: sw - bell.x, h: TOPBAR_H };
-        TopbarLayout { gear, bell, gear_hit, bell_hit, uhr, kopf, konto, name }
+        TopbarLayout { gear, bell, gear_hit, bell_hit, uhr, kopf, konto, konto_links, name }
     }
 
     // Klickbares der Leiste oben und der Kategorienleiste -- in Bildschirmkoordinaten.
@@ -4622,10 +4662,13 @@ impl App {
                 Some(a) => (a.name.clone(), self.shown_as_active(a), uuid_bytes_from_hex(&a.uuid)),
             };
             let ungueltig = konto.is_some_and(|a| matches!(self.account_check(a), accounts::Check::Invalid(_)));
+            // Weich ein- und ausgeblendet wie in den Aufklapplisten; hover_level meldet den
+            // Hover auch fuer den Klang an.
+            let k = self.hover_level(r, r.contains(cx, cy)).min(1.0);
             if aktiv {
-                rects.push(UiRect::rounded(r, g(Slot::AccentSurface), 6.0));
-            } else if r.contains(cx, cy) {
-                rects.push(UiRect::rounded(r, g(Slot::Surface2), 6.0));
+                rects.push(UiRect::rounded(r, mix_color(g(Slot::AccentSurface), g(Slot::AccentSurfaceHover), k), 6.0));
+            } else if k > 0.0 {
+                rects.push(UiRect::rounded(r, theme::with_alpha(g(Slot::Surface2), k), 6.0));
             }
             // Kopf aus dem Skin wie oben in der Leiste; solange der Skin eines Kontos noch
             // laedt, schwarz-lila (s. request_account_heads).
@@ -5584,7 +5627,7 @@ impl App {
     pub(crate) fn update_hover_sound(&mut self) {
         let jetzt = match self.skin_hover_target() {
             Some(ziel) => ziel,
-            None => self.button_under_cursor().map(HoverTarget::Button),
+            None => self.button_under_cursor().map(HoverTarget::Button).or_else(|| self.drawn_hover().map(HoverTarget::Drawn)),
         };
         if jetzt != self.hovered_button {
             self.hovered_button = jetzt;
@@ -5592,6 +5635,19 @@ impl App {
                 self.play_ui_sound(ui_sound::UiSound::Hover);
             }
         }
+    }
+
+    // Was zuletzt mit Hover gezeichnet wurde, solange es frisch ist und der Zeiger noch darauf
+    // steht (sonst klaenge das Verlassen eines Knopfs wie ein neues Ziel, bis er ohne Hover
+    // gezeichnet ist). Der Zeiger zaehlt auf dem Bildschirm und im Inhaltsraum (s. pointer).
+    fn drawn_hover(&self) -> Option<(i32, i32, i32, i32)> {
+        let (key, seen) = self.hover_drawn.get()?;
+        if seen.elapsed() > Duration::from_millis(200) {
+            return None;
+        }
+        let r = Rect { x: key.0 as f32, y: key.1 as f32, w: key.2 as f32, h: key.3 as f32 };
+        let ((ax, ay), (bx, by)) = (self.cursor_pos, self.pointer());
+        (r.contains(ax, ay) || r.contains(bx, by)).then_some(key)
     }
 
     // --- Modul-Menue (In-Welt-Overlay, s. modules.rs) ---
@@ -5984,6 +6040,14 @@ impl App {
                     Some("Spielt einen kurzen Testton auf dem gewählten Ausgabegerät ab, um Gerät + Stream zu prüfen.")
                 } else if settings_row_hover_rect(AUDIO_PITCH_ROW).contains(cx, cy) {
                     Some(UI_PITCH_TOOLTIP)
+                } else if settings_row_hover_rect(AUDIO_BUFFER_ROW).contains(cx, cy) {
+                    Some("Größe des Ausgabepuffers. Kleiner = weniger Verzögerung, aber anfälliger für Knackser und Aussetzer. Bei Bluetooth-Kopfhörern 1024 oder System-Vorgabe nehmen: die Funkstrecke kostet ohnehin 100 ms und mehr.")
+                } else if settings_row_hover_rect(AUDIO_BUFFER_INFO_ROW).contains(cx, cy) {
+                    Some("Womit der Stream gerade läuft: angefragte Größe, in Klammern was das System tatsächlich je Durchlauf anfordert, falls es abweicht.")
+                } else if settings_row_hover_rect(AUDIO_PIPEWIRE_ROW).contains(cx, cy) {
+                    Some("In welchen Blöcken PipeWire die Soundkarte gerade bedient, gemessen mit pw-top, solange dieser Tab offen ist. PipeWire rundet auf eine Zweierpotenz ab: ein Puffer von 48 läuft hier als 32 oder 64.")
+                } else if settings_row_hover_rect(AUDIO_PIPEWIRE_SET_ROW).contains(cx, cy) {
+                    Some("Unter PipeWire läuft der Ton über pipewire-pulse, und das mischt nie in kleineren Blöcken als 128 Frames (2,7 ms) -- ein kleinerer Puffer bringt dann nichts. Der Knopf legt ~/.config/pipewire/pipewire-pulse.conf.d/90-coral-client.conf an und startet pipewire-pulse neu: alle Programme verlieren kurz den Ton, und die Grenze gilt danach für alle. Entfernen stellt die Vorgabe wieder her.")
                 } else if settings_row_hover_rect(AUDIO_SPATIAL_ROW).contains(cx, cy) {
                     Some(SPATIAL_TEST_TOOLTIP)
                 } else if settings_row_hover_rect(AUDIO_MASTER_ROW).contains(cx, cy) {

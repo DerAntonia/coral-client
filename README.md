@@ -165,7 +165,6 @@ These files are not covered by the above and keep their own licenses:
 |---|---|---|
 | `assets/fonts/` | DM Sans, Lexend, Lexend Exa, Noto Sans, Outfit | SIL Open Font License 1.1 (license files next to the fonts) |
 | `assets/sounds/kenney-*` | [Kenney](https://kenney.nl): Interface Sounds, UI Audio | CC0 1.0 |
-| `assets/sounds/custom/` | made from Kenney sounds and synthesis | CC0 1.0 |
 | `assets/sounds/totemingpromax/click.wav` | [Kenney](https://kenney.nl): Interface Sounds | CC0 1.0 |
 | `assets/sounds/totemingpromax/glass_break_01.wav` | [rubberduck: 75 CC0 breaking / falling / hit sfx](https://opengameart.org/content/75-cc0-breaking-falling-hit-sfx) | CC0 1.0 |
 
