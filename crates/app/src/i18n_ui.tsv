@@ -18,6 +18,8 @@ Verbinden	Connect	Coniungere
 Los	Go	Age
 Einstellungen	Settings	Optiōnēs
 Render	Render	Pictūra
+Display	Display	Ostentātiō
+Akustik	Acoustics	Acūstica
 Video	Video	Video
 Audio	Audio	Sonus
 Steuerung	Controls	Moderāmina
@@ -470,6 +472,10 @@ Textgröße des Chats in Prozent. 100 % ist die bisherige Größe. Mit DM Sans i
 Wie viele Zeilen der Chat im Spiel zeigt.	How many lines the chat shows in game.	Quot līneās colloquium in lūdō mōnstret.
 Wie viele Zeilen der Chat zeigt, während man tippt (T). Er rückt dann direkt über die Eingabezeile; mit dem Mausrad lässt sich durch den ganzen Verlauf blättern.	How many lines the chat shows while typing (T). It then moves directly above the input line; the mouse wheel scrolls through the whole history.	Quot līneās colloquium mōnstret, dum scrībis (T). Tum dīrēctē suprā līneam ingressus movētur; rota mūris per tōtam historiam volvere licet.
 Wie lange eine Nachricht im Spiel sichtbar bleibt, danach blendet sie schnell aus. Beim Tippen (T) ist der ganze Verlauf wieder da. Nie = Nachrichten bleiben stehen. Vanilla: 10 s.	How long a message stays visible in game, after which it fades out quickly. While typing (T) the whole history is back. Never = messages stay. Vanilla: 10 s.	Quamdiū nūntius in lūdō vīsibilis maneat, deinde citō ēvānēscit. Dum scrībis (T) tōta historia redit. Numquam = nūntiī manent. Vanilla: 10 s.
+Zeilenabstand	Line spacing	Spatium versuum
+Darstellung	Display	Speciēs
+Zusätzlicher Platz zwischen den Chatzeilen, in Prozent der Zeilenhöhe; der Text steht mittig darin. 0 % = dicht wie bisher. Vanilla: Chat Line Spacing, 0 %.	Extra space between chat lines, as a percentage of the line height; the text sits centered in it. 0 % = tight as before. Vanilla: Chat Line Spacing, 0 %.	Spatium additum inter versūs colloquiī, centēsimīs altitūdinis versūs; textus in mediō stat. 0 % = artē ut anteā. Vanilla: Chat Line Spacing, 0 %.
+Java: der Chat hängt unten, neue Nachrichten schieben die älteren nach oben. Bedrock: der Chat hängt oben, neue Nachrichten kommen unten dazu, und blendet eine aus, rücken alle neueren nach oben. Gilt für den Chat im Spiel; der offene Chat (T) bleibt wie Java.	Java: the chat hangs at the bottom, new messages push older ones up. Bedrock: the chat hangs at the top, new messages are added at the bottom, and when one fades out, all newer ones move up. Applies to the in-game chat; the open chat (T) stays like Java.	Java: colloquium īmō haeret, nūntiī novī veterēs sūrsum pellunt. Bedrock: colloquium summō haeret, nūntiī novī īmō adduntur, et cum ūnus ēvānēscit, omnēs recentiōrēs sūrsum migrant. Valet in lūdō; colloquium apertum (T) ut Java manet.
 Wie stark bei offenem Chat (T) alles bis einschließlich der Eingabezeile abgedunkelt wird. 0 % = gar nicht.	How much everything up to and including the input line is darkened with the chat open (T). 0 % = not at all.	Quantum colloquiō apertō (T) omnia usque ad līneam ingressus obscūrentur. 0 % = minimē.
 Wie stark der Hintergrund hinter dem Chattext abgedunkelt wird. 0 % = kein Hintergrund. Gilt auch für die Eingabezeile und die Verlaufsliste.	How much the background behind the chat text is darkened. 0 % = no background. Also applies to the input line and the history list.	Quantum fundus post textum colloquiī obscūrētur. 0 % = nūllus fundus. Valet etiam prō līnea ingressus et indice historiae.
 Rand um allen Text. Kontur: eine dünne schwarze Linie rundherum. Vanilla: Minecrafts Schatten -- dieselbe Zeile einen Schriftpixel nach rechts unten versetzt, in einem Viertel der Helligkeit. Aus: kein Rand. Anklicken schaltet weiter.	Border around all text. Outline: a thin black line all around. Vanilla: Minecraft's shadow -- the same line offset one font pixel to the bottom right, at a quarter of the brightness. Off: no border. Clicking cycles.	Margō circā omnem textum. Ambitus: līnea nigra tenuis circumcircā. Vanilla: umbra Minecraft -- eādem līnea ūnō punctō deorsum dextrōrsum mōta, quārta parte clāritātis. Nōn: nūlla margō. Premendō prōgreditur.
@@ -593,6 +599,8 @@ Symmetrie: 4-fach	Symmetry: 4-way	Symmetria: quadruplex
 Links: Füllung   Rechts: Kontur   Auf gleichem Pixel: löschen   Esc: fertig	Left: fill   Right: outline   Same pixel again: erase   Esc: done	Sinistra: implēre   Dextra: margō   Idem pūnctum: dēlēre   Esc: factum
 Entity-Renderdistanz	Entity render distance	Spatium pictūrae entium
 Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.	Up to which distance entities are drawn (players, mobs, items, displays, name tags, hitboxes), in blocks. Farther ones stay loaded and targetable, they are just not drawn. Click the number for a custom value, -1 = unlimited.	Usque ad quam distantiam entia pinguntur (lūsōrēs, creātūrae, rēs, ostentāmina, titulī nōminum, capsae ictūs), in cubīs. Remōtiōra onerāta et petibilia manent, tantum nōn pinguntur. Numerum preme prō valōre propriō, -1 = īnfīnītum.
+Block-Entity-Renderdistanz	Block entity render distance	Spatium pictūrae entium cubicorum
+Bis zu welcher Entfernung Block-Entities gezeichnet werden (Truhen, Betten, Shulkerkisten, Köpfe, Statuen, Schilder), in Blöcken. Außerhalb der Render-Distance nie. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.	Up to which distance block entities are drawn (chests, beds, shulker boxes, heads, statues, signs), in blocks. Never outside the render distance. Click the number for a custom value, -1 = unlimited.	Usque ad quod spatium entia cubica pinguntur (arcae, lecti, cistae shulker, capita, statuae, signa), in cubis. Extra spatium pictūrae numquam. Numerum preme ut valōrem tuum pōnās, -1 = sine fīne.
 Spielmodus-Rad	Game mode wheel	Rota modī lūdī
 Überleben	Survival	Superstes
 Kreativ	Creative	Creātor
@@ -720,3 +728,574 @@ Riss wandert	Tear moves	Fissūra migrat
 Riss in der Austastlücke	Tear in the blanking	Fissūra in intervallō caecō
 Riss bei	Tear at	Fissūra ad
 Wie das Coral-Fenster gerade auf den Schirm kommt. "Zusammengesetzt von": ein Compositor setzt es zusammen und entscheidet, wann ein Bild erscheint -- dann wirken Scanout-Timing und Riss-Timing nicht (Cinnamon: Einstellungen, Allgemein, "Komposit für Vollbildfenster deaktivieren" an). Sonst kommt es ohne Compositor per Hardware-Flip oder als Kopie des X-Servers, und dahinter steht, wo der Riss der letzten Bilder lag (gemessen an den Meldungen des X-Servers). Bleibt er bei jeder Einstellung an derselben Stelle, auch wenn man Scanout-Timing und Riss-Timing verstellt, hält der X-Server die Bilder fest -- dann hilft ein Neustart (oder Ab- und wieder Anmelden).	How the Coral window currently reaches the screen. "Composited by": a compositor assembles it and decides when a frame appears -- then Scanout timing and Tear timing have no effect (Cinnamon: Settings, General, turn on "Disable compositing for full-screen windows"). Otherwise it arrives without a compositor, as a hardware flip or a copy made by the X server, followed by where the tear of the last frames was (measured from the X server's notifications). If it stays in the same place with every setting, even while changing Scanout timing and Tear timing, the X server is holding the frames -- then a reboot (or logging out and back in) helps.	Quōmodo fenestra Coral nunc in vīsōrium veniat. "Compositum ā": compositor eam compōnit et statuit quandō imāgō appāreat -- tum Tempus perlūstrātiōnis et Tempus fissūrae nihil efficiunt (Cinnamon: Optiōnēs, Generālia, "Compositiōnem prō fenestrīs plēnīs exstinguere" accende). Aliter sine compositōre venit, per mūtātiōnem māchinālem aut exemplar servī X, et post id stat ubi fissūra ultimārum imāginum fuerit (ex nūntiīs servī X mēnsa). Sī omnī optiōne eōdem locō manet, etiam cum Tempus perlūstrātiōnis et Tempus fissūrae mūtantur, servus X imāginēs retinet -- tum computātrum dēnuō incipere (aut exīre et iterum intrāre) iuvat.
+#	Nachtrag: Meldungen, Debug-Anzeigen, Profiler, Ladebildschirm, Partikel- und Hitbox-Namen.
+kein Konfigurationsverzeichnis	no configuration directory	nūllum indicem cōnfigūrātiōnis
+ist abgeschaltet	is disabled	exstīnctum est
+Antwort nicht lesbar	response not readable	respōnsum legī nōn potest
+Addon {} laedt nicht: {}	Addon {} does not load: {}	Additāmentum {} nōn onerātur: {}
+exportiert keinen Speicher	exports no memory	memoriam nūllam exportat
+Addons nicht verfuegbar: {}	Addons not available: {}	Additāmenta nōn praesto sunt: {}
+Addon {} angemeldet ({} Module)	Addon {} registered ({} modules)	Additāmentum {} īnscrīptum ({} modulī)
+Addon {} hat sich nicht angemeldet	Addon {} did not register	Additāmentum {} sē nōn īnscrīpsit
+Addon {} startet nicht: {}	Addon {} does not start: {}	Additāmentum {} nōn incipit: {}
+Addon {} abgeschaltet: {}	Addon {} disabled: {}	Additāmentum {} exstīnctum: {}
+Addon {} abgeschaltet	Addon {} disabled	Additāmentum {} exstīnctum
+[{}] Chat verworfen (zu schnell): {}	[{}] Chat dropped (too fast): {}	[{}] Colloquium abiectum (nimis celeriter): {}
+Ausführen	Run	Exsequī
+Befehl aus dem Chat: /{}	Command from chat: /{}	Iussum ē colloquiō: /{}
+Chat-Verlauf nicht gespeichert: {}	Chat history not saved: {}	Historia colloquiī nōn servāta: {}
+Chat konnte nicht signiert werden: {}	Chat could not be signed: {}	Colloquium signārī nōn potuit: {}
+Item-Dump fehlgeschlagen: {}	Item dump failed: {}	Exscrīptiō reī dēfēcit: {}
+Kein Profilschlüssel: {} -- Chat bleibt unsigniert	No profile key: {} -- chat stays unsigned	Nūlla clāvis profīlī: {} -- colloquium nōn signātum manet
+Konto-UUID unlesbar -- Chat bleibt unsigniert	Account UUID unreadable -- chat stays unsigned	UUID ratiōnis legī nōn potest -- colloquium nōn signātum manet
+Server fuehrt eine andere UUID als das Konto (Offline-Mode) -- Chat bleibt unsigniert	Server uses a different UUID than the account (offline mode) -- chat stays unsigned	Servītor aliam UUID quam ratiō habet (modus sine rēte) -- colloquium nōn signātum manet
+Chat-Sitzung angemeldet -- Nachrichten werden signiert.	Chat session registered -- messages are signed.	Sessiō colloquiī īnscrīpta -- nūntiī signantur.
+Profilschlüssel unbrauchbar: {}	Profile key unusable: {}	Clāvis profīlī inūtilis: {}
+Access-Token abgelaufen -- erneuere es ...	Access token expired -- renewing it ...	Tessera accessūs exspīrāvit -- eam renovō ...
+Token erneuern fehlgeschlagen: {}	Renewing token failed: {}	Tesseram renovāre dēfēcit: {}
+{} -- weiter mit der Code-Anmeldung	{} -- continuing with code sign-in	{} -- pergō cum ingressū per cōdicem
+Vorherige Microsoft-Anmeldung abgebrochen.	Previous Microsoft sign-in cancelled.	Prior ingressus Microsoft abruptus.
+{} -- stammt das Token von Coral Client?	{} -- is the token from Coral Client?	{} -- estne tessera ā Coral Client?
+Im Browser das Konto auswählen ...	Choose the account in the browser ...	Ratiōnem in nāvigātōre ēlige ...
+Browser ließ sich nicht öffnen ({}). Diese Seite öffnen: {}	Could not open the browser ({}). Open this page: {}	Nāvigātor aperīrī nōn potuit ({}). Hanc paginam aperī: {}
+== reconnect ==	== reconnect ==	== iterum coniungere ==
+== reconnect (vom Nutzer) ==	== reconnect (by user) ==	== iterum coniungere (ab ūsūāriō) ==
+== getrennt (vom Nutzer) ==	== disconnected (by user) ==	== disiūnctum (ab ūsūāriō) ==
+TearFree konnte nicht zurückgesetzt werden: {}	Could not reset TearFree: {}	TearFree restituī nōn potuit: {}
+TearFree konnte nicht gesetzt werden: {}	Could not set TearFree: {}	TearFree pōnī nōn potuit: {}
+-- Sonne: Tageszeit {} | Richtung {} {} {} --	-- Sun: time of day {} | direction {} {} {} --	-- Sōl: hōra diēī {} | dīrēctiō {} {} {} --
+Sonnenstrahl: kein Block im Blick	Sun ray: no block in view	Radius sōlis: nūllus cubus in cōnspectū
+Sonnenstrahl: Fläche {} zeigt von der Sonne weg	Sun ray: face {} points away from the sun	Radius sōlis: faciēs {} ā sōle āversa est
+ (wirft im Shader KEINEN Schatten)	 (casts NO shadow in the shader)	 (in shadere NŪLLAM umbram iacit)
+Sonnenstrahl ab {}: trifft {} bei {} nach {} Blöcken{}	Sun ray from {}: hits {} at {} after {} blocks{}	Radius sōlis ab {}: {} ferit ad {} post {} cubōs{}
+Sonnenstrahl ab {}: frei bis zum Himmel	Sun ray from {}: clear up to the sky	Radius sōlis ab {}: līber usque ad caelum
+Entity-Latenz: kein anderer Spieler in Reichweite	Entity latency: no other player in range	Mora entium: nūllus alius lūsor in propinquō
+letzter {}ms  Mittel {}ms  max {}ms	last {}ms  mean {}ms  max {}ms	ultimum {}ms  medium {}ms  max {}ms
+noch kein Abstand gemessen (Entity steht still)	no distance measured yet (entity is standing still)	nūllum intervallum adhūc mēnsum (ēns stat)
+-- Entity-Latenz (nächster Spieler, {} Blöcke entfernt) --	-- Entity latency (nearest player, {} blocks away) --	-- Mora entium (lūsor proximus, {} cubōs abest) --
+Paket-Takt: {}	Packet rate: {}	Rhythmus fasciculōrum: {}
+Alter der Serverposition: {}ms	Age of server position: {}ms	Aetās locī servītōris: {}ms
+Bild↔Trefferbox: {} Blöcke	Image↔hitbox: {} blocks	Imāgō↔capsa ictūs: {} cubī
+Bild↔Serverpos:  {} Blöcke	Image↔server pos:  {} blocks	Imāgō↔locus servītōris:  {} cubī
+NEIN	NO	NŌN
+vor {} s	{} s ago	ante {} s
+Blick-Chunk {} {}: Daten {} | Mesh {} ({} Sections, {} sichtbar) | dirty {} | empfangen {} | vergessen {} | unlesbar {} | Welt-Reset {}	View chunk {} {}: data {} | mesh {} ({} sections, {} visible) | dirty {} | received {} | forgotten {} | unreadable {} | world reset {}	Frūstum cōnspectūs {} {}: data {} | rēte {} ({} sectiōnēs, {} vīsibilēs) | sordidum {} | acceptum {} | oblītum {} | illegibile {} | mundus restitūtus {}
+Coral-Client-Debug (F3)  |  {} FPS	Coral Client debug (F3)  |  {} FPS	Coral Client ēmendātiō (F3)  |  {} FPS
+Chunk: {} {}  (rel {} {} im Chunk)	Chunk: {} {}  (rel {} {} in chunk)	Frūstum: {} {}  (rel {} {} in frūstō)
+Blick: {}  Yaw={}  Pitch={}	Facing: {}  Yaw={}  Pitch={}	Cōnspectus: {}  Yaw={}  Pitch={}
+Perspektive (F5): {}  |  FOV {}	Perspective (F5): {}  |  FOV {}	Perspectīva (F5): {}  |  FOV {}
+Zustand: {}  |  am Boden: {}	State: {}  |  on ground: {}	Status: {}  |  in solō: {}
+Welt: {} Spalten geladen, {} im Mesh-Pool, {} gemesht	World: {} columns loaded, {} in mesh pool, {} meshed	Mundus: {} columnae onerātae, {} in cōpiā rētium, {} textae
+Chunks: {} empfangen, {} gemesht  |  Mesh-VRAM: {} MB	Chunks: {} received, {} meshed  |  Mesh VRAM: {} MB	Frūsta: {} accepta, {} texta  |  VRAM rētium: {} MB
+Gelaende: {} von {} Abschnitten gezeichnet (Sichtkegel + Hoehlen-Culling)	Terrain: {} of {} sections drawn (view frustum + cave culling)	Terra: {} ex {} sectiōnibus pīctae (cōnus cōnspectūs + culling spēluncārum)
+Gelaende: {} von {} Abschnitten gezeichnet (Hoehlen-Culling AUS)	Terrain: {} of {} sections drawn (cave culling OFF)	Terra: {} ex {} sectiōnibus pīctae (culling spēluncārum NŌN)
+Partikel: {}  ({})	Particles: {}  ({})	Particulae: {}  ({})
+Entities: {}  |  Positions-Updates: {}/s  |  Server: {}	Entities: {}  |  position updates: {}/s  |  Server: {}	Entia: {}  |  renovātiōnēs locī: {}/s  |  Servītor: {}
+Ton: {} Aufnahmen geladen  |  Hauptlautstärke {}	Sound: {} recordings loaded  |  master volume {}	Sonus: {} īnscrīptiōnēs onerātae  |  sonōritās prīncipālis {}
+Ton: sounds.json nicht gelesen -- Weltgeräusche stumm	Sound: sounds.json not read -- world sounds muted	Sonus: sounds.json nōn lēctum -- sonī mundī mūtī
+ unsichtbar	 invisible	 invīsibilis
+Trank-Partikel: eigene {}{}  |  andere ({}): {}	Potion particles: own {}{}  |  others ({}): {}	Particulae pōtiōnis: propriae {}{}  |  aliae ({}): {}
+ (Leuchtfeuer)	 (beacon)	 (phārus)
+VBlank-Messung über {}	VBlank measurement via {}	Mēnsūra VBlank per {}
+Keine VBlank-Zeitstempel (kein Zugriff auf /dev/dri/card*?)	No VBlank timestamps (no access to /dev/dri/card*?)	Nūlla signa temporis VBlank (nūllus accessus ad /dev/dri/card*?)
+keine CSV-Datei	no CSV file	nūllum documentum CSV
+Frame-Profiler an, schreibt {}	Frame profiler on, writing {}	Profīlātor imāginum incēnsus, scrībit {}
+== verbunden ==	== connected ==	== coniūnctum ==
+getrennt: {}	disconnected: {}	disiūnctum: {}
+Rekonfiguration	Reconfiguration	Recōnfigūrātiō
+Transfer nach {}:{}	Transfer to {}:{}	Trānslātiō ad {}:{}
+Chunk {} {} nicht dekodierbar	Chunk {} {} not decodable	Frūstum {} {} dēcōdificārī nōn potest
+Weltwechsel-Respawn	World change respawn	Renāscī mūtātō mundō
+== schlafen (Schleichen zum Aufstehen) ==	== sleeping (sneak to get up) ==	== dormīre (rēpe ut surgās) ==
+== aufgewacht ==	== woke up ==	== expergefactus ==
+== gestorben ==	== died ==	== mortuus ==
+Consumable-Optimizer: vom Server abgeschaltet	Consumable optimizer: disabled by the server	Optimizātor cōnsūmptibilium: ā servītōre exstīnctus
+Welt-Untergrenze: {} (Dimension {})	World bottom: {} (dimension {})	Fīnis īnferior mundī: {} (dimēnsiō {})
+Unbekannte Dimensionsart {} -- Welthöhe bleibt auf der Vorgabe	Unknown dimension type {} -- world height stays at the default	Genus dimēnsiōnis ignōtum {} -- altitūdō mundī apud praescrīptum manet
+Server wieder da	Server back	Servītor redīt
+{} s lang kamen keine Pakete.	No packets arrived for {} s.	Per {} s nūllī fasciculī advēnērunt.
+Keine Pakete vom Server	No packets from the server	Nūllī fasciculī ā servītōre
+Seit {} s kam nichts mehr an.	Nothing has arrived for {} s.	Ā {} s nihil advēnit.
+Lag-back ×{}	Lag-back ×{}	Retractus ×{}
+Lag-back	Lag-back	Retractus
+Zuletzt {} Blöcke zurückgesetzt.	Last set back {} blocks.	Ultimō {} cubōs retractus.
+{} Blöcke zurückgesetzt.	Set back {} blocks.	{} cubōs retractus.
+O: {} ms lang ging nichts an den Server.	O: nothing was sent to the server for {} ms.	O: per {} ms nihil ad servītōrem missum est.
+I: {} ms lang kam nichts, dann alles auf einmal.	I: nothing arrived for {} ms, then everything at once.	I: per {} ms nihil advēnit, deinde omnia simul.
+Starkes Rubberbanding ×{}	Heavy rubberbanding ×{}	Retractus gravis ×{}
+Starkes Rubberbanding	Heavy rubberbanding	Retractus gravis
+erste Position	first position	prīmus locus
+an Ort und Stelle	in place	in locō
+Perle/Chorus	Pearl/chorus	Margarīta/chorus
+zu weit (echter Teleport)	too far (real teleport)	nimis longē (vēra trānslātiō)
+Sprachchat: verbinde (Reichweite {} Blöcke)	Voice chat: connecting (range {} blocks)	Colloquium vōcāle: coniungō (spatium {} cubī)
+Sprachchat: Verbindung fehlgeschlagen: {}	Voice chat: connection failed: {}	Colloquium vōcāle: coniūnctiō dēfēcit: {}
+Sprachchat: Secret unlesbar	Voice chat: secret unreadable	Colloquium vōcāle: arcānum legī nōn potest
+Sprachchat: kein Mikrofon ({})	Voice chat: no microphone ({})	Colloquium vōcāle: nūllum microphōnum ({})
+Sprachchat: verbunden	Voice chat: connected	Colloquium vōcāle: coniūnctum
+Sprachchat: getrennt ({})	Voice chat: disconnected ({})	Colloquium vōcāle: disiūnctum ({})
+Optimizer disabled on this server.	Optimizer disabled on this server.	Optimizātor in hōc servītōre exstīnctus.
+Itemname	Item name	Nōmen reī
+♪ Taub	♪ Deafened	♪ Surdus
+♪ Stumm	♪ Muted	♪ Mūtus
+♪ Flüstern	♪ Whisper	♪ Susurrāre
+♪ Sprechen	♪ Speaking	♪ Loquī
+♪ kein Mikrofon	♪ no microphone	♪ nūllum microphōnum
+♪ nicht verbunden	♪ not connected	♪ nōn coniūnctum
+Session-Info	Session info	Nōtitia sessiōnis
+LMB	LMB	MS
+RMB	RMB	MD
+Eingabegerät erfasst: {} ({})	Input device captured: {} ({})	Īnstrūmentum ingressūs captum: {} ({})
+{} erfasst!	{} captured!	{} captum!
+Server-Liste konnte nicht gespeichert werden: {}	Could not save the server list: {}	Index servītōrum servārī nōn potuit: {}
+Reconnect	Reconnect	Iterum coniungere
+Server-Links	Server links	Nexūs servītōris
+OK	OK	Bene
+Überspringen	Skip	Trānsīre
+Anpassen	Customize	Accommodāre
+Neu	New	Novum
+Duplizieren	Duplicate	Duplicāre
+Umbenennen	Rename	Renōmināre
+Wirklich?	Really?	Certē?
+Öffnen	Open	Aperīre
+Erweitert	Advanced	Prōvectum
+Symmetrie: {}	Symmetry: {}	Symmetria: {}
+Prozentual	Percentage	Prō centēsimā
+Pauschal	Flat	Fixum
+Blasen	Bubbles	Bullae
+Balken	Bars	Tabulae
+Detailliert	Detailed	Accūrātum
+Effektfarbe	Effect color	Color effectūs
+Link konnte nicht geöffnet werden ({}): {}	Could not open link ({}): {}	Nexus aperīrī nōn potuit ({}): {}
+Config gelöscht	Config deleted	Cōnfigūrātiō dēlēta
+"{}" -- jetzt aktiv: {}	"{}" -- now active: {}	"{}" -- nunc āctīva: {}
+Config nicht gelöscht	Config not deleted	Cōnfigūrātiō nōn dēlēta
+Hitbox {}	Hitbox {}	Capsa ictūs {}
+Kreuz beim Brennen	Cross while burning	Crux ārdentī
+Namensschatten	Name shadow	Umbra nōminis
+Namensschatten 2	Name shadow 2	Umbra nōminis 2
+Namensfarbe {}	Name color {}	Color nōminis {}
+Tasten: {}	Keys: {}	Clāvēs: {}
+Ausgabegerät konnte nicht gesetzt werden: {}	Could not set output device: {}	Īnstrūmentum ēgressūs pōnī nōn potuit: {}
+Puffer {} geht mit diesem Gerät nicht: {}	Buffer {} does not work with this device: {}	Tampōn {} cum hōc īnstrūmentō nōn fungitur: {}
+Config	Config	Cōnfigūrātiō
+Config gewechselt	Config switched	Cōnfigūrātiō mūtāta
+Neuer Eintrag	New entry	Īnscrīptiō nova
+Token	Token	Tessera
+Achte darauf, dass niemand sonst auf deinen Bildschirm sieht -- auch kein Stream, keine Aufnahme und kein geteilter Bildschirm. Mit dem Refresh-Token kann sich jeder immer wieder als du anmelden, bis du es bei Microsoft zurückziehst.	Make sure nobody else can see your screen -- no stream, no recording and no shared screen either. With the refresh token anyone can sign in as you again and again until you revoke it at Microsoft.	Cavē nē quis alius tuum quadrum videat -- neque flūmen, neque īnscrīptiō, neque quadrum commūne. Tesserā renovātiōnis quisque ut tū iterum atque iterum ingredī potest, dōnec eam apud Microsoft revocēs.
+Achte darauf, dass niemand sonst auf deinen Bildschirm sieht -- auch kein Stream, keine Aufnahme und kein geteilter Bildschirm. Mit dem Token kann sich jeder als du anmelden, bis es abläuft.	Make sure nobody else can see your screen -- no stream, no recording and no shared screen either. With the token anyone can sign in as you until it expires.	Cavē nē quis alius tuum quadrum videat -- neque flūmen, neque īnscrīptiō, neque quadrum commūne. Tesserā quisque ut tū ingredī potest, dōnec exspīret.
+Neues {} wird erzeugt ...	Generating new {} ...	Nova {} gignitur ...
+Gespeichertes Token (das Konto hat kein Refresh-Token, ein neues gibt es nicht).	Saved token (the account has no refresh token, there is no new one).	Tessera servāta (ratiō tesseram renovātiōnis nōn habet, nova nūlla est).
+Neues {} ist da.	New {} is ready.	Nova {} parāta est.
+Anzeigen	Show	Ostendere
+Gültig: {}	Valid: {}	Valet: {}
+Client-ID: {}	Client ID: {}	ID clientis: {}
+Kopieren	Copy	Exscrībere
+Kein neues Token: {}	No new token: {}	Nūlla tessera nova: {}
+Token kopiert	Token copied	Tessera exscrīpta
+Liegt jetzt in der Zwischenablage.	Now on the clipboard.	Nunc in tabulā interimā est.
+Token exportieren	Export token	Tesseram exportāre
+Refresh-Token exportieren	Export refresh token	Tesseram renovātiōnis exportāre
+Eintrag bearbeiten	Edit entry	Īnscrīptiōnem mūtāre
+ADRESSE	ADDRESS	ĪNSCRĪPTIŌ
+NAME (OPTIONAL)	NAME (OPTIONAL)	NŌMEN (ARBITRĀRIUM)
+VERBINDUNGSBILD	CONNECTION IMAGE	IMĀGŌ CONIŪNCTIŌNIS
+Erster Moment	First moment	Prīmum mōmentum
+Letzter Moment	Last moment	Ultimum mōmentum
+assets/minecraft -- Ausgeschaltetes kommt aus den Packs darunter bzw. von Vanilla	assets/minecraft -- what is switched off comes from the packs below or from Vanilla	assets/minecraft -- quod exstīnctum est, ē fascibus īnferiōribus vel ā Vanilla venit
+Das Pack hat nichts unter assets/minecraft.	The pack has nothing under assets/minecraft.	Fascis nihil sub assets/minecraft habet.
+Alles an	All on	Omnia incēnsa
+Zips automatisch entpacken	Unpack zips automatically	Zips sponte expandere
+{} min	{} min	{} min
+No UI close	No UI close	Fenestra nōn clauditur
+No chat clear	No chat clear	Colloquium nōn dēlētur
+Schild direkt beschreiben	Write on signs directly	In tabellā rēctā scrībere
+No slot set	No slot set	Locus nōn pōnitur
+No rotate set	No rotate set	Conversiō nōn pōnitur
+Server anklicken = verbinden  |  ziehen = verschieben  |  Rechtsklick = bearbeiten/löschen	Click a server = connect  |  drag = move  |  right click = edit/delete	Servītōrem preme = coniungere  |  trahe = movēre  |  dextrō preme = mūtāre/dēlēre
+Größe des Ausgabepuffers. Kleiner = weniger Verzögerung, aber anfälliger für Knackser und Aussetzer. Bei Bluetooth-Kopfhörern 1024 oder System-Vorgabe nehmen: die Funkstrecke kostet ohnehin 100 ms und mehr.	Size of the output buffer. Smaller = less delay, but more prone to crackles and dropouts. With Bluetooth headphones use 1024 or the system default: the radio link costs 100 ms or more anyway.	Magnitūdō tampōnis ēgressūs. Minor = minus morae, sed crepitibus et intermissiōnibus prōnior. Cum auriculīs Bluetooth 1024 aut praescrīptum systēmatis sūme: via radiophōnica ipsa 100 ms et plūs cōnsūmit.
+Womit der Stream gerade läuft: angefragte Größe, in Klammern was das System tatsächlich je Durchlauf anfordert, falls es abweicht.	What the stream is running with right now: requested size, in brackets what the system actually requests per cycle if it differs.	Quō flūmen nunc currit: magnitūdō petīta, in parenthēsibus quod systēma rē vērā per cursum poscit, sī differt.
+In welchen Blöcken PipeWire die Soundkarte gerade bedient, gemessen mit pw-top, solange dieser Tab offen ist. PipeWire rundet auf eine Zweierpotenz ab: ein Puffer von 48 läuft hier als 32 oder 64.	In which block size PipeWire is currently serving the sound card, measured with pw-top while this tab is open. PipeWire rounds to a power of two: a buffer of 48 runs here as 32 or 64.	Quantīs partibus PipeWire chartam sonī nunc servit, pw-top mēnsum, dum haec pagina aperta est. PipeWire ad potestātem bīnāriī rotundat: tampōn 48 hīc ut 32 aut 64 currit.
+Nur unter Linux mit PipeWire. Senkt die PipeWire-Grenze passend zum Puffer und startet pipewire-pulse dafür nur neu, wenn die Grenze noch nicht stimmt. Fehlen pipewire-pulse Echtzeit oder Nice -11, holt der Client das alle 10 Sekunden über RTKit nach, ohne Neustart. Der eigene Ton-Faden des Clients bekommt ebenfalls Echtzeit, damit es beim Laden nicht knackt.	Linux with PipeWire only. Lowers the PipeWire limit to match the buffer and only restarts pipewire-pulse for it if the limit is not right yet. If pipewire-pulse lacks real-time or nice -11, the client catches up every 10 seconds via RTKit, without a restart. The client's own audio thread also gets real-time so it does not crackle while loading.	Sōlum in Linux cum PipeWire. Fīnem PipeWire ad tampōnem dēmittit et pipewire-pulse sōlum iterum incipit, sī fīnis nōndum convenit. Sī pipewire-pulse tempus vērum aut Nice -11 caret, cliēns id singulīs 10 secundīs per RTKit supplet, sine novō initiō. Fīlum sonī proprium clientis quoque tempus vērum accipit, nē inter onerandum crepet.
+Wie pipewire-pulse eingeplant ist: Echtzeit-Priorität seiner Ton-Fäden und Nice des Haupt-Threads. Normal ist Echtzeit 20 · Nice -11. Ohne Echtzeit kommt der Ton bei kleinen Blöcken ab und zu zu spät und rauscht; nach dem Setzen der Grenze holt der Client die Priorität über RTKit nach.	How pipewire-pulse is scheduled: real-time priority of its audio threads and nice of the main thread. Normal is real-time 20 · nice -11. Without real-time the sound occasionally comes too late with small blocks and hisses; after setting the limit the client catches up the priority via RTKit.	Quōmodo pipewire-pulse ōrdinātur: prior tempus vērum fīlōrum sonī et Nice fīlī prīncipālis. Solitum est tempus vērum 20 · Nice -11. Sine tempore vērō sonus partibus parvīs interdum sērius venit et strepit; fīne positō cliēns priōritātem per RTKit supplet.
+Unter PipeWire läuft der Ton über pipewire-pulse, und das mischt nie in kleineren Blöcken als 128 Frames (2,7 ms) -- ein kleinerer Puffer bringt dann nichts. Der Knopf legt ~/.config/pipewire/pipewire-pulse.conf.d/90-coral-client.conf an und startet pipewire-pulse neu: alle Programme verlieren kurz den Ton, und die Grenze gilt danach für alle. Entfernen stellt die Vorgabe wieder her.	Under PipeWire the sound runs through pipewire-pulse, which never mixes in blocks smaller than 128 frames (2.7 ms) -- a smaller buffer then gains nothing. The button creates ~/.config/pipewire/pipewire-pulse.conf.d/90-coral-client.conf and restarts pipewire-pulse: all programs briefly lose sound, and the limit then applies to all of them. Remove restores the default.	Sub PipeWire sonus per pipewire-pulse currit, quod numquam partibus minōribus quam 128 imāginum (2,7 ms) miscet -- tampōn minor tum nihil prōdest. Pulsābulum ~/.config/pipewire/pipewire-pulse.conf.d/90-coral-client.conf creat et pipewire-pulse iterum incipit: omnia programmata sonum breviter āmittunt, et fīnis deinde omnibus valet. Removēre praescrīptum restituit.
+Schließt der Server ein offenes Fenster, bleibt es trotzdem offen. Immer: jedes Fenster (Truhe, Inventar, Schild-Editor ...). Nur Inventar: nur das eigene Inventar, Truhen & Co. schließt der Server weiter. Kein Vanilla-Verhalten: Klicks in einen Container, den der Server schon geschlossen hat, nimmt er nicht mehr an.	If the server closes an open window, it stays open anyway. Always: every window (chest, inventory, sign editor ...). Inventory only: only your own inventory; the server still closes chests & co. Not Vanilla behaviour: the server no longer accepts clicks in a container it has already closed.	Sī servītor fenestram apertam claudit, tamen aperta manet. Semper: omnis fenestra (arca, inventārium, tabellae ēditor ...). Sōlum inventārium: sōlum inventārium proprium, arcās et cētera servītor adhūc claudit. Mōs nōn Vanilla: ictūs in receptāculum, quod servītor iam clausit, nōn iam accipit.
+An: man schreibt direkt auf das Schild in der Welt, solange man die Seite sieht. Aus: immer das Editor-Fenster wie in Vanilla.	On: you write directly on the sign in the world while you can see its side. Off: always the editor window as in Vanilla.	Sīc: rēctā in tabellā in mundō scrībis, dum latus eius vidēs. Nōn: semper fenestra ēditōris ut in Vanilla.
+Wenn der Server deinen Hotbar-Slot wechselt. Aus: wie Vanilla, der Slot wechselt. Ignore: dein Slot bleibt, dem Server wird nichts gemeldet -- für ihn gilt seiner, bis du selbst wechselst. Reset: dein Slot bleibt und geht im nächsten Tick an den Server zurück.	When the server changes your hotbar slot. Off: as in Vanilla, the slot changes. Ignore: your slot stays, nothing is reported to the server -- its own slot applies for it until you switch yourself. Reset: your slot stays and is sent back to the server on the next tick.	Cum servītor locum virgae tuae mūtat. Nōn: ut in Vanilla, locus mūtātur. Ignōrāre: locus tuus manet, servītōrī nihil nūntiātur -- eī suus valet, dōnec ipse mūtēs. Restituere: locus tuus manet et proximō ictū temporis ad servītōrem redit.
+Wenn der Server deine Blickrichtung dreht (Teleport, Kamera-Effekte). Aus: wie Vanilla. Ignore: deine Kamera bleibt, dem Server wird nichts gemeldet -- für ihn gilt seine Richtung, bis du dich bewegst. Reset: deine Kamera bleibt und deine Richtung geht im nächsten Tick an den Server. Die Bestätigung des Teleports trägt immer die Richtung des Servers, sonst flaggen Anticheats sofort.	When the server turns your view direction (teleport, camera effects). Off: as in Vanilla. Ignore: your camera stays, nothing is reported to the server -- its direction applies for it until you move. Reset: your camera stays and your direction goes to the server on the next tick. The teleport confirmation always carries the server's direction, otherwise anticheats flag at once.	Cum servītor dīrēctiōnem cōnspectūs tuī vertit (trānslātiō, effectūs camerae). Nōn: ut in Vanilla. Ignōrāre: camera tua manet, servītōrī nihil nūntiātur -- eī sua dīrēctiō valet, dōnec movēāris. Restituere: camera tua manet et dīrēctiō tua proximō ictū temporis ad servītōrem it. Cōnfirmātiō trānslātiōnis semper dīrēctiōnem servītōris fert, aliōquīn custōdēs fraudis statim notant.
+Zur Fehlersuche, statt des Bildes. Licht: wie viel Licht der Lampen ankommt -- gelb am meisten, blau am wenigsten, schwarz keins, rot die Grenze, wo es aufhört. Abweichung: wie weit die Lichtkarten von echten Strahlen abweichen -- schwarz gleich, rot zu hell, blau zu dunkel (voll bei 25 %).	For debugging, instead of the image. Light: how much lamp light arrives -- yellow the most, blue the least, black none, red the border where it ends. Deviation: how far the light maps deviate from real rays -- black equal, red too bright, blue too dark (full at 25 %).	Ad errōrēs quaerendōs, prō imāgine. Lūx: quantum lūcis lucernārum advenit -- flāvum plūrimum, caeruleum minimum, nigrum nūllum, rubrum fīnis, ubi dēsinit. Dēviātiō: quantum tabulae lūminis ā radiīs vērīs differant -- nigrum aequāle, rubrum nimis clārum, caeruleum nimis obscūrum (plēnum ad 25 %).
+Für jede Lichtquelle ein eigener Faktor auf ihre Leuchtstärke (Shader-Pfad): 50 % = halb so hell und halb so weit, 0 % = leuchtet gar nicht. Über 100 % wird es heller und reicht weiter (bis 1000 %, dann bis zu 150 Blöcke).	A separate factor on the brightness of each light source (shader path): 50 % = half as bright and half as far, 0 % = does not glow at all. Above 100 % it gets brighter and reaches further (up to 1000 %, then up to 150 blocks).	Prō quōque fonte lūminis factor proprius in vim lūcendī (via shaderis): 50 % = dīmidiō clārius et dīmidiō longius, 0 % = omnīnō nōn lūcet. Suprā 100 % clārius fit et longius pertinet (usque ad 1000 %, tum usque ad 150 cubōs).
+Wie weich die Schatten von Fackeln, Laternen und anderen Lichtquellen werden, als scheinbare Größe der Quelle in Grad. Wie bei der Sonne: direkt am Hindernis scharf, mit Abstand immer weicher. 0 = überall scharf.	How soft the shadows of torches, lanterns and other light sources become, as the apparent size of the source in degrees. As with the sun: sharp right at the obstacle, softer and softer with distance. 0 = sharp everywhere.	Quam mollēs umbrae facum, lanternārum aliōrumque fontium lūminis fiant, ut magnitūdō appārēns fontis in gradibus. Ut apud sōlem: ad ipsum impedīmentum ācrēs, cum intervallō semper mollius. 0 = ubīque ācrēs.
+Fackeln, Laternen, Glowstone und andere Lichtquellen werfen Schatten: Was zwischen Quelle und Fläche steht, hält ihr Licht ab, Buntglas färbt es. Ein Rest bleibt als zurückgeworfenes Licht. Kostet GPU-Zeit, wo viele Quellen nah beieinander sind.	Torches, lanterns, glowstone and other light sources cast shadows: whatever stands between source and surface blocks their light, stained glass tints it. A remainder stays as reflected light. Costs GPU time where many sources are close together.	Facēs, lanternae, lapis lūcēns aliīque fontēs lūminis umbrās iaciunt: quod inter fontem et superficiem stat, lūmen eōrum arcet, vitrum tīnctum id colōrat. Reliquum ut lūx reflexa manet. Tempus GPU cōnsūmit, ubi multī fontēs prope sunt.
+Wie weich Schattenkanten werden, als scheinbare Größe der Sonne in Grad. Direkt an einer Wand bleibt der Schatten scharf, mit wachsendem Abstand zum Hindernis wird der Übergang breiter (Halbschatten). Die echte Sonne hat 0,5°, 0 = überall scharf.	How soft shadow edges become, as the apparent size of the sun in degrees. Right at a wall the shadow stays sharp; with growing distance to the obstacle the transition gets wider (penumbra). The real sun has 0.5°, 0 = sharp everywhere.	Quam mollēs margine umbrārum fiant, ut magnitūdō appārēns sōlis in gradibus. Ad ipsum mūrum umbra ācris manet, crēscente intervallō ab impedīmentō trānsitus lātior fit (paenumbra). Sōl vērus 0,5° habet, 0 = ubīque ācrēs.
+Wie stark die Luft Licht streut (Shader-Pfad, Oberwelt). Physikalisch die Dichte der streuenden Teilchen: 100 % = Erdatmosphäre, 0 % = keine Luft und ein schwarzer Himmel wie im Weltraum, mehr = dichtere, dunstigere Luft mit blasserem Himmel und röteren Sonnenuntergängen. Bestimmt auch das Umgebungslicht vom Himmel: ohne Luft sind Schatten tiefschwarz, mit mehr Luft heller.	How strongly the air scatters light (shader path, Overworld). Physically the density of the scattering particles: 100 % = Earth's atmosphere, 0 % = no air and a black sky as in space, more = denser, hazier air with a paler sky and redder sunsets. Also determines the ambient light from the sky: without air shadows are pitch black, with more air brighter.	Quam valdē āēr lūcem spargat (via shaderis, mundus superior). Physicē dēnsitās particulārum spargentium: 100 % = atmosphaera terrae, 0 % = nūllus āēr et caelum nigrum ut in spatiō, plūs = āēr dēnsior et cālīginōsior cum caelō pallidiōre et occāsibus rubriōribus. Etiam lūcem ambientem ā caelō dēfīnit: sine āere umbrae nigerrimae, cum plūre āere clāriōrēs.
+Hält man einen Stapel über einen Slot mit demselben Item, steht am Zeiger die Summe beider Stapel und die Zahl im Slot wird ausgeblendet, statt dass sich zwei Zahlen überlagern.	When you hold a stack over a slot with the same item, the cursor shows the sum of both stacks and the number in the slot is hidden, instead of two numbers overlapping.	Sī acervum suprā locum cum eādem rē tenēs, ad indicem summa ambōrum acervōrum stat et numerus in locō cēlātur, nē duo numerī sibi superpōnantur.
+Form	Shape	Fōrma
+{} px	{} px	{} px
+Ring hat Kontur	Ring has outline	Ānulus ambitum habet
+Haltbarkeit ab	Durability from	Infragilitās ab
+≤ {} Punkte	≤ {} points	≤ {} puncta
+Grenze	Threshold	Fīnis
+Sauerstoff	Oxygen	Oxygenium
+Ausrichtung	Alignment	Dīrēctiō
+Ambiente verstecken	Hide ambient	Ambientia cēlāre
+Stil	Style	Stilus
+Icon	Icon	Īcōn
+Timer-Farbe	Timer color	Color temporis
+Blinken ab 10 s	Blink from 10 s	Micāre ab 10 s
+Rücken nach	Shift to	Movēre ad
+Zahl-Größe	Number size	Magnitūdō numerī
+Zahl X	Number X	Numerus X
+Zahl Y	Number Y	Numerus Y
+Grün bei >87 %	Green at >87 %	Viride ad >87 %
+Chat-Zeile {}	Chat line {}	Versus colloquiī {}
+Noch keine Server gespeichert. Unten auf "Neuer Eintrag".	No servers saved yet. Click "New entry" below.	Nūllī servītōrēs adhūc servātī. Īnfrā "Īnscrīptiō nova" preme.
+Item-Hitbox	Item hitbox	Capsa ictūs reī
+Eigene Hitbox	Own hitbox	Capsa ictūs propria
+Spinnennetz-Hitbox	Cobweb hitbox	Capsa ictūs arāneae
+Wasser-Hitbox	Water hitbox	Capsa ictūs aquae
+Individuelle Farben	Individual colors	Colōrēs singulārēs
+Überschreiben	Override	Superscrībere
+Erkennung	Detection	Agnitiō
+Eigene Teamfarbe	Own team color	Color turmae propriae
+Automatisch	Automatic	Sponte
+{}-Hitboxen	{} hitboxes	Capsae ictūs {}
+Namensschild	Name tag	Nota nōminis
+Fest	Fixed	Fīxum
+Ohne Pfeile	Without arrows	Sine sagittīs
+Im HUD-Editor	In the HUD editor	In ēditōre HUD
+Zähler	Counter	Numerātor
+Auf null setzen	Reset to zero	Ad nihilum redigere
+Sterne	Stars	Stēllae
+Von	From	Ab
+{} Blöcke	{} blocks	{} cubī
+Bis	To	Ad
+Im Hintergrund pausieren	Pause in background	In fundō cōnsistere
+3D im Pausemenü pausieren	Pause 3D in the pause menu	3D in indice pausae cōnsistere
+Coral Client (Vorgabe)	Coral Client (default)	Coral Client (praescrīptum)
+Lautstärke der anderen	Volume of others	Sonōritās aliōrum
+Mikrofon-Verstärkung	Microphone gain	Amplificātiō microphōnī
+{} dB	{} dB	{} dB
+Aktivierung	Activation	Āctīvātiō
+Sprechtaste	Push to talk	Clāvis loquendī
+Sprachaktivierung	Voice activation	Āctīvātiō vōce
+ (jetzt {})	 (now {})	 (nunc {})
+Aktivierungsschwelle	Activation threshold	Līmen āctīvātiōnis
+Nachlauf	Hold time	Mora post
+Mikrofon stumm	Microphone muted	Microphōnum mūtum
+Sprachchat taub	Voice chat deafened	Colloquium vōcāle surdum
+Stumm beim Betreten	Muted on join	Mūtum ingrediendō
+Automatische Verstärkung	Automatic gain	Amplificātiō sponte
+Rauschunterdrückung	Noise suppression	Suppressiō strepitūs
+3D-Klang	3D sound	Sonus 3D
+Ausgabepuffer	Output buffer	Tampōn ēgressūs
+Paket-Schwelle	Packet threshold	Līmen fasciculōrum
+Mikrofon	Microphone	Microphōnum
+Mikrofon mithören	Monitor microphone	Microphōnum auscultāre
+Symbol am Namensschild	Icon on name tag	Signum ad notam nōminis
+Anzeige im HUD	Display in HUD	Ostentātiō in HUD
+Durchdrücken bei Rest	Push through at remaining	Perprimere ad reliquum
+{} ms	{} ms	{} ms
+Slotwechsel erst nach dem Essen	Slot switch only after eating	Locum mūtāre sōlum post edendum
+Aggressive Prediction	Aggressive prediction	Praedictiō ācris
+Dicke	Thickness	Crassitūdō
+Grund	Background	Fundus
+Raster	Grid	Crātis
+Anzeigen als	Show as	Ostendere ut
+eigener Name	own name	nōmen proprium
+Färbung	Coloring	Colōrātiō
+Schatten-Deckkraft	Shadow opacity	Opācitās umbrae
+Schattenfarbe 1	Shadow color 1	Color umbrae 1
+Schattenfarbe	Shadow color	Color umbrae
+Schattenfarbe 2	Shadow color 2	Color umbrae 2
+Ton bei Erwähnung	Sound on mention	Sonus mentiōne
+Klicks je Sekunde	Clicks per second	Ictūs per secundam
+{} CPS	{} CPS	{} CPS
+Verzögerung je Richtung	Delay per direction	Mora per dīrēctiōnem
+Pack-Shader {} nicht nutzbar: {}	Pack shader {} not usable: {}	Shader fascis {} ūsuī nōn est: {}
+Pack-Shader aktiv: {}	Pack shader active: {}	Shader fascis āctīvus: {}
+Weltgrenze ohne Shader {}: {}	World border without shader {}: {}	Fīnis mundī sine shadere {}: {}
+Teamfarbe	Team color	Color turmae
+Tab-Liste	Tab list	Index Tab
+Prefix	Prefix	Praefīxum
+Beschriftung	Label	Īnscrīptiō
+Beschriftung (Rest)	Label (rest)	Īnscrīptiō (reliqua)
+Seitenleiste	Sidebar	Tabula lateris
+ (du)	 (you)	 (tū)
+(fehlt)	(missing)	(deest)
+Effekte: keine  |  Tempo x1.00	Effects: none  |  speed x1.00	Effectūs: nūllī  |  celeritās x1.00
+Effekte: {}  |  Tempo x{}	Effects: {}  |  speed x{}	Effectūs: {}  |  celeritās x{}
+Partikel noch nicht umgesetzt: {}	Particle not implemented yet: {}	Particula nōndum effecta: {}
+Launcher-Bild: {} Spalten gemesht, Kamera {} {} {}	Launcher image: {} columns meshed, camera {} {} {}	Imāgō launcheris: {} columnae textae, camera {} {} {}
+Hintergrundbild: {}	Background image: {}	Imāgō fundī: {}
+Schaden: {} (Krit {})	Damage: {} (crit {})	Damnum: {} (ictus gravis {})
+Tempo: {} Schläge/s	Speed: {} hits/s	Celeritās: {} ictūs/s
+Reichweite: {}{} Blöcke	Reach: {}{} blocks	Spatium: {}{} cubī
+Schutz: {} %	Protection: {} %	Praesidium: {} %
+{} Rüstung	{} armor	{} tegmen
+{} Härte	{} toughness	{} soliditās
+Verzauberung {} %	Enchantment {} %	Incantāmentum {} %
+Geschosse	Projectiles	Missilia
+Explosionen	Explosions	Displōsiōnēs
+Feuer	Fire	Ignis
+Fallschaden	Fall damage	Damnum cāsūs
+gegen {}: {} %	against {}: {} %	contrā {}: {} %
+Haltbarkeit: {} / {}	Durability: {} / {}	Infragilitās: {} / {}
+Stapel: {} / {}	Stack: {} / {}	Acervus: {} / {}
++ eigene Komponenten	+ custom components	+ compositiōnēs propriae
+Config: {}	Config: {}	Cōnfigūrātiō: {}
+Compositor	Compositor	Compositor
+0 (Fence)	0 (fence)	0 (saeptum)
+Rüstungsbesatz	Armor trim	Ōrnāmentum tegminis
+Render-Distance	Render distance	Spatium pictūrae
+LOD-Detail	LOD detail	Subtīlitās LOD
+{} Chunks	{} chunks	{} frūsta
+{} px²	{} px²	{} px²
+Kamera-Empfindlichkeit X	Camera sensitivity X	Sēnsibilitās camerae X
+Kamera-Empfindlichkeit Y	Camera sensitivity Y	Sēnsibilitās camerae Y
+X/Y getrennt	X/Y separate	X/Y sēparātim
+Empfindlichkeits-Rechner	Sensitivity calculator	Computātor sēnsibilitātis
+No Extinguish DC Ghost	No Extinguish DC Ghost	Exstinctiō nōn fallit
+Bestätigungsdauer (allgemein)	Confirmation time (general)	Tempus cōnfirmātiōnis (commūne)
+Reconnect-Verzögerung	Reconnect delay	Mora iterum coniungendī
+Spielbild abdunkeln	Darken game image	Imāginem lūdī obscūrāre
+Trägheit beim Scrollen	Scroll inertia	Inertia volvendī
+Scrollweite	Scroll distance	Spatium volvendī
+Wird beim nächsten Start gerendert	Rendered at next start	Proximō initiō pingētur
+Eigener Name	Own name	Nōmen proprium
+Stabile Zahlen	Stable numbers	Numerī stabilēs
+Schriften	Fonts	Litterae
+{} cm	{} cm	{} cm
+Höhe	Height	Altitūdō
+Hurt-Cam	Hurt cam	Camera vulneris
+Stärke	Strength	Vīs
+Todesanimation	Death animation	Animātiō mortis
+Name der neuen Config	Name of the new config	Nōmen cōnfigūrātiōnis novae
+Name der Kopie	Name of the copy	Nōmen exemplī
+Neuer Name	New name	Nōmen novum
+Klick auf eine Config wechselt sofort -- auch mitten im Spiel.	Clicking a config switches at once -- even in the middle of a game.	Cōnfigūrātiōnem premere statim mūtat -- etiam mediō in lūdō.
+Configs	Configs	Cōnfigūrātiōnēs
++ {} weitere (im Launcher)	+ {} more (in the launcher)	+ {} aliae (in launchere)
+Suche	Search	Quaerere
+Fackel, Laterne, ...	Torch, lantern, ...	Fax, lanterna, ...
+Keine Lichtquelle gefunden.	No light source found.	Nūllus fōns lūminis inventus.
+{}–{} von {} (Mausrad)	{}–{} of {} (mouse wheel)	{}–{} ex {} (rota mūris)
+Partikelart ({}–{} von {})	Particle type ({}–{} of {})	Genus particulae ({}–{} ex {})
+Lichtstreuung	Light scattering	Dispersiō lūcis
+Schattenweichheit	Shadow softness	Mollitia umbrae
+Blocklicht-Schatten	Block light shadows	Umbrae lūminis cubōrum
+Blocklicht-Weichheit	Block light softness	Mollitia lūminis cubōrum
+Lichtstärken	Light strengths	Vīrēs lūminis
+Lichtstärken ({} geändert)	Light strengths ({} changed)	Vīrēs lūminis ({} mūtātae)
+Lichtkarten anzeigen	Show light maps	Tabulās lūminis ostendere
+Operator-Items (Kreativ)	Operator items (Creative)	Rēs administrātōris (Creātīvus)
+Zusammenfassen bei Hover	Combine on hover	Coniungere superāns
+Puffer	Buffer	Tampōn
+Puffer aktiv	Buffer active	Tampōn āctīvus
+PipeWire aktiv	PipeWire active	PipeWire āctīvum
+PipeWire-Grenze	PipeWire limit	Fīnis PipeWire
+Automatisch optimieren	Optimize automatically	Sponte optimāre
+Verfügbar	Available	Praesto
+Noch keine Packs. Rechts auf "Ordner öffnen" und ein Pack hineinlegen, als Ordner oder Zip.	No packs yet. Click "Open folder" on the right and put a pack in, as a folder or zip.	Nūllī fascēs adhūc. Dextrā "Indicem aperīre" preme et fascem impōne, ut indicem aut zip.
+Server-Pack	Server pack	Fascis servītōris
+Die Standard-Texturen von Minecraft. Füllt auf, was die Packs darüber nicht mitbringen; Packs darunter ergänzen nur noch, was Vanilla nicht hat.	Minecraft's default textures. Fills in what the packs above do not bring; packs below only add what Vanilla does not have.	Textūrae praescrīptae Minecraft. Supplent quod fascēs superiōrēs nōn afferunt; fascēs īnferiōrēs sōlum addunt quod Vanilla nōn habet.
+Vom Server geschickt. Steht anfangs ganz oben; weiter unten überschreibt es nur noch, was die Packs darüber nicht haben. Platz und Zahnrad merkt sich der Client für diesen Server und dieses Pack.	Sent by the server. Starts at the very top; further down it only overrides what the packs above do not have. The client remembers position and gear for this server and this pack.	Ā servītōre missus. Initiō summō stat; īnferius sōlum superscrībit quod fascēs superiōrēs nōn habent. Locum et rotam dentātam cliēns prō hōc servītōre et hōc fasce meminit.
+Server-Pack (oberstes von {})	Server pack (top of {})	Fascis servītōris (summus ex {})
+Neu laden	Reload	Iterum onerāre
+Kopf-Profil nicht geladen: {}	Head profile not loaded: {}	Profīlum capitis nōn onerātum: {}
+Server-Resourcepack angeboten: {}{}	Server resource pack offered: {}{}	Fascis subsidiōrum servītōris oblātus: {}{}
+ (Pflicht)	 (required)	 (necessārius)
+Server-Resourcepack nicht geladen: {}	Server resource pack not loaded: {}	Fascis subsidiōrum servītōris nōn onerātus: {}
+Server-Resourcepack: SHA-1 passt nicht ({} statt {})	Server resource pack: SHA-1 does not match ({} instead of {})	Fascis subsidiōrum servītōris: SHA-1 nōn convenit ({} prō {})
+kein Home-Ordner	no home folder	nūllus index domesticus
+Server-Resourcepack nicht gespeichert: {}	Server resource pack not saved: {}	Fascis subsidiōrum servītōris nōn servātus: {}
+Server-Resourcepack	Server resource pack	Fascis subsidiōrum servītōris
+Umhang nicht dekodierbar (kein 64x32?): {}	Cape not decodable (not 64x32?): {}	Pallium dēcōdificārī nōn potest (nōn 64x32?): {}
+Umhang nicht geladen: {}	Cape not loaded: {}	Pallium nōn onerātum: {}
+Skin nicht dekodierbar: {}	Skin not decodable: {}	Cutis dēcōdificārī nōn potest: {}
+Skin nicht geladen: {}	Skin not loaded: {}	Cutis nōn onerāta: {}
+eigener Skin geladen ({}).	own skin loaded ({}).	cutis propria onerāta ({}).
+eigener Umhang geladen.	own cape loaded.	pallium proprium onerātum.
+Audio nach PipeWire-Neustart nicht wieder geöffnet: {}	Audio not reopened after PipeWire restart: {}	Sonus post novum initium PipeWire nōn iterum apertus: {}
+{} Frames · {} ms	{} frames · {} ms	{} imāginēs · {} ms
+kein PipeWire gefunden	no PipeWire found	nūllum PipeWire inventum
+Echtzeit {} · Nice {}	Real-time {} · nice {}	Tempus vērum {} · Nice {}
+ohne Echtzeit · Nice {}	without real-time · nice {}	sine tempore vērō · Nice {}
+nicht gefunden	not found	nōn inventum
+Fehlgeschlagen: {}	Failed: {}	Dēfēcit: {}
+{} Frames gesetzt · entfernen	{} frames set · remove	{} imāginēs positae · removēre
+Auf {} Frames senken	Lower to {} frames	Ad {} imāginēs dēmittere
+Vorgabe reicht für diesen Puffer	Default is enough for this buffer	Praescrīptum huic tampōnī sufficit
+Serverliste	Server list	Index servītōrum
+Tastenbelegung: {} → {}	Key binding: {} → {}	Clāvis assignāta: {} → {}
+Tastenbelegung: {} -- {} entfernt	Key binding: {} -- {} removed	Clāvis assignāta: {} -- {} remōta
+Screenshot in die Zwischenablage kopiert	Screenshot copied to clipboard	Imāgō quadrī in tabulam interimam exscrīpta
+Hoch	Upright	Ērēctum
+Flach, Helm rechts	Flat, helmet right	Plānum, galea dextrā
+Flach, Helm links	Flat, helmet left	Plānum, galea sinistrā
+Oben	Top	Suprā
+Spiegeln	Mirror	Speculārī
+Dialog vom Server nicht lesbar -- nicht angezeigt	Dialog from the server not readable -- not shown	Dialogus ā servītōre legī nōn potest -- nōn ostēnsus
+Befehl aus einem Dialog in der Konfiguration verworfen: /{}	Command from a dialog during configuration dropped: /{}	Iussum ē dialogō in cōnfigūrātiōne abiectum: /{}
+Befehl aus einem Dialog: /{}	Command from a dialog: /{}	Iussum ē dialogō: /{}
+Verwiesener Dialog unbekannt -- nicht angezeigt	Referenced dialog unknown -- not shown	Dialogus relātus ignōtus -- nōn ostēnsus
+Hinweis zu eigenen Fenstern	Note on custom windows	Monitum dē fenestrīs propriīs
+Zurück	Back	Redīre
+Zurück ({}s)	Back ({}s)	Redīre ({}s)
+Trennen	Disconnect	Disiungere
+Fenster des Servers abgelehnt	Server window rejected	Fenestra servītōris recūsāta
+Für diesen Kodex nicht mehr anzeigen	Don't show again for this code	Prō hōc cōdice nōn iam ostendere
+Annehmen	Accept	Accipere
+Der Server verlangt, dass du seinen Verhaltenskodex annimmst.	The server requires you to accept its code of conduct.	Servītor postulat ut cōdicem mōrum eius accipiās.
+Link nicht geöffnet (nur http/https): {}	Link not opened (http/https only): {}	Nexus nōn apertus (sōlum http/https): {}
+Link öffnen?	Open link?	Nexum aperīre?
+Verlauf bewegt	Moving gradient	Gradātiō mōta
+Regenbogen	Rainbow	Arcus caelestis
+Pling	Pling	Tinnītus
+Glocke	Bell	Campāna
+Glockenspiel	Chime	Tintinnābula
+Harfe	Harp	Harpa
+Amethyst	Amethyst	Amethystus
+Erfahrung	Experience	Experientia
+Levelaufstieg	Level up	Gradus ascēnsus
+Treffer	Hit	Ictus
+Aufheben	Pick up	Tollere
+Enderperle	Ender pearl	Margarīta Endis
+Pfeil	Arrow	Sagitta
+Dreizack	Trident	Tridēns
+Windkugel	Wind charge	Globus ventī
+Item am Boden	Item on the ground	Rēs humī
+Wurftrank	Splash potion	Pōtiō iaciēnda
+Schneeball, Ei	Snowball, egg	Pila nivis, ōvum
+Angelhaken	Fishing hook	Hāmus
+Feuerwerksrakete	Firework rocket	Rochetta pyrotechnica
+Endkristall	End crystal	Crystallus Endis
+TNT	TNT	TNT
+Spinnennetz	Cobweb	Arāneum
+Wasserquelle	Water source	Fōns aquae
+kein verbundener Ausgang gefunden	no connected output found	nūllus exitus coniūnctus inventus
+xrandr nicht ausfuehrbar: {}	xrandr cannot run: {}	xrandr exsequī nōn potest: {}
+Block-Texturen	Block textures	Textūrae cubōrum
+Blockzustaende	Block states	Status cubōrum
+Blockmodelle	Block models	Exemplāria cubōrum
+Items	Items	Rēs
+Entity-Texturen	Entity textures	Textūrae entium
+Grafik wird vorbereitet	Preparing graphics	Graphica parātur
+Threads	Threads	Fīla
+LOD-Weite	LOD distance	Spatium LOD
+Gespeicherte Chunks zeichnen	Draw saved chunks	Frūsta servāta pingere
+Fernsicht: {} Knoten, {} Mio. Flaechen ({} MB)  |  Aufnahme wartet: {}  |  Mesh-Auftraege: {}	Far view: {} nodes, {} M faces ({} MB)  |  capture waiting: {}  |  mesh jobs: {}	Prōspectus longinquus: {} nōdī, {} mīl. faciērum ({} MB)  |  captūra exspectat: {}  |  opera texendī: {}
+Diamant	Diamond	Adamās
+Netherit	Netherite	Netherite
+ZWEITHAND	OFFHAND	MANUS ALTERA
+Blasensäule	Bubble column	Columna bullārum
+Blockstaub	Block dust	Pulvis cubōrum
+Endstab	End rod	Virga Endis
+Feuerwerks-Blitz	Firework flash	Fulgor pyrotechnicus
+Flammen	Flames	Flammae
+Item-Splitter	Item shards	Fragmenta reī
+Krit	Crit	Ictus gravis
+Rauch	Smoke	Fūmus
+Rauchwölkchen	Smoke puffs	Nūbēculae fūmī
+Redstone-Staub	Redstone dust	Pulvis Redstone
+Schadensherzen	Damage hearts	Corda damnī
+Schwungangriff	Sweep attack	Impetus lātus
+Sculk-Seele	Sculk soul	Anima Sculk
+Totem	Totem	Totem
+Trank-Spritzer	Potion splash	Aspergō pōtiōnis
+Trankeffekte	Potion effects	Effectūs pōtiōnum
+Verzauberungs-Treffer	Enchanted hit	Ictus incantātus
+Windböe	Gust	Flātus ventī
+Wolke	Cloud	Nūbēs
+kein Konfigurationsordner	no configuration folder	nūllus index cōnfigūrātiōnis
+pipewire-pulse nicht gefunden	pipewire-pulse not found	pipewire-pulse nōn inventum
+RTKit hat die Prioritaet abgelehnt	RTKit refused the priority	RTKit priōritātem recūsāvit
+Welt	World	Mundus
+Figur	Figure	Figūra
+Ausgabe	Output	Ēgressus
+Gelaende	Terrain	Terra
+Wasser/Glas	Water/glass	Aqua/vitrum
+Sonstiges	Other	Cētera
+Licht	Light	Lūx
+Lichtkarten	Light maps	Tabulae lūminis
+Spiegelungen	Reflections	Reflexiōnēs
+FRAME-PROFILER ({} s, {} Frames)	FRAME PROFILER ({} s, {} frames)	PROFĪLĀTOR IMĀGINUM ({} s, {} imāginēs)
+Intervall {} ms  sd {}  min {}  max {}{}	Interval {} ms  sd {}  min {}  max {}{}	Intervallum {} ms  sd {}  min {}  max {}{}
+  (Ziel {})	  (target {})	  (mēta {})
+Ausreißer {}  Aufwecken max +{} ms  Schleife {}x/Frame  Ticks {}	Outliers {}  wake-up max +{} ms  loop {}x/frame  ticks {}	Aberrantēs {}  excitātiō max +{} ms  ānsa {}x/imāgō  ictūs {}
+Phase (ms)	Phase (ms)	Phasis (ms)
+Summe	Sum	Summa
+Rest (Schlaf/unerfasst)	Rest (sleep/unmeasured)	Reliquum (somnus/nōn mēnsum)
+GPU gesamt	GPU total	GPU tōta
+Monitor: keine VBlank-Zeitstempel	Monitor: no VBlank timestamps	Monitor: nūlla signa temporis VBlank
+Monitor: warte auf VBlanks ({})	Monitor: waiting for VBlanks ({})	Monitor: VBlank exspectō ({})
+Monitor {} Hz  Periode {} ms  ({})	Monitor {} Hz  period {} ms  ({})	Monitor {} Hz  periodus {} ms  ({})
+GPU fertig	GPU done	GPU perfecta
+Riss-Steuerung: Ziel {} ms  Abweichung mittel {}  max {} ms	Tear control: target {} ms  deviation mean {}  max {} ms	Moderātiō scissūrae: mēta {} ms  dēviātiō media {}  max {} ms
+Riss ({}) bei {} %  Phase {} ms  sd {} ms  Sprünge {}	Tear ({}) at {} %  phase {} ms  sd {} ms  jumps {}	Scissūra ({}) ad {} %  phasis {} ms  sd {} ms  saltūs {}
+GPU nach Present: mittel {} ms  max {} ms	GPU after present: mean {} ms  max {} ms	GPU post Present: media {} ms  max {} ms
+Tastatur und Maus	Keyboard and mouse	Clāviātūra et mūs
+Tastatur	Keyboard	Clāviātūra
+Maus	Mouse	Mūs
+<unbekannt>	<unknown>	<ignōtum>
+Kills	Kills	Necēs
+Tode	Deaths	Mortēs
+Siege	Wins	Victōriae
+Skin entpackt	Skin unpacked	Cutis expansa
+{} -- das Zip liegt im Papierkorb.	{} -- the zip is in the trash.	{} -- zip in quisquiliīs iacet.
+{}, aber das Zip blieb liegen: {}	{}, but the zip was left behind: {}	{}, sed zip relictum est: {}
+Zip nicht entpackt	Zip not unpacked	Zip nōn expansum
+Papierkorb meldet {}	Trash reports {}	Quisquiliae nūntiant {}
+Fluggeschwindigkeit: {} Blöcke/s	Flight speed: {} blocks/s	Celeritās volātūs: {} cubī/s
+CPU {} %  ·  Coral {} %  ({} Kerne)	CPU {} %  ·  Coral {} %  ({} cores)	CPU {} %  ·  Coral {} %  ({} nuclei)
+RAM + Swap {} / {} GB  ·  Coral {} GB	RAM + swap {} / {} GB  ·  Coral {} GB	RAM + Swap {} / {} GB  ·  Coral {} GB
+{} ({} Threads)	{} ({} threads)	{} ({} fīla)
+Verbündete	Allies	Sociī
+Gegner	Enemies	Hostēs
+Scoreboard-Team	Scoreboard team	Turma tabulae punctōrum
+Namensfarbe	Name color	Color nōminis
+Rüstungsfarbe	Armor color	Color tegminis
+Akzent 2	Accent 2	Accentus 2
+Akzent 2 Hover	Accent 2 hover	Accentus 2 superāns
+Akzent-2-Text	Accent 2 text	Textus accentūs 2
+noch zu wenig	not enough yet	nōndum satis
+immer dieselbe ID	always the same ID	semper eadem ID
+zählt um {}	counts by {}	numerat per {}
+zählt meist um {}, {} Sprünge	mostly counts by {}, {} jumps	plērumque numerat per {}, {} saltūs
+wechselnd ({} verschiedene Schritte)	varying ({} different steps)	varium ({} gradūs dīversī)
+Transaktionen: keine (kein Anticheat-Ping gesehen)	Transactions: none (no anticheat ping seen)	Trānsāctiōnēs: nūllae (nūllus ping custōdis fraudis vīsus)
+Transaktionen: ID {}{}, {}/s, erste {}, {} gesamt  |  {}	Transactions: ID {}{}, {}/s, first {}, {} total  |  {}	Trānsāctiōnēs: ID {}{}, {}/s, prīma {}, {} tōtae  |  {}
+Hover	Hover	Superāre
+Schalter an	Switch on	Commūtātor incēnsus
+Schalter aus	Switch off	Commūtātor exstīnctus
+Schritt	Step	Gradus
+Gesperrt	Locked	Clausum
+Tippen	Typing	Scrībere
+Slider-Tick	Slider tick	Ictus lābentis
+Aufploppen	Pop-up	Ēmergere
+Absenden	Send	Mittere
+Lautstärke des Hover-Klangs: die Maus betritt ein klickbares Element. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of the hover sound: the mouse enters a clickable element. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās sonī superandī: mūs in elementum premendum intrat. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke des Klicks: eine Aktion wird ausgeführt. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of the click: an action is carried out. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās ictūs: āctiō exsequitur. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke beim Einschalten eines Schalters. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume when a switch is turned on. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās, cum commūtātor incenditur. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke beim Ausschalten eines Schalters. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume when a switch is turned off. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās, cum commūtātor exstinguitur. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke, wenn eine Fläche oder ein Fenster aufgeht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume when a panel or window opens. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās, cum tabula aut fenestra aperītur. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke, wenn eine Fläche oder ein Fenster zugeht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume when a panel or window closes. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās, cum tabula aut fenestra clauditur. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke der Schritte: Stepper, Hotbar-Platz, Vorschlagsliste, Chat-Verlauf. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of steps: stepper, hotbar slot, suggestion list, chat history. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās graduum: gradātor, locus virgae, index suggestiōnum, historia colloquiī. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke, wenn eine Aktion nicht möglich ist (abgeblendeter Knopf). Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume when an action is not possible (greyed-out button). Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās, cum āctiō fierī nōn potest (pulsābulum obscūrātum). Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke des Tippens: ein Zeichen wurde getippt. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of typing: a character was typed. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās scrībendī: signum scrīptum est. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke des Löschens: ein Zeichen wurde gelöscht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of deleting: a character was deleted. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās dēlendī: signum dēlētum est. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke des Slider-Ticks: ein Schieberegler ändert seinen Wert, die Tonhöhe steigt mit dem Wert. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of the slider tick: a slider changes its value, the pitch rises with the value. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās ictūs lābentis: lābēns valōrem mūtat, altitūdō sonī cum valōre crēscit. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke des Aufploppens: ein Eintrag erscheint, etwa eine Zeile einer Rangliste. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume of the pop-up: an entry appears, such as a line of a leaderboard. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās ēmergendī: īnscrīptiō appāret, ut versus tabulae ōrdinis. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+Lautstärke beim Absenden einer Chat-Nachricht, auch per /msg, /w, /tc und Ähnlichem. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.	Volume when sending a chat message, also via /msg, /w, /tc and similar. Relative to UI sounds above. Changing it plays it as a sample.	Sonōritās, cum nūntius colloquiī mittitur, etiam per /msg, /w, /tc et similia. Relātīva ad sonōs interfaciēī suprā. Mūtāre eum ad probandum sonat.
+{} crtc {} ({}x{} bei {},{}, {} Hz)	{} crtc {} ({}x{} at {},{}, {} Hz)	{} crtc {} ({}x{} ad {},{}, {} Hz)
+D3DKMT {} ({}x{} bei {},{}, {} Hz, {})	D3DKMT {} ({}x{} at {},{}, {} Hz, {})	D3DKMT {} ({}x{} ad {},{}, {} Hz, {})
+{} Zeilen, sichtbar ab Zaehlerstand {}	{} lines, visible from counter {}	{} versūs, vīsibilēs ā numerō {}
+Zeilen geschaetzt	Lines estimated	Versūs aestimātī
+Reduziert	Reduced	Dēminūtum
+Dateidialog: {}	File dialog: {}	Dialogus documentōrum: {}
+Hintergrundbild wählen	Choose background image	Imāginem fundī ēligere
+Kein Dateidialog gefunden (zenity oder kdialog installieren)	No file dialog found (install zenity or kdialog)	Nūllus dialogus documentōrum inventus (zenity aut kdialog īnstitue)
+{} ist kein unterstütztes Bild	{} is not a supported image	{} imāgō sustentāta nōn est
+Token von {}	Token of {}	Tessera {}
+Refresh-Token von {}	Refresh token of {}	Tessera renovātiōnis {}
+Namen anzeigen	Show name	Nōmen ostendere

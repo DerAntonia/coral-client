@@ -213,7 +213,7 @@ const ATLAS_MAX_SIDE: u32 = 8192;
 
 pub struct FontAtlas {
     pub bind_group: wgpu::BindGroup,
-    // Geteilt: ein zweiter Atlas (andere Schrift fuer einzelne Anzeigen, s. build_shared) muss
+    // Geteilt: ein zweiter Atlas (andere Schrift fuer einzelne Anzeigen, s. build_in_background) muss
     // an dieselben Pipelines passen -- wgpu verlangt dafuer DASSELBE Layout-Objekt.
     pub bind_group_layout: Arc<wgpu::BindGroupLayout>,
     glyphs: HashMap<char, GlyphInfo>,
@@ -257,6 +257,27 @@ struct AtlasPixels {
     descent_px: f32,
 }
 
+// Ein Atlas, der noch gerastert wird (s. FontAtlas::build_in_background).
+pub struct PendingFont {
+    kind: FontKind,
+    rx: std::sync::mpsc::Receiver<AtlasPixels>,
+}
+
+impl PendingFont {
+    pub fn kind(&self) -> FontKind {
+        self.kind
+    }
+
+    // Fertig? Dann hochladen. Ok(None) = noch nicht, Err = der Thread ist ohne Ergebnis weg.
+    pub fn try_finish(&self, device: &wgpu::Device, queue: &wgpu::Queue, bind_group_layout: Arc<wgpu::BindGroupLayout>) -> Result<Option<FontAtlas>, ()> {
+        match self.rx.try_recv() {
+            Ok(pixels) => Ok(Some(FontAtlas::from_pixels(device, queue, pixels, self.kind, bind_group_layout))),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(()),
+        }
+    }
+}
+
 impl FontAtlas {
     // Die Installation kommt von aussen: sie wird beim Start einmal geoeffnet (und dort
     // auch geprueft) und spaeter ebenso fuer Block-Texturen gebraucht.
@@ -266,22 +287,32 @@ impl FontAtlas {
         installation: &mut assets::MinecraftInstallation,
         kind: FontKind,
     ) -> Result<Self, assets::AssetsError> {
-        Self::build_shared(device, queue, installation, kind, Arc::new(create_layout(device)))
+        let pixels = build_pixels(installation, kind)?;
+        Ok(Self::from_pixels(device, queue, pixels, kind, Arc::new(create_layout(device))))
     }
 
-    // Wie build, aber mit dem Layout eines schon bestehenden Atlas -- fuer einen zweiten Atlas
-    // mit anderer Schrift, der in dieselben Pipelines passt.
-    pub fn build_shared(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        installation: &mut assets::MinecraftInstallation,
-        kind: FontKind,
-        bind_group_layout: Arc<wgpu::BindGroupLayout>,
-    ) -> Result<Self, assets::AssetsError> {
-        let pixels = build_pixels(installation, kind)?;
+    // Ein zweiter Atlas mit anderer Schrift, der mit dem Layout eines schon bestehenden in
+    // dieselben Pipelines passt (s. PendingFont::try_finish). Gerastert in einem eigenen Thread:
+    // eine TTF braucht dafuer 200 bis 300 ms, und der Schrift-Tab will alle auf einmal -- im
+    // Hauptthread stand dabei gut eine Sekunde lang alles. Die Minecraft-Schrift (unter 1 ms,
+    // braucht die Installation) kommt vorher noch hier.
+    pub fn build_in_background(installation: &mut assets::MinecraftInstallation, kind: FontKind) -> Result<PendingFont, assets::AssetsError> {
+        let minecraft = build_minecraft(installation)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let pixels = match kind.ttf() {
+                Some(spec) => build_ttf(&minecraft, spec),
+                None => minecraft,
+            };
+            let _ = tx.send(pixels);
+        });
+        Ok(PendingFont { kind, rx })
+    }
+
+    fn from_pixels(device: &wgpu::Device, queue: &wgpu::Queue, pixels: AtlasPixels, kind: FontKind, bind_group_layout: Arc<wgpu::BindGroupLayout>) -> Self {
         let (coverage_view, sampler) = upload_atlas(device, queue, &pixels, kind);
         let bind_group = make_bind_group(device, &bind_group_layout, &coverage_view, &sampler, None);
-        Ok(Self {
+        Self {
             bind_group,
             bind_group_layout,
             glyphs: pixels.glyphs,
@@ -296,7 +327,7 @@ impl FontAtlas {
             coverage_view,
             sampler,
             pack: None,
-        })
+        }
     }
 
     // Die Schriften der geladenen Resourcepacks einsetzen (None = keine).
@@ -351,6 +382,14 @@ impl FontAtlas {
         self.descent_px
     }
 
+    // Wo die Oberkante des "A" unter dem Zeilenanfang steht, in Font-Pixeln. Bei der
+    // Minecraft-Schrift 0, DM Sans reicht hoeher hinaus (negativ) -- daran richtet sich der
+    // Schreibcursor aus, sonst steht er unter den Buchstaben.
+    pub fn cap_top_px(&self) -> f32 {
+        let top = *DM_SANS_QUARTERS.end();
+        self.placed.get(&(top, 'A')).map_or(0.0, |p| self.ascent_px + p.offset[1] / (top as f32 / 4.0))
+    }
+
     // Nur fuer Vorschub/Breite (Font-Pixel) -- gezeichnet wird ueber place().
     //
     // Mit Resourcepack-Schriften (s. PackGlyphCache) gilt: Zeichen aus eigenen Schriften und
@@ -360,6 +399,7 @@ impl FontAtlas {
     pub fn glyph(&self, ch: char) -> Option<GlyphInfo> {
         match self.resolve(ch)? {
             Resolved::Base(c) => self.glyphs.get(&c).copied(),
+            Resolved::Shifted(c, dy) => self.glyphs.get(&c).map(|g| GlyphInfo { offset_px: [g.offset_px[0], g.offset_px[1] + dy], ..*g }),
             Resolved::Pack(g) => Some(GlyphInfo {
                 uv_min: [0.0; 2],
                 uv_max: [0.0; 2],
@@ -376,7 +416,7 @@ impl FontAtlas {
     pub fn vanilla_advance(&self, ch: char) -> f32 {
         match self.resolve(ch) {
             Some(Resolved::Pack(g)) => g.advance,
-            Some(Resolved::Base(c)) => self.vanilla_advance.get(&c).copied().unwrap_or(6.0),
+            Some(Resolved::Base(c) | Resolved::Shifted(c, _)) => self.vanilla_advance.get(&c).copied().unwrap_or(6.0),
             None => 6.0,
         }
     }
@@ -386,7 +426,10 @@ impl FontAtlas {
         if ch as u32 >= protocol::nbt::FONT_CHAR_FIRST {
             let (font, orig) = protocol::nbt::font_char_origin(ch)?;
             if let Some(g) = pack.and_then(|p| p.fonts.fonts.get(&*font)).and_then(|f| f.get(&orig)) {
-                return Some(Resolved::Pack(*g));
+                return Some(match g.text_shift {
+                    Some(dy) if self.glyphs.contains_key(&orig) => Resolved::Shifted(orig, dy),
+                    _ => Resolved::Pack(*g),
+                });
             }
             // Schrift unbekannt oder ohne dieses Zeichen: wie die Standardschrift.
             return self.resolve(orig);
@@ -420,7 +463,13 @@ impl FontAtlas {
         if !p.snap {
             return (p, x);
         }
-        snap_in(if bold { &self.placed_bold } else { &self.placed }, ch, scale, p, x)
+        // Die Subpixel-Fassungen liegen unter dem Zeichen selbst, nicht unter seinem Pack-Code.
+        let (ch, dy) = match self.resolve(ch) {
+            Some(Resolved::Shifted(c, dy)) => (c, dy),
+            _ => (ch, 0.0),
+        };
+        let (gesetzt, x) = snap_in(if bold { &self.placed_bold } else { &self.placed }, ch, scale, shifted(p, -dy, scale), x);
+        (shifted(gesetzt, dy, scale), x)
     }
 
     // Um wie viel ein Text verschoben gezeichnet wird, damit er am schaerfsten aussieht.
@@ -437,8 +486,9 @@ impl FontAtlas {
 
     // Wo und wie gross ein Zeichen bei Faktor `scale` gezeichnet wird.
     pub fn place(&self, ch: char, scale: f32) -> Option<PlacedGlyph> {
-        let ch = match self.resolve(ch)? {
-            Resolved::Base(c) => c,
+        let (ch, dy) = match self.resolve(ch)? {
+            Resolved::Base(c) => (c, 0.0),
+            Resolved::Shifted(c, dy) => (c, dy),
             Resolved::Pack(g) => {
                 let (uv_min, uv_max) = self.pack.as_ref()?.slot(&g)?;
                 return Some(PlacedGlyph {
@@ -453,13 +503,13 @@ impl FontAtlas {
             }
         };
         if let Some(p) = pick_placed(&self.placed, ch, scale) {
-            return Some(p);
+            return Some(shifted(p, dy, scale));
         }
         let g = self.glyphs.get(&ch)?;
         Some(PlacedGlyph {
             uv_min: g.uv_min,
             uv_max: g.uv_max,
-            offset: [g.offset_px[0] * scale, g.offset_px[1] * scale],
+            offset: [g.offset_px[0] * scale, (g.offset_px[1] + dy) * scale],
             size: [g.size_px[0] * scale, g.size_px[1] * scale],
             snap: false,
             pack: false,
@@ -471,8 +521,12 @@ impl FontAtlas {
     // in Font-Pixeln. None, wo es keinen gibt (Minecraft-Schrift, Pack- und Ersatzzeichen,
     // s. has_bold) -- dort zeichnet der Aufrufer wie Vanilla zweimal mit einem Pixel Versatz.
     pub fn place_bold(&self, ch: char, scale: f32) -> Option<(PlacedGlyph, f32)> {
-        let Resolved::Base(ch) = self.resolve(ch)? else { return None };
-        Some((pick_placed(&self.placed_bold, ch, scale)?, *self.bold_advance.get(&ch)?))
+        let (ch, dy) = match self.resolve(ch)? {
+            Resolved::Base(c) => (c, 0.0),
+            Resolved::Shifted(c, dy) => (c, dy),
+            Resolved::Pack(_) => return None,
+        };
+        Some((shifted(pick_placed(&self.placed_bold, ch, scale)?, dy, scale), *self.bold_advance.get(&ch)?))
     }
 }
 
@@ -547,6 +601,11 @@ fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, posi
 
 // Die fuer Faktor `scale` gerasterte Fassung, sonst die naechstgroessere (verkleinern ist
 // weicher als vergroessern) skaliert; ueber der groessten wird die groesste vergroessert.
+// Ein gesetzter Glyph `dy` Font-Pixel tiefer (s. Resolved::Shifted).
+fn shifted(p: PlacedGlyph, dy: f32, scale: f32) -> PlacedGlyph {
+    PlacedGlyph { offset: [p.offset[0], p.offset[1] + dy * scale], ..p }
+}
+
 fn pick_placed(placed: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32) -> Option<PlacedGlyph> {
     if placed.is_empty() {
         return None;
@@ -568,6 +627,9 @@ fn pick_placed(placed: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32) 
 enum Resolved {
     Base(char),
     Pack(assets::PackGlyph),
+    // Gewoehnlicher Text aus einer verschobenen Kopie der Standardschrift (s.
+    // PackGlyph::text_shift): in der eingestellten Schrift, so viele Font-Pixel tiefer.
+    Shifted(char, f32),
 }
 
 // Privater Unicode-Bereich der BMP -- dort legen Server ihre Symbole ab.
@@ -632,7 +694,7 @@ impl PackGlyphCache {
         let u = self.fonts.unihex.as_ref()?.glyphs.get(&ch)?;
         // Seite UNIHEX_PAGE, Zelle (Codepunkt, 0): s. slot. 16 Zeilen auf 8 Font-Pixel, die
         // Oberkante 7 ueber der Grundlinie wie bei der Bitmap-Schrift.
-        Some(assets::PackGlyph { page: Some(UNIHEX_PAGE), cell: [ch as u32, 0, u.width(), 16], scale: 0.5, ascent: 7.0, advance: u.advance() })
+        Some(assets::PackGlyph { page: Some(UNIHEX_PAGE), cell: [ch as u32, 0, u.width(), 16], scale: 0.5, ascent: 7.0, advance: u.advance(), text_shift: None })
     }
 
     // UV-Rechteck der Zelle im Blatt; laedt sie beim ersten Mal hoch.

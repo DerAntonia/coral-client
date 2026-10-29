@@ -8,6 +8,12 @@ impl App {
     // das "g" tiefer als die Minecraft-Zelle und beruehrte die naechste Zeile. Fuer
     // die Minecraft-Schrift ergibt das unveraendert Vanillas 9 Pixel.
     pub(crate) fn chat_line_height(&self, gpu: &GpuState) -> f32 {
+        let abstand = 1.0 + self.settings.chat_line_spacing as f32 / 100.0;
+        (self.chat_text_height(gpu) * abstand).round()
+    }
+
+    // So hoch wie der Text einer Chatzeile, ohne Zeilenabstand (Tooltips bleiben dicht).
+    pub(crate) fn chat_text_height(&self, gpu: &GpuState) -> f32 {
         let f = &gpu.font_atlas;
         ((f.ascent_px() + f.descent_px() + 1.0) * self.chat_scale()).ceil()
     }
@@ -134,6 +140,39 @@ impl App {
         (zeilen, deckkraft)
     }
 
+    // Chat im Spiel wie Bedrock: oben verankert. Jede Zeile hat einen festen Platz (ihre Nummer
+    // seit Beginn, s. chat_lines_total); gezeigt werden die juengsten, die noch nicht
+    // ausgeblendet sind, hoechstens chat_lines. Der Anfang gleitet: blendet oben eine Nachricht
+    // aus, ruecken alle gleitend nach oben. Neue Nachrichten sind sofort da, auch wenn sie den
+    // vollen Chat weiterschieben (s. tick_ui_anim).
+    #[allow(clippy::too_many_arguments)]
+    fn build_chat_bedrock(&self, gpu: &GpuState, block: Rect, scale: f32, line_h: f32, deckkraft: f32, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
+        let max = self.settings.chat_lines as usize;
+        // Doppelt so viele holen: was oben gerade hinausgleitet, ist auch noch zu sehen.
+        let (lines, alphas) = self.chat_wrapped_tail_faded(gpu, block.w - 4.0, scale, 2 * max);
+        let gesamt = self.chat_lines_total as f32;
+        let lebend = lines.len().min(max) as f32;
+        self.chat_bedrock_target.set((gesamt - lebend, gesamt));
+        let (anfang, ende) = self.chat_bedrock_anim.unwrap_or((gesamt - lebend, gesamt));
+        let unten = block.y + block.h;
+        let n = lines.len();
+        for (j, (line, a)) in lines.iter().zip(&alphas).enumerate() {
+            let nummer = gesamt - (n - j) as f32;
+            let herein = (ende - nummer).clamp(0.0, 1.0);
+            let y = block.y + (nummer - anfang) * line_h + (1.0 - herein) * line_h;
+            let deckung = a * herein * (1.0 - (y + line_h - unten) / line_h).clamp(0.0, 1.0) * (1.0 - (block.y - y) / line_h).clamp(0.0, 1.0);
+            if deckung <= 0.0 {
+                continue;
+            }
+            let zeile = Rect { y, h: line_h, ..block };
+            if deckkraft > 0.0 {
+                let (y0, y1) = (y.round(), (y + line_h).round());
+                rects.push(UiRect { rect: Rect { y: y0, h: y1 - y0, ..block }, color: [0.0, 0.0, 0.0, deckkraft * deckung], ..UiRect::FLAT });
+            }
+            self.draw_chat_lines(gpu, std::slice::from_ref(line), zeile, scale, line_h, rects, texts, None, &[deckung], None);
+        }
+    }
+
     // Zeilen von unten nach oben in `rect` setzen. Links werden unterstrichen und -- wenn
     // `hits` da ist -- als Klickflaeche gemerkt (s. chat_click).
     pub(crate) fn draw_chat_lines(
@@ -156,8 +195,11 @@ impl App {
         let top = rect.y + rect.h - lines.len() as f32 * line_h;
         let underline_y = (gpu.font_atlas.ascent_px() + 1.0) * scale;
         let underline_h = (scale / 2.0).round().max(1.0);
+        // Mit Zeilenabstand steht der Text mittig in seiner Zeile.
+        let text_dy = ((line_h - self.chat_text_height(gpu)) / 2.0).max(0.0).round();
         for (i, line) in lines.iter().enumerate() {
             let y = top + i as f32 * line_h;
+            let ty = y + text_dy;
             if max_bottom.is_some_and(|unten| y + line_h > unten) {
                 break;
             }
@@ -168,9 +210,9 @@ impl App {
                 farbe[3] *= alpha;
                 let w = gpu.measure_text(&span.text, scale);
                 push_span_shadow(texts, span.shadow);
-                texts.push(UiText { text: span.text.clone(), x: x.round(), y, color: farbe, scale });
+                texts.push(UiText { text: span.text.clone(), x: x.round(), y: ty, color: farbe, scale });
                 if span.link.is_some() {
-                    rects.push(UiRect { rect: Rect { x: x.round(), y: (y + underline_y).round(), w: w.round(), h: underline_h }, color: farbe, ..UiRect::FLAT });
+                    rects.push(UiRect { rect: Rect { x: x.round(), y: (ty + underline_y).round(), w: w.round(), h: underline_h }, color: farbe, ..UiRect::FLAT });
                 }
                 if span.link.is_some() || span.action.is_some() {
                     if let Some(hits) = hits.as_deref_mut() {
@@ -302,7 +344,7 @@ impl App {
         // Vorschlaegen liegt -- ausgespart wird aber nur, was NACH dem Chat-Hintergrund kam.
         if let Some((tooltip, texte_ab, flaechen_ab)) = self.build_chat_overlay_body(gpu, rects, texts) {
             let scale = self.chat_scale();
-            self.build_chat_tooltip(gpu, &tooltip, scale, self.chat_line_height(gpu), rects, texts, texte_ab, flaechen_ab);
+            self.build_chat_tooltip(gpu, &tooltip, scale, self.chat_text_height(gpu), rects, texts, texte_ab, flaechen_ab);
         }
     }
 
@@ -324,18 +366,33 @@ impl App {
             // GESCHLOSSEN: die juengsten Zeilen am eingestellten Ort, Hintergrund nur hinter
             // Zeilen, die es auch gibt.
             let block = self.hud_chat_rect(gpu);
-            let (lines, alphas) = self.chat_wrapped_tail_faded(gpu, block.w - 4.0, scale, self.settings.chat_lines as usize);
+            if self.settings.chat_bedrock {
+                self.build_chat_bedrock(gpu, block, scale, line_h, deckkraft, rects, texts);
+                return None;
+            }
+            // Neue Nachrichten gleiten von unten herein (s. chat_rise): alles steht um `rise`
+            // Zeilen zu tief, unten blendet die neue Zeile ein, oben die verdraengte aus.
+            let rise = self.chat_rise;
+            let (lines, mut alphas) = self.chat_wrapped_tail_faded(gpu, block.w - 4.0, scale, self.settings.chat_lines as usize + rise.ceil() as usize);
+            let unten = block.y + block.h;
+            let flaeche = Rect { y: block.y + rise * line_h, ..block };
+            for (i, a) in alphas.iter_mut().enumerate() {
+                let y = flaeche.y + flaeche.h - (lines.len() - i) as f32 * line_h;
+                let unten_drin = 1.0 - (y + line_h - unten) / line_h;
+                let oben_drin = 1.0 - (block.y - y) / line_h;
+                *a *= unten_drin.clamp(0.0, 1.0) * oben_drin.clamp(0.0, 1.0);
+            }
             if !lines.is_empty() {
                 if deckkraft > 0.0 {
                     // Je Zeile ein Streifen, damit der Hintergrund mit seiner Nachricht ausblendet.
-                    let top = block.y + block.h - lines.len() as f32 * line_h;
+                    let top = flaeche.y + flaeche.h - lines.len() as f32 * line_h;
                     for (i, alpha) in alphas.iter().enumerate() {
                         let y = (top + i as f32 * line_h).round();
                         let y2 = (top + (i + 1) as f32 * line_h).round();
                         rects.push(UiRect { rect: Rect { x: block.x, y, w: block.w, h: y2 - y }, color: dunkel(deckkraft * alpha), ..UiRect::FLAT });
                     }
                 }
-                self.draw_chat_lines(gpu, &lines, block, scale, line_h, rects, texts, None, &alphas, None);
+                self.draw_chat_lines(gpu, &lines, flaeche, scale, line_h, rects, texts, None, &alphas, None);
             }
         } else {
             // OFFEN: ueber der Eingabezeile, volle Breite, mit Mausrad durch den ganzen Verlauf
@@ -353,6 +410,10 @@ impl App {
             let sichtbar_basis = (block.h / line_h).round().max(1.0) as usize;
             let max_scroll = alle.len().saturating_sub(sichtbar_basis);
             let scroll = self.chat_scroll.min(max_scroll);
+            // Gezeichnet wird gleitend: Ausschnitt fuer die ganze Zeile darunter, eine Zeile
+            // mehr oben, alles um den Bruchteil tiefer (s. unten).
+            let gleitend = self.chat_scroll_glide.stand.clamp(0.0, max_scroll as f32);
+            let ganz = gleitend.floor() as usize;
 
             // Solange unter dem Chat noch Platz ist, kostet eine Radstufe KEINE Zeile: der
             // Block waechst stattdessen um eine Zeile nach unten. Die unterste Nachricht
@@ -364,9 +425,10 @@ impl App {
             // sie war, und alles darunter wandert um GENAU eine Zeile. Deshalb braucht das
             // keine Animation -- es bewegt sich von sich aus mit der Radgeschwindigkeit.
             let max_wachstum = (self.chat_extend_max(gpu) / line_h).floor().max(0.0) as usize;
-            let (wachstum, anfang, ende) = chat_scroll_layout(alle.len(), sichtbar_basis, max_wachstum, scroll);
+            let (wachstum, anfang, ende) = chat_scroll_layout(alle.len(), sichtbar_basis, max_wachstum, ganz);
             let sichtbar = sichtbar_basis + wachstum;
-            let zeichenflaeche = Rect { h: block.h + wachstum as f32 * line_h, ..block };
+            let wachstum_f = gleitend.min(max_wachstum as f32);
+            let zeichenflaeche = Rect { h: block.h + wachstum_f * line_h, ..block };
 
             // Fuer die mitwandernde Textauswahl zaehlt, wo der Text STEHT, nicht welcher
             // Ausschnitt gezeigt wird. Beides zusammen -- Blaettern und Wachsen -- ergibt
@@ -377,7 +439,7 @@ impl App {
             // Verlauf wird genau an ihrer Oberkante abgeschnitten: NICHT neu umgebrochen --
             // die Zeilen darueber bleiben stehen, nur was darunter lag faellt weg.
             let getippt = self.chat_input.as_ref().is_some_and(|f| !f.text().is_empty());
-            let abschneiden = if getippt && wachstum > 0 { Some(block.y + block.h) } else { None };
+            let abschneiden = if getippt && wachstum_f > 0.0 { Some(block.y + block.h) } else { None };
             // Hintergrund und Scrollbalken folgen dem, was man WIRKLICH sieht: beim
             // Abschneiden wieder nur bis zur Eingabezeile, sonst bis ganz hinunter.
             let sichtbereich = if abschneiden.is_some() { block } else { zeichenflaeche };
@@ -386,7 +448,29 @@ impl App {
             }
             let (texte_ab, flaechen_ab) = (texts.len(), rects.len());
             let mut hits = Vec::new();
-            self.draw_chat_lines(gpu, &alle[anfang..ende], zeichenflaeche, scale, line_h, rects, texts, Some(&mut hits), &[], abschneiden);
+            // Was das Wachsen nicht schon nach unten geschoben hat, rueckt der Text selbst: in
+            // Summe immer genau der Bruchteil einer Zeile. Die Zeile, die oben hereingleitet,
+            // erscheint erst, wenn sie ganz drin ist; unten verschwindet die herausgleitende.
+            // Ganz unten gleiten neue Nachrichten von unten herein wie im Spiel (s. chat_rise).
+            // Zeilen am Rand blenden anteilig aus, statt zu springen.
+            let rise = if self.chat_scroll == 0 { self.chat_rise_open } else { 0.0 };
+            let schub = ((gleitend - ganz as f32) - (wachstum_f - wachstum as f32) + rise) * line_h;
+            let flaeche = Rect { y: zeichenflaeche.y + schub, ..zeichenflaeche };
+            let (oben, unten) = (zeichenflaeche.y, zeichenflaeche.y + zeichenflaeche.h);
+            let mut von = anfang.saturating_sub(1 + rise.ceil() as usize);
+            let deckung = |i: usize, von: usize| {
+                let y = flaeche.y + flaeche.h - (ende - von - i) as f32 * line_h;
+                (1.0 - (y + line_h - unten) / line_h).clamp(0.0, 1.0) * (1.0 - (oben - y) / line_h).clamp(0.0, 1.0)
+            };
+            // Ganz verdeckte Zeilen oben fallen weg (keine unsichtbaren Links); unten haelt
+            // bis_unten sie ab.
+            while von < ende && deckung(0, von) <= 0.0 {
+                von += 1;
+            }
+            let alphas: Vec<f32> = (0..ende - von).map(|i| deckung(i, von)).collect();
+            let bis_unten = unten + line_h - 0.01;
+            let bis_unten = Some(abschneiden.map_or(bis_unten, |a| a.min(bis_unten)));
+            self.draw_chat_lines(gpu, &alle[von..ende], flaeche, scale, line_h, rects, texts, Some(&mut hits), &alphas, bis_unten);
             // Tooltip des Abschnitts unter dem Zeiger (HoverEvent, s. nbt::SpanAction::hover).
             let (cx, cy) = self.cursor_pos;
             let tooltip = hits.iter().find(|(r, _)| r.contains(cx, cy)).and_then(|(_, h)| h.action.as_ref()?.hover.clone());
@@ -398,7 +482,7 @@ impl App {
                 rects.push(UiRect { rect: spur, color: [1.0, 1.0, 1.0, 0.12], ..UiRect::FLAT });
                 let anteil = sichtbar as f32 / alle.len() as f32;
                 let daumen_h = (spur.h * anteil).max(12.0);
-                let pos = 1.0 - scroll as f32 / max_scroll as f32;
+                let pos = 1.0 - gleitend / max_scroll as f32;
                 rects.push(UiRect {
                     rect: Rect { x: spur.x, y: spur.y + (spur.h - daumen_h) * pos, w: spur.w, h: daumen_h },
                     color: [1.0, 1.0, 1.0, 0.55],
@@ -463,7 +547,7 @@ impl App {
         // push_caret): zwei verschieden blinkende Cursor im selben Programm saehen nach einem
         // Fehler aus. Steht an der Cursorstelle im Text.
         let text_y = rect.y + 3.0 + cursor_zeile as f32 * line_h + 1.0;
-        self.push_caret(rects, Rect { x: cursor_x.round(), y: text_y, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_NORMAL) }, COLOR_CARET);
+        self.push_caret(rects, gpu.caret_rect(cursor_x.round(), text_y, UI_SCALE_NORMAL));
 
         selection_boundary(texts);
         self.build_chat_history_list(gpu, feld.history(), deckkraft, rects, texts);
@@ -513,21 +597,25 @@ impl App {
         // Neueste zuerst: `scroll` Eintraege vom neuesten Ende uebersprungen, dann so viele
         // aeltere, wie Platz haben.
         let max_scroll = verlauf.len().saturating_sub(platz);
-        let scroll = self.chat_history_scroll.min(max_scroll);
-        let eintraege: Vec<&String> = verlauf.iter().rev().skip(scroll).take(platz).collect();
-        let h = eintraege.len() as f32 * zeile_h;
+        let gleitend = self.chat_history_glide.stand.clamp(0.0, max_scroll as f32);
+        let eintraege: Vec<(usize, &String)> = verlauf.iter().rev().enumerate().skip(gleitend.floor() as usize).take(platz + 1).collect();
+        let h = verlauf.len().min(platz) as f32 * zeile_h;
         if deckkraft > 0.0 {
             rects.push(UiRect { rect: Rect { h, ..flaeche }, color: [0.0, 0.0, 0.0, deckkraft], ..UiRect::FLAT });
         }
         let textbreite = flaeche.w - 12.0;
         let (mx, my) = self.cursor_pos;
-        for (i, eintrag) in eintraege.iter().enumerate() {
-            let zeile = Rect { x: flaeche.x, y: flaeche.y + i as f32 * zeile_h, w: flaeche.w, h: zeile_h };
+        for (k, eintrag) in eintraege {
+            // Gleitend; nur ganz sichtbare Eintraege.
+            let zeile = Rect { x: flaeche.x, y: flaeche.y + (k as f32 - gleitend) * zeile_h, w: flaeche.w, h: zeile_h };
+            if zeile.y < flaeche.y - 0.5 || zeile.y + zeile_h > flaeche.y + h + 0.5 {
+                continue;
+            }
             if zeile.contains(mx, my) {
                 rects.push(UiRect { rect: zeile, color: [1.0, 1.0, 1.0, 0.12], ..UiRect::FLAT });
             }
             // Zu lange Eintraege hinten kuerzen.
-            let mut sichtbar = (*eintrag).clone();
+            let mut sichtbar = eintrag.clone();
             if gpu.measure_text(&sichtbar, UI_SCALE_SMALL) > textbreite {
                 while !sichtbar.is_empty() && gpu.measure_text(&format!("{sichtbar}..."), UI_SCALE_SMALL) > textbreite {
                     sichtbar.pop();
@@ -535,14 +623,14 @@ impl App {
                 sichtbar.push_str("...");
             }
             texts.push(UiText { text: sichtbar, x: zeile.x + 4.0, y: zeile.y + 2.0, color: COLOR_WHITE, scale: UI_SCALE_SMALL });
-            hits.push((zeile, (*eintrag).clone()));
+            hits.push((zeile, eintrag.clone()));
         }
         // Scrollbalken, wenn nicht alles hineinpasst -- oben = neueste.
         if max_scroll > 0 {
             let spur = Rect { x: flaeche.x + flaeche.w - 4.0, y: flaeche.y, w: 3.0, h };
             rects.push(UiRect { rect: spur, color: [1.0, 1.0, 1.0, 0.12], ..UiRect::FLAT });
             let daumen_h = (h * platz as f32 / verlauf.len() as f32).max(10.0);
-            let pos = scroll as f32 / max_scroll as f32;
+            let pos = gleitend / max_scroll as f32;
             rects.push(UiRect { rect: Rect { y: spur.y + (h - daumen_h) * pos, h: daumen_h, ..spur }, color: [1.0, 1.0, 1.0, 0.55], ..UiRect::FLAT });
         }
         *self.chat_history_hits.borrow_mut() = hits;
@@ -564,7 +652,7 @@ impl App {
         push_typed_marker(texts);
         texts.push(UiText { text: wert.to_string(), x: feld.x + 12.0, y: ty, color: theme::text(), scale: UI_SCALE_NORMAL });
         if fokus {
-            self.push_caret(rects, Rect { x: caret_x, y: ty, w: CARET_WIDTH_PX, h }, theme::text());
+            self.push_caret(rects, gpu.caret_rect(caret_x, ty, UI_SCALE_NORMAL));
         }
     }
 
@@ -743,7 +831,7 @@ impl App {
     // Schreibcursor zeichnen: `ziel` ist, wo er jetzt hingehoert. Eine Stelle fuer alle
     // Eingabefelder (Chat, Wert-, Namens-, Adress- und Suchfelder): sie gleiten (s. CARET_GLIDE)
     // und blinken gleich -- sichtbar ab der letzten Bewegung, dann halb an, halb aus.
-    pub(crate) fn push_caret(&self, rects: &mut Vec<UiRect>, ziel: Rect, color: [f32; 4]) {
+    pub(crate) fn push_caret(&self, rects: &mut Vec<UiRect>, ziel: Rect) {
         let jetzt = Instant::now();
         self.caret_drawn.set(Some((ziel.x, ziel.y)));
         let gleich = |a: &Rect| a.y == ziel.y && a.h == ziel.h;
@@ -753,7 +841,7 @@ impl App {
             _ => CaretAnim { from_x: ziel.x, to: ziel, start: jetzt, seen: jetzt },
         };
         self.caret_anim.set(Some(CaretAnim { seen: jetzt, ..a }));
-        let [r, g, b, alpha] = color;
+        let [r, g, b, alpha] = theme::accent_2();
         let alpha = alpha * caret_alpha(jetzt.duration_since(a.start));
         rects.push(UiRect { rect: Rect { x: a.x(jetzt), ..ziel }, color: [r, g, b, alpha], ..UiRect::FLAT });
     }
@@ -852,7 +940,21 @@ impl App {
             return;
         }
         chat_log::append(&spans.iter().map(|s| s.text.as_str()).collect::<String>());
-        self.chat_messages.push_back(linkify_chat(spans));
+        let spans = linkify_chat(spans);
+        // Der geschlossene Chat rueckt um die Zeilen der neuen Nachricht hoch, gleitend (s.
+        // chat_rise). Gedeckelt, damit eine Flut nicht ewig nachlaeuft.
+        if let Some(gpu) = self.gpu.as_ref() {
+            let _schrift = self.area_font_scope(gpu, ShadowArea::Chat);
+            let scale = self.chat_scale();
+            let breite = self.hud_chat_rect(gpu).w - 4.0;
+            let n = wrap_chat_message(&spans, breite, |t| gpu.measure_text(t, scale)).len();
+            self.chat_rise = (self.chat_rise + n as f32).min(self.settings.chat_lines as f32);
+            self.chat_lines_total += n as u64;
+            let breite = self.chat_open_rect(gpu).w - 12.0;
+            let n = wrap_chat_message(&spans, breite, |t| gpu.measure_text(t, scale)).len();
+            self.chat_rise_open = (self.chat_rise_open + n as f32).min(self.settings.chat_lines_open as f32);
+        }
+        self.chat_messages.push_back(spans);
         self.chat_times.push_back(Instant::now());
         if self.chat_messages.len() > CHAT_MAX_MESSAGES {
             self.chat_times.pop_front();
@@ -872,6 +974,9 @@ impl App {
         // weggeschoben zu werden (Vanilla: ChatHud.addVisibleMessage).
         if self.chat_scroll > 0 {
             self.chat_scroll += 1;
+            // Auch der gleitende Stand, sonst glitte die Ansicht eine Zeile nach.
+            self.chat_scroll_glide.ziel += 1.0;
+            self.chat_scroll_glide.stand += 1.0;
         }
     }
 
@@ -1306,7 +1411,7 @@ impl App {
         }
         if self.screen == MenuScreen::SettingsLightLevels {
             self.light_search.extend(text.chars().filter(|c| !c.is_control()));
-            self.light_scroll = 0;
+            self.light_scroll = Default::default();
             return true;
         }
         false
@@ -1409,6 +1514,12 @@ impl App {
                     let _ = cb.set_text(text);
                 }
             }
+            // Screen.defaultHandleGameClickEvent: ohne Nachfrage an den Server.
+            ClickAction::Custom { id, payload } => {
+                if let Some(tx) = &self.outgoing_tx {
+                    let _ = tx.send(protocol::packets::custom_click_action_payload(&id, payload.as_ref()));
+                }
+            }
         }
     }
 
@@ -1455,6 +1566,8 @@ impl App {
         // sonst laege er ueber dem Text. Ansicht wieder ganz unten.
         self.chat_scroll = 0;
         self.chat_history_scroll = 0;
+        self.chat_scroll_glide.jump(0.0);
+        self.chat_history_glide.jump(0.0);
         if let Some(gpu) = self.gpu.as_ref() {
             let eingabe = self.chat_input_rect(gpu);
             self.cursor_pos = (gpu.size().0 / 2.0, eingabe.y + eingabe.h + 2.0 * Self::chat_input_line_h(gpu));

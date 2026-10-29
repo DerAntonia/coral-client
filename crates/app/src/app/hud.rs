@@ -407,6 +407,8 @@ impl App {
                 self.settings.chat_lines = defaults.chat_lines;
                 self.settings.chat_lines_open = defaults.chat_lines_open;
                 self.settings.chat_fade_secs = defaults.chat_fade_secs;
+                self.settings.chat_line_spacing = defaults.chat_line_spacing;
+                self.settings.chat_bedrock = defaults.chat_bedrock;
             }
             HudElement::ShieldCooldown => {
                 self.settings.hud_shield_cd_x = defaults.hud_shield_cd_x;
@@ -710,7 +712,7 @@ impl App {
                 Self::end_text_area(gpu, &mut texts);
                 self.build_arrow_hud(gpu, &mut sprites, &mut texts);
                 self.begin_text_area(gpu, &mut texts, ShadowArea::Hotbar);
-                self.build_armor_hud(gpu, &mut sprites, &mut texts);
+                self.build_armor_hud(gpu, &mut rects, &mut sprites, &mut texts);
                 Self::end_text_area(gpu, &mut texts);
                 if self.settings.module_keystrokes && self.conn_status == ConnStatus::Connected {
                     self.push_keystrokes(gpu, &mut rects, &mut texts);
@@ -853,13 +855,18 @@ impl App {
     }
 
     // GUI-Skalierung aus einer Einstellung: 0 heisst Auto (Vanillas "Auto", so gross wie das
-    // 320x240-Grundraster erlaubt), 1..4 sind Vanillas feste Stufen x1..x4.
+    // 320x240-Grundraster erlaubt), sonst die feste Stufe, hoechstens inventory::max_gui_scale.
     pub(crate) fn gui_scale_of(setting: u32, screen: (f32, f32)) -> f32 {
         if setting == 0 {
             inventory::gui_scale(screen)
         } else {
-            setting.clamp(1, 4) as f32
+            setting.clamp(1, inventory::max_gui_scale(screen)) as f32
         }
+    }
+
+    // Groesste feste Stufe fuer die Plus-Knoepfe der Skalierungen.
+    pub(crate) fn max_gui_scale_setting(&self) -> u32 {
+        self.gpu.as_ref().map_or(4, |g| inventory::max_gui_scale(g.size()))
     }
 
     // Skalierung des Inventarfensters bzw. der Hotbar -- zwei getrennte Einstellungen, weil
@@ -1702,7 +1709,7 @@ impl App {
 
     // Ruestungs-HUD im Spiel: nur mit Verbindung, nicht als Zuschauer und nur, wenn man
     // ueberhaupt etwas traegt.
-    pub(crate) fn build_armor_hud(&self, gpu: &GpuState, sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
+    pub(crate) fn build_armor_hud(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>) {
         if !self.settings.module_armor_hud || self.conn_status != ConnStatus::Connected || self.game_mode == GAME_MODE_SPECTATOR {
             return;
         }
@@ -1711,7 +1718,7 @@ impl App {
         if teile.iter().all(Option::is_none) {
             return;
         }
-        self.push_armor_hud(gpu, teile, getragen.map(|t| t.is_none()), sprites, texts);
+        self.push_armor_hud(gpu, teile, getragen.map(|t| t.is_none()), rects, sprites, texts);
     }
 
     // Einmal je Tick: das getragene Teil je Slot merken (s. armor_last_worn).
@@ -1770,12 +1777,14 @@ impl App {
 
     // Die Teile an ihren Plaetzen (s. armor_hud::cells), je mit der Haltbarkeit an der
     // eingestellten Stelle -- im Spiel und als Vorschau im HUD-Editor.
-    // `ausgezogen`: das Teil liegt nur im Inventar -- sein Bild halb durchsichtig, die Zahl nicht.
+    // `ausgezogen`: das Teil liegt nur im Inventar -- sein Bild blass, die Zahl nicht. Solange
+    // eins abgelegt ist, haben die noch getragenen einen gelben Rahmen.
     pub(crate) fn push_armor_hud(
         &self,
         gpu: &GpuState,
         teile: [Option<&protocol::item::ItemStack>; 4],
         ausgezogen: [bool; 4],
+        rects: &mut Vec<UiRect>,
         sprites: &mut Vec<UiSprite>,
         texts: &mut Vec<UiText>,
     ) {
@@ -1789,14 +1798,20 @@ impl App {
         let (x0, y0) = (rect.x + m.rand[0], rect.y + m.rand[1]);
         self.begin_text_area(gpu, texts, ShadowArea::ArmorHud);
         let text_h = gpu.text_height(m.text_scale);
+        let etwas_abgelegt = teile.iter().zip(ausgezogen).any(|(t, aus)| t.is_some() && aus);
         for ((stack, zelle), ausgezogen) in teile.into_iter().zip(zellen).zip(ausgezogen) {
             let (Some(stack), Some(zelle)) = (stack, zelle) else { continue };
             let bild = if hochkant { (x0, y0 + zelle as f32 * schritt) } else { (x0 + zelle as f32 * schritt, y0) };
+            if etwas_abgelegt && !ausgezogen {
+                // Knapp ausserhalb des Bilds, ein Bildpixel breit.
+                let r = Rect { x: bild.0.round() - m.px, y: bild.1.round() - m.px, w: m.size + 2.0 * m.px, h: m.size + 2.0 * m.px };
+                rects.push(UiRect::framed(r, [0.0; 4], m.px, m.px, COLOR_ARMOR_KEPT));
+            }
             let erstes = sprites.len();
             self.push_item_icon_only(sprites, stack, bild.0.round(), bild.1.round(), m.size);
             if ausgezogen {
                 for s in &mut sprites[erstes..] {
-                    s.color[3] *= 0.5;
+                    s.color[3] *= 0.3;
                 }
             }
             let Some(rest) = world::item_registry::item_name(stack.item_id).and_then(|name| durability_points(stack, name)) else { continue };
@@ -2002,7 +2017,7 @@ impl App {
             .shown_effects
             .iter()
             .filter(|(_, e)| !nur_symbol || e.show_icon())
-            .map(|(&effect, e)| EffectEntry { effect, ambient: e.ambient(), amplifier: e.amplifier, remaining: e.remaining(now), received: e.duration })
+            .map(|(&effect, e)| EffectEntry { effect, ambient: e.ambient(), amplifier: e.amplifier, remaining: e.remaining(now), exact: e.remaining_exact(now), received: e.duration })
             .collect();
         liste.sort_by(effect_order);
         liste
@@ -2018,7 +2033,7 @@ impl App {
         if !liste.is_empty() || !beispiel {
             return liste;
         }
-        let e = |effect: i32, remaining: i32| EffectEntry { effect, ambient: false, amplifier: 0, remaining, received: remaining };
+        let e = |effect: i32, remaining: i32| EffectEntry { effect, ambient: false, amplifier: 0, remaining, exact: remaining as f64, received: remaining };
         let mut liste = vec![e(protocol::packets::MOB_EFFECT_SPEED, 3600), e(4, 2400), e(18, 900)];
         liste.sort_by(effect_order);
         liste

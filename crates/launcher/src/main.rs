@@ -18,20 +18,31 @@
 
 #[cfg(target_os = "linux")]
 mod desktop_entry;
+mod hero;
+mod i18n;
+mod style;
+mod title;
 mod update;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use assets::{Candidate, GameSource};
 use eframe::egui;
+use i18n::tr;
 
 use update::{Progress, Release};
 
 // Muss zur MC_VERSION im Client passen (crates/app/src/main.rs).
 const MC_VERSION: &str = "1.21.11";
+
+// Fenstergroesse: nur das Startbild, bzw. die Einstellungen (s. Launcher::set_page).
+const BILD_GROESSE: [f32; 2] = [500.0, 330.0];
+const EINSTELLUNGEN_GROESSE: [f32; 2] = [1000.0, 660.0];
+const EINSTELLUNGEN_MIN: [f32; 2] = [780.0, 540.0];
 
 // Pfad des laufenden Launchers, beim Start festgehalten: nach einem Selbst-Update zeigt
 // current_exe() unter Linux auf die ersetzte, geloeschte Datei ("... (deleted)").
@@ -48,15 +59,20 @@ fn main() -> eframe::Result {
         #[cfg(target_os = "linux")]
         desktop_entry::install(&exe);
     }
-    let installed = LauncherConf::load().installed;
+    let conf = LauncherConf::load();
+    i18n::set_language(conf.lang);
+    let installed = conf.installed;
     move_client_from_launcher_dir(&installed);
     name_client_with_version(&installed);
     update::cleanup_old_files(&client_path(&installed));
+    // Laeuft der Client schon, gleich die Logs (s. Launcher::new), sonst nur das Startbild.
+    let laeuft = running_client();
+    let (groesse, min) = if laeuft.is_some() { (EINSTELLUNGEN_GROESSE, EINSTELLUNGEN_MIN) } else { (BILD_GROESSE, BILD_GROESSE) };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Coral Client Launcher").with_app_id("coral-client-launcher").with_inner_size([560.0, 620.0]).with_min_inner_size([420.0, 380.0]),
+        viewport: egui::ViewportBuilder::default().with_title("Coral Client Launcher").with_app_id("coral-client-launcher").with_inner_size(groesse).with_min_inner_size(min),
         ..Default::default()
     };
-    eframe::run_native("Coral Client Launcher", options, Box::new(|cc| Ok(Box::new(Launcher::new(&cc.egui_ctx)))))
+    eframe::run_native("Coral Client Launcher", options, Box::new(move |cc| Ok(Box::new(Launcher::new(&cc.egui_ctx, laeuft)))))
 }
 
 enum UpdateState {
@@ -83,13 +99,48 @@ struct Launcher {
     releases: Vec<Release>,
     // In der Versionsauswahl gewaehlter Tag; None = die installierte Version.
     chosen_tag: Option<String>,
-    client: Option<Child>,
+    // Prozess-ID des laufenden Clients -- auch eines, den ein frueherer Launcher gestartet hat
+    // (s. running_client); alle CLIENT_SCAN neu nachgesehen.
+    client: Option<u32>,
+    client_scan: Instant,
+    // Seit wann SIGTERM geschickt ist -- der Knopf zaehlt mit (s. log_section).
+    stopping: Option<Instant>,
     status: Option<String>,
     configs: Vec<String>,
     config: String,
     config_edit: Option<ConfigEdit>,
     game_data: GameData,
     log: ClientLog,
+    page: Page,
+    hero: hero::Hero,
+    title: title::Title,
+}
+
+/// Seiten der Seitenleiste. Auf der Startseite der Spielen-Knopf und das Wichtigste in Kurzform,
+/// auf den anderen die vollstaendigen Einstellungen.
+#[derive(Clone, Copy, PartialEq)]
+enum Page {
+    Start,
+    Installation,
+    Configs,
+    Updates,
+    Diagnose,
+    Launcher,
+}
+
+impl Page {
+    const ALL: [Page; 6] = [Page::Start, Page::Installation, Page::Configs, Page::Updates, Page::Diagnose, Page::Launcher];
+
+    fn title(self) -> &'static str {
+        match self {
+            Page::Start => "Start",
+            Page::Installation => "Installation",
+            Page::Configs => "Configs",
+            Page::Updates => "Updates",
+            Page::Diagnose => "Log & Flags",
+            Page::Launcher => "Launcher",
+        }
+    }
 }
 
 /// Was der Client nach stdout/stderr schreibt (client.log, s. play), zum Mitlesen im Launcher.
@@ -172,7 +223,8 @@ enum ConfigEditKind {
 }
 
 impl Launcher {
-    fn new(ctx: &egui::Context) -> Self {
+    fn new(ctx: &egui::Context, laeuft: Option<u32>) -> Self {
+        style::apply(ctx);
         let mut launcher = Self {
             candidates: Vec::new(),
             selected: assets::load_selection(),
@@ -182,13 +234,18 @@ impl Launcher {
             releases: Vec::new(),
             chosen_tag: None,
             client_check: ClientCheck::Unknown,
-            client: None,
+            client: laeuft,
+            client_scan: Instant::now(),
+            stopping: None,
             status: None,
             configs: Vec::new(),
             config: assets::startup_config(None),
             config_edit: None,
             game_data: GameData::Status(assets::game_data_status(MC_VERSION)),
             log: ClientLog::default(),
+            page: if laeuft.is_some() { Page::Diagnose } else { Page::Start },
+            hero: hero::Hero::start(ctx),
+            title: title::Title::start(ctx),
         };
         launcher.reload_configs();
         launcher.rescan();
@@ -256,14 +313,14 @@ impl Launcher {
 
     fn game_data_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         use assets::GameDataStatus as S;
-        ui.heading("Spieldaten");
-        let gruen = egui::Color32::from_rgb(90, 180, 90);
-        let orange = egui::Color32::from_rgb(210, 150, 60);
-        let rot = egui::Color32::from_rgb(220, 90, 90);
+        ui.heading(tr("Spieldaten"));
+        let gruen = style::SUCCESS;
+        let orange = style::WARNING;
+        let rot = style::DANGER;
         let installation_ok = self.selected_candidate().is_some_and(|c| c.files.is_ok());
         let mut starten = false;
         let mut knopf = |ui: &mut egui::Ui, text: &str| {
-            if ui.add_enabled(installation_ok, egui::Button::new(text)).on_disabled_hover_text("Erst eine nutzbare Installation waehlen.").clicked() {
+            if ui.add_enabled(installation_ok, egui::Button::new(tr(text))).on_disabled_hover_text(tr("Erst eine nutzbare Installation waehlen.")).clicked() {
                 starten = true;
             }
         };
@@ -272,27 +329,27 @@ impl Launcher {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     let schritt = step.lock().map(|s| s.clone()).unwrap_or_default();
-                    ui.label(format!("Extrahiere aus Minecraft {MC_VERSION} ... {schritt}"));
+                    ui.label(tr(&format!("Extrahiere aus Minecraft {MC_VERSION} ... {schritt}")));
                 });
             }
             GameData::Failed(e) => {
-                ui.colored_label(rot, format!("Extrahieren fehlgeschlagen: {e}"));
+                ui.colored_label(rot, tr(&format!("Extrahieren fehlgeschlagen: {e}")));
                 knopf(ui, "Erneut versuchen");
             }
             GameData::Status(status) => {
                 ui.horizontal(|ui| {
                     match status {
-                        S::Current => ui.colored_label(gruen, "aktuell"),
-                        S::Missing => ui.colored_label(orange, "fehlen -- ohne sie fehlen Entity-Modelle und das Kreativinventar"),
-                        S::JarChanged => ui.colored_label(orange, "Minecraft wurde aktualisiert oder eine andere Installation gewaehlt -- neu extrahieren"),
-                        S::DumperChanged => ui.colored_label(orange, "passen nicht zu diesem Client -- neu extrahieren"),
+                        S::Current => ui.colored_label(gruen, tr("aktuell")),
+                        S::Missing => ui.colored_label(orange, tr("fehlen -- ohne sie fehlen Entity-Modelle und das Kreativinventar")),
+                        S::JarChanged => ui.colored_label(orange, tr("Minecraft wurde aktualisiert oder eine andere Installation gewaehlt -- neu extrahieren")),
+                        S::DumperChanged => ui.colored_label(orange, tr("passen nicht zu diesem Client -- neu extrahieren")),
                     };
                     knopf(ui, if *status == S::Missing { "Extrahieren" } else { "Neu extrahieren" });
                 });
             }
         }
         if let Some(dir) = assets::game_data_dir(MC_VERSION) {
-            ui.weak(format!("Ordner: {}", dir.display()));
+            ui.weak(tr(&format!("Ordner: {}", dir.display())));
         }
         if starten {
             self.start_extract(ctx);
@@ -414,10 +471,11 @@ impl Launcher {
             }
         }
 
-        if let Some(child) = &mut self.client {
-            if let Ok(Some(exit)) = child.try_wait() {
-                self.client = None;
-                self.status = (!exit.success()).then(|| format!("Client mit Fehler beendet ({exit}). Log: {}", log_path().display()));
+        if self.client_scan.elapsed() >= CLIENT_SCAN {
+            self.client_scan = Instant::now();
+            self.client = running_client();
+            if self.client.is_none() {
+                self.stopping = None;
             }
         }
     }
@@ -452,7 +510,7 @@ impl Launcher {
     }
 
     fn config_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Config");
+        ui.heading(tr("Config"));
         let editing = self.config_edit.is_some();
         let running = self.client.is_some();
 
@@ -468,19 +526,19 @@ impl Launcher {
                 });
                 let start = |kind, name: String| Some(ConfigEdit { kind, name, error: None, focus: true });
                 let mut edit = None;
-                if ui.button("Neu").on_hover_text("Leere Config mit Standardwerten").clicked() {
+                if ui.button(tr("Neu")).on_hover_text(tr("Leere Config mit Standardwerten")).clicked() {
                     edit = start(ConfigEditKind::New, String::new());
                 }
-                if ui.button("Kopieren").on_hover_text("Neue Config als Kopie der gewaehlten").clicked() {
-                    edit = start(ConfigEditKind::Duplicate, format!("{} Kopie", self.config));
+                if ui.button(tr("Kopieren")).on_hover_text(tr("Neue Config als Kopie der gewaehlten")).clicked() {
+                    edit = start(ConfigEditKind::Duplicate, tr(&format!("{} Kopie", self.config)).into_owned());
                 }
                 // Umbenennen/Loeschen nicht, waehrend der Client mit ihr laeuft -- er wuerde beim
                 // naechsten Speichern die alte Datei wieder anlegen.
-                if ui.add_enabled(!running, egui::Button::new("Umbenennen")).clicked() {
+                if ui.add_enabled(!running, egui::Button::new(tr("Umbenennen"))).clicked() {
                     edit = start(ConfigEditKind::Rename, self.config.clone());
                 }
                 let deletable = !running && self.configs.len() > 1;
-                if ui.add_enabled(deletable, egui::Button::new("Loeschen")).on_disabled_hover_text("Die letzte Config bleibt stehen.").clicked() {
+                if ui.add_enabled(deletable, egui::Button::new(tr("Loeschen"))).on_disabled_hover_text(tr("Die letzte Config bleibt stehen.")).clicked() {
                     match assets::delete_config(&self.config) {
                         Ok(()) => self.reload_configs(),
                         Err(e) => self.status = Some(format!("Loeschen fehlgeschlagen: {e}")),
@@ -500,11 +558,11 @@ impl Launcher {
         let mut cancel = false;
         if let Some(edit) = &mut self.config_edit {
             ui.horizontal(|ui| {
-                ui.label(match edit.kind {
+                ui.label(tr(match edit.kind {
                     ConfigEditKind::New => "Name der neuen Config:",
                     ConfigEditKind::Duplicate => "Name der Kopie:",
                     ConfigEditKind::Rename => "Neuer Name:",
-                });
+                }));
                 let field = ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(180.0));
                 if std::mem::take(&mut edit.focus) {
                     field.request_focus();
@@ -512,15 +570,15 @@ impl Launcher {
                 if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     apply = true;
                 }
-                if ui.button("OK").clicked() {
+                if ui.button(tr("OK")).clicked() {
                     apply = true;
                 }
-                if ui.button("Abbrechen").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button(tr("Abbrechen")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     cancel = true;
                 }
             });
             if let Some(error) = &edit.error {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                ui.colored_label(style::DANGER, tr(error));
             }
         }
         if cancel {
@@ -528,19 +586,19 @@ impl Launcher {
         } else if apply {
             self.apply_config_edit();
         }
-        ui.weak("Einstellungen werden im Client bearbeitet und in der gewaehlten Config gespeichert.");
+        ui.weak(tr("Einstellungen werden im Client bearbeitet und in der gewaehlten Config gespeichert."));
     }
 
     // Ausklappbarer Reiter mit den Debug-Flags. Gilt ab dem naechsten Start des Clients.
     fn flags_section(&mut self, ui: &mut egui::Ui) {
         let aktiv = self.conf.flags.len();
         let titel = if aktiv == 0 { "Flags".to_string() } else { format!("Flags ({aktiv} an)") };
-        egui::CollapsingHeader::new(titel).id_salt("flags").show(ui, |ui| {
-            ui.weak(format!("Diagnose-Ausgaben landen in {}. Gilt ab dem naechsten Start.", log_path().display()));
+        egui::CollapsingHeader::new(tr(&titel)).id_salt("flags").show(ui, |ui| {
+            ui.weak(tr(&format!("Diagnose-Ausgaben landen in {}. Gilt ab dem naechsten Start.", log_path().display())));
             let mut geaendert = false;
             for (name, label, hilfe) in DEBUG_FLAGS {
                 let mut an = self.conf.flags.iter().any(|f| f == name);
-                if ui.checkbox(&mut an, *label).on_hover_text(format!("{hilfe}\n\n{name}")).changed() {
+                if ui.checkbox(&mut an, tr(label)).on_hover_text(format!("{}\n\n{name}", tr(hilfe))).changed() {
                     geaendert = true;
                     if an {
                         self.conf.flags.push(name.to_string());
@@ -555,7 +613,8 @@ impl Launcher {
         });
     }
 
-    fn play(&mut self) {
+    /// Startet den Client; true, wenn er laeuft.
+    fn play(&mut self) -> bool {
         let path = client_path(&self.conf.installed);
         let log = std::fs::File::create(log_path());
         let mut command = Command::new(&path);
@@ -587,41 +646,54 @@ impl Launcher {
         }
         match command.spawn() {
             Ok(child) => {
-                self.client = Some(child);
+                self.client = Some(child.id());
                 self.status = None;
+                true
             }
-            Err(e) => self.status = Some(format!("{} liess sich nicht starten: {e}", path.display())),
+            Err(e) => {
+                self.status = Some(format!("{} liess sich nicht starten: {e}", path.display()));
+                false
+            }
         }
+    }
+
+    /// Client beenden: "-TERM" hoeflich (die Zeit seitdem zaehlt der Knopf), "-KILL" hart.
+    fn stop(&mut self, sig: &str) {
+        let Some(pid) = self.client else { return };
+        if sig == "-TERM" && self.stopping.is_none() {
+            self.stopping = Some(Instant::now());
+        }
+        signal(pid, sig);
     }
 
     fn installation_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Minecraft-Installation");
-            if ui.small_button("Neu suchen").clicked() {
+            ui.heading(tr("Minecraft-Installation"));
+            if ui.small_button(tr("Neu suchen")).clicked() {
                 self.rescan();
             }
         });
-        ui.label(format!("Gebraucht wird Minecraft {MC_VERSION}. Die Version muss dort schon einmal gestartet worden sein."));
+        ui.label(tr(&format!("Gebraucht wird Minecraft {MC_VERSION}. Die Version muss dort schon einmal gestartet worden sein.")));
         ui.add_space(4.0);
 
         let mut clicked = None;
         egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
             if self.candidates.is_empty() {
-                ui.label("Keine Installation gefunden.");
+                ui.label(tr("Keine Installation gefunden."));
             }
             for candidate in &self.candidates {
                 let is_selected = self.selected.as_ref() == Some(&candidate.source);
                 ui.horizontal(|ui| {
                     let text = match &candidate.version {
-                        Some(v) => format!("{}  ({v})", candidate.label),
-                        None => candidate.label.clone(),
+                        Some(v) => format!("{}  ({v})", tr(&candidate.label)),
+                        None => tr(&candidate.label).into_owned(),
                     };
                     if ui.radio(is_selected, text).on_hover_text(candidate.source.describe()).clicked() {
                         clicked = Some(candidate.source.clone());
                     }
                     match &candidate.files {
-                        Ok(_) => ui.colored_label(egui::Color32::from_rgb(90, 180, 90), "bereit"),
-                        Err(reason) => ui.colored_label(egui::Color32::from_rgb(210, 150, 60), "nicht nutzbar").on_hover_text(reason),
+                        Ok(_) => ui.colored_label(style::SUCCESS, tr("bereit")),
+                        Err(reason) => ui.colored_label(style::WARNING, tr("nicht nutzbar")).on_hover_text(reason),
                     };
                 });
             }
@@ -632,9 +704,9 @@ impl Launcher {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Eigener Ordner:");
-            ui.add(egui::TextEdit::singleline(&mut self.custom_path).hint_text("Pfad zu einem .minecraft-Ordner").desired_width(260.0));
-            if ui.add_enabled(!self.custom_path.trim().is_empty(), egui::Button::new("Hinzufuegen")).clicked() {
+            ui.label(tr("Eigener Ordner:"));
+            ui.add(egui::TextEdit::singleline(&mut self.custom_path).hint_text(tr("Pfad zu einem .minecraft-Ordner")).desired_width(260.0));
+            if ui.add_enabled(!self.custom_path.trim().is_empty(), egui::Button::new(tr("Hinzufuegen"))).clicked() {
                 let source = GameSource::Official { dir: PathBuf::from(self.custom_path.trim()) };
                 if !self.candidates.iter().any(|c| c.source == source) {
                     self.candidates.push(custom_candidate(source.clone()));
@@ -646,17 +718,17 @@ impl Launcher {
     }
 
     fn update_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Updates");
-        ui.label(format!("Installiert: {}", self.conf.installed));
+        ui.heading(tr("Updates"));
+        ui.label(tr(&format!("Installiert: {}", self.conf.installed)));
         let checkbox = ui
-            .checkbox(&mut self.conf.self_update, "Launcher mit aktualisieren")
-            .on_hover_text("Beim Herunterladen eines Updates auch den Launcher selbst ersetzen. Aus: nur der Client wird aktualisiert, den Launcher tauschst du bei Bedarf von Hand.");
+            .checkbox(&mut self.conf.self_update, tr("Launcher mit aktualisieren"))
+            .on_hover_text(tr("Beim Herunterladen eines Updates auch den Launcher selbst ersetzen. Aus: nur der Client wird aktualisiert, den Launcher tauschst du bei Bedarf von Hand."));
         if checkbox.changed() {
             self.conf.save();
         }
         let beta = ui
-            .checkbox(&mut self.conf.beta, "Beta-Versionen anzeigen")
-            .on_hover_text("Auch Vorabversionen (auf GitHub als Pre-release markiert) anbieten. Sie sind neuer, aber weniger getestet.");
+            .checkbox(&mut self.conf.beta, tr("Beta-Versionen anzeigen"))
+            .on_hover_text(tr("Auch Vorabversionen (auf GitHub als Pre-release markiert) anbieten. Sie sind neuer, aber weniger getestet."));
         if beta.changed() {
             self.conf.save();
             let busy = matches!(self.update, UpdateState::Checking(_) | UpdateState::Downloading { .. });
@@ -671,43 +743,43 @@ impl Launcher {
         ui.horizontal(|ui| match &self.update {
             UpdateState::Checking(_) => {
                 ui.spinner();
-                ui.label("Suche auf GitHub ...");
+                ui.label(tr("Suche auf GitHub ..."));
             }
             UpdateState::UpToDate(release) => {
-                ui.label("Aktuell.");
+                ui.label(tr("Aktuell."));
                 let (text, color, button) = match self.client_check {
-                    ClientCheck::Matches => ("Client geprueft.", egui::Color32::from_rgb(110, 190, 110), None),
-                    ClientCheck::Missing => ("Client fehlt.", egui::Color32::from_rgb(210, 150, 60), Some("Client herunterladen")),
-                    ClientCheck::Differs => ("Client weicht vom Release ab.", egui::Color32::from_rgb(210, 150, 60), Some("Neu herunterladen")),
+                    ClientCheck::Matches => ("Client geprueft.", style::SUCCESS, None),
+                    ClientCheck::Missing => ("Client fehlt.", style::WARNING, Some("Client herunterladen")),
+                    ClientCheck::Differs => ("Client weicht vom Release ab.", style::WARNING, Some("Neu herunterladen")),
                     ClientCheck::NoDigest => ("Client nicht pruefbar (keine Pruefsumme im Release).", ui.visuals().weak_text_color(), Some("Neu herunterladen")),
                     ClientCheck::Unknown => ("", ui.visuals().weak_text_color(), None),
                 };
                 if !text.is_empty() {
-                    ui.colored_label(color, text);
+                    ui.colored_label(color, tr(text));
                 }
                 if let Some(label) = button {
-                    if release.asset_for_platform().is_some() && ui.button(label).clicked() {
+                    if release.asset_for_platform().is_some() && ui.button(tr(label)).clicked() {
                         repair = Some(release.clone());
                     }
                 }
             }
             // Releases gibt es, aber alle sind Betas und der Schalter ist aus.
             UpdateState::NoRelease if !self.releases.is_empty() => {
-                ui.label("Noch keine stabile Version. Die Betas zeigt \"Beta-Versionen anzeigen\".");
+                ui.label(tr("Noch keine stabile Version. Die Betas zeigt \"Beta-Versionen anzeigen\"."));
             }
             UpdateState::NoRelease => {
-                ui.label(format!("{} hat noch kein Release.", update::REPO));
+                ui.label(tr(&format!("{} hat noch kein Release.", update::REPO)));
             }
             UpdateState::Available(release) => {
-                ui.label(format!("Neue Version: {}", release.name.as_deref().unwrap_or(&release.tag_name)));
+                ui.label(tr(&format!("Neue Version: {}", release.name.as_deref().unwrap_or(&release.tag_name))));
                 if release.asset_for_platform().is_some() {
-                    if ui.button("Herunterladen").clicked() {
+                    if ui.button(tr("Herunterladen")).clicked() {
                         action = Some(release.clone());
                     }
                 } else {
-                    ui.colored_label(egui::Color32::from_rgb(210, 150, 60), format!("(kein {} im Release)", release.client_asset_name()));
+                    ui.colored_label(style::WARNING, tr(&format!("(kein {} im Release)", release.client_asset_name())));
                 }
-                ui.hyperlink_to("auf GitHub", &release.html_url);
+                ui.hyperlink_to(tr("auf GitHub"), &release.html_url);
             }
             UpdateState::Downloading { progress, .. } => {
                 let progress = progress.lock().unwrap();
@@ -715,19 +787,19 @@ impl Launcher {
                 ui.add(egui::ProgressBar::new(fraction).show_percentage().desired_width(260.0));
             }
             UpdateState::Installed { tag, launcher_updated } => {
-                ui.label(format!("{tag} installiert."));
+                ui.label(tr(&format!("{tag} installiert.")));
                 // Der laufende Launcher ist noch die alte Fassung -- neu starten holt die neue.
-                if *launcher_updated && ui.button("Launcher neu starten").clicked() {
+                if *launcher_updated && ui.button(tr("Launcher neu starten")).clicked() {
                     restart = true;
                 }
             }
             UpdateState::Failed(e) => {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), e);
+                ui.colored_label(style::DANGER, tr(e));
             }
         });
         if let UpdateState::Available(release) = &self.update {
             if let Some(body) = release.body.as_deref().filter(|b| !b.trim().is_empty()) {
-                egui::CollapsingHeader::new("Aenderungen").show(ui, |ui| {
+                egui::CollapsingHeader::new(tr("Aenderungen")).show(ui, |ui| {
                     egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| ui.label(body));
                 });
             }
@@ -750,7 +822,7 @@ impl Launcher {
             self.restart(ctx);
         }
         let busy = matches!(self.update, UpdateState::Checking(_) | UpdateState::Downloading { .. });
-        if ui.add_enabled(!busy, egui::Button::new("Nach Updates suchen")).clicked() {
+        if ui.add_enabled(!busy, egui::Button::new(tr("Nach Updates suchen"))).clicked() {
             self.check_for_update(ctx);
         }
     }
@@ -769,13 +841,13 @@ impl Launcher {
             if r.tag_name == installiert {
                 text.push_str("  - installiert");
             }
-            text
+            tr(&text).into_owned()
         };
         let gewaehlt = self.chosen_tag.clone().unwrap_or_else(|| self.conf.installed.clone());
         let mut neu = None;
         let mut installieren = None;
         ui.horizontal(|ui| {
-            ui.label("Version:");
+            ui.label(tr("Version:"));
             let anzeige = self
                 .releases
                 .iter()
@@ -791,7 +863,7 @@ impl Launcher {
             });
             let release = self.releases.iter().find(|r| r.tag_name == gewaehlt);
             let moeglich = !busy && gewaehlt != self.conf.installed && release.is_some_and(|r| r.asset_for_platform().is_some());
-            if ui.add_enabled(moeglich, egui::Button::new("Installieren")).clicked() {
+            if ui.add_enabled(moeglich, egui::Button::new(tr("Installieren"))).clicked() {
                 installieren = release.cloned();
             }
         });
@@ -801,35 +873,103 @@ impl Launcher {
         installieren
     }
 
-    fn play_section(&mut self, ui: &mut egui::Ui) {
-        let client_exists = client_path(&self.conf.installed).is_file();
-        let installation_ok = self.selected_candidate().is_some_and(|c| c.files.is_ok());
-        let running = self.client.is_some();
-        let downloading = matches!(self.update, UpdateState::Downloading { .. });
-
-        let reason = if running {
-            Some("Client laeuft.".to_string())
+    /// Warum Spielen gerade nicht geht, und wo man es behebt; None = bereit.
+    fn play_blocker(&self) -> Option<(String, Page)> {
+        if self.client.is_some() {
+            Some(("Client laeuft.".to_string(), Page::Diagnose))
         } else if matches!(self.game_data, GameData::Extracting { .. }) {
-            Some("Spieldaten werden extrahiert ...".to_string())
-        } else if !client_exists {
-            Some(format!("{} fehlt -- ueber Updates herunterladen.", client_path(&self.conf.installed).display()))
-        } else if !installation_ok {
-            Some("Erst eine nutzbare Installation waehlen.".to_string())
+            Some(("Spieldaten werden extrahiert ...".to_string(), Page::Installation))
+        } else if matches!(self.update, UpdateState::Downloading { .. }) {
+            Some(("Update wird heruntergeladen ...".to_string(), Page::Updates))
+        } else if !client_path(&self.conf.installed).is_file() {
+            Some((format!("{} fehlt -- unter Updates herunterladen.", client_path(&self.conf.installed).display()), Page::Updates))
+        } else if self.selected_candidate().is_none_or(|c| c.files.is_err()) {
+            Some(("Erst unter Installation eine nutzbare Minecraft-Installation waehlen.".to_string(), Page::Installation))
+        } else if !matches!(self.game_data, GameData::Status(assets::GameDataStatus::Current | assets::GameDataStatus::JarChanged)) {
+            Some(("Erst die Spieldaten extrahieren.".to_string(), Page::Installation))
         } else {
             None
-        };
+        }
+    }
 
-        ui.horizontal(|ui| {
-            let button = egui::Button::new(egui::RichText::new("Spielen").size(20.0)).min_size(egui::vec2(140.0, 40.0));
-            if ui.add_enabled(reason.is_none() && !downloading, button).clicked() {
-                self.play();
+    /// Zwischen Startbild und Einstellungen wechselt auch die Fenstergroesse.
+    fn set_page(&mut self, ctx: &egui::Context, page: Page) {
+        let (war, wird) = (self.page == Page::Start, page == Page::Start);
+        self.page = page;
+        if war == wird {
+            return;
+        }
+        if wird {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(BILD_GROESSE.into()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(BILD_GROESSE.into()));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(EINSTELLUNGEN_GROESSE.into()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(EINSTELLUNGEN_MIN.into()));
+        }
+    }
+
+    /// Nur das Bild: Linksklick startet den Client und schliesst den Launcher, Rechtsklick
+    /// oeffnet die Einstellungen. Geht Starten nicht, landet man auf der Seite, die es behebt.
+    fn bild_ansicht(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(style::BG_APP)).show(ctx, |ui| {
+            let flaeche = ui.max_rect();
+            style::paint_hero(ui.painter(), flaeche, self.hero.texture());
+            if self.conf.hint {
+                style::paint_hint(ui.painter(), flaeche.min + egui::vec2(12.0, 12.0), self.title.texture(), &title::lines());
             }
-            if let Some(reason) = &reason {
-                ui.label(reason);
+            let klick = ui.interact(flaeche, ui.id().with("bild"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            if klick.secondary_clicked() {
+                self.set_page(ctx, Page::Installation);
+            } else if klick.clicked() {
+                match self.play_blocker() {
+                    Some((_, page)) => self.set_page(ctx, page),
+                    // Bleibt der Launcher offen, zeigt er die Logs -- wie beim Oeffnen mit laufendem Client.
+                    None if self.play() && self.conf.close_on_launch => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    None => self.set_page(ctx, Page::Diagnose),
+                }
             }
         });
-        if let Some(status) = &self.status {
-            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), status);
+    }
+
+    fn launcher_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading(tr("Sprache"));
+        ui.horizontal(|ui| {
+            for lang in i18n::Language::ALL {
+                if ui.selectable_label(self.conf.lang == lang, lang.label()).clicked() && self.conf.lang != lang {
+                    self.conf.lang = lang;
+                    self.conf.save();
+                    i18n::set_language(lang);
+                    // Der Hinweis im Startbild ist einmal gerastert -- in der neuen Sprache neu.
+                    self.title = title::Title::start(ui.ctx());
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.heading(tr("Startbild"));
+        if ui.checkbox(&mut self.conf.hint, tr("Hinweis oben links")).on_hover_text(tr("\u{201e}Linksklick für Start, Rechtsklick für Einstellungen\u{201c} über dem Bild.")).changed() {
+            self.conf.save();
+        }
+        if ui.checkbox(&mut self.conf.close_on_launch, tr("Launcher beim Start schließen")).on_hover_text(tr("Aus: nach dem Start bleibt der Launcher offen und zeigt die Logs.")).changed() {
+            self.conf.save();
+        }
+    }
+
+    fn sidebar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Coral Client").size(22.0));
+        ui.label(egui::RichText::new(concat!("Launcher v", env!("CARGO_PKG_VERSION"))).size(12.0).color(style::TEXT_2));
+        ui.add_space(18.0);
+        ui.spacing_mut().item_spacing.y = 4.0;
+        let update_da = matches!(self.update, UpdateState::Available(_));
+        for page in Page::ALL {
+            if style::nav_button(ui, &tr(page.title()), self.page == page, page == Page::Updates && update_da).clicked() {
+                self.set_page(ctx, page);
+            }
+        }
+        if self.client.is_some() {
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                ui.colored_label(style::SUCCESS, tr("Client laeuft"));
+            });
         }
     }
 
@@ -838,9 +978,23 @@ impl Launcher {
     fn log_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.log.refresh();
         ui.horizontal(|ui| {
-            ui.heading("Log");
-            if ui.small_button("Kopieren").clicked() {
+            ui.heading(tr("Log"));
+            if ui.small_button(tr("Kopieren")).clicked() {
                 ctx.copy_text(self.log.zeilen.join("\n"));
+            }
+            if self.client.is_some() {
+                // Nach SIGTERM: Sekunden seitdem, eine Nachkommastelle.
+                let term = match self.stopping {
+                    Some(seit) => format!("SIGTERM {:.1} s", seit.elapsed().as_secs_f32()).replace('.', ","),
+                    None => "SIGTERM".to_string(),
+                };
+                let knopf = |text: String, farbe| egui::Button::new(egui::RichText::new(text).color(style::TEXT_ON_ACCENT)).fill(farbe);
+                if ui.add(knopf(term, style::WARNING)).on_hover_text(tr("Hoeflich beenden")).clicked() {
+                    self.stop("-TERM");
+                }
+                if ui.add(knopf("SIGKILL".to_string(), style::DANGER)).on_hover_text(tr("Sofort hart beenden")).clicked() {
+                    self.stop("-KILL");
+                }
             }
             ui.label(egui::RichText::new(log_path().display().to_string()).small());
         });
@@ -848,7 +1002,7 @@ impl Launcher {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::both().id_salt("client_log").max_height(320.0).auto_shrink([false, true]).stick_to_bottom(true).show(ui, |ui| {
                 if self.log.zeilen.is_empty() {
-                    ui.label("Noch nichts -- der Client schreibt hierher, sobald er laeuft.");
+                    ui.label(tr("Noch nichts -- der Client schreibt hierher, sobald er laeuft."));
                 }
                 for zeile in &self.log.zeilen {
                     ui.add(egui::Label::new(egui::RichText::new(zeile).monospace()).extend());
@@ -865,27 +1019,45 @@ impl eframe::App for Launcher {
         // sonst zeichnet egui erst beim naechsten Mausereignis neu.
         if matches!(self.update, UpdateState::Downloading { .. }) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else if self.stopping.is_some() {
+            // Der SIGTERM-Knopf zaehlt Zehntelsekunden.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         } else if self.client.is_some() {
             // Haeufig genug, dass das Log beim Verbinden fluessig mitlaeuft.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Scrollbar, weil der aufgeklappte Flags-Reiter das Fenster sonst sprengt.
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                self.installation_section(ui);
-                ui.separator();
-                self.config_section(ui);
-                ui.separator();
-                self.game_data_section(ui, ctx);
-                ui.separator();
-                self.update_section(ui, ctx);
-                ui.separator();
-                self.flags_section(ui);
-                ui.separator();
-                self.play_section(ui);
-                ui.separator();
-                self.log_section(ui, ctx);
+        self.hero.poll(ctx);
+        self.title.poll(ctx);
+
+        if self.page == Page::Start {
+            self.bild_ansicht(ctx);
+            return;
+        }
+        egui::SidePanel::left("seiten")
+            .exact_width(200.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(style::BG_PANEL).inner_margin(egui::Margin::symmetric(12, 16)))
+            .show(ctx, |ui| self.sidebar(ui, ctx));
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(style::BG_APP).inner_margin(egui::Margin::same(20))).show(ctx, |ui| {
+            ui.label(egui::RichText::new(tr(self.page.title())).size(24.0));
+            if let Some(status) = &self.status {
+                ui.colored_label(style::DANGER, tr(status));
+            }
+            ui.add_space(4.0);
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.page {
+                Page::Installation => {
+                    style::card(ui, |ui| self.installation_section(ui));
+                    style::card(ui, |ui| self.game_data_section(ui, ctx));
+                }
+                Page::Configs => style::card(ui, |ui| self.config_section(ui)),
+                Page::Updates => style::card(ui, |ui| self.update_section(ui, ctx)),
+                Page::Diagnose => {
+                    style::card(ui, |ui| self.flags_section(ui));
+                    style::card(ui, |ui| self.log_section(ui, ctx));
+                }
+                Page::Launcher => style::card(ui, |ui| self.launcher_section(ui)),
+                Page::Start => {}
             });
         });
     }
@@ -959,6 +1131,44 @@ fn move_client_from_launcher_dir(installed: &str) {
     }
 }
 
+// So oft wird nachgesehen, ob der Client (noch) laeuft.
+const CLIENT_SCAN: Duration = Duration::from_secs(1);
+
+/// Prozess-ID eines laufenden Clients: ein Prozess, dessen Programm im Client-Ordner liegt und
+/// coral-client(-v...) heisst -- auch wenn die Datei inzwischen ersetzt wurde ("(deleted)").
+/// Nur unter Linux (/proc); sonst None.
+fn running_client() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let dir = client_dir();
+        for eintrag in std::fs::read_dir("/proc").ok()?.flatten() {
+            let Some(pid) = eintrag.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+            let Ok(exe) = std::fs::read_link(eintrag.path().join("exe")) else { continue };
+            let exe = exe.to_string_lossy();
+            let exe = Path::new(exe.strip_suffix(" (deleted)").unwrap_or(&exe));
+            let name = exe.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if exe.parent() == Some(dir.as_path()) && (name == "coral-client" || name.starts_with("coral-client-v")) {
+                return Some(pid);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+/// Signal an einen Prozess ("-TERM", "-KILL"). Unter Windows gibt es keine Signale: dort beendet
+/// taskkill hart (laufende Clients erkennt der Launcher dort ohnehin nicht, s. running_client).
+fn signal(pid: u32, sig: &str) {
+    #[cfg(unix)]
+    let _ = Command::new("kill").arg(sig).arg(pid.to_string()).status();
+    #[cfg(not(unix))]
+    {
+        let _ = sig;
+        let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).status();
+    }
+}
+
 fn log_path() -> PathBuf {
     assets::config_dir().unwrap_or_else(std::env::temp_dir).join("client.log")
 }
@@ -978,6 +1188,12 @@ struct LauncherConf {
     beta: bool,
     // Eingeschaltete Debug-Flags (Umgebungsvariablen aus DEBUG_FLAGS), s. flags_section.
     flags: Vec<String>,
+    // Hinweis oben links im Startbild (s. launcher_section).
+    hint: bool,
+    // Nach dem Start des Clients den Launcher schliessen (s. bild_ansicht).
+    close_on_launch: bool,
+    // Sprache des Launchers (s. i18n, launcher_section).
+    lang: i18n::Language,
 }
 
 /// Ein gespeicherter Schaltername, wie er heute heisst -- oder None, wenn es den Schalter nicht
@@ -1029,6 +1245,9 @@ impl LauncherConf {
             self_update: value("self_update").is_none_or(|v| v != "false"),
             beta: value("beta").is_some_and(|v| v == "true"),
             flags: value("flags").map(|v| v.split(',').filter_map(known_flag).collect()).unwrap_or_default(),
+            hint: value("hint").is_none_or(|v| v != "false"),
+            close_on_launch: value("close_on_launch").is_none_or(|v| v != "false"),
+            lang: value("lang").and_then(|v| i18n::Language::from_code(&v)).unwrap_or(i18n::Language::German),
         }
     }
 
@@ -1039,7 +1258,16 @@ impl LauncherConf {
             }
             let _ = std::fs::write(
                 path,
-                format!("installed={}\nself_update={}\nbeta={}\nflags={}\n", self.installed, self.self_update, self.beta, self.flags.join(",")),
+                format!(
+                    "installed={}\nself_update={}\nbeta={}\nflags={}\nhint={}\nclose_on_launch={}\nlang={}\n",
+                    self.installed,
+                    self.self_update,
+                    self.beta,
+                    self.flags.join(","),
+                    self.hint,
+                    self.close_on_launch,
+                    self.lang.code()
+                ),
             );
         }
     }

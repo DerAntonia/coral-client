@@ -156,6 +156,37 @@ pub fn ao_darkens(state: u32, full_cube: bool) -> bool {
     }
 }
 
+// Hoehe einer Schneeschicht in Achteln (1..=8), sonst None.
+pub fn snow_layers(state: u32) -> Option<u8> {
+    if block_name(state) != Some("snow") {
+        return None;
+    }
+    property(state, "layers")?.parse().ok()
+}
+
+// Bewusst ANDERS als Vanilla: eine Treppe aus Schneeschichten. Vanilla verteilt die Abdunklung
+// ueber die ganze Blockhoehe -- jede Stufenkante sitzt auf einer anderen Hoehe und bekam damit
+// einen anderen Ausschnitt (unterste Kante ~70 %, oberste ~95 %), und nur die Oberseite vor
+// Schicht 8 wurde dunkel (Schicht 8 zaehlt als Vollwuerfel, 1..7 nicht). Hier sieht jede Stufe
+// gleich aus: die Kante wird nur ueber ihren SICHTBAREN Teil interpoliert (unten in der Ecke
+// dunkel, oben hell), und eine hoehere Schicht daneben dunkelt die Oberseite ab wie eine Wand.
+
+// Unterkante des sichtbaren Teils einer Seitenflaeche (in Blockhoehe 0..1): die Oberseite einer
+// niedrigeren Schicht davor, sonst 0.
+pub fn snow_riser_bottom(own_layers: u8, front: u32) -> f32 {
+    snow_layers(front).filter(|&l| l < own_layers).map_or(0.0, |l| l as f32 / 8.0)
+}
+
+// AO-Flags eines Nachbarn fuer die Oberseite einer Schneeschicht: eine hoehere Schicht in
+// derselben Lage dunkelt ab.
+pub fn snow_top_flags(own_layers: u8, neighbor: u32, flags: u8) -> u8 {
+    if snow_layers(neighbor).is_some_and(|l| l > own_layers) {
+        flags | AO_DARKENS
+    } else {
+        flags
+    }
+}
+
 // Leuchtet dieser State? Nur die Frage "0 oder nicht" zaehlt. Aus Blocks.java (1.21.11)
 // herausgezogen: feste Werte ueber `.luminance(state -> N)`, zustandsabhaengige ueber `lit`,
 // Ladungen, Beeren usw. Gefaerbte und gewachste Varianten erben ihre Einstellungen dort per

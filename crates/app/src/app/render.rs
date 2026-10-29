@@ -2399,17 +2399,14 @@ impl App {
     // eigenen BlockEntity-Renderer und einer Entity-Textur. Ohne das bleibt ein Bett komplett
     // unsichtbar.
     //
-    // Gezeichnet wird nur, was in der Naehe liegt: BED_RENDER_DISTANCE deckt die uebliche
-    // Sichtweite ab, ohne bei einer weit geladenen Welt tausende Betten pro Frame anzufassen.
+    // Gezeichnet wird nur, was in der Naehe liegt (s. block_entity_shown) -- auch, damit eine
+    // weit geladene Welt nicht tausende Betten pro Frame anfasst.
     // Die Positionen kommen aus World::beds, dem Index, der beim Laden/Aendern gepflegt wird.
     // `eye`: der Bezugspunkt des Entity-Puffers -- alles darin ist augenrelativ (s.
     // build_entity_vertices), die Blockposition wird also davon abgezogen.
     pub(crate) fn emit_beds(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
-        const BED_RENDER_DISTANCE: f64 = 128.0;
-        let auge = self.physics.eye_pos();
         for (pos, state) in self.world.beds() {
-            let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > BED_RENDER_DISTANCE * BED_RENDER_DISTANCE {
+            if !self.block_entity_shown(pos) {
                 continue;
             }
             let Some(bett) = world::bed_instance(pos, state) else { continue };
@@ -2426,14 +2423,11 @@ impl App {
     // Shulkerkisten (ShulkerBoxBlockEntityRenderer) -- derselbe Weg wie die Betten, aus
     // demselben Index (World::beds fuehrt beide). Der Deckel folgt block_lids.
     pub(crate) fn emit_shulker_boxes(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
-        const SHULKER_RENDER_DISTANCE: f64 = 128.0;
-        let auge = self.physics.eye_pos();
         let t = self.tick_progress();
         let model = world::entity_model::shulker_box_model();
         for (pos, state) in self.world.beds() {
             let Some(kiste) = world::shulker_instance(pos, state) else { continue };
-            let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > SHULKER_RENDER_DISTANCE * SHULKER_RENDER_DISTANCE {
+            if !self.block_entity_shown(pos) {
                 continue;
             }
             let Some(tex) = self.entity_atlas.rect(kiste.texture) else { continue };
@@ -2466,6 +2460,19 @@ impl App {
 
     // Profil eines platzierten Kopfes merken: die Textur-Property wie bei Kopf-Items (s.
     // note_head_profile), geladen wird ueber request_head_skins.
+    // Block-Entities (Truhen, Betten, Schilder, ...) wie Vanilla nur in gezeichneten Chunks
+    // (BlockEntityRenderDispatcher laeuft ueber die kompilierten Sections). Sonst blieben sie
+    // nach dem Verkleinern der Sichtweite einzeln in der Luft stehen.
+    pub(crate) fn block_column_drawn(&self, pos: (i32, i32, i32)) -> bool {
+        self.render_limit_meshed.contains(&(pos.0.div_euclid(16), pos.2.div_euclid(16)))
+    }
+
+    // Gezeichneter Chunk und innerhalb der Block-Entity-Renderdistanz (vom Auge aus).
+    pub(crate) fn block_entity_shown(&self, pos: (i32, i32, i32)) -> bool {
+        let d = self.settings.block_entity_render_distance;
+        self.block_column_drawn(pos) && (d >= BLOCK_ENTITY_DISTANCE_MAX || self.near_eye(pos, d as f64))
+    }
+
     pub(crate) fn near_eye(&self, pos: (i32, i32, i32), abstand: f64) -> bool {
         let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
         (mitte - self.physics.eye_pos()).length_squared() <= abstand * abstand
@@ -2486,12 +2493,9 @@ impl App {
     // Platzierte Koepfe (SkullBlockEntityRenderer.render): am Boden auf der Blockmitte, an der
     // Wand ein Viertel Block von der Wand weg und 4 Pixel hoch, gedreht in 22.5-Grad-Stufen.
     pub(crate) fn emit_skulls(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
-        const SKULL_RENDER_DISTANCE: f64 = 64.0;
-        let auge = self.physics.eye_pos();
         for (pos, state) in self.world.beds() {
             let Some(kopf) = world::skull_instance(pos, state) else { continue };
-            let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > SKULL_RENDER_DISTANCE * SKULL_RENDER_DISTANCE {
+            if !self.block_entity_shown(pos) {
                 continue;
             }
             let Some((tex, hut)) = self.skull_texture_for(kopf.item, self.placed_heads.get(&pos).copied()) else { continue };
@@ -2510,12 +2514,9 @@ impl App {
     // y = 0, um Z halb gedreht). Frueher als Lebewesen eingebettet -- das stimmte nur fuer
     // den Stehend-Layer, die anderen Haltungen schwebten 1,5 Bloecke hoch.
     pub(crate) fn emit_statues(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
-        const STATUE_RENDER_DISTANCE: f64 = 64.0;
-        let auge = self.physics.eye_pos();
         for (pos, state) in self.world.beds() {
             let Some(statue) = world::statue_instance(pos, state) else { continue };
-            let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > STATUE_RENDER_DISTANCE * STATUE_RENDER_DISTANCE {
+            if !self.block_entity_shown(pos) {
                 continue;
             }
             let (Some(model), Some(tex)) = (world::model_data::layer_model(statue.layer), self.entity_atlas.rect(statue.texture)) else { continue };
@@ -2529,15 +2530,12 @@ impl App {
     // Doppeltruhe geht als Ganzes auf: Vanilla nimmt den groesseren Deckelstand beider Haelften
     // (ChestBlock.getAnimationProgressRetriever).
     pub(crate) fn emit_chests(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
-        const CHEST_RENDER_DISTANCE: f64 = 128.0;
-        let auge = self.physics.eye_pos();
         let t = self.tick_progress();
         let weihnachten = is_christmas();
         let deckel = |pos: &(i32, i32, i32)| self.block_lids.get(pos).map_or(0.0, |d| d.last + (d.progress - d.last) * t);
         for (pos, state) in self.world.beds() {
             let Some(truhe) = world::chest_instance(pos, state, weihnachten) else { continue };
-            let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > CHEST_RENDER_DISTANCE * CHEST_RENDER_DISTANCE {
+            if !self.block_entity_shown(pos) {
                 continue;
             }
             let Some(tex) = self.entity_atlas.rect(truhe.texture) else { continue };
@@ -2564,11 +2562,8 @@ impl App {
     // Augenrelativ wie emit_beds. Frueher standen die Schilder irgendwo im Himmel:
     // hier stand die absolute Blockposition in einem augenrelativen Puffer.
     pub(crate) fn emit_signs(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
-        const SIGN_RENDER_DISTANCE: f64 = 64.0;
-        let auge = self.physics.eye_pos();
         for &pos in self.signs.keys() {
-            let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > SIGN_RENDER_DISTANCE * SIGN_RENDER_DISTANCE {
+            if !self.block_entity_shown(pos) {
                 continue;
             }
             let Some((holz, art, grad)) = self.sign_at(pos) else { continue };
@@ -2723,9 +2718,10 @@ impl App {
         self.sky_module_mode() == Some(SkyMode::Solid)
     }
 
-    // Die Art des Moduls Himmel, solange es wirkt (an, und nur im Leistungs-Pfad).
+    // Die Art des Moduls Himmel, solange es wirkt (an, und nur im Leistungs-Pfad). Nicht beim
+    // Launcher-Bild: das zeigt die Szene bei ihrer eigenen Uhrzeit (Tag), nicht den Himmel der Config.
     pub(crate) fn sky_module_mode(&self) -> Option<SkyMode> {
-        (self.settings.module_sky_color_enabled && self.settings.render_path != 1).then_some(self.settings.sky_mode)
+        (self.settings.module_sky_color_enabled && self.settings.render_path != 1 && self.hero_fov.is_none()).then_some(self.settings.sky_mode)
     }
 
     // Die Weltzeit, nach der der Himmel aussieht: die echte, oder mit dem Modul (Feste
@@ -2733,7 +2729,7 @@ impl App {
     // Tageszyklus (days/daysLoop) ihren Himmel des Tages zeigen.
     pub(crate) fn sky_day_time(&self) -> i64 {
         // Einfarbig kennt keine Uhrzeit (die Zeile ist dort ausgegraut).
-        if self.settings.module_sky_color_enabled && self.settings.module_sky_fixed_time && self.settings.sky_mode != SkyMode::Solid {
+        if self.settings.module_sky_color_enabled && self.settings.module_sky_fixed_time && self.settings.sky_mode != SkyMode::Solid && self.hero_fov.is_none() {
             self.world_time_of_day.div_euclid(SKY_TIME_DAY as i64) * SKY_TIME_DAY as i64 + self.settings.module_sky_time as i64
         } else {
             self.world_time_of_day
@@ -4146,7 +4142,7 @@ impl App {
         let editiert = self.sign_edit_in_world(gpu).and(self.sign_edit.as_ref());
         for (&pos, text) in &self.signs {
             let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
-            if (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE {
+            if !self.block_column_drawn(pos) || (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE {
                 continue;
             }
             for (seite, vorn) in [(&text.front, true), (&text.back, false)] {

@@ -253,6 +253,12 @@ pub fn user_dir() -> Option<PathBuf> {
     Some(home_base()?.join(DIR_NAME))
 }
 
+/// Speicher-Ordner (~/coral-client/storage): Spieldaten aus dem Jar (s. storage.rs) und das
+/// Startbild des Launchers. Lag frueher im Datenordner, migrate_legacy_dirs zieht ihn um.
+pub fn storage_dir() -> Option<PathBuf> {
+    Some(user_dir()?.join("storage"))
+}
+
 /// Einmaliger Umzug nach der Umbenennung von mc-client zu Coral Client: jeder alte Ordner wird
 /// umbenannt, solange es den neuen noch nicht gibt. Gibt es beide, bleibt alles, wie es ist --
 /// dann hat schon ein neuer Start Daten angelegt, und Zusammenfuehren waere Raten. Launcher und
@@ -273,6 +279,15 @@ pub fn migrate_legacy_dirs() {
         if alt.is_file() && !neu.exists() {
             if let Err(e) = std::fs::rename(&alt, &neu) {
                 eprintln!("[ordner] {} nicht nach {} umbenannt: {e}", alt.display(), neu.display());
+            }
+        }
+    }
+    // Der Speicher lag im Datenordner; jetzt liegt er sichtbar im Benutzerordner.
+    if let (Some(alt), Some(neu)) = (data_dir().map(|d| d.join("storage")), storage_dir()) {
+        if alt.is_dir() && !neu.exists() {
+            let ergebnis = neu.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::rename(&alt, &neu));
+            if let Err(e) = ergebnis {
+                eprintln!("[ordner] {} nicht nach {} verschoben: {e}", alt.display(), neu.display());
             }
         }
     }

@@ -17,6 +17,8 @@ assets = { path = "../assets" }
 # Kleines Fenster ohne eigene Render-Pipeline. glow (OpenGL) statt wgpu: eframe 0.31 will
 # wgpu 24, der Client benutzt 22 -- zweimal wgpu zu bauen kostet Minuten fuer nichts.
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+# Das Hintergrundbild der Startseite dekodieren (vom Client gerendert, s. src/hero.rs).
+image = { version = "0.25", default-features = false, features = ["png"] }
 # GitHub-Releases abfragen und herunterladen; dieselbe reqwest-Version wie im auth-Crate.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 serde = { version = "1", features = ["derive"] }

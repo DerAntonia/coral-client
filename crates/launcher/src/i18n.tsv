@@ -1,0 +1,141 @@
+#	Uebersetzungen des Launchers: Deutsch (genau wie im Code) <TAB> Englisch <TAB> Latein.
+#	"{}" steht fuer einen eingesetzten Wert. Zeilen mit "#" am Anfang sind Kommentare.
+Start	Start	Initium
+Installation	Installation	Īnstitūtiō
+Configs	Configs	Cōnfigūrātiōnēs
+Updates	Updates	Renovātiōnēs
+Log & Flags	Log & flags	Ācta & signa
+Launcher	Launcher	Launcher
+Auswahl nicht gespeichert: {}	Selection not saved: {}	Ēlēctiō nōn servāta: {}
+Spieldaten	Game data	Data lūdī
+Erst eine nutzbare Installation waehlen.	Choose a usable installation first.	Prīmum īnstitūtiōnem ūtilem ēlige.
+Extrahiere aus Minecraft {} ... {}	Extracting from Minecraft {} ... {}	Ex Minecraft {} extrahō ... {}
+Extrahieren fehlgeschlagen: {}	Extraction failed: {}	Extractiō dēfēcit: {}
+Erneut versuchen	Try again	Iterum temptāre
+aktuell	up to date	recentia
+fehlen -- ohne sie fehlen Entity-Modelle und das Kreativinventar	missing -- without them entity models and the creative inventory are missing	dēsunt -- sine eīs exemplāria entium et inventārium creātīvum dēsunt
+Minecraft wurde aktualisiert oder eine andere Installation gewaehlt -- neu extrahieren	Minecraft was updated or another installation was chosen -- extract again	Minecraft renovātum est aut alia īnstitūtiō ēlēcta -- iterum extrahe
+passen nicht zu diesem Client -- neu extrahieren	do not match this client -- extract again	huic clientī nōn conveniunt -- iterum extrahe
+Extrahieren	Extract	Extrahere
+Neu extrahieren	Extract again	Iterum extrahere
+Ordner: {}	Folder: {}	Index: {}
+Neustart fehlgeschlagen: {} -- bitte {} von Hand starten.	Restart failed: {} -- please start {} by hand.	Novum initium dēfēcit: {} -- quaesō {} manū incipe.
+Config	Config	Cōnfigūrātiō
+Neu	New	Nova
+Leere Config mit Standardwerten	Empty config with default values	Cōnfigūrātiō vacua cum valōribus praescrīptīs
+Kopieren	Copy	Exscrībere
+Neue Config als Kopie der gewaehlten	New config as a copy of the selected one	Cōnfigūrātiō nova ut exemplar ēlēctae
+{} Kopie	{} copy	{} exemplar
+Umbenennen	Rename	Renōmināre
+Loeschen	Delete	Dēlēre
+Die letzte Config bleibt stehen.	The last config stays.	Ultima cōnfigūrātiō manet.
+Loeschen fehlgeschlagen: {}	Deleting failed: {}	Dēlēre dēfēcit: {}
+Name der neuen Config:	Name of the new config:	Nōmen cōnfigūrātiōnis novae:
+Name der Kopie:	Name of the copy:	Nōmen exemplāris:
+Neuer Name:	New name:	Nōmen novum:
+OK	OK	Bene
+Abbrechen	Cancel	Abrogāre
+Einstellungen werden im Client bearbeitet und in der gewaehlten Config gespeichert.	Settings are edited in the client and saved in the selected config.	Optiōnēs in cliente mūtantur et in cōnfigūrātiōne ēlēctā servantur.
+Flags	Flags	Signa
+Flags ({} an)	Flags ({} on)	Signa ({} incēnsa)
+Diagnose-Ausgaben landen in {}. Gilt ab dem naechsten Start.	Diagnostic output goes to {}. Applies from the next start.	Exitūs dīagnōsis in {} cadunt. Ā proximō initiō valet.
+{} liess sich nicht starten: {}	{} could not be started: {}	{} incipī nōn potuit: {}
+Minecraft-Installation	Minecraft installation	Īnstitūtiō Minecraft
+Neu suchen	Search again	Iterum quaerere
+Gebraucht wird Minecraft {}. Die Version muss dort schon einmal gestartet worden sein.	Minecraft {} is needed. The version must have been started there at least once.	Minecraft {} opus est. Versiō ibi iam semel incepta esse dēbet.
+Keine Installation gefunden.	No installation found.	Nūlla īnstitūtiō inventa.
+bereit	ready	parāta
+nicht nutzbar	not usable	inūtilis
+Eigener Ordner:	Custom folder:	Index proprius:
+Eigener Ordner	Custom folder	Index proprius
+Pfad zu einem .minecraft-Ordner	Path to a .minecraft folder	Via ad indicem .minecraft
+Hinzufuegen	Add	Addere
+Installiert: {}	Installed: {}	Īnstitūtum: {}
+Launcher mit aktualisieren	Update the launcher too	Launcher quoque renovāre
+Beim Herunterladen eines Updates auch den Launcher selbst ersetzen. Aus: nur der Client wird aktualisiert, den Launcher tauschst du bei Bedarf von Hand.	When downloading an update, also replace the launcher itself. Off: only the client is updated; you swap the launcher by hand if needed.	Cum renovātiō dēdūcitur, etiam ipsum launcher substituere. Nōn: sōlus cliēns renovātur, launcher sī opus est manū mūtās.
+Beta-Versionen anzeigen	Show beta versions	Versiōnēs beta ostendere
+Auch Vorabversionen (auf GitHub als Pre-release markiert) anbieten. Sie sind neuer, aber weniger getestet.	Also offer pre-release versions (marked as pre-release on GitHub). They are newer but less tested.	Etiam versiōnēs praeviās (in GitHub ut Pre-release notātās) offerre. Recentiōrēs sunt, sed minus probātae.
+Suche auf GitHub ...	Searching GitHub ...	In GitHub quaerō ...
+Aktuell.	Up to date.	Recēns.
+Client geprueft.	Client verified.	Cliēns probātus.
+Client fehlt.	Client missing.	Cliēns deest.
+Client herunterladen	Download client	Clientem dēdūcere
+Client weicht vom Release ab.	Client differs from the release.	Cliēns ā ēditiōne differt.
+Neu herunterladen	Download again	Iterum dēdūcere
+Client nicht pruefbar (keine Pruefsumme im Release).	Client cannot be verified (no checksum in the release).	Cliēns probārī nōn potest (nūlla summa probātiōnis in ēditiōne).
+Noch keine stabile Version. Die Betas zeigt "Beta-Versionen anzeigen".	No stable version yet. "Show beta versions" shows the betas.	Nūlla versiō stabilis adhūc. Versiōnēs beta ostendit "Versiōnēs beta ostendere".
+{} hat noch kein Release.	{} has no release yet.	{} nūllam ēditiōnem adhūc habet.
+Neue Version: {}	New version: {}	Versiō nova: {}
+Herunterladen	Download	Dēdūcere
+(kein {} im Release)	(no {} in the release)	(nūllum {} in ēditiōne)
+auf GitHub	on GitHub	in GitHub
+{} installiert.	{} installed.	{} īnstitūtum.
+Launcher neu starten	Restart launcher	Launcher iterum incipere
+Aenderungen	Changes	Mūtātiōnēs
+Nach Updates suchen	Check for updates	Renovātiōnēs quaerere
+{}  (Beta)	{}  (beta)	{}  (beta)
+{}  - installiert	{}  - installed	{}  - īnstitūtum
+{}  (Beta)  - installiert	{}  (beta)  - installed	{}  (beta)  - īnstitūtum
+Version:	Version:	Versiō:
+Installieren	Install	Īnstituere
+Client laeuft.	Client is running.	Cliēns currit.
+Client laeuft	Client running	Cliēns currit
+Spieldaten werden extrahiert ...	Extracting game data ...	Data lūdī extrahuntur ...
+Update wird heruntergeladen ...	Downloading update ...	Renovātiō dēdūcitur ...
+{} fehlt -- unter Updates herunterladen.	{} is missing -- download it under Updates.	{} deest -- sub Renovātiōnibus dēdūc.
+Erst unter Installation eine nutzbare Minecraft-Installation waehlen.	First choose a usable Minecraft installation under Installation.	Prīmum sub Īnstitūtiōne īnstitūtiōnem Minecraft ūtilem ēlige.
+Erst die Spieldaten extrahieren.	Extract the game data first.	Prīmum data lūdī extrahe.
+Startbild	Start image	Imāgō initiī
+Hinweis oben links	Hint at top left	Monitum suprā sinistrā
+„Linksklick für Start, Rechtsklick für Einstellungen“ über dem Bild.	"Left click to start, right click for settings" above the image.	"Sinistrō preme ad incipiendum, dextrō ad optiōnēs" suprā imāginem.
+Launcher beim Start schließen	Close launcher on start	Launcher initiō claudere
+Aus: nach dem Start bleibt der Launcher offen und zeigt die Logs.	Off: after the start the launcher stays open and shows the logs.	Nōn: post initium launcher apertum manet et ācta ostendit.
+Sprache	Language	Lingua
+Log	Log	Ācta
+SIGTERM {} s	SIGTERM {} s	SIGTERM {} s
+Hoeflich beenden	Quit politely	Cōmiter fīnīre
+Sofort hart beenden	Kill immediately	Statim dūriter fīnīre
+Noch nichts -- der Client schreibt hierher, sobald er laeuft.	Nothing yet -- the client writes here as soon as it runs.	Nihil adhūc -- cliēns hūc scrībit, simul ac currit.
+Linksklick für Start,	Left click to start,	Sinistrō preme ad incipiendum,
+Rechtsklick für Einstellungen	right click for settings	dextrō ad optiōnēs
+Titel	Titles	Titulī
+Jeden Titel/Untertitel mit Zeichencodes loggen, samt Zeichen, die die Schrift nicht kennt.	Log every title/subtitle with character codes, including characters the font does not know.	Omnem titulum/subtitulum cum cōdicibus signōrum in ācta referre, etiam signa quae littera nōn nōvit.
+Namensschilder	Name tags	Notae nōminum
+Einmal pro Sekunde jede gezeichnete Beschriftung samt Quelle und Entity loggen.	Once per second, log every drawn label with source and entity.	Semel per secundam omnem īnscrīptiōnem pīctam cum fonte et ente in ācta referre.
+Items in der Hand	Items in hand	Rēs in manū
+Loggen, als was ein gehaltenes Item aufgeloest wird und mit welcher Haltung.	Log what a held item resolves to and with which pose.	In ācta referre, quid rēs tenta fiat et quō habitū.
+Interaktionen	Interactions	Interāctiōnēs
+Jedes gesendete Interaktions- und Tick-Paket in Sendereihenfolge loggen (GrimAC-Paketreihenfolge).	Log every sent interaction and tick packet in send order (GrimAC packet order).	Omnem fasciculum interāctiōnis et ictūs temporis missum ōrdine mittendī in ācta referre (ōrdō fasciculōrum GrimAC).
+Bewegungspakete	Movement packets	Fasciculī mōtūs
+Gesendete Bewegungspakete loggen (Grim Simulation/GroundSpoof).	Log sent movement packets (Grim Simulation/GroundSpoof).	Fasciculōs mōtūs missōs in ācta referre (Grim Simulation/GroundSpoof).
+Posenwechsel	Pose changes	Mūtātiōnēs habitūs
+Posenwechsel je Tick loggen.	Log pose changes per tick.	Mūtātiōnēs habitūs per ictum temporis in ācta referre.
+Schleichen	Sneaking	Rēpere
+Schleich-Eingabe und Posen-Aufloesung je Tick loggen.	Log sneak input and pose resolution per tick.	Ingressum rēpendī et habitum per ictum temporis in ācta referre.
+Schwimmen	Swimming	Natāre
+Schwimm-Zustand je Tick loggen.	Log swim state per tick.	Statum natandī per ictum temporis in ācta referre.
+Wasser-Bewegung	Water movement	Mōtus in aquā
+Bewegung im Wasser je Tick loggen (Sprint-Schwimmen).	Log movement in water per tick (sprint swimming).	Mōtum in aquā per ictum temporis in ācta referre (natātiō celeris).
+Klaenge	Sounds	Sonī
+Abgespielte Server-Klaenge loggen.	Log played server sounds.	Sonōs servītōris lūsōs in ācta referre.
+Login-Paket	Login packet	Fasciculus ingressūs
+Das erste Play-Paket (Login) mit seinen ersten Bytes loggen.	Log the first play packet (login) with its first bytes.	Prīmum fasciculum lūdī (ingressum) cum prīmīs bytīs in ācta referre.
+Screenshot	Screenshot	Imāgō quadrī
+F2 kopiert das gerade gezeigte Bild in die Zwischenablage (auch im Exclusive-Fullscreen).	F2 copies the currently shown image to the clipboard (also in exclusive fullscreen).	F2 imāginem nunc ostēnsam in tabulam interimam exscrībit (etiam in quadrō plēnō exclūsīvō).
+Hohe Prioritaet	High priority	Priōritās alta
+Den Client mit erhoehter Prozess-Prioritaet starten (fuer Latenzmessungen).	Start the client with raised process priority (for latency measurements).	Clientem cum priōritāte prōcessūs auctā incipere (ad mēnsūrās morae).
+Klang-Mitschnitt	Sound recording	Īnscrīptiō sonōrum
+Jeden abgespielten Klang (vom Server und vom Client selbst) mit Zeit, Verursacher und Abstand in soundlog.txt neben dem Client-Log mitschreiben.	Record every played sound (from the server and from the client itself) with time, source and distance in soundlog.txt next to the client log.	Omnem sonum lūsum (ā servītōre et ab ipsō cliente) cum tempore, auctōre et intervallō in soundlog.txt iuxtā ācta clientis īnscrībere.
+Paket-Mitschnitt	Packet recording	Īnscrīptiō fasciculōrum
+Jedes Paket in pktlog.txt neben dem Client-Log mitschreiben (wird gross).	Record every packet in pktlog.txt next to the client log (gets large).	Omnem fasciculum in pktlog.txt iuxtā ācta clientis īnscrībere (magnum fit).
+Roh-Mitschnitt	Raw recording	Īnscrīptiō crūda
+Jedes Paket mit allen Bytes in pktraw.bin neben dem Client-Log mitschreiben (wird sehr gross).	Record every packet with all bytes in pktraw.bin next to the client log (gets very large).	Omnem fasciculum cum omnibus bytīs in pktraw.bin iuxtā ācta clientis īnscrībere (permagnum fit).
+GitHub nicht erreichbar: {}	GitHub not reachable: {}	GitHub attingī nōn potest: {}
+Antwort von GitHub unlesbar: {}	Response from GitHub unreadable: {}	Respōnsum GitHub legī nōn potest: {}
+{} nicht gefunden.	{} not found.	{} nōn inventum.
+GitHub-Anfragegrenze erreicht -- in einer Stunde nochmal versuchen.	GitHub request limit reached -- try again in an hour.	Fīnis rogātiōnum GitHub attāctus -- post hōram iterum temptā.
+GitHub antwortet mit {}	GitHub responds with {}	GitHub respondet {}
+Download fehlgeschlagen: {}	Download failed: {}	Dēductiō dēfēcit: {}
+{} ist {} statt {} Byte gross	{} is {} instead of {} bytes	{} est {} prō {} bytīs
+Pruefsumme von {} stimmt nicht (erwartet {}, bekommen {})	Checksum of {} does not match (expected {}, got {})	Summa probātiōnis {} nōn convenit (exspectāta {}, accepta {})
+{} nicht eingesetzt: {}	{} not put in place: {}	{} nōn positum: {}

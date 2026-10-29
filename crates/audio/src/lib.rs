@@ -372,12 +372,19 @@ pub struct BufferInfo {
     pub requested_frames: Option<u32>,
     pub sample_rate: u32,
     callback_frames: Arc<AtomicU32>,
+    callback_thread: Arc<AtomicU32>,
 }
 
 impl BufferInfo {
     /// 0, solange noch kein Callback gelaufen ist.
     pub fn callback_frames(&self) -> u32 {
         self.callback_frames.load(Ordering::Relaxed)
+    }
+
+    /// Thread-ID (Linux-TID) des Callback-Fadens, sobald der erste Callback lief -- fuer eine
+    /// Echtzeit-Prioritaet von aussen (s. app::pipewire). Sonst None.
+    pub fn callback_thread(&self) -> Option<u32> {
+        Some(self.callback_thread.load(Ordering::Relaxed)).filter(|&t| t != 0)
     }
 
     pub fn frames_to_ms(&self, frames: u32) -> f32 {
@@ -467,7 +474,16 @@ impl AudioEngine {
         let sample_rate = config.sample_rate.0 as f32;
         let callback_frames = Arc::new(AtomicU32::new(0));
         let gemessen = Arc::clone(&callback_frames);
-        let melde = move |len: usize| gemessen.store((len / channels.max(1)) as u32, Ordering::Relaxed);
+        let callback_thread = Arc::new(AtomicU32::new(0));
+        let faden = Arc::clone(&callback_thread);
+        let melde = move |len: usize| {
+            gemessen.store((len / channels.max(1)) as u32, Ordering::Relaxed);
+            // Einmal je Stream: /proc/thread-self zeigt auf "<pid>/task/<tid>".
+            if faden.load(Ordering::Relaxed) == 0 {
+                let tid = std::fs::read_link("/proc/thread-self").ok().and_then(|p| p.file_name()?.to_str()?.parse().ok());
+                faden.store(tid.unwrap_or(u32::MAX), Ordering::Relaxed);
+            }
+        };
 
         let err_fn = |e| eprintln!("[audio] Stream-Fehler: {e}");
         let stream = match sample_format {
@@ -519,7 +535,7 @@ impl AudioEngine {
             BufferSize::Fixed(n) => Some(n),
             BufferSize::Default => None,
         };
-        self.buffer = Some(BufferInfo { requested_frames, sample_rate: config.sample_rate.0, callback_frames });
+        self.buffer = Some(BufferInfo { requested_frames, sample_rate: config.sample_rate.0, callback_frames, callback_thread });
         Ok(())
     }
 

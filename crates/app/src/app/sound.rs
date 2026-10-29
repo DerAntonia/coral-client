@@ -23,6 +23,12 @@ impl App {
             return;
         }
         let Some(aufnahme) = sound.sample().and_then(|name| self.sounds.get(name)) else { return };
+        // Tastenwiederholung: leiser nach jedem Anschlag, mit der Zeit wieder voll.
+        let pegel = match self.ui_sound_last[i].filter(|_| sound.ducks()) {
+            Some(t) => ui_sound::repeat_level(self.ui_sound_level[i], jetzt.duration_since(t).as_secs_f32()),
+            None => 1.0,
+        };
+        self.ui_sound_level[i] = pegel;
         self.ui_sound_last[i] = Some(jetzt);
         let streuung = sound.spread_semitones();
         let zufall = if streuung > 0.0 {
@@ -36,7 +42,7 @@ impl App {
         let regler = if sound == ui_sound::UiSound::Type { 0.0 } else { self.settings.ui_pitch_semitones as f32 };
         let pitch = audio::semitone_factor(regler + halbtoene + zufall);
         let einzeln = self.settings.ui_sound_volume.get(i).copied().unwrap_or(100.0) / 100.0;
-        let gain = sound.sample_gain() * self.settings.sound_gain(protocol::packets::SoundCategory::Ui) * einzeln;
+        let gain = sound.sample_gain() * self.settings.sound_gain(protocol::packets::SoundCategory::Ui) * einzeln * pegel;
         sound_log::sound("ui", &format!("{sound:?}"), protocol::packets::SoundCategory::Ui, "-", None, 1.0, pitch, &format!("gespielt  pegel={gain:.3}"));
         self.audio.sink().play_sample(aufnahme, gain, 0.0, pitch);
     }
@@ -412,6 +418,15 @@ impl App {
                 self.push_log(format!("Audio nach PipeWire-Neustart nicht wieder geöffnet: {e}"));
             }
         }
+        if self.settings.audio_auto_optimize {
+            let puffer = self.settings.audio_buffer_frames;
+            let m = self.pipewire.messung();
+            let ziel = (puffer != 0 && puffer < PIPEWIRE_PULSE_MIN).then(|| pipewire::grenze_fuer(puffer, m.and_then(|m| m.min_quantum)));
+            self.pipewire.auto_optimieren(ziel, m.map_or(48_000, |m| m.rate));
+            if let Some(tid) = self.audio.buffer_info().and_then(|b| b.callback_thread()) {
+                self.pipewire.client_echtzeit(tid);
+            }
+        }
         if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsAudio {
             self.pipewire.messen_wenn_faellig();
         }
@@ -423,6 +438,20 @@ impl App {
             Some(m) => format!("{} Frames · {} ms", m.quantum, format!("{:.1}", m.ms()).replace('.', ",")),
             None if self.pipewire.beschaeftigt() => "misst".to_string(),
             None => "kein PipeWire gefunden".to_string(),
+        }
+    }
+
+    // Zeile "pipewire-pulse": Echtzeit der Ton-Faeden und Nice des Haupt-Threads.
+    pub(crate) fn pipewire_prio_text(&self) -> String {
+        match self.pipewire.messung() {
+            Some(m) => match m.pulse {
+                Some(p) => match p.echtzeit {
+                    Some(rt) => format!("Echtzeit {rt} · Nice {}", p.nice),
+                    None => format!("ohne Echtzeit · Nice {}", p.nice),
+                },
+                None => "nicht gefunden".to_string(),
+            },
+            None => self.pipewire_text(),
         }
     }
 

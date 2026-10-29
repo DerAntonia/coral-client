@@ -1003,14 +1003,24 @@ mod tests {
         assert_eq!((w, h), (16, 20));
     }
 
-    // Ein hochaufloesendes Resourcepack (64x64) passt nicht in einen 32er-Platz und wird
-    // ganzzahlig halbiert, statt zu verschwinden.
+    // Ein sehr hochaufloesendes Resourcepack (256x256) passt nicht in einen 128er-Platz und
+    // wird ganzzahlig verkleinert, statt zu verschwinden.
     #[test]
     fn zu_grosse_textur_wird_verkleinert() {
-        let rgba = vec![128u8; (64 * 64 * 4) as usize];
-        let (w, h, out) = fit_to_slot(64, (64, 64), &rgba).unwrap();
+        let rgba = vec![128u8; (256 * 256 * 4) as usize];
+        let (w, h, out) = fit_to_slot(256, (256, 256), &rgba).unwrap();
         assert!(w <= assets::ITEM_SLOT_SIZE && h <= assets::ITEM_SLOT_SIZE, "passt nicht in den Platz: {w}x{h}");
         assert_eq!(out.len(), (w * h * 4) as usize);
+    }
+
+    // 64er-Packs (CPVP Aesthetic) muessen UNVERAENDERT hineinpassen: halbiert fielen die
+    // ungeraden Zeilen weg und mit ihnen der rechte und untere 1-Pixel-Rand.
+    #[test]
+    fn vierfache_aufloesung_bleibt_unveraendert() {
+        let rgba: Vec<u8> = (0..64 * 64 * 4).map(|i| (i % 251) as u8).collect();
+        let (w, h, out) = fit_to_slot(64, (64, 64), &rgba).unwrap();
+        assert_eq!((w, h), (64, 64));
+        assert_eq!(out, rgba);
     }
 
     // Die Verdraengung muss den alten Eintrag ENTFERNEN, nicht bloss den Platz neu vergeben.

@@ -180,9 +180,10 @@ impl App {
     }
 
     // Wie weit die Fernsicht zeichnet, in Chunks: die LOD-Render-Distance, mit "Gespeicherte
-    // Chunks zeichnen" mindestens die normale Sichtweite. LOD-Weite aus = gar keine Fernsicht.
-    fn lod_radius_chunks(&self) -> u32 {
-        if self.settings.lod_render_distance == DISTANCE_OFF {
+    // Chunks zeichnen" mindestens die normale Sichtweite. LOD-Weite aus oder Modul aus = gar
+    // keine Fernsicht; die eingestellte Weite bleibt dabei gespeichert.
+    pub(crate) fn lod_radius_chunks(&self) -> u32 {
+        if !self.settings.module_chunk_saver || self.settings.lod_render_distance == DISTANCE_OFF {
             return DISTANCE_OFF;
         }
         let gespeichert = if self.render_saved() { self.settings.max_render_distance } else { DISTANCE_OFF };
@@ -325,8 +326,8 @@ impl App {
 
     // Einmal je Frame vor dem Zeichnen der Welt.
     pub(crate) fn update_chunk_saver(&mut self) {
-        // Gebraucht wird er zum Speichern (Modul an) oder zum Zeichnen der Fernsicht.
-        if !self.settings.module_chunk_saver && self.settings.lod_render_distance == DISTANCE_OFF {
+        // Gebraucht wird er nur mit Modul: zum Speichern und zum Zeichnen der Fernsicht.
+        if !self.settings.module_chunk_saver {
             // Beim Abschalten speichert der Chunk-Saver noch alles und beendet seine Threads.
             self.lod.saver = None;
             if let Some(gpu) = self.gpu.as_mut() {

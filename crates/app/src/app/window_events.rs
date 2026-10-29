@@ -24,6 +24,8 @@ impl App {
                 if !focused {
                     self.cursor_fx.release_all(Instant::now());
                     self.clear_controls();
+                    // Ebenso das Loslassen nach einem Druck in einer Liste: sie bleibt, wo sie ist.
+                    self.drag_scroll = None;
                     // Loslassen ausserhalb des Fensters bekommen wir nicht mit.
                     self.binds_down.clear();
                     // DXGI-Exclusive-Fullscreen gibt den Bildschirm sonst nicht her: der
@@ -62,11 +64,11 @@ impl App {
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / WHEEL_PIXELS_PER_NOTCH,
                 };
                 if self.dialog_shown() || self.code_of_conduct.is_some() {
-                    self.dialog_scroll(rasten * 40.0);
+                    self.dialog_scroll(delta);
                     return;
                 }
                 if self.dropdown_active().is_some() {
-                    self.dropdown_scroll(rasten);
+                    self.dropdown_scroll(delta);
                     return;
                 }
                 // Offene Kontenliste oder Zeiger auf der Benachrichtigungsliste: die Seite darunter
@@ -84,69 +86,53 @@ impl App {
                     }
                     return;
                 }
+                // Alle Listen gleiten (s. smooth_scroll) und lassen sich gegen Widerstand ueber
+                // den Rand ziehen; wie weit eine Raste reicht, sagt die Scrollweite.
+                //
                 // Server-Karten: eine Karte je Raste.
-                if self.mode == AppMode::Menu && self.screen == MenuScreen::Connect && self.server_edit.is_none() && server_panel().contains(self.cursor_pos.0, self.cursor_pos.1) {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / server_row_h(),
-                    };
-                    // Eine Karte je Raste; gleitend nachgezogen in tick_ui_anim.
-                    let schritt = if lines.abs() < 1.0 && lines != 0.0 { lines.signum() } else { lines.round() };
-                    let max = self.servers.len().saturating_sub(server_rows_visible());
-                    self.server_scroll = (self.server_first() as f32 - schritt).clamp(0.0, max as f32) as usize;
+                if self.mode == AppMode::Menu && self.screen == MenuScreen::Connect && self.server_edit.is_none() && (server_panel().contains(self.cursor_pos.0, self.cursor_pos.1) || self.server_bar_hit().is_some_and(|r| r.contains(self.cursor_pos.0, self.cursor_pos.1))) {
+                    let weg = self.wheel_units(delta, 1.0, server_row_h() + SERVER_ROW_GAP);
+                    let max = self.server_max_scroll();
+                    self.server_scroll.push(weg, 1.0, max);
                 }
                 // Einstellungsseiten im Zeilenraster: die ganze Seite, sobald sie nicht ins
                 // Fenster passt.
                 if self.mode == AppMode::Menu && self.screen.settings_page().is_some() {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / SETTINGS_ROW_H,
-                    };
-                    self.scroll_settings(lines * SETTINGS_SCROLL_ROWS_PER_NOTCH);
+                    let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
+                    self.scroll_settings(weg);
                 }
-                // Skin-Tab: das Dateifenster, sonst die Spalte unter dem Zeiger.
+                // Skin-Tab: das Dateifenster (drei Zeilen je Raste), sonst die Spalte unter dem
+                // Zeiger (eine Kachel).
                 if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsSkin {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / SETTINGS_ROW_H,
-                    };
                     if self.skin_files.is_some() {
-                        self.scroll_skin_files(lines);
+                        let weg = self.wheel_units(delta, SKIN_FILES_ROWS_PER_NOTCH, SKIN_FILES_ROW_H);
+                        self.scroll_skin_files(weg);
                     } else {
-                        self.scroll_skin_column(lines);
+                        let weg = self.wheel_units(delta, 1.0, skin_tile_h() + SKIN_TILE_GAP);
+                        self.scroll_skin_column(weg);
                     }
                 }
                 // Partikel-Anpassung: durch die Arten.
                 if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / SETTINGS_ROW_H,
-                    };
-                    let max = particles::KINDS.len().saturating_sub(self.particle_visible_rows());
-                    let neu = self.particle_scroll as f32 - (lines * SETTINGS_SCROLL_ROWS_PER_NOTCH).round();
-                    self.particle_scroll = (neu.max(0.0) as usize).min(max);
+                    let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
+                    let max = self.particle_max_scroll();
+                    self.particle_scroll.push(weg, SETTINGS_SCROLL_ROWS_PER_NOTCH, max);
                 }
                 // Lichtstaerken: durch die Trefferliste.
                 if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsLightLevels {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / SETTINGS_ROW_H,
-                    };
-                    let max = self.light_search_hits().len().saturating_sub(self.light_visible_rows());
-                    let neu = self.light_scroll as f32 - (lines * SETTINGS_SCROLL_ROWS_PER_NOTCH).round();
-                    self.light_scroll = (neu.max(0.0) as usize).min(max);
+                    let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
+                    let max = self.light_max_scroll();
+                    self.light_scroll.push(weg, SETTINGS_SCROLL_ROWS_PER_NOTCH, max);
                 }
                 // Offener Chat: durch den Verlauf blaettern.
                 if self.mode == AppMode::World && self.chat_input.is_some() {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 16.0,
-                    };
+                    // Positiv = zurueck in die Vergangenheit (Rad nach oben), mit Scrollweite.
+                    let zeilen = -self.wheel_units(delta, CHAT_SCROLL_LINES_PER_NOTCH, 16.0);
                     let ueber_verlauf = self.gpu.as_ref().is_some_and(|gpu| self.chat_history_rect(gpu).contains(self.cursor_pos.0, self.cursor_pos.1));
                     if ueber_verlauf {
-                        self.scroll_chat_history(lines * CHAT_SCROLL_LINES_PER_NOTCH);
+                        self.scroll_chat_history(zeilen);
                     } else {
-                        self.scroll_chat(lines * CHAT_SCROLL_LINES_PER_NOTCH);
+                        self.scroll_chat(zeilen);
                     }
                 }
                 // Ueber einem Buendel waehlt das Rad ein Item darin (BundleMouseActions) -- und
@@ -178,11 +164,8 @@ impl App {
                 }
                 // Modul-Menue: die Detailspalte scrollen, wenn sie nicht ganz hineinpasst.
                 if self.module_menu_shown() {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / SETTINGS_ROW_H,
-                    };
-                    self.scroll_module_menu(lines * SETTINGS_SCROLL_ROWS_PER_NOTCH);
+                    let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
+                    self.scroll_module_menu(weg);
                 }
                 if self.wheel_scrolls_list() {
                     return;
@@ -243,10 +226,16 @@ impl App {
                 };
                 let jetzt = Instant::now();
                 self.cursor_fx.button(jetzt, self.cursor_pos, taste, state == ElementState::Pressed);
+                // Druck in einer Liste (s. drag_scroll_grab): Schwung oder der aufgeschobene Klick,
+                // vor allem anderen, was am Loslassen haengt.
+                if button == MouseButton::Left && state == ElementState::Released {
+                    self.drag_scroll_release();
+                }
                 // Dialoge des Servers liegen ueber allem und schlucken jeden Druck, in Menue
                 // und Welt.
                 if self.dialog_shown() || self.code_of_conduct.is_some() {
                     match state {
+                        ElementState::Pressed if button == MouseButton::Left && self.drag_scroll_grab(self.dialog_drag_list()) => {}
                         ElementState::Pressed if matches!(button, MouseButton::Left | MouseButton::Right) => self.dialog_press(button == MouseButton::Right),
                         ElementState::Released => self.dialog_release(),
                         _ => {}
@@ -339,7 +328,7 @@ impl App {
                     }
                 }
                 // Aufklappliste: wie das Farbfenster ueber allem, ein Druck daneben schliesst sie nur.
-                if button == MouseButton::Left && state == ElementState::Pressed && self.dropdown.is_some() && self.dropdown_press() {
+                if button == MouseButton::Left && state == ElementState::Pressed && self.dropdown.is_some() && (self.drag_scroll_grab(self.dropdown_drag_list()) || self.dropdown_press()) {
                     return;
                 }
                 // Offene Benachrichtigungsliste: ein Klick daneben (nicht auf die Glocke) schliesst sie.
@@ -491,6 +480,7 @@ impl App {
                         edit.dragging = false;
                     }
                     self.quick_dragging = false;
+                    self.server_bar_grab = None;
                     if let Some(d) = self.theme_name_dialog.as_mut() {
                         d.dragging = false;
                     }
@@ -547,8 +537,10 @@ impl App {
                     } else if self.book_view.is_some() || self.lectern_book().is_some() {
                         self.book_click();
                     } else if self.module_menu_open {
-                        let (px, py) = self.cursor_pos;
-                        self.handle_click(px, py);
+                        if !self.drag_scroll_grab(self.list_drag_list()) {
+                            let (px, py) = self.cursor_pos;
+                            self.handle_click(px, py);
+                        }
                     } else if self.chat_input.is_some() {
                         let (px, py) = self.cursor_pos;
                         self.chat_click(px, py);
@@ -581,6 +573,10 @@ impl App {
                     if self.editing_value.as_ref().map(|(e, _)| *e) != Some(ev) {
                         self.begin_edit_value(ev);
                     }
+                } else if self.drag_scroll_grab(self.list_drag_list()) {
+                    // In einer Liste: Klick oder Ziehen entscheidet sich beim Loslassen.
+                } else if self.server_bar_press() {
+                    // Bildlaufleiste der Serverliste: der Griff haengt jetzt am Zeiger.
                 } else if !self.server_card_connect() {
                     let (px, py) = self.cursor_pos;
                     self.handle_click(px, py);
@@ -952,7 +948,15 @@ impl App {
                     }
                     return;
                 }
-                if self.dialog.is_some() || self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() {
+                // Connect-Screen: das erste getippte Zeichen oeffnet die Suche (s. server_search_start).
+                if !self.modifiers.control_key() && !self.modifiers.alt_key() {
+                    if let Some(text) = key_event.text.clone() {
+                        if self.server_search_start(&text) {
+                            return;
+                        }
+                    }
+                }
+                if self.dialog.is_some() || self.server_edit.is_some() || self.theme_name_dialog.is_some() || self.quick_typing() || self.server_search_typing() {
                     if key_event.state != ElementState::Pressed {
                         return;
                     }
@@ -1022,6 +1026,7 @@ impl App {
                         // und landet in on_escape(), das das Fenster schliesst.
                         Key::Named(NamedKey::Enter) if self.server_edit.is_some() => self.commit_server_edit(),
                         Key::Named(NamedKey::Enter) if self.theme_name_dialog.is_some() => self.create_custom_theme(),
+                        Key::Named(NamedKey::Enter) if self.server_search_typing() && !self.quick_typing() => self.server_search_submit(),
                         Key::Named(NamedKey::Enter) => self.quick_connect_submit(),
                         _ => {
                             if !strg {
@@ -1090,7 +1095,7 @@ impl App {
                             }
                         }
                     }
-                    self.light_scroll = 0;
+                    self.light_scroll = Default::default();
                     return;
                 }
 
@@ -1321,6 +1326,10 @@ impl App {
         }
         if self.screen == MenuScreen::SettingsLightLevels {
             return Some((17, self.light_search.clone()));
+        }
+        // Serversuche: zu ist sie leer, so klingt schon das Zeichen, das sie oeffnet.
+        if self.mode == AppMode::Menu && self.screen == MenuScreen::Connect {
+            return Some((18, self.server_search.as_ref().map_or(String::new(), |f| f.text().to_string())));
         }
         None
     }

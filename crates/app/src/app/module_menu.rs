@@ -743,18 +743,24 @@ impl App {
         self.module_total_rows(gpu).saturating_sub(self.module_visible_rows(gpu))
     }
 
-    // Der wirksame Scroll-Stand, gedeckelt auf das aktuell Moegliche. Der gespeicherte Wert
-    // wird NICHT hier korrigiert (die Zeichenfunktionen haben nur &self) -- ein Aufklappen
-    // des Farbeditors kann die Zeilenzahl aendern, ohne dass jemand scrollt, und dann muss
-    // die Anzeige trotzdem sofort im gueltigen Bereich liegen.
-    pub(crate) fn module_scroll(&self, gpu: &GpuState) -> usize {
-        self.module_menu_scroll.min(self.module_max_scroll(gpu))
+    // Die ganz sichtbaren Zeilen der aktuellen Ansicht beim gleitenden Stand: Index und Platz
+    // (0 = oberste Zeile, mit Bruchteil). Was ueber den Rand gleitet, verschwindet ganz. Schrumpft
+    // die Ansicht (Farbeditor zugeklappt), federt der Stand in tick_ui_anim zurueck.
+    pub(crate) fn module_rows_shown(&self, gpu: &GpuState) -> Vec<(usize, f32)> {
+        let stand = self.module_menu_scroll.stand;
+        let visible = self.module_visible_rows(gpu);
+        let von = self.module_menu_scroll.first();
+        (von..(von + visible + 1).min(self.module_total_rows(gpu)))
+            .map(|i| (i, i as f32 - stand))
+            .filter(|&(_, n)| n >= -0.01 && n <= (visible - 1) as f32 + 0.01)
+            .collect()
     }
 
-    pub(crate) fn scroll_module_menu(&mut self, lines: f32) {
+    // `weg` Zeilen Richtung Ende (s. App::wheel_units).
+    pub(crate) fn scroll_module_menu(&mut self, weg: f32) {
         let Some(gpu) = self.gpu.as_ref() else { return };
         let max = self.module_max_scroll(gpu) as f32;
-        self.module_menu_scroll = (self.module_menu_scroll as f32 - lines).clamp(0.0, max).round() as usize;
+        self.module_menu_scroll.push(weg, SETTINGS_SCROLL_ROWS_PER_NOTCH, max);
     }
 
     // Die Tafel: feste Groesse (Kategorien + drei Kachelspalten), an der GUI-Skalierung des
@@ -847,18 +853,14 @@ impl App {
         let tile_w = ((panel.x + panel.w - Self::MODULE_PAD * scale - x0) - (cols - 1.0) * gap) / cols;
         let tile_h = Self::MODULE_TILE_H * scale;
         let top = panel.y + Self::MODULE_TOP_H * scale;
-        let scroll = self.module_scroll(gpu);
-        let visible = self.module_visible_rows(gpu);
+        let reihen = self.module_rows_shown(gpu);
         self.module_menu_category
             .modules()
             .into_iter()
             .enumerate()
             .filter_map(|(i, id)| {
                 let (reihe, spalte) = (i / spalten, i % spalten);
-                if reihe < scroll || reihe >= scroll + visible {
-                    return None;
-                }
-                let n = (reihe - scroll) as f32;
+                let &(_, n) = reihen.iter().find(|&&(r, _)| r == reihe)?;
                 Some((id, Rect { x: x0 + spalte as f32 * (tile_w + gap), y: top + n * (tile_h + gap), w: tile_w, h: tile_h }))
             })
             .collect()
@@ -943,10 +945,9 @@ impl App {
         // Der Hauptschalter ist die EINE Ausnahme von `enabled`: er muss auch dann gehen,
         // wenn das Modul aus ist -- sonst gaebe es keinen Weg zurueck (s. module_master_row).
         let master = self.module_menu_selected.toggle_action();
-        let scroll = self.module_scroll(gpu);
-        let visible = self.module_visible_rows(gpu);
-        for (n, row) in self.module_detail_rows().into_iter().skip(scroll).take(visible).enumerate() {
-            let n = n as f32;
+        let mut rows: Vec<Option<ModuleRow>> = self.module_detail_rows().into_iter().map(Some).collect();
+        for (k, n) in self.module_rows_shown(gpu) {
+            let Some(row) = rows.get_mut(k).and_then(Option::take) else { continue };
             match row {
                 ModuleRow::Toggle { action, on, .. } => out.push(Button {
                     rect: layout.control_rect(n),
@@ -1221,11 +1222,9 @@ impl App {
             });
             let enabled = self.module_menu_selected.enabled(&self.settings);
             let (px, py) = self.pointer();
-            let scroll = self.module_scroll(gpu);
-            let visible = self.module_visible_rows(gpu);
             let rows = self.module_detail_rows();
-            for (n, row) in rows.iter().skip(scroll).take(visible).enumerate() {
-                let n = n as f32;
+            for (k, n) in self.module_rows_shown(gpu) {
+                let Some(row) = rows.get(k) else { continue };
                 // Unterkategorie wie ein Abschnitt der Einstellungen: Linie ueber die ganze
                 // Breite, der Name rechts darueber; darunter die Spaltenkoepfe, je mittig ueber
                 // ihrem Schalter.
@@ -1310,7 +1309,7 @@ impl App {
                     ModuleRow::Toggle { .. } | ModuleRow::Choice { .. } | ModuleRow::Pick { .. } | ModuleRow::Heading { .. } => {}
                 }
             }
-            self.draw_module_scrollbar(gpu, panel, layout.top, visible as f32 * SETTINGS_ROW_H, rects);
+            self.draw_module_scrollbar(gpu, panel, layout.top, self.module_visible_rows(gpu) as f32 * SETTINGS_ROW_H, rects);
         }
 
         // Knoepfe mit Beschriftung (Zu, Zurueck, Schalter, Pfeile). Die ohne Beschriftung
@@ -1340,13 +1339,13 @@ impl App {
             return;
         }
         let scale = self.module_scale(gpu);
-        let scroll = self.module_scroll(gpu);
+        let scroll = self.module_menu_scroll.stand;
         let bar = Rect { x: panel.x + panel.w - 4.0 * scale, y: top, w: 3.0 * scale, h: hoehe };
         rects.push(UiRect { rect: bar, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
         let anteil = self.module_visible_rows(gpu) as f32 / self.module_total_rows(gpu).max(1) as f32;
         let thumb_h = (bar.h * anteil).max(6.0 * scale);
-        let thumb_y = bar.y + (bar.h - thumb_h) * (scroll as f32 / max_scroll as f32);
-        let color = if scroll > 0 { theme::accent() } else { theme::get(theme::Slot::Border2) };
+        let thumb_y = bar.y + (bar.h - thumb_h) * (scroll / max_scroll as f32).clamp(0.0, 1.0);
+        let color = if scroll > 0.5 { theme::accent() } else { theme::get(theme::Slot::Border2) };
         rects.push(UiRect { rect: Rect { y: thumb_y, h: thumb_h, ..bar }, color, ..UiRect::FLAT });
     }
 
@@ -1361,18 +1360,18 @@ impl App {
             ButtonAction::SelectModule(id) => {
                 self.module_menu_selected = id;
                 self.module_menu_detail = true;
-                self.module_menu_scroll = 0;
+                self.module_menu_scroll = Default::default();
                 self.shield_color_editor = None;
             }
             ButtonAction::SelectModuleCategory(kategorie) => {
                 self.module_menu_category = kategorie;
                 self.module_menu_detail = false;
-                self.module_menu_scroll = 0;
+                self.module_menu_scroll = Default::default();
             }
             ButtonAction::ModuleBack => {
                 self.module_menu_detail = false;
                 self.module_menu_category = self.module_menu_selected.category();
-                self.module_menu_scroll = 0;
+                self.module_menu_scroll = Default::default();
             }
             // Oeffnet das Farbfenster, bevor es hier ankaeme (s. color_target_of).
             ButtonAction::HitboxColorEditor(_) => {}

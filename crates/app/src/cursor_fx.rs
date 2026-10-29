@@ -123,6 +123,9 @@ pub struct CursorFx {
     buttons_down: u32,
     /// Welche Tasten (Bit je Taste) unten sind, s. `button`.
     held: u32,
+    /// Der letzte Druck kam von der rechten Taste: dann leuchtet der Zeiger in Akzent 2 statt
+    /// im Akzent, auch noch beim Ausblenden nach dem Loslassen.
+    right: bool,
 }
 
 impl CursorFx {
@@ -135,6 +138,7 @@ impl CursorFx {
             tail: (0.0, 0.0),
             buttons_down: 0,
             held: 0,
+            right: false,
         }
     }
 
@@ -145,6 +149,10 @@ impl CursorFx {
 
     pub fn additive_alpha(&self, now: Instant) -> f32 {
         self.additive.value(now).clamp(0.0, 1.0)
+    }
+
+    pub fn right_tint(&self) -> bool {
+        self.right
     }
 
     pub fn rotation_deg(&self, now: Instant) -> f32 {
@@ -183,6 +191,7 @@ impl CursorFx {
         }
         self.held ^= bit;
         if down {
+            self.right = id == 1;
             self.press(now, pos);
         } else {
             self.release(now);

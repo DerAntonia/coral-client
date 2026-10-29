@@ -381,3 +381,71 @@ fn pilzblock_aus_modellvierecken_hat_eckabdunklung() {
     let hell = |x: f32| oben.iter().filter(|v| (v.position[0] - x).abs() < 1e-4).map(|v| v.color[0]).fold(0.0f32, f32::max);
     assert!(hell(9.0) < hell(8.0) * 0.9, "Kante am Stein {} nicht dunkler als frei {}", hell(9.0), hell(8.0));
 }
+
+// Treppe aus Schneeschichten 1..7 auf Stein: jede Stufenkante beginnt an der Oberseite der
+// Schicht davor und sieht gleich aus (unten dunkel, oben hell), und jede Oberseite wird zur
+// hoeheren Stufe hin dunkler -- nicht nur die vor Schicht 8.
+#[test]
+fn schneetreppe_hat_gleiche_stufen() {
+    let n = world::state_count();
+    let state_of = |name: &str, layers: Option<u8>| {
+        (0..n as u32).find(|&s| world::block_name(s) == Some(name) && layers.is_none_or(|l| world::ambient_occlusion::snow_layers(s) == Some(l))).unwrap()
+    };
+    let stein = state_of("stone", None);
+    let mut per_state: Vec<Option<Vec<world::ShapeBox>>> = vec![None; n];
+    per_state[stein as usize] = Some(vec![world::ShapeBox { min: [0.0; 3], max: [1.0; 3], faces: [true; 6], content: [false; 6], uv: [None; 6] }]);
+    let schicht: Vec<u32> = (1..=8).map(|l| state_of("snow", Some(l))).collect();
+    for (i, &s) in schicht.iter().enumerate() {
+        let max = [1.0, (i + 1) as f32 / 8.0, 1.0];
+        per_state[s as usize] = Some(vec![world::ShapeBox { min: [0.0; 3], max, faces: [true; 6], content: [false; 6], uv: [None; 6] }]);
+    }
+    let mut shapes = world::BlockShapes::new(per_state);
+    shapes.build_ao_flags(&Default::default());
+    let mut welt = World::new();
+    welt.insert_column(0, 0, column(0));
+    for x in 0..10 {
+        for z in 0..6 {
+            welt.set_block(x, 0, z, stein);
+        }
+    }
+    for x in 0..7 {
+        for z in 0..6 {
+            welt.set_block(x, 1, z, schicht[x as usize]);
+        }
+    }
+    let neighbors = welt.column_neighbors(0, 0).unwrap();
+    let (verts, _) = world::mesh_column_with_lighting(
+        0,
+        0,
+        &neighbors,
+        &world::BlockUvs::single_tile(),
+        &shapes,
+        &world::BiomePalette::fallback(),
+        &world::CrossBlocks::none(),
+        &shapes,
+        1.0,
+        false,
+    );
+    let dreiecke: Vec<_> = verts.chunks_exact(3).filter(|d| d.iter().all(|v| (2.0..=3.0).contains(&v.position[2]))).collect();
+    // Kante (Westseite) der Schicht k+1 bei x = k: senkrechte Dreiecke mit x == k.
+    let kante = |k: usize| {
+        let vs: Vec<_> = dreiecke.iter().filter(|d| d.iter().all(|v| (v.position[0] - k as f32).abs() < 1e-5)).flat_map(|d| d.iter()).collect();
+        let unten = vs.iter().map(|v| v.position[1]).fold(f32::INFINITY, f32::min);
+        let farbe = |y: f32| vs.iter().find(|v| (v.position[1] - y).abs() < 1e-5).unwrap().color[0];
+        (unten, farbe(unten), farbe(1.0 + (k + 1) as f32 / 8.0))
+    };
+    let erste = kante(1);
+    for k in 1..7 {
+        let (unten, dunkel, hell) = kante(k);
+        assert!((unten - (1.0 + k as f32 / 8.0)).abs() < 1e-5, "Kante {k} beginnt bei {unten}");
+        assert!((dunkel - erste.1).abs() < 1e-4 && (hell - erste.2).abs() < 1e-4, "Kante {k}: {dunkel}/{hell}, erste {:?}", erste);
+        assert!(dunkel < hell - 0.1, "Kante {k} unten {dunkel} nicht dunkler als oben {hell}");
+    }
+    // Oberseite der Schicht k (x = k-1..k): an x = k (vor der hoeheren Stufe) dunkler als an x = k-1.
+    for k in 1..7usize {
+        let y = 1.0 + k as f32 / 8.0;
+        let oben: Vec<_> = dreiecke.iter().filter(|d| d.iter().all(|v| (v.position[1] - y).abs() < 1e-5)).flat_map(|d| d.iter()).collect();
+        let hell = |x: f32| oben.iter().filter(|v| (v.position[0] - x).abs() < 1e-5).map(|v| v.color[0]).fold(0.0f32, f32::max);
+        assert!(hell(k as f32) < hell(k as f32 - 1.0) * 0.9, "Oberseite {k}: vorne {} hinten {}", hell(k as f32 - 1.0), hell(k as f32));
+    }
+}

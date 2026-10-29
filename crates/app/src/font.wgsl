@@ -67,6 +67,29 @@ fn coverage(p: vec2<f32>, b: vec4<f32>, pack: bool) -> f32 {
     return select(0.0, c, innen);
 }
 
+// Deckung eines Texels des eigenen Glyphen; ausserhalb seines Rechtecks 0.
+fn texel_deckung(t: vec2<i32>, groesse: vec2<f32>, b: vec4<f32>, pack: bool) -> f32 {
+    let mitte = (vec2<f32>(t) + 0.5) / groesse;
+    let innen = mitte.x >= b.x && mitte.y >= b.y && mitte.x <= b.z && mitte.y <= b.w;
+    let tc = clamp(t, vec2<i32>(0), vec2<i32>(groesse) - 1);
+    let c = select(textureLoad(atlas_texture, tc, 0).r, textureLoad(pack_texture, tc, 0).a, pack);
+    return select(0.0, c, innen);
+}
+
+// Wie coverage, aber immer bilinear zwischen den Texeln -- fuer den weichen Schatten. Die
+// Minecraft-Schrift liegt Pixel fuer Pixel im Atlas und wird mit Nearest gelesen: jede Probe
+// des Schattens waere eine harte Stufe, und weil die Proben etwa ein Schriftpixel auseinander
+// liegen, sah der Schatten treppig aus statt weich.
+fn coverage_weich(p: vec2<f32>, b: vec4<f32>, pack: bool) -> f32 {
+    let groesse = select(vec2<f32>(textureDimensions(atlas_texture)), vec2<f32>(textureDimensions(pack_texture)), pack);
+    let q = p * groesse - 0.5;
+    let t = vec2<i32>(floor(q));
+    let f = q - floor(q);
+    let oben = mix(texel_deckung(t, groesse, b, pack), texel_deckung(t + vec2<i32>(1, 0), groesse, b, pack), f.x);
+    let unten = mix(texel_deckung(t + vec2<i32>(0, 1), groesse, b, pack), texel_deckung(t + vec2<i32>(1, 1), groesse, b, pack), f.x);
+    return mix(oben, unten, f.y);
+}
+
 // Die Oberflaeche ist sRGB, gemischt wird also linear: eine halb deckende Kante dunkler
 // Schrift auf hellem Grund (Akzent-Knoepfe) wird so nur gut ein Viertel dunkler statt halb,
 // die Schrift wirkt vom Grund aufgefressen. Fuer schwarze Schrift ergibt 1 - (1 - a)^2,2 genau
@@ -128,7 +151,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         for (var dy = -2; dy <= 2; dy++) {
             for (var dx = -2; dx <= 2; dx++) {
                 let w = 3.0 - 0.5 * f32(abs(dx) + abs(dy));
-                summe += w * coverage(mitte + vec2<f32>(f32(dx), f32(dy)) * px * (in.mode.w * 0.5), in.bounds, pack);
+                summe += w * coverage_weich(mitte + vec2<f32>(f32(dx), f32(dy)) * px * (in.mode.w * 0.5), in.bounds, pack);
                 gewicht += w;
             }
         }
@@ -136,5 +159,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Staerke), die Deckung nicht.
         return vec4<f32>(in.color.rgb, min(in.color.a * 0.6 * summe / gewicht, 1.0));
     }
-    return vec4<f32>(in.color.rgb, in.color.a * rand * (1.0 - selbst));
+    // Zusammen mit dem Glyphen darueber soll der Pixel genau max(Rand, Glyph) decken (mal der
+    // Deckkraft des Textes). Frueher stand hier Rand * (1 - Glyph): an halb gedeckten Kanten
+    // schien dann der Grund durch beide Lagen -- im Inventar die Item-Pixel durch die Zahl,
+    // die oben ohne Kontur und an Ecken wie angebissen aussah.
+    let ziel = in.color.a * max(rand, selbst);
+    let glyph_deckt = in.color.a * selbst;
+    return vec4<f32>(in.color.rgb, max(ziel - glyph_deckt, 0.0) / max(1.0 - glyph_deckt, 1e-4));
 }

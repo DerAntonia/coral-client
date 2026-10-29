@@ -91,7 +91,7 @@ impl App {
 
     // Hinter den geladenen Chunks: die gespeicherten Bloecke der Fernsicht (Modul Chunk-Saver).
     fn lod_teleport_hit(&self, eye: DVec3, dir: DVec3) -> Option<physics::BlockRayHit> {
-        let reach = TELEPORT_REACH.max(self.settings.lod_render_distance as f64 * 16.0);
+        let reach = TELEPORT_REACH.max(self.lod_radius_chunks() as f64 * 16.0);
         let (block, achse, schritt) = self.lod.raycast(eye.to_array(), dir.to_array(), reach)?;
         let face = match (achse, schritt > 0) {
             (0, true) => protocol::packets::FACE_WEST,

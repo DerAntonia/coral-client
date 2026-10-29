@@ -184,6 +184,14 @@ impl UiSound {
         })
     }
 
+    /// Klänge, die beim Halten einer Taste mit der Tastenwiederholung kommen. Dort stapelten
+    /// sich die Stimmen (Löschen klingt bis zu 200 ms nach, die Wiederholung kommt alle 30 ms)
+    /// und es wurde sehr laut. Deshalb drückt jeder Anschlag den nächsten leiser, mit der Zeit
+    /// kommt die Lautstärke zurück (s. `repeat_level`).
+    pub fn ducks(self) -> bool {
+        matches!(self, UiSound::Type | UiSound::Erase)
+    }
+
     /// Obergrenze für die Länge der Aufnahme. Dieselbe Regel wie bei der Synthese: was oft
     /// kommt, sollte kurz sein, sonst stapeln sich die Klänge übereinander. 70 ms für die
     /// Klänge in schnellen Folgen; Löschen kommt seltener am Stück, die übrigen einzeln.
@@ -298,6 +306,19 @@ impl UiSound {
 // samt Mixer-Formel als KOPIE. Beides ist inzwischen die echte Quelle: die Klaenge kommen aus
 // cue() gleich nebenan, das Ausrechnen aus audio::render_cue. Eine Kopie, die still veraltet,
 // misst irgendwann etwas, das niemand hoert.
+/// Der nächste Anschlag ist so viel leiser als der letzte (Faktor auf dessen Lautstärke) ...
+const DUCK_STEP: f32 = 0.5;
+/// ... und kehrt mit dieser Zeitkonstante (Sekunden) zum Standard zurück.
+const DUCK_RECOVER_S: f32 = 0.15;
+
+/// Lautstärke-Faktor eines Anschlags `seit` Sekunden nach dem letzten, der mit `vorher` gespielt
+/// wurde. Ergibt bei gehaltener Taste (30 je Sekunde) gut ein Drittel, beim Schreiben (zehn je
+/// Sekunde) rund zwei Drittel, nach einer Pause wieder den vollen Pegel.
+pub fn repeat_level(vorher: f32, seit: f32) -> f32 {
+    let danach = vorher * DUCK_STEP;
+    1.0 - (1.0 - danach) * (-seit.max(0.0) / DUCK_RECOVER_S).exp()
+}
+
 #[cfg(test)]
 mod mess {
     use super::tests::ALLE;
@@ -498,5 +519,22 @@ mod tests {
             let gain = sound.cue().gain;
             assert!(gain > 0.0 && gain <= 0.3, "{sound:?}: {gain}");
         }
+    }
+
+    #[test]
+    // Gehaltene Taste: deutlich leiser als der erste Anschlag; nach einer Pause wieder voll.
+    fn wiederholung_wird_leiser_und_erholt_sich() {
+        let mut pegel = 1.0;
+        for _ in 0..60 {
+            pegel = super::repeat_level(pegel, 0.033);
+        }
+        assert!(pegel > 0.25 && pegel < 0.4, "gehalten: {pegel}");
+        let mut schreiben = 1.0;
+        for _ in 0..30 {
+            schreiben = super::repeat_level(schreiben, 0.1);
+        }
+        assert!(schreiben > pegel && schreiben < 0.8, "schreiben: {schreiben}");
+        assert!(super::repeat_level(pegel, 1.0) > 0.99);
+        assert!(UiSound::Erase.ducks() && UiSound::Type.ducks() && !UiSound::Click.ducks());
     }
 }

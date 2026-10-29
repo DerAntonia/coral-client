@@ -247,6 +247,41 @@ pub struct PackGlyph {
     pub scale: f32,
     pub ascent: f32,
     pub advance: f32,
+    // Ein Zeichen einer unveraenderten Seite der Standardschrift (pixelgleich, dieselbe Zelle,
+    // dieselbe Hoehe), nur mit anderem ascent: um so viele Font-Pixel tiefer als dort. Server
+    // verschieben so gewoehnlichen Text (Heldeninsel: ui_0 bis ui_12). Der Client zeichnet ihn
+    // dann wie jeden Text in der eingestellten Schrift, nur eben versetzt.
+    pub text_shift: Option<f32>,
+}
+
+// Eine Seite der Standardschrift, gegen die Pack-Seiten verglichen werden (s. text_shift).
+struct TextPage {
+    hash: u64,
+    ascent: i32,
+    height: i32,
+    chars: Vec<Vec<char>>,
+}
+
+// Nur die deckenden Pixel samt Farbe: Packs streuen gern fast unsichtbare Pixel (Alpha 1 oder
+// 254) in kopierte Seiten -- die Heldeninsel in ihre Kopie von ascii.png --, am Bild aendert
+// das nichts.
+fn page_hash(tex: &DecodedTexture) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (tex.width, tex.height).hash(&mut h);
+    for px in tex.rgba.chunks_exact(4) {
+        if px[3] >= 128 {
+            px[..3].hash(&mut h);
+        } else {
+            0u8.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+// Server-Symbole: privater Bereich der BMP und die Ebenen 15/16.
+fn is_private_char(c: char) -> bool {
+    ('\u{E000}'..='\u{F8FF}').contains(&c) || c as u32 >= 0xF0000
 }
 
 #[derive(Default)]
@@ -466,11 +501,16 @@ impl MinecraftInstallation {
 
         let mut out = PackFonts { unihex: self.load_unifont().map(std::sync::Arc::new), ..Default::default() };
         let mut seiten: HashMap<String, Option<u32>> = HashMap::new();
+        let vorlagen: Vec<TextPage> = self
+            .load_default_font()
+            .map(|f| f.pages.into_iter().map(|p| TextPage { hash: page_hash(&p.texture), ascent: p.ascent, height: p.height, chars: p.chars }).collect())
+            .unwrap_or_default();
+        let mut text = TextPages { vorlagen, je_seite: HashMap::new() };
         let ids: Vec<String> = defs.keys().filter(|id| !is_base_font(id)).cloned().collect();
         for id in ids {
             let mut tabelle: HashMap<char, PackGlyph> = HashMap::new();
             let mut besucht = Vec::new();
-            self.fill_font(&id, &defs, &mut besucht, &mut seiten, &mut out.pages, &mut tabelle);
+            self.fill_font(&id, &defs, &mut besucht, &mut seiten, &mut text, &mut out.pages, &mut tabelle);
             if !tabelle.is_empty() {
                 out.fonts.insert(id, tabelle);
             }
@@ -484,6 +524,7 @@ impl MinecraftInstallation {
         defs: &HashMap<String, Vec<PackProvider>>,
         besucht: &mut Vec<String>,
         seiten: &mut HashMap<String, Option<u32>>,
+        text: &mut TextPages,
         pages: &mut Vec<DecodedTexture>,
         tabelle: &mut HashMap<char, PackGlyph>,
     ) {
@@ -494,10 +535,10 @@ impl MinecraftInstallation {
         let Some(providers) = defs.get(id) else { return };
         for p in providers {
             match p {
-                PackProvider::Reference(r) => self.fill_font(r, defs, besucht, seiten, pages, tabelle),
+                PackProvider::Reference(r) => self.fill_font(r, defs, besucht, seiten, text, pages, tabelle),
                 PackProvider::Space(adv) => {
                     for &(c, a) in adv {
-                        tabelle.entry(c).or_insert(PackGlyph { page: None, cell: [0; 4], scale: 1.0, ascent: 0.0, advance: a });
+                        tabelle.entry(c).or_insert(PackGlyph { page: None, cell: [0; 4], scale: 1.0, ascent: 0.0, advance: a, text_shift: None });
                     }
                 }
                 PackProvider::Bitmap { file, chars, ascent, height } => {
@@ -514,6 +555,14 @@ impl MinecraftInstallation {
                         continue;
                     }
                     let scale = *height as f32 / ch as f32;
+                    // Dieselbe Seite wie eine der Standardschrift, im selben Raster und gleich hoch?
+                    let vorlage = *text.je_seite.entry(page).or_insert_with(|| {
+                        let h = page_hash(tex);
+                        text.vorlagen.iter().position(|v| v.hash == h)
+                    });
+                    let vorlage = vorlage
+                        .map(|i| &text.vorlagen[i])
+                        .filter(|v| v.height == *height && v.chars.len() == chars.len() && v.chars[0].len() == chars[0].len());
                     for (row, zeile) in chars.iter().enumerate() {
                         for (col, &c) in zeile.iter().enumerate() {
                             if c == '\0' || tabelle.contains_key(&c) {
@@ -524,13 +573,22 @@ impl MinecraftInstallation {
                             // Vanillas Vorschub: (int)(0.5 + Breite * Faktor) + 1, Java rundet
                             // dabei zur Null hin -- auch bei negativem Faktor.
                             let advance = ((0.5 + breite as f32 * scale) as f64).trunc() as f32 + 1.0;
-                            tabelle.insert(c, PackGlyph { page: Some(page), cell: [x, y, cw, ch], scale, ascent: *ascent as f32, advance });
+                            let text_shift = vorlage
+                                .filter(|v| !is_private_char(c) && v.chars[row].get(col) == Some(&c))
+                                .map(|v| (v.ascent - *ascent) as f32);
+                            tabelle.insert(c, PackGlyph { page: Some(page), cell: [x, y, cw, ch], scale, ascent: *ascent as f32, advance, text_shift });
                         }
                     }
                 }
             }
         }
     }
+}
+
+// Die Seiten der Standardschrift und je Pack-Seite, welcher davon sie gleicht.
+struct TextPages {
+    vorlagen: Vec<TextPage>,
+    je_seite: HashMap<u32, Option<usize>>,
 }
 
 // Rechteste Spalte mit Deckung + 1 (s. FontPage::glyph_width), 0 fuer eine leere Zelle.
@@ -563,3 +621,4 @@ mod unifont_tests {
         assert!(u.glyphs.len() > 50_000);
     }
 }
+

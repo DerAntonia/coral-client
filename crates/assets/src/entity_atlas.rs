@@ -65,15 +65,16 @@ pub const CAPE_HEIGHT: u32 = 32;
 // Ein Platz haelt EINE Textur, nicht ein Item: ein Blockitem in der Hand braucht bis zu drei
 // verschiedene (oben/Seite/unten), ein flaches Sprite genau eine.
 //
-// 32x32 statt Vanillas 16x16, damit Resourcepacks mit doppelter Aufloesung unveraendert
-// hineinpassen; groessere werden beim Laden ganzzahlig heruntergerechnet (s.
-// app::held_item). 192 Plaetze (197k Pixel): auch liegende Items und Wurfgeschosse brauchen
+// 128x128 statt Vanillas 16x16, damit Resourcepacks bis zur achtfachen Aufloesung
+// unveraendert hineinpassen; groessere werden beim Laden ganzzahlig heruntergerechnet (s.
+// app::held_item). Mit 32er-Plaetzen verlor ein 64er-Pack beim Halbieren jede zweite Zeile --
+// 1-Pixel-Raender (CPVP-Obsidian, Kristallrahmen) fehlten rechts und unten. 192 Plaetze (3,1M Pixel): auch liegende Items und Wurfgeschosse brauchen
 // welche, und nach einem Tod liegen leicht 40 verschiedene Stapel herum -- mit zu wenigen
 // Plaetzen verdraengten sich die Texturen gegenseitig in jedem Frame. Im Vanilla-Atlas bleibt
 // nach allen festen Texturen dafuer reichlich Platz (s. entity_atlas_smoke, der die volle Liste der
 // App packt).
 pub const ITEM_SLOTS: usize = 192;
-pub const ITEM_SLOT_SIZE: u32 = 32;
+pub const ITEM_SLOT_SIZE: u32 = 128;
 
 // Plaetze fuer Ruestungsbesatz (Trims): Vanilla setzt deren Texturen erst zur Laufzeit aus
 // Muster und Farbpalette zusammen (paletted_permutations im Atlas armor_trims), es gibt sie

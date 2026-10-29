@@ -848,12 +848,21 @@ impl ScreenLayout {
 }
 
 // Ganzzahlige GUI-Skalierung wie Vanillas "Auto": so gross wie moeglich, solange das
-// 320x240-Grundraster noch passt, gedeckelt bei 4.
+// 320x240-Grundraster noch passt. Wie in Vanilla ohne Deckel -- auf 4K ergibt das x9.
 pub fn gui_scale(screen: (f32, f32)) -> f32 {
     let by_width = (screen.0 / 320.0).floor();
     let by_height = (screen.1 / 240.0).floor();
-    by_width.min(by_height).clamp(1.0, 4.0)
+    by_width.min(by_height).max(1.0)
 }
+
+// Hoechste feste Stufe, die die Einstellungen anbieten: was Auto ergibt, aber mindestens
+// x4, damit kleine Fenster ihre gewohnten Stufen behalten.
+pub fn max_gui_scale(screen: (f32, f32)) -> u32 {
+    (gui_scale(screen) as u32).max(4)
+}
+
+// Obergrenze fuer gespeicherte Werte, bevor die Bildschirmgroesse bekannt ist (8K traegt x18).
+pub const GUI_SCALE_SETTING_MAX: u32 = 32;
 
 // Die Hotbar unten: Sheet-Position und die neun Icon-Positionen. `origin` ist die linke
 // obere Ecke des Sheets in Bildschirmpixeln (aus dem HUD-Editor).

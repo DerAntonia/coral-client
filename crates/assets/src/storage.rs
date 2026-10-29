@@ -1,9 +1,10 @@
 // Spieldaten aus dem Client-Jar der Installation, einmal extrahiert in einen festen Ordner
-// (~/.local/share/coral-client/storage/<version>/). Manches kennt das Jar nur als Java-Code --
+// (~/coral-client/storage/<version>/). Manches kennt das Jar nur als Java-Code --
 // die Geometrie der Entity-Modelle, die Inhalte der Kreativ-Tabs, die Standard-Components der
 // Items. Dafuer laeuft je ein kleines Java-Programm (EntityModelDump.java, CreativeTabsDump.java,
 // ItemComponentsDump.java) mit dem Java, das der Launcher fuer
-// die Version mitbringt, und schreibt Zahlen bzw. Text. Im Repo liegt davon nichts.
+// die Version mitbringt, und schreibt Zahlen bzw. Text. Dazu kommen Minecrafts Sprachdateien
+// der Sprachen, die der Client anbietet, nach lang/. Im Repo liegt davon nichts.
 //
 // Extrahiert wird im LAUNCHER (beim ersten Start von selbst, sonst auf Knopfdruck, z.B. nach
 // einem Update der Version durch Mojang). Der Client liest nur noch die fertigen Dateien und
@@ -16,7 +17,8 @@ use std::process::Command;
 use serde::Deserialize;
 
 use crate::installation::AssetsError;
-use crate::source::{active_source, data_dir, JavaLaunch};
+use crate::installation::MinecraftInstallation;
+use crate::source::{active_source, storage_dir, JavaLaunch};
 
 // Die Dumper: (Dateiname im Speicher, Quelldatei, Quelltext).
 const DUMPS: [(&str, &str, &str); 3] = [
@@ -26,6 +28,9 @@ const DUMPS: [(&str, &str, &str); 3] = [
 ];
 
 const STAMP: &str = "stamp.conf";
+
+// Sprachdateien, die mit extrahiert werden (lang/<code>.json): die Sprachen des Clients.
+const LANGS: [&str; 3] = ["de_de", "en_us", "la_la"];
 
 #[derive(Deserialize)]
 struct VersionJson {
@@ -177,7 +182,12 @@ fn running_java() -> Vec<PathBuf> {
 
 /// Ordner der extrahierten Daten fuer `version`.
 pub fn game_data_dir(version: &str) -> Option<PathBuf> {
-    Some(data_dir()?.join("storage").join(version))
+    Some(storage_dir()?.join(version))
+}
+
+/// Pfad einer extrahierten Sprachdatei (code wie "de_de").
+pub fn stored_lang_path(version: &str, code: &str) -> Option<PathBuf> {
+    Some(game_data_dir(version)?.join("lang").join(format!("{code}.json")))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,7 +218,7 @@ fn dumper_stamp(datei: &str, quelle: &str) -> String {
 pub fn game_data_status(version: &str) -> GameDataStatus {
     let Some(dir) = game_data_dir(version) else { return GameDataStatus::Missing };
     let Ok(stempel) = std::fs::read_to_string(dir.join(STAMP)) else { return GameDataStatus::Missing };
-    if DUMPS.iter().any(|(name, _, _)| !dir.join(name).is_file()) {
+    if DUMPS.iter().any(|(name, _, _)| !dir.join(name).is_file()) || LANGS.iter().any(|code| !stored_lang_path(version, code).is_some_and(|p| p.is_file())) {
         return GameDataStatus::Missing;
     }
     let zeilen: Vec<&str> = stempel.lines().collect();
@@ -240,6 +250,18 @@ pub fn extract_game_data(version: &str, progress: &dyn Fn(&str)) -> Result<(), A
         std::fs::write(&neu, text)?;
         std::fs::rename(&neu, dir.join(name))?;
         stempel.push(dumper_stamp(datei, quelle));
+    }
+    // Sprachdateien so, wie Vanilla sie mitbringt (ohne Resourcepacks): en_us steht im Jar,
+    // die anderen in den Assets der Installation.
+    progress("lang");
+    let mut installation = MinecraftInstallation::locate(version, Vec::<PathBuf>::new())?;
+    std::fs::create_dir_all(dir.join("lang"))?;
+    for code in LANGS {
+        let Some(bytes) = installation.load_layers(&format!("minecraft/lang/{code}.json")).pop() else { continue };
+        let ziel = dir.join("lang").join(format!("{code}.json"));
+        let neu = ziel.with_extension(format!("json.{}.tmp", std::process::id()));
+        std::fs::write(&neu, bytes)?;
+        std::fs::rename(&neu, &ziel)?;
     }
     std::fs::write(dir.join(STAMP), stempel.join("\n") + "\n")?;
     Ok(())

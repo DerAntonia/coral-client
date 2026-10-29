@@ -1336,8 +1336,9 @@ impl App {
         }
         // tooltip_display: der Server will gar keinen Tooltip. Traenke (auch Wurf-/Verweil-
         // traenke und getippte Pfeile) erkennt man an der Farbe und dem Buchstaben in der
-        // Ecke; was sie bewirken, zeigt die Untersuchen-Taste.
-        if stack.tooltip_hidden || !item_needs_tooltip(stack) || stack.potion.is_some() {
+        // Ecke; was sie bewirken, zeigt die Untersuchen-Taste. Einen eigenen Namen oder Lore
+        // zeigen Farbe und Buchstabe aber nicht -- dann gibt es den Tooltip doch.
+        if stack.tooltip_hidden || !item_needs_tooltip(stack) || (stack.potion.is_some() && !item_shows_held_name(stack)) {
             return None;
         }
         let zeilen = protocol::nbt::with_lang_area(protocol::nbt::LangArea::Items, || self.item_tooltip_short(stack));
@@ -1465,7 +1466,7 @@ impl App {
             .map(|(effect, amplifier, dauer)| {
                 let effect = effect as i32;
                 let dauer = if dauer == protocol::packets::MOB_EFFECT_INFINITE { dauer } else { (dauer as f32 * faktor).floor() as i32 };
-                let mut text = effect_display_name(&EffectEntry { effect, ambient: false, amplifier, remaining: dauer, received: dauer });
+                let mut text = effect_display_name(&EffectEntry { effect, ambient: false, amplifier, remaining: dauer, exact: dauer as f64, received: dauer });
                 if dauer == protocol::packets::MOB_EFFECT_INFINITE || dauer > 20 {
                     text = format!("{text} ({})", format_effect_duration(dauer));
                 }
@@ -1524,8 +1525,14 @@ impl App {
         let activity = self.settings.module_discord_status.then(|| discord_rpc::Activity {
             details: format!("Coral Client {}", env!("CARGO_PKG_VERSION")),
             state: match self.conn_status {
-                ConnStatus::Connected => format!("auf {}", self.server_address),
-                _ => "im Menü".to_string(),
+                // Discord zeigt den Text selbst, er laeuft also nicht durch shape_text. "auf {}"
+                // steht mit Absicht nicht in der Tabelle: dort passte es auf jeden Text mit "auf ".
+                ConnStatus::Connected => match crate::i18n::ui_language() {
+                    crate::i18n::Language::German => format!("auf {}", self.server_address),
+                    crate::i18n::Language::English => format!("on {}", self.server_address),
+                    crate::i18n::Language::Latin => format!("in {}", self.server_address),
+                },
+                _ => crate::i18n::tr("im Menü").into_owned(),
             },
             start: self.discord_start,
         });

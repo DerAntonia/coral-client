@@ -270,6 +270,7 @@ impl App {
         for (row, label) in [
             (RENDER_DISTANCE_ROW, "Render-Distance"),
             (ENTITY_DISTANCE_ROW, "Entity-Renderdistanz"),
+            (BLOCK_ENTITY_DISTANCE_ROW, "Block-Entity-Renderdistanz"),
             (LOD_DETAIL_ROW, "LOD-Detail"),
         ] {
             let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
@@ -284,15 +285,13 @@ impl App {
         let weite = set.entity_render_distance;
         let weite = if weite >= ENTITY_DISTANCE_MAX { "unbegrenzt".to_string() } else { format!("{weite} Blöcke") };
         self.draw_editable_value(gpu, stepper_value_rect(ENTITY_DISTANCE_ROW), EditableValue::EntityRenderDistance, weite, rects, texts);
+        let weite = set.block_entity_render_distance;
+        let weite = if weite >= BLOCK_ENTITY_DISTANCE_MAX { "unbegrenzt".to_string() } else { format!("{weite} Blöcke") };
+        self.draw_editable_value(gpu, stepper_value_rect(BLOCK_ENTITY_DISTANCE_ROW), EditableValue::BlockEntityRenderDistance, weite, rects, texts);
 
-        let lod_farbe = theme::text();
-        for (row, text) in [
-            (LOD_DETAIL_ROW, format!("{} px²", set.chunk_saver_threshold)),
-        ] {
-            let rect = stepper_value_rect(row);
-            rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-            texts.push(gpu.centered_text(rect, text, lod_farbe, UI_SCALE_SMALL));
-        }
+        let rect = stepper_value_rect(LOD_DETAIL_ROW);
+        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(rect, format!("{} px²", set.chunk_saver_threshold), theme::text(), UI_SCALE_SMALL));
     }
 
     // Steuerung: zwei Spalten (s. Layout-Konstanten am Dateianfang). Links die
@@ -366,7 +365,7 @@ impl App {
     // darunter die Platzhalter.
     // Beschriftung und Wert der Chat-Einstellungen, Reihenfolge wie CHAT_TOOLTIPS (im
     // Einstellungsfenster des Chats im HUD-Editor, s. build_hud_config).
-    pub(crate) fn chat_setting_rows(&self) -> [(&'static str, String); 7] {
+    pub(crate) fn chat_setting_rows(&self) -> [(&'static str, String); 9] {
         let set = &self.settings;
         [
             ("Textgröße", format!("{} %", set.chat_scale_percent)),
@@ -376,6 +375,8 @@ impl App {
             ("Zeilen (im Spiel)", format!("{}", set.chat_lines)),
             ("Zeilen (beim Tippen)", format!("{}", set.chat_lines_open)),
             ("Ausblenden nach", if set.chat_fade_secs == 0 { "Nie".to_string() } else { format!("{} s", set.chat_fade_secs) }),
+            ("Zeilenabstand", format!("{} %", set.chat_line_spacing)),
+            ("Darstellung", String::new()),
         ]
     }
 
@@ -393,18 +394,19 @@ impl App {
         if page.sections.len() >= 2 {
             rects.push(UiRect { rect: Rect { x: SETTINGS_LABEL_X, y: SETTINGS_FIRST_Y - 5.0, w: linie_bis - SETTINGS_LABEL_X, h: 1.0 }, color: linie, ..UiRect::FLAT });
         }
-        let erste = self.page_scroll().min(max_scroll);
+        // Gleitend: die oberste Zeile mit Bruchteil, ueber den Rand gezogen auch ausserhalb.
+        let erste = self.page_scroll().stand;
         let name_ueber = |name: &str, linie_y: f32, texts: &mut Vec<UiText>| {
             let x = linie_bis - gpu.measure_text(name, UI_SCALE_SMALL);
             texts.push(UiText { text: name.to_string(), x: x.round(), y: (linie_y - 4.0 - gpu.text_height(UI_SCALE_SMALL)).round(), color: theme::text(), scale: UI_SCALE_SMALL });
         };
         // Der Abschnitt, in dem die oberste sichtbare Zeile liegt: sein Name ueber der Linie oben.
         if page.sections.len() >= 2 {
-            if let Some(&(name, _)) = page.sections.iter().rev().find(|&&(_, row)| row <= erste) {
+            if let Some(&(name, _)) = page.sections.iter().rev().find(|&&(_, row)| row as f32 <= erste.max(0.0).round()) {
                 name_ueber(name, SETTINGS_FIRST_Y - 5.0, texts);
             }
         }
-        for &(name, row) in page.sections.iter().filter(|&&(_, row)| row > erste) {
+        for &(name, row) in page.sections.iter().filter(|&&(_, row)| row as f32 > erste) {
             let y = settings_row_y(row);
             if y < 0.0 {
                 continue;
@@ -419,7 +421,7 @@ impl App {
             let spur = Rect { x: rechts - 6.0, y: SETTINGS_FIRST_Y, w: 6.0, h: hoehe };
             rects.push(UiRect { rect: spur, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
             let griff_h = (hoehe * (page.rows - max_scroll) as f32 / page.rows as f32).max(24.0);
-            let anteil = self.page_scroll().min(max_scroll) as f32 / max_scroll as f32;
+            let anteil = (erste / max_scroll as f32).clamp(0.0, 1.0);
             let griff = Rect { x: spur.x, y: spur.y + (hoehe - griff_h) * anteil, w: spur.w, h: griff_h };
             rects.push(UiRect { rect: griff, color: theme::text_disabled(), ..UiRect::FLAT });
         }
@@ -432,6 +434,12 @@ impl App {
         texts.push(UiText { text: "Spielbild abdunkeln".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(MENU_BACKDROP_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
         let abdunkeln = format!("{} %", self.settings.menu_backdrop_opacity);
         self.draw_editable_value(gpu, stepper_value_rect(MENU_BACKDROP_ROW), EditableValue::MenuBackdropOpacity, abdunkeln, rects, texts);
+        texts.push(UiText { text: "Trägheit beim Scrollen".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(SCROLL_INERTIA_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
+        let traegheit = format!("{} %", self.settings.scroll_inertia);
+        self.draw_editable_value(gpu, stepper_value_rect(SCROLL_INERTIA_ROW), EditableValue::ScrollInertia, traegheit, rects, texts);
+        texts.push(UiText { text: "Scrollweite".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(SCROLL_DISTANCE_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
+        let weite = format!("{} %", self.settings.scroll_distance);
+        self.draw_editable_value(gpu, stepper_value_rect(SCROLL_DISTANCE_ROW), EditableValue::ScrollDistance, weite, rects, texts);
         texts.push(UiText { text: "Hintergrundbild".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(WALLPAPER_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
         // Rechts daneben, was gerade gilt. Beim eigenen Bild steht dort der Knopf (s.
         // buttons()), der Hinweis rechts davon.
@@ -532,7 +540,7 @@ impl App {
             let hinweis = if fest { "Preset: Farben fest. Eigene Farben mit +" } else { "Farbfeld anklicken zum Ändern, Rechtsklick auf die Kachel löscht" };
             texts.push(UiText { text: hinweis.to_string(), x: THEME_COLORS_X + breite + 16.0, y, color: theme::text_2(), scale: UI_SCALE_SMALL });
         }
-        for (i, slot) in theme::Slot::ALL.into_iter().enumerate() {
+        for (i, slot) in theme::EDITABLE.into_iter().enumerate() {
             let (row, x) = theme_slot_cell(i);
             if !sichtbar(settings_row_y(row)) {
                 continue;
@@ -1183,12 +1191,17 @@ impl App {
         texts.push(UiText { text: "Eigene Crit-Farbe".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(CRIT_COLOR_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
 
         let set = &self.settings;
-        let detail = if set.fire_mode == FIRE_MODE_CROSSHAIR { "Farbe" } else { "Höhe" };
+        // Beim Modus Aus gibt es nichts einzustellen: die Zeile darunter bleibt leer.
+        let detail = match set.fire_mode {
+            FIRE_MODE_CROSSHAIR => "Farbe",
+            FIRE_MODE_OFF => "",
+            _ => "Höhe",
+        };
         for (row, label) in [(HURT_CAM_ROW, "Hurt-Cam"), (HURT_CAM_STRENGTH_ROW, "Stärke"), (FIRE_MODE_ROW, "Modus"), (FIRE_DETAIL_ROW, detail), (DEATH_ANIM_ROW, "Todesanimation")] {
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
         }
         let mut werte = vec![(HURT_CAM_STRENGTH_ROW, set.hurt_cam_strength)];
-        if set.fire_mode != FIRE_MODE_CROSSHAIR {
+        if set.fire_mode == FIRE_MODE_VANILLA {
             werte.push((FIRE_DETAIL_ROW, set.fire_height));
         }
         for (row, wert) in werte {
@@ -1213,7 +1226,7 @@ impl App {
             let tx = feld.x + 10.0;
             push_typed_marker(texts);
             texts.push(UiText { text: wert.clone(), x: tx, y: zeile(1), color: theme::text(), scale: UI_SCALE_SMALL });
-            self.push_caret(rects, Rect { x: tx + gpu.measure_raw(wert, UI_SCALE_SMALL), y: zeile(1), w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
+            self.push_caret(rects, gpu.caret_rect(tx + gpu.measure_raw(wert, UI_SCALE_SMALL), zeile(1), UI_SCALE_SMALL));
         } else {
             texts.push(UiText {
                 text: "Klick auf eine Config wechselt sofort -- auch mitten im Spiel.".to_string(),
@@ -1248,25 +1261,27 @@ impl App {
         push_typed_marker(texts);
         texts.push(UiText { text: shown, x: text_x, y: zeile(0), color: farbe, scale: UI_SCALE_SMALL });
         let caret_x = tx + if self.light_search.is_empty() { 0.0 } else { gpu.measure_raw(&self.light_search, UI_SCALE_SMALL) };
-        self.push_caret(rects, Rect { x: caret_x, y: zeile(0), w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
+        self.push_caret(rects, gpu.caret_rect(caret_x, zeile(0), UI_SCALE_SMALL));
         let treffer = self.light_search_hits();
         if treffer.is_empty() {
             texts.push(UiText { text: "Keine Lichtquelle gefunden.".to_string(), x: SETTINGS_LABEL_X, y: zeile(1), color: theme::text_disabled(), scale: UI_SCALE_SMALL });
         }
         let sichtbar = self.light_visible_rows();
-        for (z, &i) in treffer.iter().skip(self.light_scroll).take(sichtbar).enumerate() {
-            let id = light_source_blocks()[i];
+        let text_dy = (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0;
+        for (k, y) in header_list_rows(treffer.len(), self.light_scroll.stand, sichtbar) {
+            let id = light_source_blocks()[treffer[k]];
             let p = self.settings.light_factor_of(id);
             let farbe = if p == 100 { theme::text() } else { COLOR_HUD };
-            texts.push(UiText { text: block_display_name(id), x: SETTINGS_LABEL_X, y: zeile(1 + z), color: farbe, scale: UI_SCALE_SMALL });
-            let rect = stepper_value_rect(1 + z);
+            texts.push(UiText { text: block_display_name(id), x: SETTINGS_LABEL_X, y: (y + text_dy).round(), color: farbe, scale: UI_SCALE_SMALL });
+            let rect = Rect { y, ..stepper_value_rect(0) };
             rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
             texts.push(gpu.centered_text(rect, format!("{p} %"), farbe, UI_SCALE_SMALL));
         }
         if treffer.len() > sichtbar {
-            let bis = (self.light_scroll + sichtbar).min(treffer.len());
+            let erste = header_list_first(treffer.len(), self.light_scroll.stand, sichtbar);
+            let bis = (erste + sichtbar).min(treffer.len());
             texts.push(UiText {
-                text: format!("{}–{} von {} (Mausrad)", self.light_scroll + 1, bis, treffer.len()),
+                text: format!("{}–{} von {} (Mausrad)", erste + 1, bis, treffer.len()),
                 x: SETTINGS_CTRL_X + STEPPER_VALUE_W + 2.0 * (STEPPER_BTN_W + STEPPER_GAP) + 20.0,
                 y: zeile(0),
                 color: theme::text_disabled(),
@@ -1290,8 +1305,9 @@ impl App {
         ];
         let sichtbar = self.particle_visible_rows();
         let kopf = if particles::KINDS.len() > sichtbar {
-            let bis = (self.particle_scroll + sichtbar).min(particles::KINDS.len());
-            format!("Partikelart ({}–{} von {})", self.particle_scroll + 1, bis, particles::KINDS.len())
+            let erste = header_list_first(particles::KINDS.len(), self.particle_scroll.stand, sichtbar);
+            let bis = (erste + sichtbar).min(particles::KINDS.len());
+            format!("Partikelart ({}–{} von {})", erste + 1, bis, particles::KINDS.len())
         } else {
             "Partikelart".to_string()
         };
@@ -1299,12 +1315,12 @@ impl App {
         for ((x, w), text) in koepfe {
             texts.push(gpu.centered_text(Rect { x, y: settings_row_y(0), w, h: SETTINGS_CTRL_H }, text.to_string(), theme::text_2(), UI_SCALE_SMALL));
         }
-        for (z, i) in (0..particles::KINDS.len()).skip(self.particle_scroll).take(sichtbar).enumerate() {
+        let text_dy = (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0;
+        for (i, y) in header_list_rows(particles::KINDS.len(), self.particle_scroll.stand, sichtbar) {
             let t = self.settings.particle_tuning[i];
             let art = particles::KINDS[i].spawn;
-            let row = 1 + z;
             let farbe = if t == particles::ParticleTuning::default() { theme::text() } else { COLOR_HUD };
-            texts.push(UiText { text: particles::KINDS[i].label.to_string(), x: SETTINGS_LABEL_X, y: zeile(row), color: farbe, scale: UI_SCALE_SMALL });
+            texts.push(UiText { text: particles::KINDS[i].label.to_string(), x: SETTINGS_LABEL_X, y: (y + text_dy).round(), color: farbe, scale: UI_SCALE_SMALL });
             let mut werte = vec![t.lifetime_pct, t.opacity_pct, t.speed_pct];
             if art.has_amount() {
                 werte.push(t.amount_pct);
@@ -1313,7 +1329,7 @@ impl App {
             }
             // Wertfelder wie bei einem Stepper -- der Regler holt sich Flaeche und Zahl daraus.
             for (col, wert) in werte.into_iter().enumerate() {
-                let rect = particle_value_rect(col, row);
+                let rect = Rect { y, ..particle_value_rect(col, 0) };
                 rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
                 let wert_farbe = if wert == 100 { theme::text() } else { COLOR_HUD };
                 texts.push(gpu.centered_text(rect, format!("{wert} %"), wert_farbe, UI_SCALE_SMALL));
@@ -1432,6 +1448,11 @@ impl App {
         let pw_rect = settings_wide_rect(AUDIO_PIPEWIRE_ROW);
         rects.push(UiRect { rect: pw_rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
         texts.push(gpu.centered_text(pw_rect, self.pipewire_text(), theme::text(), UI_SCALE_SMALL));
+        let y_prio = (settings_row_y(AUDIO_PIPEWIRE_PRIO_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "pipewire-pulse".to_string(), x: SETTINGS_LABEL_X, y: y_prio, color: theme::text(), scale: UI_SCALE_SMALL });
+        let prio_rect = settings_wide_rect(AUDIO_PIPEWIRE_PRIO_ROW);
+        rects.push(UiRect { rect: prio_rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(prio_rect, self.pipewire_prio_text(), theme::text(), UI_SCALE_SMALL));
         let y8 = (settings_row_y(AUDIO_PIPEWIRE_SET_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         texts.push(UiText { text: "PipeWire-Grenze".to_string(), x: SETTINGS_LABEL_X, y: y8, color: theme::text(), scale: UI_SCALE_SMALL });
         if let PipewireKnopf::Text(text) = self.pipewire_knopf() {
@@ -1439,6 +1460,8 @@ impl App {
             rects.push(UiRect { rect, color: theme::get(theme::Slot::Surface1), ..UiRect::FLAT });
             texts.push(gpu.centered_text(rect, text, theme::text(), UI_SCALE_SMALL));
         }
+        let y_auto = (settings_row_y(AUDIO_AUTO_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "Automatisch optimieren".to_string(), x: SETTINGS_LABEL_X, y: y_auto, color: theme::text(), scale: UI_SCALE_SMALL });
 
         // Raumklang-Hoertest (echt, s. spatial_sound::OrbitTest) -- der Knopf selbst kommt
         // aus buttons(), hier nur die Beschriftung davor.
@@ -1547,7 +1570,7 @@ impl App {
         }
         // Gezogene Kachel: Linie in der Luecke, in der sie landen wuerde.
         if let Some((c, platz)) = self.skin_drop_slot() {
-            let stand = self.skin_scroll_anim[usize::from(c == Column::Selected)];
+            let stand = self.skin_scroll[usize::from(c == Column::Selected)].stand;
             let col = skin_column_rect(c);
             let y = (skin_tile_rect(c, platz as f32 - stand).y - SKIN_TILE_GAP / 2.0 - 1.0).round();
             if y >= oben - SKIN_TILE_GAP && y <= unten {
@@ -1566,7 +1589,7 @@ impl App {
             rects.push(UiRect::rounded(spur, g(Slot::Surface1), 2.0));
             let griff_h = (spur.h * sichtbar as f32 / n as f32).max(32.0);
             let max = n - sichtbar;
-            let griff = Rect { y: spur.y + (spur.h - griff_h) * (self.skin_scroll_anim[k] / max as f32).clamp(0.0, 1.0), h: griff_h, ..spur };
+            let griff = Rect { y: spur.y + (spur.h - griff_h) * (self.skin_scroll[k].stand / max as f32).clamp(0.0, 1.0), h: griff_h, ..spur };
             rects.push(UiRect::rounded(griff, g(Slot::Border2), 2.0));
         }
     }
@@ -1576,13 +1599,9 @@ impl App {
         (skin_tab::available_column(&self.skin_catalog.names, &self.settings.skin_order, &self.selected_skins), self.selected_skins.clone())
     }
 
-    // Erste sichtbare Kachel einer Spalte mit `n` Plaetzen (Scrollstand, aufs Ende geklemmt).
-    pub(crate) fn skin_first(&self, c: skin_tab::Column, n: usize) -> usize {
-        let scroll = match c {
-            skin_tab::Column::Available => self.skin_scroll,
-            skin_tab::Column::Selected => self.skin_scroll_right,
-        };
-        scroll.min(n.saturating_sub(skin_tiles_visible()))
+    // So weit laesst sich eine Spalte scrollen, in Kacheln.
+    pub(crate) fn skin_max_scroll(&self, c: skin_tab::Column) -> f32 {
+        self.skin_column_len(c).saturating_sub(skin_tiles_visible()) as f32
     }
 
     // Die sichtbaren Kacheln in Inhaltskoordinaten: Spalte, Index in der Spalte, Name (None =
@@ -1595,7 +1614,7 @@ impl App {
         let mut out = Vec::new();
         for (k, (c, liste)) in [(Column::Available, links), (Column::Selected, rechts)].into_iter().enumerate() {
             let reihe = liste.into_iter().enumerate().filter(|(i, _)| gezogen != Some((c, *i)));
-            let stand = self.skin_scroll_anim[k];
+            let stand = self.skin_scroll[k].stand;
             for (platz, (i, name)) in reihe.enumerate() {
                 let r = skin_tile_rect(c, platz as f32 - stand);
                 if skin_clip(r).is_some() {
@@ -1648,7 +1667,7 @@ impl App {
             return None;
         }
         let n = self.skin_column_len(c);
-        let stand = self.skin_scroll_anim[usize::from(c == Column::Selected)];
+        let stand = self.skin_scroll[usize::from(c == Column::Selected)].stand;
         let schritt = skin_tile_h() + SKIN_TILE_GAP;
         let platz = ((y - skin_tiles_top() + SKIN_TILE_GAP / 2.0) / schritt + stand + 0.5).floor().max(0.0) as usize;
         Some((c, platz.min(n)))
@@ -1772,7 +1791,9 @@ impl App {
             if !self.skin_tab_was_open {
                 self.skin_catalog.invalidate();
                 for (i, c) in [skin_tab::Column::Available, skin_tab::Column::Selected].into_iter().enumerate() {
-                    self.skin_scroll_anim[i] = self.skin_first(c, self.skin_column_len(c)) as f32;
+                    let max = self.skin_max_scroll(c);
+                    let s = &mut self.skin_scroll[i];
+                    s.jump(s.target(max));
                 }
             }
             let neu = self.skin_catalog.refresh(skins_dir().as_deref(), list_available_skins);
@@ -1798,7 +1819,7 @@ impl App {
     pub(crate) fn open_skin_files(&mut self, skin: String) {
         let Some(dir) = skins_dir() else { return };
         let entries = skin_tab::list_tree(&dir.join(&skin).join("assets").join("minecraft"));
-        self.skin_files = Some(SkinFilesWindow { title: skin.clone(), skin, mirror: None, entries, expanded: std::collections::HashSet::new(), scroll: 0 });
+        self.skin_files = Some(SkinFilesWindow { title: skin.clone(), skin, mirror: None, entries, expanded: std::collections::HashSet::new(), scroll: Default::default() });
     }
 
     // Dateifenster fuer das oberste Server-Pack (das Zip im Cache).
@@ -1822,7 +1843,7 @@ impl App {
             }
         }
         let title = if packs.len() > 1 { format!("Server-Pack (oberstes von {})", packs.len()) } else { "Server-Pack".to_string() };
-        self.skin_files = Some(SkinFilesWindow { skin, mirror, title, entries, expanded: std::collections::HashSet::new(), scroll: 0 });
+        self.skin_files = Some(SkinFilesWindow { skin, mirror, title, entries, expanded: std::collections::HashSet::new(), scroll: Default::default() });
     }
 
     // Nach jeder Aenderung im Dateifenster: bei einem Server-Pack dasselbe auch unter der
@@ -1889,15 +1910,22 @@ impl App {
         let Some(w) = &self.skin_files else { return Vec::new() };
         let (_, liste, _, _) = skin_files_layout();
         let zeilen = skin_tab::visible_rows(&w.entries, &w.expanded);
-        let n = skin_files_rows_visible();
-        let erste = w.scroll.min(zeilen.len().saturating_sub(n));
+        let stand = w.scroll.stand;
+        // Gleitend; nur ganz sichtbare Zeilen, was ueber den Rand gleitet, verschwindet.
         zeilen
             .into_iter()
-            .skip(erste)
-            .take(n)
             .enumerate()
-            .map(|(k, i)| (i, Rect { x: liste.x, y: liste.y + k as f32 * SKIN_FILES_ROW_H, w: liste.w, h: SKIN_FILES_ROW_H }))
+            .skip(w.scroll.first())
+            .take(skin_files_rows_visible() + 1)
+            .map(|(k, i)| (i, Rect { x: liste.x, y: liste.y + (k as f32 - stand) * SKIN_FILES_ROW_H, w: liste.w, h: SKIN_FILES_ROW_H }))
+            .filter(|(_, r)| r.y >= liste.y - 0.5 && r.y + r.h <= liste.y + liste.h + 0.5)
             .collect()
+    }
+
+    // So weit laesst sich das offene Dateifenster scrollen, in Zeilen.
+    pub(crate) fn skin_files_max_scroll(&self) -> Option<f32> {
+        let w = self.skin_files.as_ref()?;
+        Some(skin_tab::visible_rows(&w.entries, &w.expanded).len().saturating_sub(skin_files_rows_visible()) as f32)
     }
 
     // Kaestchen einer Zeile; links davon steht bei Ordnern der Pfeil zum Aufklappen.
@@ -1951,31 +1979,21 @@ impl App {
         true
     }
 
-    pub(crate) fn scroll_skin_files(&mut self, zeilen: f32) {
-        let Some(w) = self.skin_files.as_mut() else { return };
-        let n = skin_tab::visible_rows(&w.entries, &w.expanded).len();
-        let max = n.saturating_sub(skin_files_rows_visible());
-        let neu = w.scroll.min(max) as f32 - (zeilen * 3.0).round();
-        w.scroll = (neu.max(0.0) as usize).min(max);
+    // `weg` Zeilen Richtung Ende (s. App::wheel_units).
+    pub(crate) fn scroll_skin_files(&mut self, weg: f32) {
+        let Some(max) = self.skin_files_max_scroll() else { return };
+        if let Some(w) = self.skin_files.as_mut() {
+            w.scroll.push(weg, SKIN_FILES_ROWS_PER_NOTCH, max);
+        }
     }
 
-    // Mausrad im Skin-Tab: die Spalte unter dem Zeiger.
-    pub(crate) fn scroll_skin_column(&mut self, zeilen: f32) {
+    // Mausrad im Skin-Tab: die Spalte unter dem Zeiger, `weg` Kacheln Richtung Ende.
+    pub(crate) fn scroll_skin_column(&mut self, weg: f32) {
         use skin_tab::Column;
         let (x, y) = self.pointer();
         let Some(c) = [Column::Available, Column::Selected].into_iter().find(|&c| skin_column_rect(c).contains(x, y)) else { return };
-        let (links, rechts) = self.skin_columns();
-        let n = match c {
-            Column::Available => links.len(),
-            Column::Selected => rechts.len(),
-        };
-        let max = n.saturating_sub(skin_tiles_visible());
-        let stand = match c {
-            Column::Available => &mut self.skin_scroll,
-            Column::Selected => &mut self.skin_scroll_right,
-        };
-        let neu = (*stand).min(max) as f32 - zeilen.signum() * zeilen.abs().ceil();
-        *stand = (neu.max(0.0) as usize).min(max);
+        let max = self.skin_max_scroll(c);
+        self.skin_scroll[usize::from(c == Column::Selected)].push(weg, 1.0, max);
     }
 
     // Rand rechts im Skin-Tab: "Ordner öffnen" und "Neu laden", darunter der Schalter Zips automatisch entpacken.

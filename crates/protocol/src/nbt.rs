@@ -379,13 +379,15 @@ const STYLE_FIELDS: [(&str, u8); 5] =
 // Was ein Klick auf einen Abschnitt ausser "open_url" (das ist TextSpan::link) tun kann --
 // die Faelle aus Vanillas Screen.handleClickEvent, die ein Server in eine Chatzeile legen
 // kann. Nicht dabei: open_file (nur fuer clientseitig erzeugten Text, "userDefinable" =
-// false), change_page (nur Buecher), show_dialog und custom (Dialog-System, das dieser
-// Client nicht hat).
+// false), change_page (nur Buecher) und show_dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClickAction {
     RunCommand(String),
     SuggestCommand(String),
     CopyToClipboard(String),
+    // Seit 1.21.6 (nur im neuen Format): geht als ServerboundCustomClickAction an den Server.
+    // Heldeninsel legt so die Knoepfe in den Text ihrer Dialoge.
+    Custom { id: String, payload: Option<NbtValue> },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -565,6 +567,7 @@ fn click_action(value: &NbtValue) -> Option<ClickAction> {
             "run_command" => lies("command").map(ClickAction::RunCommand),
             "suggest_command" => lies("command").map(ClickAction::SuggestCommand),
             "copy_to_clipboard" => lies("value").map(ClickAction::CopyToClipboard),
+            "custom" if neu => ev.get("id").and_then(NbtValue::as_str).map(|id| ClickAction::Custom { id: id.to_string(), payload: ev.get("payload").cloned() }),
             _ => None,
         };
     }
@@ -1450,6 +1453,21 @@ mod json_text_tests {
         assert_eq!(aktion(&neu, "c").click, Some(ClickAction::CopyToClipboard("kopie".into())));
         let alt = json_text_to_spans(r#"{"text":"d","clickEvent":{"action":"run_command","value":"/home"}}"#);
         assert_eq!(aktion(&alt, "d").click, Some(ClickAction::RunCommand("/home".into())));
+    }
+
+    // custom (Heldeninsel: Knoepfe im Dialogtext) -- id und payload, nur im neuen Format.
+    #[test]
+    fn custom_klick_wird_gelesen() {
+        let spans = json_text_to_spans(r#"{"text":"k","click_event":{"action":"custom","id":"heldenui:1/0","payload":{}}}"#);
+        match aktion(&spans, "k").click {
+            Some(ClickAction::Custom { id, payload }) => {
+                assert_eq!(id, "heldenui:1/0");
+                assert!(payload.is_some());
+            }
+            andere => panic!("{andere:?}"),
+        }
+        let alt = json_text_to_spans(r#"{"text":"k","clickEvent":{"action":"custom","id":"x:y"}}"#);
+        assert_eq!(aktion(&alt, "k").click, None);
     }
 
     // Hover-Text wird vererbt, ein Kind mit eigenem Klick behaelt den geerbten Tooltip, und

@@ -41,6 +41,7 @@ pub mod terrain_vertex;
 pub mod vanilla_collision;
 pub mod vanilla_shapes;
 pub mod weather;
+pub mod water_blend;
 pub mod world_border;
 
 pub use biome_palette::{BiomeColors, BiomePalette};

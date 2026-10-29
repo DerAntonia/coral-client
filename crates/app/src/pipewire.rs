@@ -22,6 +22,8 @@ const DATEI: &str = "90-coral-client.conf";
 // So oft wird neu gemessen, solange der Audio-Tab offen ist. pw-top braucht selbst rund eine
 // Sekunde fuer zwei Durchlaeufe.
 const ABSTAND: Duration = Duration::from_secs(3);
+// So oft prueft "Audio automatisch optimieren" die Prioritaet von pipewire-pulse nach.
+const AUTO_ABSTAND: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Messung {
@@ -33,6 +35,16 @@ pub struct Messung {
     pub min_quantum: Option<u32>,
     // Was in der eigenen Datei steht (s. eigene_grenze), None = keine.
     pub eigene_grenze: Option<u32>,
+    // Wie pipewire-pulse gerade eingeplant ist (s. prioritaet), None = nicht gefunden.
+    pub pulse: Option<Prioritaet>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Prioritaet {
+    // Echtzeit-Prioritaet der Ton-Faeden (pw-data-loop), None = mindestens einer ohne Echtzeit.
+    pub echtzeit: Option<u32>,
+    // Nice des Haupt-Threads.
+    pub nice: i32,
 }
 
 impl Messung {
@@ -47,7 +59,14 @@ pub struct Status {
     laeuft: Arc<AtomicBool>,
     neu_oeffnen: Arc<AtomicBool>,
     fehler: Arc<Mutex<Option<String>>>,
+    // Fehlgeschlagene Messungen in Folge (s. messen_wenn_faellig).
+    fehlversuche: Arc<std::sync::atomic::AtomicU32>,
     letzte: Option<Instant>,
+    // Automatisch optimieren: fuer welche Zielgrenze zuletzt geprueft wurde, und wann.
+    auto_ziel: Option<Option<u32>>,
+    auto_letzte: Option<Instant>,
+    // Der Ton-Faden des Clients, der zuletzt Echtzeit bekommen hat (s. client_echtzeit).
+    client_faden: Option<u32>,
 }
 
 impl Status {
@@ -66,16 +85,21 @@ impl Status {
 
     // Neu messen, falls die letzte Messung alt genug ist und keine laeuft.
     pub fn messen_wenn_faellig(&mut self) {
-        if !cfg!(target_os = "linux") || self.laeuft.load(Ordering::Relaxed) || self.letzte.is_some_and(|t| t.elapsed() < ABSTAND) {
+        if !cfg!(target_os = "linux") || self.letzte.is_some_and(|t| t.elapsed() < ABSTAND) || self.laeuft.swap(true, Ordering::Relaxed) {
             return;
         }
         self.letzte = Some(Instant::now());
-        self.laeuft.store(true, Ordering::Relaxed);
-        let (ziel, laeuft) = (self.messung.clone(), self.laeuft.clone());
+        let (ziel, laeuft, fehlversuche) = (self.messung.clone(), self.laeuft.clone(), self.fehlversuche.clone());
         std::thread::spawn(move || {
             let m = messen(std::process::id());
+            // Ab und zu liefert pw-top einen Durchlauf ganz ohne Werte (alles 0) -- eine einzelne
+            // leere Messung ueberschreibt deshalb nicht die letzte gute, erst die dritte in Folge.
+            let versuche = if m.is_some() { 0 } else { fehlversuche.load(Ordering::Relaxed) + 1 };
+            fehlversuche.store(versuche, Ordering::Relaxed);
             if let Ok(mut z) = ziel.lock() {
-                *z = m;
+                if m.is_some() || versuche >= 3 {
+                    *z = m;
+                }
             }
             laeuft.store(false, Ordering::Relaxed);
         });
@@ -91,11 +115,66 @@ impl Status {
         self.letzte = None;
         std::thread::spawn(move || {
             let ergebnis = schreiben(frames, rate).and_then(|()| neu_starten());
+            if ergebnis.is_ok() {
+                neu.store(true, Ordering::Relaxed);
+            }
+            let ergebnis = ergebnis.and_then(|()| prioritaet_sichern());
             if let Ok(mut f) = fehler.lock() {
                 *f = ergebnis.as_ref().err().cloned();
             }
-            if ergebnis.is_ok() {
-                neu.store(true, Ordering::Relaxed);
+            laeuft.store(false, Ordering::Relaxed);
+        });
+    }
+
+    // "Audio automatisch optimieren": pipewire-pulse nur dann neu starten, wenn die eigene Grenze
+    // fuer `ziel` (s. grenze_fuer) noch nicht stimmt -- der Neustart reisst allen Programmen kurz
+    // den Ton ab. Fehlende Echtzeit oder Nice holt RTKit ohne Neustart nach (s.
+    // prioritaet_sichern). Ohne pipewire-pulse geschieht nichts.
+    pub fn auto_optimieren(&mut self, ziel: Option<u32>, rate: u32) {
+        let faellig = self.auto_ziel != Some(ziel) || self.auto_letzte.is_none_or(|t| t.elapsed() >= AUTO_ABSTAND);
+        if !cfg!(target_os = "linux") || !faellig || self.laeuft.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.auto_ziel = Some(ziel);
+        self.auto_letzte = Some(Instant::now());
+        let (laeuft, neu, fehler) = (self.laeuft.clone(), self.neu_oeffnen.clone(), self.fehler.clone());
+        let neustart = ziel.is_some() && eigene_grenze() != ziel;
+        if neustart {
+            self.letzte = None;
+        }
+        std::thread::spawn(move || {
+            let ergebnis = if pulse_pid().is_none() {
+                Ok(())
+            } else if neustart {
+                let r = schreiben(ziel, rate).and_then(|()| neu_starten());
+                if r.is_ok() {
+                    neu.store(true, Ordering::Relaxed);
+                }
+                r.and_then(|()| prioritaet_sichern())
+            } else {
+                prioritaet_sichern()
+            };
+            if let Ok(mut f) = fehler.lock() {
+                *f = ergebnis.err();
+            }
+            laeuft.store(false, Ordering::Relaxed);
+        });
+    }
+
+    // Den eigenen Ton-Faden (cpal-Callback) ueber RTKit in Echtzeit setzen, einmal je Faden --
+    // ein neu geoeffneter Strom hat einen neuen. Ohne das laeuft er mit normaler Prioritaet, und
+    // beim Start, wenn das Laden alle Kerne belegt, kam er bei 1 ms Puffer zu spaet: es knackte.
+    pub fn client_echtzeit(&mut self, tid: u32) {
+        if !cfg!(target_os = "linux") || tid == u32::MAX || self.client_faden == Some(tid) || self.laeuft.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.client_faden = Some(tid);
+        let (laeuft, fehler) = (self.laeuft.clone(), self.fehler.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = faden_echtzeit(tid) {
+                if let Ok(mut f) = fehler.lock() {
+                    *f = Some(e);
+                }
             }
             laeuft.store(false, Ordering::Relaxed);
         });
@@ -161,6 +240,96 @@ fn neu_starten() -> Result<(), String> {
     Ok(())
 }
 
+// Nach mehreren Neustarts kurz hintereinander lief pipewire-pulse ohne Echtzeit und mit Nice 0
+// (RTKit hat module-rt vermutlich abgewiesen) -- bei 64 Frames rauschte es dann ab und zu.
+// Fehlt die Prioritaet, wird sie ueber RTKit nachgeholt, mit denselben Werten wie module-rt.
+const RT_PRIO: u32 = 20;
+const NICE: i32 = -11;
+
+fn prioritaet_sichern() -> Result<(), String> {
+    let pid = pulse_pid().ok_or("pipewire-pulse nicht gefunden")?;
+    let faeden = faeden(pid);
+    let haupt_nice = faeden.iter().find(|(tid, _)| *tid == pid).map(|(_, f)| f.nice);
+    let ohne_echtzeit: Vec<u32> = faeden.iter().filter(|(_, f)| f.name == "pw-data-loop" && f.policy == 0).map(|(tid, _)| *tid).collect();
+    let (pid_s, prio_s, nice_s) = (pid.to_string(), RT_PRIO.to_string(), NICE.to_string());
+    for tid in ohne_echtzeit {
+        rtkit(&["MakeThreadRealtimeWithPID", "ttu", &pid_s, &tid.to_string(), &prio_s])?;
+    }
+    if haupt_nice.is_some_and(|n| n > NICE) {
+        rtkit(&["MakeThreadHighPriorityWithPID", "tti", &pid_s, &pid_s, "--", &nice_s])?;
+    }
+    Ok(())
+}
+
+fn rtkit(args: &[&str]) -> Result<(), String> {
+    let mut alle = vec!["call", "--system", "org.freedesktop.RealtimeKit1", "/org/freedesktop/RealtimeKit1", "org.freedesktop.RealtimeKit1"];
+    alle.extend_from_slice(args);
+    let status = std::process::Command::new("busctl").args(&alle).stdout(std::process::Stdio::null()).status().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("RTKit hat die Prioritaet abgelehnt".into())
+    }
+}
+
+// Unter pipewire-pulse (RT_PRIO): der Client liefert ihm zu, nicht umgekehrt.
+const CLIENT_RT_PRIO: u32 = 10;
+// RTKit gibt Echtzeit nur Prozessen mit begrenzter RLIMIT_RTTIME (Vorgabe hoechstens 200 ms
+// Rechenzeit am Stueck): ein haengender Echtzeit-Faden soll das System nicht einfrieren.
+const RTTIME_US: u64 = 200_000;
+
+#[cfg(target_os = "linux")]
+fn faden_echtzeit(tid: u32) -> Result<(), String> {
+    // SAFETY: getrlimit/setrlimit mit gueltigem Zeiger auf eine lokale Struktur.
+    unsafe {
+        let mut grenze: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_RTTIME, &mut grenze) == 0 && grenze.rlim_max > RTTIME_US {
+            let neu = libc::rlimit { rlim_cur: RTTIME_US, rlim_max: RTTIME_US };
+            libc::setrlimit(libc::RLIMIT_RTTIME, &neu);
+        }
+    }
+    rtkit(&["MakeThreadRealtimeWithPID", "ttu", &std::process::id().to_string(), &tid.to_string(), &CLIENT_RT_PRIO.to_string()])
+}
+
+#[cfg(not(target_os = "linux"))]
+fn faden_echtzeit(_tid: u32) -> Result<(), String> {
+    Ok(())
+}
+
+fn pulse_pid() -> Option<u32> {
+    ausgabe("systemctl", &["--user", "show", "-p", "MainPID", "--value", "pipewire-pulse.service"])?.trim().parse().ok().filter(|&p| p != 0)
+}
+
+fn faeden(pid: u32) -> Vec<(u32, Faden)> {
+    let Ok(ordner) = std::fs::read_dir(format!("/proc/{pid}/task")) else { return Vec::new() };
+    ordner
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .filter_map(|tid| Some((tid, aus_stat(&std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat")).ok()?)?)))
+        .collect()
+}
+
+fn prioritaet(faeden: &[(u32, Faden)], pid: u32) -> Option<Prioritaet> {
+    let nice = faeden.iter().find(|(tid, _)| *tid == pid)?.1.nice;
+    let ton: Vec<&Faden> = faeden.iter().map(|(_, f)| f).filter(|f| f.name == "pw-data-loop").collect();
+    let echtzeit = if !ton.is_empty() && ton.iter().all(|f| f.policy != 0) { ton.iter().map(|f| f.rt_prio).min() } else { None };
+    Some(Prioritaet { echtzeit, nice })
+}
+
+struct Faden {
+    name: String,
+    nice: i32,
+    rt_prio: u32,
+    policy: u32,
+}
+
+// /proc/<pid>/task/<tid>/stat: Name in Klammern (darf Leerzeichen enthalten), danach ab Feld 3
+// durchgezaehlt -- nice ist Feld 19, rt_priority Feld 40, policy Feld 41.
+fn aus_stat(text: &str) -> Option<Faden> {
+    let (start, ende) = (text.find('(')?, text.rfind(')')?);
+    let felder: Vec<&str> = text[ende + 1..].split_whitespace().collect();
+    Some(Faden { name: text[start + 1..ende].to_string(), nice: felder.get(19 - 3)?.parse().ok()?, rt_prio: felder.get(40 - 3)?.parse().ok()?, policy: felder.get(41 - 3)?.parse().ok()? })
+}
+
 fn ausgabe(programm: &str, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new(programm).args(args).stderr(std::process::Stdio::null()).output().ok()?;
     String::from_utf8(out.stdout).ok()
@@ -169,8 +338,9 @@ fn ausgabe(programm: &str, args: &[&str]) -> Option<String> {
 fn messen(pid: u32) -> Option<Messung> {
     let dump: serde_json::Value = serde_json::from_str(&ausgabe("pw-dump", &[])?).ok()?;
     let (knoten, min_quantum) = aus_dump(&dump, pid)?;
-    let (quantum, rate) = aus_top(&ausgabe("pw-top", &["-b", "-n", "2"])?, knoten)?;
-    Some(Messung { quantum, rate, min_quantum, eigene_grenze: eigene_grenze() })
+    let (quantum, rate) = aus_top(&ausgabe("pw-top", &["-b", "-n", "3"])?, knoten)?;
+    let pulse = pulse_pid().and_then(|p| prioritaet(&faeden(p), p));
+    Some(Messung { quantum, rate, min_quantum, eigene_grenze: eigene_grenze(), pulse })
 }
 
 // Der Ausgabe-Knoten dieses Prozesses und clock.min-quantum aus den Einstellungen.
@@ -212,7 +382,8 @@ fn aus_top(top: &str, knoten: u64) -> Option<(u32, u32)> {
             treiber = (quantum > 0 && rate > 0).then_some((quantum, rate));
         }
         if id == knoten {
-            treffer = if folger { treiber } else { treiber.or(treffer) };
+            // Ein Durchlauf ohne Werte (Treiber noch bei 0) laesst den vorigen Treffer stehen.
+            treffer = treiber.or(treffer);
         }
     }
     treffer
@@ -242,6 +413,33 @@ mod tests {
                    R   89     48  48000   6,6us   F32LE 2 48000  + ALSA plug-in\n";
         assert_eq!(aus_top(top, 89), Some((32, 48000)), "der Treiber zaehlt, nicht der Wunsch des Knotens");
         assert_eq!(aus_top(top, 7), None);
+    }
+
+    #[test]
+    fn leerer_durchlauf_laesst_den_letzten_wert_stehen() {
+        let top = "R   51     64  48000  10,6us   S32LE 2 48000 alsa_output\n\
+                   R   87     64  48000   6,6us   F32LE 2 48000  + ALSA plug-in\n\
+                   S   ID  QUANT   RATE    WAIT\n\
+                   R   51      0      0   0,0us   S32LE 2 48000 alsa_output\n\
+                   R   87      0      0   0,0us   F32LE 2 48000 ALSA plug-in\n";
+        assert_eq!(aus_top(top, 87), Some((64, 48000)));
+    }
+
+    #[test]
+    fn faden_aus_proc_stat() {
+        let stat = "250252 (pw-data-loop) S 1652 250250 250250 0 -1 4194624 74 0 0 0 0 0 0 0 -21 0 3 0 2954398 112455680 3131 18446744073709551615 1 1 0 0 0 0 0 4096 0 0 0 0 -1 3 20 2 0 0 0 0 0 0 0 0 0 0 0\n";
+        let f = aus_stat(stat).unwrap();
+        assert_eq!((f.name.as_str(), f.nice, f.rt_prio, f.policy), ("pw-data-loop", 0, 20, 2));
+    }
+
+    #[test]
+    fn prioritaet_braucht_echtzeit_in_allen_tonfaeden() {
+        let faden = |name: &str, nice, rt_prio, policy| Faden { name: name.into(), nice, rt_prio, policy };
+        let gut = [(1, faden("pipewire-pulse", -11, 0, 0)), (2, faden("module-rt", 0, 0, 0)), (3, faden("pw-data-loop", 0, 20, 2))];
+        assert_eq!(prioritaet(&gut, 1), Some(Prioritaet { echtzeit: Some(20), nice: -11 }));
+        let ohne = [(1, faden("pipewire-pulse", 0, 0, 0)), (3, faden("pw-data-loop", 0, 0, 0))];
+        assert_eq!(prioritaet(&ohne, 1), Some(Prioritaet { echtzeit: None, nice: 0 }));
+        assert_eq!(prioritaet(&ohne, 9), None);
     }
 
     #[test]

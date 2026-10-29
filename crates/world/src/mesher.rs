@@ -25,6 +25,7 @@ use crate::block_shapes::{BlockShapes, ShapeBox};
 use crate::block_uvs::BlockUvs;
 use crate::chunk::{is_solid, ChunkColumn, World, SECTION_SIZE, STATE_AIR};
 use crate::cross_shapes::CrossBlocks;
+use crate::water_blend::WaterBlend;
 use crate::fluid::{always_wet, FluidKind};
 use crate::state_props::property;
 
@@ -370,6 +371,8 @@ pub fn mesh_column_ao_fading(
         neighbors.target.get(x - base_x, y, z - base_z)
     };
 
+    // Wasserfarbe ueber Biomgrenzen gemischt (s. water_blend).
+    let wasser = WaterBlend::new(neighbors, biomes);
     let mut opaque = Vec::new();
     let mut translucent = Vec::new();
     // Zeitversetzte Animationen (s. desync_animations): der zuletzt begonnene Block und wo
@@ -414,12 +417,12 @@ pub fn mesh_column_ao_fading(
                     if !show_markers && is_marker_block(name) {
                         // Eine wassergefuellte Barriere zeigt trotzdem ihr Wasser.
                         if property(state, "waterlogged") == Some("true") {
-                            push_waterlogged_fill(&mut translucent, origin, x, y, z, colors.water, uvs, shapes, &block_at, [false; 6]);
+                            push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, [false; 6]);
                         }
                         continue;
                     }
                     let (tint, tint_only_up) = if is_water(name) {
-                        (colors.water, false)
+                        (wasser.at(local_x, y, local_z), false)
                     } else {
                         match tint_kind(name) {
                             TintKind::None => ([1.0, 1.0, 1.0], false),
@@ -449,7 +452,7 @@ pub fn mesh_column_ao_fading(
                         // normale waterlogged-Check unten (Box-Schleife) fuer Kreuz-Bloecke
                         // nie erreicht wird (continue oben).
                         if always_wet(name) {
-                            push_waterlogged_fill(&mut translucent, origin, x, y, z, colors.water, uvs, shapes, &block_at, [false; 6]);
+                            push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, [false; 6]);
                         }
                         // Zusaetzliche, unrotierte Geometrie eines Kreuz-Modells (z.B. die
                         // Hitbox-Deko-Ebenen eines PvP-Cobweb-Packs, s. assets::shapes::
@@ -539,7 +542,7 @@ pub fn mesh_column_ao_fading(
                             }
                         }
                         if property(state, "waterlogged") == Some("true") {
-                            push_waterlogged_fill(&mut translucent, origin, x, y, z, colors.water, uvs, shapes, &block_at, [false; 6]);
+                            push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, [false; 6]);
                         }
                         continue;
                     }
@@ -569,7 +572,7 @@ pub fn mesh_column_ao_fading(
                     // Bloecken oben gibt es hier keine always_wet-Wasserfuellung zusaetzlich
                     // noetig -- "water" IST schon die Fuellung).
                     if is_water_block {
-                        push_fluid_quads(&mut translucent, origin, x, y, z, state, FluidKind::Water, colors.water, uvs, shapes, &block_at);
+                        push_fluid_quads(&mut translucent, origin, x, y, z, state, FluidKind::Water, wasser.at(local_x, y, local_z), uvs, shapes, &block_at);
                         continue;
                     }
 
@@ -733,7 +736,7 @@ pub fn mesh_column_ao_fading(
                             // Kesselrand angewendet).
                             let (uv, t) = if shape_box.content[atlas_face] {
                                 let content_uv = uvs.content_rect(state, atlas_face).unwrap_or_else(|| uvs.face_rect(state, atlas_face));
-                                let content_tint = if name == "water_cauldron" { colors.water } else { [1.0, 1.0, 1.0] };
+                                let content_tint = if name == "water_cauldron" { wasser.at(local_x, y, local_z) } else { [1.0, 1.0, 1.0] };
                                 (content_uv, content_tint)
                             } else {
                                 let apply_tint = !tint_only_up || atlas_face == FACE_UP;
@@ -774,7 +777,28 @@ pub fn mesh_column_ao_fading(
                             // Weiche Beleuchtung: vier Eckwerte der Flaeche aus den Nachbarn,
                             // dann je Vertex bilinear an seiner Lage in der Flaeche (s.
                             // ambient_occlusion). Ohne sie bleibt es bei einer Farbe je Quad.
-                            let ao = (ao_strength > 0.0 && shapes.ao_flags(state) & crate::ambient_occlusion::AO_SKIP == 0).then(|| {
+                            // Treppe aus Schneeschichten (s. ambient_occlusion::snow_riser_bottom):
+                            // die Seitenflaeche beginnt erst an der Oberseite der niedrigeren
+                            // Schicht davor, und ihre Abdunklung laeuft nur ueber diesen Teil.
+                            let schnee = crate::ambient_occlusion::snow_layers(state).filter(|&l| l < 8);
+                            let schnee_seite = schnee.filter(|_| offset[1] == 0 && touches_cell_boundary(shape_box, offset));
+                            let mut ao_box = (shape_box.min, shape_box.max);
+                            let (quad_min, uv) = match schnee_seite {
+                                Some(l) => {
+                                    let unten = crate::ambient_occlusion::snow_riser_bottom(l, block_at(x + offset[0], y, z + offset[2]));
+                                    let hoehe = shape_box.max[1] - shape_box.min[1];
+                                    if unten > shape_box.min[1] && hoehe > 0.0 {
+                                        ao_box.0[1] = unten;
+                                        let [u0, v0, u1, v1] = uv;
+                                        let anteil = (shape_box.max[1] - unten) / hoehe;
+                                        ([quad_min[0], quad_min[1] + (unten - shape_box.min[1]), quad_min[2]], [u0, v0, u1, v0 + (v1 - v0) * anteil])
+                                    } else {
+                                        (quad_min, uv)
+                                    }
+                                }
+                                None => (quad_min, uv),
+                            };
+                            let ao_ecken = |nachschlagen: &dyn Fn(i32, i32, i32) -> u32| {
                                 let ecken = crate::ambient_occlusion::face_corners(
                                     (x, y, z),
                                     atlas_face,
@@ -783,13 +807,24 @@ pub fn mesh_column_ao_fading(
                                     // innen versetztes Quad als Aussenflaeche).
                                     touches_cell_boundary(shape_box, offset)
                                         || shapes.ao_flags(state) & crate::ambient_occlusion::AO_FULL_CUBE != 0,
-                                    |bx, by, bz| shapes.ao_flags(block_at(bx, by, bz)),
+                                    |bx, by, bz| {
+                                        let nachbar = nachschlagen(bx, by, bz);
+                                        let flags = shapes.ao_flags(nachbar);
+                                        match schnee {
+                                            Some(l) if atlas_face == FACE_UP => crate::ambient_occlusion::snow_top_flags(l, nachbar, flags),
+                                            _ => flags,
+                                        }
+                                    },
                                 );
-                                face_quad_corners(shape_box.min, shape_box.max, offset).map(|lokal| {
+                                face_quad_corners(ao_box.0, ao_box.1, offset).map(|mut lokal| {
+                                    if schnee_seite.is_some() {
+                                        lokal[1] = (lokal[1] - ao_box.0[1]) / (ao_box.1[1] - ao_box.0[1]).max(1e-4);
+                                    }
                                     let voll = crate::ambient_occlusion::vertex_ao(atlas_face, ecken, lokal);
                                     1.0 - (1.0 - voll) * ao_strength
                                 })
-                            });
+                            };
+                            let ao = (ao_strength > 0.0 && shapes.ao_flags(state) & crate::ambient_occlusion::AO_SKIP == 0).then(|| ao_ecken(&block_at));
                             // Eckabdunklung wie VOR der Aenderung, falls diese Flaeche an einer
                             // der `fades` haengt (s. mesh_column_ao_fading). Nur opak.
                             let ao_vorher = match ao {
@@ -803,17 +838,7 @@ pub fn mesh_column_ao_fading(
                                         let alt = |bx: i32, by: i32, bz: i32| {
                                             fades.iter().find(|(p, _)| *p == (bx, by, bz)).map_or_else(|| block_at(bx, by, bz), |(_, s)| *s)
                                         };
-                                        let ecken = crate::ambient_occlusion::face_corners(
-                                            (x, y, z),
-                                            atlas_face,
-                                            touches_cell_boundary(shape_box, offset)
-                                                || shapes.ao_flags(state) & crate::ambient_occlusion::AO_FULL_CUBE != 0,
-                                            |bx, by, bz| shapes.ao_flags(alt(bx, by, bz)),
-                                        );
-                                        Some(face_quad_corners(shape_box.min, shape_box.max, offset).map(|lokal| {
-                                            let voll = crate::ambient_occlusion::vertex_ao(atlas_face, ecken, lokal);
-                                            1.0 - (1.0 - voll) * ao_strength
-                                        }))
+                                        Some(ao_ecken(&alt))
                                     };
                                     vorher.filter(|v| *v != faktoren)
                                 }
@@ -889,7 +914,7 @@ pub fn mesh_column_ao_fading(
                     // Wasserbloecke ("water" selbst) sind hier ausgeschlossen (waeren sonst
                     // doppelt gezeichnet, s. is_water_block oben).
                     if !is_water_block && (property(state, "waterlogged") == Some("true") || always_wet(name)) {
-                        push_waterlogged_fill(&mut translucent, origin, x, y, z, colors.water, uvs, shapes, &block_at, own_faces);
+                        push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, own_faces);
                     }
                 }
             }

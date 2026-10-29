@@ -12,11 +12,12 @@ use protocol::nbt::TextSpan;
 
 use crate::dialog::{self, ActionButton, AfterAction, Body, Control, Dialog, Event, Kind, Source, Value};
 use crate::item_icons::UiSprite;
+use crate::smooth_scroll::SmoothScroll;
 use crate::text_field::TextField;
 use crate::{
     dialog_dim, push_styled_piece, push_typed_marker, rgb_to_rgba, span_lines, styled_button, styled_text, theme, ui_sound, vanilla_text, wrap_spans,
     wrap_spans_styled, App, AppMode, Button, ButtonAction, ChatLine, ConnStatus,
-    GpuState, Rect, UiOverlay, UiOverlayGroup, UiRect, UiText, UI_SCALE_NORMAL, UI_SCALE_SMALL,
+    GpuState, Rect, ScrollList, UiOverlay, UiOverlayGroup, UiRect, UiText, UI_SCALE_NORMAL, UI_SCALE_SMALL,
 };
 
 // Bildschirmpixel je GUI-Pixel einer Breitenangabe.
@@ -26,6 +27,8 @@ const PAD: f32 = 24.0;
 const GAP: f32 = 12.0;
 const BUTTON_GAP: f32 = 6.0;
 const CHECK_SIZE: f32 = 20.0;
+// Eine Mausrad-Raste scrollt so viele Pixel.
+const WHEEL_PX: f32 = 40.0;
 // So lange bleibt "Zurueck" im Warte-Fenster gesperrt (WaitingForResponseScreen: 5 s, ab
 // der ersten Sekunde sichtbar).
 const WAIT_BACK_AFTER_S: u64 = 5;
@@ -40,7 +43,8 @@ pub(crate) struct OpenDialog {
     // Die Knoepfe im Inhalt (multi_action, server_links, dialog_list), beim Oeffnen
     // aufgeloest.
     list: Vec<ActionButton>,
-    scroll: f32,
+    // In Pixeln des Inhalts.
+    scroll: SmoothScroll,
     dragging: Option<usize>,
     // Statt des Dialogs der Hinweis auf fremde Fenster (Vanillas Warnknopf neben dem Titel).
     info: bool,
@@ -56,7 +60,8 @@ impl OpenDialog {
 pub(crate) struct CodeOfConduct {
     text: String,
     dont_show_again: bool,
-    scroll: f32,
+    // In Pixeln.
+    scroll: SmoothScroll,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +201,7 @@ fn text_hits(gpu: &GpuState, rect: Rect, lines: &[ChatLine], v: f32) -> Vec<(Rec
                     protocol::nbt::ClickAction::RunCommand(c) => Event::RunCommand(c.clone()),
                     protocol::nbt::ClickAction::SuggestCommand(c) => Event::SuggestCommand(c.clone()),
                     protocol::nbt::ClickAction::CopyToClipboard(c) => Event::CopyToClipboard(c.clone()),
+                    protocol::nbt::ClickAction::Custom { id, payload } => Event::Custom { id: id.clone(), payload: payload.clone() },
                 })
             });
             if let Some(e) = ereignis {
@@ -290,7 +296,7 @@ impl App {
             .collect();
         let focus = fields.iter().position(Option::is_some);
         let war_offen = self.dialog_shown();
-        self.dialog = Some(OpenDialog { dialog: d, values, fields, focus, list, scroll: 0.0, dragging: None, info: false });
+        self.dialog = Some(OpenDialog { dialog: d, values, fields, focus, list, scroll: SmoothScroll::default(), dragging: None, info: false });
         self.dialog_waiting = None;
         if !war_offen && self.mode == AppMode::World {
             self.close_chat();
@@ -470,13 +476,64 @@ impl App {
         }
     }
 
-    pub(crate) fn dialog_scroll(&mut self, delta_px: f32) {
-        let max = self.gpu.as_ref().and_then(|g| self.dialog_layout(g)).map_or(0.0, |l| l.max_scroll);
+    // Mausrad: Dialog und Verhaltenskodex gleiten wie die Listen (s. smooth_scroll).
+    pub(crate) fn dialog_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
+        let weg = self.wheel_units(delta, WHEEL_PX, 1.0);
+        let (dialog_max, kodex_max) = self.dialog_scroll_max();
         if let Some(offen) = self.dialog.as_mut() {
-            offen.scroll = (offen.scroll - delta_px).clamp(0.0, max);
+            offen.scroll.push(weg, WHEEL_PX, dialog_max);
         }
         if let Some(c) = self.code_of_conduct.as_mut() {
-            c.scroll = (c.scroll - delta_px).max(0.0);
+            c.scroll.push(weg, WHEEL_PX, kodex_max);
+        }
+    }
+
+    // Wie weit Dialog und Verhaltenskodex scrollen koennen, in Pixeln.
+    fn dialog_scroll_max(&self) -> (f32, f32) {
+        let Some(gpu) = self.gpu.as_ref() else { return (0.0, 0.0) };
+        let dialog = self.dialog.as_ref().and_then(|_| self.dialog_layout(gpu)).map_or(0.0, |l| l.max_scroll);
+        let kodex = self.code_of_conduct_layout(gpu).map_or(0.0, |(_, zeilen, _, _, _, sichtbar)| zeilen.len().saturating_sub(sichtbar) as f32 * line_h(gpu));
+        (dialog, kodex)
+    }
+
+    pub(crate) fn tick_dialog_scroll(&mut self, dt: f32, rate: f32) {
+        if self.dialog.is_none() && self.code_of_conduct.is_none() {
+            return;
+        }
+        let (dialog_max, kodex_max) = self.dialog_scroll_max();
+        if let Some(offen) = self.dialog.as_mut() {
+            offen.scroll.tick(dt, rate, dialog_max);
+        }
+        if let Some(c) = self.code_of_conduct.as_mut() {
+            c.scroll.tick(dt, rate, kodex_max);
+        }
+    }
+
+    // Linksziehen (s. App::drag_scroll_grab): der Inhalt unter dem Zeiger, wenn er scrollt --
+    // nicht auf einem Regler oder Textfeld, die ziehen selbst bzw. setzen die Schreibmarke.
+    pub(crate) fn dialog_drag_list(&self) -> Option<ScrollList> {
+        let gpu = self.gpu.as_ref()?;
+        let (cx, cy) = self.cursor_pos;
+        let (dialog_max, kodex_max) = self.dialog_scroll_max();
+        if self.code_of_conduct.is_some() {
+            let (p, ..) = self.code_of_conduct_layout(gpu)?;
+            return (kodex_max > 0.0 && p.contains(cx, cy)).then_some(ScrollList::CodeOfConduct);
+        }
+        if self.dialog_notice_layout(gpu).is_some() || dialog_max <= 0.0 {
+            return None;
+        }
+        let l = self.dialog_layout(gpu)?;
+        let eigenes_ziehen = l.parts.iter().any(|(r, teil)| r.contains(cx, cy) && matches!(teil, Part::Slider(_) | Part::Field(_)));
+        (l.body.contains(cx, cy) && !eigenes_ziehen).then_some(ScrollList::Dialog)
+    }
+
+    // Scrollstand, Ende und Pixel je Einheit fuer das Ziehen (alles in Pixeln).
+    pub(crate) fn dialog_drag_scroll(&mut self, kodex: bool) -> Option<(&mut SmoothScroll, f32, f32)> {
+        let (dialog_max, kodex_max) = self.dialog_scroll_max();
+        if kodex {
+            self.code_of_conduct.as_mut().map(|c| (&mut c.scroll, WHEEL_PX, kodex_max))
+        } else {
+            self.dialog.as_mut().map(|o| (&mut o.scroll, WHEEL_PX, dialog_max))
         }
     }
 
@@ -579,7 +636,8 @@ impl App {
         let panel = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
         let body = Rect { x: panel.x, y: panel.y + kopf_h, w: panel.w, h: (h - kopf_h - fuss_h - PAD).max(0.0) };
         let max_scroll = (inhalt_h - body.h).max(0.0);
-        let scroll = offen.scroll.min(max_scroll);
+        // Gleitend, ueber den Rand gezogen auch ausserhalb (s. smooth_scroll).
+        let scroll = offen.scroll.stand;
 
         let mitte = panel.x + panel.w / 2.0;
         let mut parts = Vec::new();
@@ -735,7 +793,13 @@ impl App {
                         for (x, w, span) in abschnitte {
                             let farbe = span_color(span);
                             span_lines(gpu, span.style, x, x + w, y, farbe, *v, &mut |l| rects.push(UiRect { rect: l, color: farbe, ..UiRect::FLAT }));
-                            push_styled_piece(span.style, span.shadow, styled_text(span).into_owned(), x.round(), y.round(), farbe, *v, texts);
+                            // Gesetzt ist die Zeile nach Vanillas Breiten, in der eingestellten
+                            // Schrift ist Text aber anders breit: der Abschnitt mittig in seinen
+                            // Platz, sonst rueckt er gegen Bilder und Abstaende daneben.
+                            let text = styled_text(span).into_owned();
+                            let fett = if span.style & protocol::nbt::STYLE_BOLD != 0 { text.chars().count() as f32 * v } else { 0.0 };
+                            let eigen = gpu.measure_raw(&text, *v) + fett;
+                            push_styled_piece(span.style, span.shadow, text, (x + (w - eigen) / 2.0).round(), y.round(), farbe, *v, texts);
                         }
                     }
                 }
@@ -770,7 +834,7 @@ impl App {
                         if fokus {
                             let letzte = zeilen.last().map_or(0.0, |z| gpu.measure_raw(z, UI_SCALE_SMALL));
                             let cy_ = (r.y + 8.0 + (zeilen.len().max(1) - 1) as f32 * lh).min(r.y + r.h - lh);
-                            self.push_caret(rects, Rect { x: r.x + 12.0 + letzte, y: cy_, w: crate::CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, theme::text());
+                            self.push_caret(rects, gpu.caret_rect(r.x + 12.0 + letzte, cy_, UI_SCALE_SMALL));
                         }
                     } else {
                         self.push_text_field(gpu, feld, *r, fokus, rects, texts);
@@ -832,7 +896,7 @@ impl App {
         if l.max_scroll > 0.0 {
             let inhalt = l.body.h + l.max_scroll;
             let h = (l.body.h * l.body.h / inhalt).max(24.0);
-            let y = l.body.y + (l.body.h - h) * (offen.scroll.min(l.max_scroll) / l.max_scroll);
+            let y = l.body.y + (l.body.h - h) * (offen.scroll.stand / l.max_scroll).clamp(0.0, 1.0);
             rects.push(UiRect::rounded(Rect { x: l.panel.x + l.panel.w - 10.0, y, w: 4.0, h }, g(Slot::Border2), 2.0));
         }
         for (i, (r, br)) in l.footer.iter().enumerate() {
@@ -846,7 +910,7 @@ impl App {
         }
         if let Some(t) = tooltip {
             let (te, fe) = (texts.len(), rects.len());
-            self.build_chat_tooltip(gpu, &t, self.chat_scale(), self.chat_line_height(gpu), rects, texts, te, fe);
+            self.build_chat_tooltip(gpu, &t, self.chat_scale(), self.chat_text_height(gpu), rects, texts, te, fe);
         }
     }
 
@@ -1016,7 +1080,7 @@ impl App {
             }
             return;
         }
-        self.code_of_conduct = Some(CodeOfConduct { text, dont_show_again: false, scroll: 0.0 });
+        self.code_of_conduct = Some(CodeOfConduct { text, dont_show_again: false, scroll: SmoothScroll::default() });
         self.play_ui_sound(ui_sound::UiSound::Popup);
     }
 
@@ -1052,13 +1116,16 @@ impl App {
         let titel = Rect { x: p.x, y: p.y + PAD, w: p.w, h: gpu.text_height(UI_SCALE_NORMAL) };
         texts.push(gpu.centered_text(titel, vanilla_text("multiplayer.codeOfConduct.title", "Verhaltenskodex des Servers"), theme::text(), UI_SCALE_NORMAL));
         let lh = line_h(gpu);
-        let max_start = zeilen.len().saturating_sub(sichtbar);
-        let start = ((c.scroll / lh).floor() as usize).min(max_start);
         push_typed_marker(texts);
-        let mut y = titel.y + titel.h + 20.0;
-        for z in zeilen.iter().skip(start).take(sichtbar) {
-            texts.push(UiText { text: z.clone(), x: p.x + PAD, y, color: theme::text_2(), scale: UI_SCALE_SMALL });
-            y += lh;
+        // Gleitend; nur ganz sichtbare Zeilen, was ueber den Rand gleitet, verschwindet.
+        let oben = titel.y + titel.h + 20.0;
+        let unten = oben + sichtbar as f32 * lh;
+        let start = (c.scroll.stand.max(0.0) / lh).floor() as usize;
+        for (k, z) in zeilen.iter().enumerate().skip(start).take(sichtbar + 1) {
+            let y = (oben + k as f32 * lh - c.scroll.stand).round();
+            if y >= oben - 0.5 && y + lh <= unten + 0.5 {
+                texts.push(UiText { text: z.clone(), x: p.x + PAD, y, color: theme::text_2(), scale: UI_SCALE_SMALL });
+            }
         }
         let kasten = Rect { x: haken.x, y: haken.y, w: CHECK_SIZE, h: CHECK_SIZE };
         let k = self.hover_level(haken, haken.contains(cx, cy));

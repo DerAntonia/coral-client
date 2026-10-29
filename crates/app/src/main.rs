@@ -38,6 +38,7 @@ mod item_cooldowns;
 mod item_icons;
 mod item_model_input;
 mod latency_tuning;
+mod loading_screen;
 mod link_whitelist;
 mod lod;
 mod mesh_pool;
@@ -76,6 +77,7 @@ mod last_view;
 mod armor_hud;
 mod keystrokes;
 mod session_info;
+mod smooth_scroll;
 mod death_burst;
 mod ego_name;
 mod vanilla_sounds;
@@ -2124,6 +2126,13 @@ fn server_rows_visible() -> usize {
     (((server_list_bottom() - server_list_top() + SERVER_ROW_GAP) / (server_row_h() + SERVER_ROW_GAP)).floor() as usize).max(1)
 }
 
+// Bildlaufleiste links neben den Karten: Breite, Abstand zur Liste und wie weit daneben ein
+// Druck sie noch trifft.
+const SERVER_BAR_W: f32 = 8.0;
+const SERVER_BAR_GAP: f32 = 10.0;
+const SERVER_BAR_HIT: f32 = 6.0;
+const SERVER_SEARCH_MAX_CHARS: usize = 64;
+
 // Karte `i` bei Scrollstand `scroll` (in Karten, gleitend).
 fn server_card_rect(i: usize, scroll: f32) -> Rect {
     let p = server_panel();
@@ -2134,7 +2143,7 @@ fn server_card_rect(i: usize, scroll: f32) -> Rect {
 // (Fenster, Adressfeld, Namensfeld, Speichern, Abbrechen).
 fn server_dialog_layout() -> (Rect, Rect, Rect, Rect, Rect) {
     let (sw, sh) = ui_screen();
-    let (w, h) = (560.0, 390.0);
+    let (w, h) = (560.0, 446.0);
     let p = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
     let adresse = Rect { x: p.x + 24.0, y: p.y + 92.0, w: p.w - 48.0, h: 44.0 };
     let name = Rect { y: adresse.y + adresse.h + 40.0, ..adresse };
@@ -2149,6 +2158,13 @@ fn server_dialog_view_buttons() -> [Rect; 2] {
     let w = (name.w - 12.0) / 2.0;
     let erster = Rect { x: name.x, y: name.y + name.h + 40.0, w, h: 40.0 };
     [erster, Rect { x: erster.x + w + 12.0, ..erster }]
+}
+
+// Schalter "Namen anzeigen" rechts unter den Verbindungsbild-Knoepfen; die Beschriftung steht
+// links daneben.
+fn server_dialog_name_toggle() -> Rect {
+    let [_, letzter] = server_dialog_view_buttons();
+    Rect { x: letzter.x + letzter.w - TOGGLE_W, y: letzter.y + letzter.h + 16.0, w: TOGGLE_W, h: 40.0 }
 }
 
 // Rechtsklick-Menue einer Server-Karte: Zeilen "Bearbeiten" und "Loeschen".
@@ -2672,6 +2688,34 @@ fn token_display(gpu: &GpuState, token: &str, max_width: f32) -> String {
 // der ANFANG stehen: bei einem Servernamen/einer Adresse ist das der aussagekraeftige Teil.
 // Wie ellipsize, fuer eine Zeile aus farbigen Abschnitten: was nicht passt, endet mit "..."
 // in der Farbe des Abschnitts, in dem abgeschnitten wurde.
+// MOTD-Zeilen ohne den Leerraum, mit dem Server sie in Vanillas Liste zentrieren: gleich viele
+// fuehrende Leerzeichen in allen Zeilen (die Zeilen bleiben zueinander ausgerichtet) und die am
+// Ende. Sonst zaehlt der Rand mit, und eine eingerueckte MOTD passt nicht mehr gross in die Karte.
+fn trim_motd_padding(zeilen: &mut [Vec<protocol::nbt::TextSpan>]) {
+    let fuehrend = |z: &[protocol::nbt::TextSpan]| z.iter().flat_map(|s| s.text.chars()).take_while(|&c| c == ' ').count();
+    let gemeinsam = zeilen.iter().filter(|z| z.iter().any(|s| !s.text.trim().is_empty())).map(|z| fuehrend(z)).min().unwrap_or(0);
+    for z in zeilen.iter_mut() {
+        let mut weg = gemeinsam;
+        for span in z.iter_mut() {
+            let n = span.text.chars().take(weg).take_while(|&c| c == ' ').count();
+            span.text.drain(..n);
+            weg -= n;
+            if weg == 0 {
+                break;
+            }
+        }
+        while let Some(letzter) = z.last_mut() {
+            let ende = letzter.text.trim_end_matches(' ').len();
+            letzter.text.truncate(ende);
+            if !letzter.text.is_empty() {
+                break;
+            }
+            z.pop();
+        }
+        z.retain(|s| !s.text.is_empty());
+    }
+}
+
 fn ellipsize_spans(gpu: &GpuState, spans: &[protocol::nbt::TextSpan], scale: f32, max_width: f32) -> Vec<protocol::nbt::TextSpan> {
     if span_row_width(gpu, spans, scale) <= max_width {
         return spans.to_vec();
@@ -2783,6 +2827,7 @@ const SWAP_ROW: usize = 14;
 const COMPOSITING_ROW: usize = 15;
 const BLOCK_ROTATION_TOOLTIP: &str = "Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.";
 const ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
+const BLOCK_ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Block-Entities gezeichnet werden (Truhen, Betten, Shulkerkisten, Köpfe, Statuen, Schilder), in Blöcken. Außerhalb der Render-Distance nie. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 // Renderpfad: vorerst aus den Einstellungen genommen (der Shader-Pfad ruht), Zeile samt Knopf
 // zu den Shadereinstellungen stehen auskommentiert in buttons().
 #[allow(dead_code)]
@@ -2917,6 +2962,24 @@ fn step_in(steps: &[u32], value: u32, up: bool) -> u32 {
 // Linker Rand der Spalte `col` (0..3 Regler, 4 Schalter "Auf einmal").
 fn particle_column_x(col: usize) -> f32 {
     PARTICLE_TOGGLE_X + PARTICLE_TOGGLE_W + 24.0 + col as f32 * PARTICLE_COLUMN_W
+}
+
+// Gleitende Liste unter einer festen Kopfzeile (Partikel, Lichtstaerken): die Eintraege von
+// `n`, die beim Scrollstand `stand` ganz in den Zeilen 1..=sichtbar stehen, mit ihrer Hoehe.
+// Was ueber den Rand gleitet, verschwindet ganz -- es gibt kein Abschneiden.
+fn header_list_rows(n: usize, stand: f32, sichtbar: usize) -> Vec<(usize, f32)> {
+    let von = stand.max(0.0).floor() as usize;
+    (von..(von + sichtbar + 1).min(n))
+        .filter_map(|i| {
+            let platz = 1.0 + i as f32 - stand;
+            (platz >= 0.99 && platz <= sichtbar as f32 + 0.01).then(|| (i, settings_row_y(0) + platz * SETTINGS_ROW_H))
+        })
+        .collect()
+}
+
+// Erste Zeile fuer "a–b von n": der gleitende Stand, in die Liste geklemmt.
+fn header_list_first(n: usize, stand: f32, sichtbar: usize) -> usize {
+    (stand.max(0.0).round() as usize).min(n.saturating_sub(sichtbar))
 }
 
 // Wertfeld des Reglers in Spalte `col`: dort steht der Wert, der Regler beginnt SLIDER_GROW davor.
@@ -3105,13 +3168,21 @@ const ENTITY_DISTANCE_MIN: u32 = 16;
 const ENTITY_DISTANCE_MAX: u32 = 512;
 const ENTITY_DISTANCE_STEP: u32 = 16;
 const ENTITY_DISTANCE_DEFAULT: u32 = 128;
+// Block-Entity-Renderdistanz (Settings::block_entity_render_distance), in Bloecken: Truhen,
+// Betten, Shulker, Koepfe, Statuen, Schilder. Standard wie Vanilla (BlockEntityRenderer
+// getViewDistance 64), das Maximum heisst "unbegrenzt".
+const BLOCK_ENTITY_DISTANCE_MIN: u32 = 16;
+const BLOCK_ENTITY_DISTANCE_MAX: u32 = 512;
+const BLOCK_ENTITY_DISTANCE_STEP: u32 = 16;
+const BLOCK_ENTITY_DISTANCE_DEFAULT: u32 = 64;
 // Video-Tab, Abschnitt Sichtweite: Render-Distance (Settings::max_render_distance), Entity-
 // Weite, dann die Fernsicht aus dem Chunk-Saver (s. lod.rs) -- Weite und Detail. Das Modul
 // selbst speichert nur. Danach die Abschnitte Kamera (Sichtfeld je Perspektive, Projektion,
 // Abstand und Hoehe der 3. Person, s. Perspective), Darstellung und Treffer.
 const RENDER_DISTANCE_ROW: usize = 0;
 const ENTITY_DISTANCE_ROW: usize = RENDER_DISTANCE_ROW + 1;
-const LOD_DETAIL_ROW: usize = ENTITY_DISTANCE_ROW + 1;
+const BLOCK_ENTITY_DISTANCE_ROW: usize = ENTITY_DISTANCE_ROW + 1;
+const LOD_DETAIL_ROW: usize = BLOCK_ENTITY_DISTANCE_ROW + 1;
 const VIDEO_CAMERA_ROW: usize = LOD_DETAIL_ROW + 1;
 const VIDEO_ROW_COUNT: usize = DEATH_ANIM_ROW + 1;
 const RENDER_DISTANCE_TOOLTIP: &str = "Radius in Chunks um den Spieler, in dem geladene Chunks gezeichnet werden. Weiter draußen bleiben die Blockdaten geladen (kein Loch beim Zurückkommen), sie werden nur nicht gezeichnet. Unabhängig von der Sichtweite des Servers -- wirkt sofort, ohne neu zu verbinden. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
@@ -3165,7 +3236,9 @@ const HURT_CAM_MAX_DEGREES: f32 = 14.0;
 // Feuer vor den Augen (Settings::fire_mode).
 const FIRE_MODE_VANILLA: u8 = 0;
 const FIRE_MODE_CROSSHAIR: u8 = 1;
-const FIRE_MODE_NAMES: [&str; 2] = ["Vanilla", "Fadenkreuz"];
+// Gar nichts: kein Bild vor den Augen, kein gefaerbtes Fadenkreuz.
+const FIRE_MODE_OFF: u8 = 2;
+const FIRE_MODE_NAMES: [&str; 3] = ["Vanilla", "Fadenkreuz", "Aus"];
 
 // Sonstiges > No UI close (Settings::no_ui_close). Knopf-Reihenfolge wie besprochen,
 // gespeichert wird der Wert.
@@ -3254,7 +3327,9 @@ const AUDIO_BUFFER_INFO_ROW: usize = AUDIO_BUFFER_ROW + 1;
 // PipeWire (s. pipewire-Modul): womit der Graph laeuft, darunter dessen Untergrenze senken
 // oder wieder entfernen.
 const AUDIO_PIPEWIRE_ROW: usize = AUDIO_BUFFER_INFO_ROW + 1;
-const AUDIO_PIPEWIRE_SET_ROW: usize = AUDIO_PIPEWIRE_ROW + 1;
+const AUDIO_PIPEWIRE_PRIO_ROW: usize = AUDIO_PIPEWIRE_ROW + 1;
+const AUDIO_PIPEWIRE_SET_ROW: usize = AUDIO_PIPEWIRE_PRIO_ROW + 1;
+const AUDIO_AUTO_ROW: usize = AUDIO_PIPEWIRE_SET_ROW + 1;
 // Waehlbare Puffergroessen in Frames, 0 = Vorgabe des Systems (bei ALSA rund 100 ms). Was das
 // Geraet nicht kann, klemmt audio::low_latency_config auf seinen Bereich; was wirklich laeuft,
 // zeigt die Zeile darunter.
@@ -3274,7 +3349,7 @@ fn audio_buffer_label(frames: u32) -> String {
 
 // Chat-Einstellungen im Fenster des Chats im HUD-Editor (Rechtsklick auf den Chat), je Zeile
 // die Erklaerung beim Draufzeigen: Aussehen, dann Verlauf.
-const CHAT_TOOLTIPS: [&str; 7] = [
+const CHAT_TOOLTIPS: [&str; 9] = [
     "Textgröße des Chats in Prozent. 100 % ist die bisherige Größe. Mit DM Sans in Viertelschritten gestochen scharf, dazwischen wird gerundet; die Minecraft-Schrift ist Pixelkunst und nur bei 50/100/150/... % pixelgenau.",
     "Breite des Chats, solange er geschlossen ist (in Schriftpixeln, wächst mit der Textgröße). Geöffnet (T) nimmt er die ganze Bildschirmbreite.",
     "Wie stark der Hintergrund hinter dem Chattext abgedunkelt wird. 0 % = kein Hintergrund. Gilt auch für die Eingabezeile und die Verlaufsliste.",
@@ -3282,7 +3357,14 @@ const CHAT_TOOLTIPS: [&str; 7] = [
     "Wie viele Zeilen der Chat im Spiel zeigt.",
     "Wie viele Zeilen der Chat zeigt, während man tippt (T). Er rückt dann direkt über die Eingabezeile; mit dem Mausrad lässt sich durch den ganzen Verlauf blättern.",
     "Wie lange eine Nachricht im Spiel sichtbar bleibt, danach blendet sie schnell aus. Beim Tippen (T) ist der ganze Verlauf wieder da. Nie = Nachrichten bleiben stehen. Vanilla: 10 s.",
+    "Zusätzlicher Platz zwischen den Chatzeilen, in Prozent der Zeilenhöhe; der Text steht mittig darin. 0 % = dicht wie bisher. Vanilla: Chat Line Spacing, 0 %.",
+    "Java: der Chat hängt unten, neue Nachrichten schieben die älteren nach oben. Bedrock: der Chat hängt oben, neue Nachrichten kommen unten dazu, und blendet eine aus, rücken alle neueren nach oben. Gilt für den Chat im Spiel; der offene Chat (T) bleibt wie Java.",
 ];
+// Zeile der Wahl Java/Bedrock im Einstellungsfenster des Chats.
+const CHAT_STYLE_ROW: usize = 8;
+// Zeilenabstand im Chat (Settings::chat_line_spacing), in Prozent der Texthoehe.
+const CHAT_LINE_SPACING_MAX: u32 = 100;
+const CHAT_LINE_SPACING_STEP: u32 = 5;
 
 // Glint-Regler im Video-Tab (s. GLINT_SPEED_ROW).
 const GLINT_SPEED_TOOLTIP: &str =
@@ -3671,7 +3753,8 @@ fn hud_reset_button(row: usize) -> Rect {
 // settings_row_y -- Zeilen ausserhalb des sichtbaren Bereichs landen weit ausserhalb des
 // Bildes, damit stimmen Zeichnung, Klickflaechen und Tooltips ohne jeden Sonderfall. Auf
 // Seiten ohne Seiten-Scroll 0, unbegrenzt und ohne Abschnitte.
-static SETTINGS_SCROLL_FIRST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+// Die erste Zeile gleitend (f32-Bits, auch Bruchteile und jenseits der Seite, s. smooth_scroll).
+static SETTINGS_SCROLL_FIRST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static SETTINGS_SCROLL_BOTTOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(f32::INFINITY.to_bits());
 // Abschnittsmaske (s. SettingsPage::section_starts) in zwei Haelften: es gibt kein AtomicU128.
 static SETTINGS_SECTION_STARTS: [std::sync::atomic::AtomicU64; 2] = [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
@@ -3691,24 +3774,31 @@ const SETTINGS_SECTION_GAP: f32 = 12.0;
 
 fn settings_row_y(row: usize) -> f32 {
     use std::sync::atomic::Ordering::Relaxed;
-    let erste = SETTINGS_SCROLL_FIRST.load(Relaxed);
+    let erste = f32::from_bits(SETTINGS_SCROLL_FIRST.load(Relaxed));
     let unten = f32::from_bits(SETTINGS_SCROLL_BOTTOM.load(Relaxed));
     settings_row_y_in(row, erste, load_section_starts(), unten).unwrap_or(-10_000.0)
 }
 
-// Wo Zeile `row` steht, wenn Zeile `erste` oben ist; None, wenn sie darueber liegt oder nicht
-// mehr ganz vor `unten` passt. `starts`: Bit n = Abschnitt beginnt bei Zeile n. Vor jedem
-// Abschnittsanfang unterhalb von `erste` kommt SETTINGS_SECTION_GAP dazu. Ein Abschnitt, der
-// oben steht, braucht keine Trennlinie: dort zeigt der Reiter, wo man ist.
-fn settings_row_y_in(row: usize, erste: usize, starts: u128, unten: f32) -> Option<f32> {
-    if row < erste {
-        return None;
-    }
-    let bis = if row >= 127 { u128::MAX } else { (1u128 << (row + 1)) - 1 };
-    let ab = if erste >= 127 { 0 } else { !((1u128 << (erste + 1)) - 1) };
-    let luecken = (starts & bis & ab).count_ones();
-    let y = SETTINGS_FIRST_Y + (row - erste) as f32 * SETTINGS_ROW_H + luecken as f32 * SETTINGS_SECTION_GAP;
-    (y + SETTINGS_ROW_H <= unten).then_some(y)
+// Wo Zeile `row` steht, wenn Zeile `erste` oben ist (gleitend, auch Bruchteile); None, wenn
+// sie ueber die oberste Zeile ragt oder nicht mehr ganz vor `unten` passt. `starts`: Bit n =
+// Abschnitt beginnt bei Zeile n. Vor jedem Abschnittsanfang unterhalb von `erste` kommt
+// SETTINGS_SECTION_GAP dazu. Ein Abschnitt, der oben steht, braucht keine Trennlinie: dort
+// zeigt der Reiter, wo man ist.
+fn settings_row_y_in(row: usize, erste: f32, starts: u128, unten: f32) -> Option<f32> {
+    let y = SETTINGS_FIRST_Y + settings_row_pos(row as f32, starts) - settings_row_pos(erste, starts);
+    (y >= SETTINGS_FIRST_Y - 0.5 && y + SETTINGS_ROW_H <= unten).then_some(y)
+}
+
+// Abstand der Zeile `row` von Zeile 0, Abschnittsluecken eingerechnet. Zwischen zwei Zeilen
+// (beim Gleiten) linear, vor der ersten Zeile im Zeilenraster weiter.
+fn settings_row_pos(row: f32, starts: u128) -> f32 {
+    let ganz = |r: i64| {
+        let luecken = if r <= 0 { 0 } else { (starts & if r >= 127 { u128::MAX } else { (1u128 << (r + 1)) - 1 }).count_ones() };
+        r as f32 * SETTINGS_ROW_H + luecken as f32 * SETTINGS_SECTION_GAP
+    };
+    let unten = row.floor();
+    let a = ganz(unten as i64);
+    a + (row - unten) * (ganz(unten as i64 + 1) - a)
 }
 
 // Unterkante der Zeilen bei dieser Fensterhoehe -- darunter bleibt etwas Rand.
@@ -3720,7 +3810,7 @@ fn settings_rows_bottom(screen_h: f32) -> f32 {
 // sich die Seite scrollen. 0, wenn alles passt.
 fn settings_max_first(rows: usize, starts: u128, unten: f32) -> usize {
     let letzte = rows.saturating_sub(1);
-    (0..letzte).find(|&erste| settings_row_y_in(letzte, erste, starts, unten).is_some()).unwrap_or(letzte)
+    (0..letzte).find(|&erste| settings_row_y_in(letzte, erste as f32, starts, unten).is_some()).unwrap_or(letzte)
 }
 
 // Wie viele Einstellungs-Zeilen bei dieser Fensterhoehe ganz sichtbar sind -- darunter
@@ -4233,7 +4323,6 @@ const CURSOR_PRESS_TINT: f32 = 0.55;
 // Blinkende Schreibmarke im Adressfeld -- eigener Name, damit sie nicht mit den neuen
 // COLOR_CURSOR_*-Konstanten fuer den Mauszeiger verwechselt wird (zwei verschiedene Dinge).
 // Markierter Text: Theme-Farbe "Markierung" (s. App::push_selection_span).
-const COLOR_CARET: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const CARET_WIDTH_PX: f32 = 3.0;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(1000);
 // Schwaechste Deckkraft des Cursors im Blinken.
@@ -4406,6 +4495,8 @@ const COLOR_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const COLOR_ARMOR_LOW: [f32; 4] = [1.0, 170.0 / 255.0, 0.0, 1.0];
 // Fast neue Ruestung (s. Settings::armor_hud_green): das Gruen von §a.
 const COLOR_ARMOR_HIGH: [f32; 4] = [85.0 / 255.0, 1.0, 85.0 / 255.0, 1.0];
+// Rahmen um die noch getragenen Teile, solange ein abgelegtes daneben steht (Minecrafts Gelb).
+const COLOR_ARMOR_KEPT: [f32; 4] = [1.0, 1.0, 85.0 / 255.0, 1.0];
 // Absorptionsherzen blenden so lange ein und steigen dabei so viele GUI-Punkte von unten auf.
 const ABSORPTION_FADE_SECS: f32 = 0.25;
 const ABSORPTION_FADE_RISE: f32 = 4.0;
@@ -4641,6 +4732,8 @@ struct CursorFxFrame {
     scale: f32,
     rotation_deg: f32,
     additive: f32,
+    // Das Leuchten kommt von der rechten Taste: Akzent 2 statt Akzent.
+    right: bool,
     // Kreis unter dem Pfeil zeichnen (Settings::cursor_circle).
     circle: bool,
     // Breite des Pfeils als Faktor (Settings::cursor_width / 100).
@@ -4795,6 +4888,13 @@ const OUTLINE_PULL: f64 = 0.003;
 // Abdunklung des Weltbilds hinter den Menues in Prozent (s. world_backdrop_visible) -- Vorgabe
 // dunkel genug, dass Text darauf lesbar bleibt, hell genug, dass man die Welt erkennt.
 const MENU_BACKDROP_OPACITY_DEFAULT: u32 = 55;
+const SCROLL_INERTIA_DEFAULT: u32 = 50;
+// Scrollweite: wie weit eine Mausrad-Raste jede Liste bewegt, in Prozent ihres eigenen
+// Schritts (eine Zeile, eine Karte, ...).
+const SCROLL_DISTANCE_DEFAULT: u32 = 100;
+const SCROLL_DISTANCE_MIN: u32 = 25;
+const SCROLL_DISTANCE_MAX: u32 = 400;
+const SCROLL_DISTANCE_STEP: u32 = 25;
 
 // Breite der Container-Sheets in GUI-Pixeln (176, wie inventory::INVENTORY_SHEET_W).
 const INVENTORY_GUI_W: f32 = 176.0;
@@ -5677,8 +5777,8 @@ fn cursor_polygons(tip_pos: (f32, f32), screen_px: (f32, f32), fx: CursorFxFrame
         y1 = y1.max(y);
     }
     let pad = CURSOR_AA_PADDING_PX;
-    // Die Akzentfarbe des Themes (schon linear, wie die Oberflaeche rechnet).
-    let [ar, ag, ab, _] = theme::get(theme::Slot::Accent);
+    // Die Akzentfarbe des Themes (schon linear, wie die Oberflaeche rechnet), bei Rechtsklick Akzent 2.
+    let [ar, ag, ab, _] = theme::get(if fx.right { theme::Slot::Accent2 } else { theme::Slot::Accent });
     let kontur = CURSOR_OUTLINE_PX;
     CursorUniform {
         points,
@@ -6232,6 +6332,9 @@ struct GpuState {
     // Weitere Atlanten in anderen Schriften, nur solange eine Anzeige oder ein Bereich sie
     // will (s. App::wanted_fonts und ensure_fonts). Teilen das Layout des ersten.
     extra_fonts: Vec<FontAtlas>,
+    // Gewollte Atlanten, die noch im Hintergrund gerastert werden; bis dahin misst und zeichnet
+    // ihr Bereich in der allgemeinen Schrift (s. hud_font).
+    pending_fonts: Vec<font_atlas::PendingFont>,
     // Schriften der Resourcepacks (Server-HUD, Symbole), geteilt von allen Atlanten.
     pack_glyphs: Option<Arc<font_atlas::PackGlyphCache>>,
     // Mit welcher Schrift gerade gemessen wird (None = allgemeine): App setzt sie fuer die
@@ -7468,6 +7571,7 @@ impl GpuState {
             label_font: Default::default(),
             font_atlas,
             extra_fonts: Vec::new(),
+            pending_fonts: Vec::new(),
             pack_glyphs,
             layout_font: Default::default(),
             plain_numbers: Default::default(),
@@ -7739,6 +7843,13 @@ impl GpuState {
         self.layout_atlas().cell_height_px() * scale
     }
 
+    // Schreibcursor fuer Text, der bei `text_y` beginnt: so hoch wie eine Zeile, aber an der
+    // Oberkante der Grossbuchstaben ausgerichtet (s. FontAtlas::cap_top_px).
+    fn caret_rect(&self, x: f32, text_y: f32, scale: f32) -> Rect {
+        let y = (text_y + self.layout_atlas().cap_top_px() * scale).round();
+        Rect { x, y, w: CARET_WIDTH_PX, h: self.text_height(scale) }
+    }
+
     // Text mittig in ein Rechteck. Die Position wird auf ganze Pixel gerundet: ein
     // halber Pixel Versatz zerlegt den Bitmap-Font genauso wie eine Bruchskalierung,
     // nur subtiler -- die Glyphen wirken dann unruhig statt scharf.
@@ -7802,6 +7913,7 @@ impl GpuState {
         // push_bold_marker).
         let mut vom_server: Option<[f32; 4]> = None;
         let mut fett_naechster = false;
+        let mut getippt_naechster = false;
         for t in texts {
             if let Some(neu) = shadow_marker(t) {
                 stil = neu.unwrap_or(allgemein);
@@ -7816,6 +7928,7 @@ impl GpuState {
                 continue;
             }
             if is_typed_marker(t) {
+                getippt_naechster = true;
                 continue;
             }
             if let Some(an) = plain_numbers_marker(t) {
@@ -7874,7 +7987,10 @@ impl GpuState {
             let mehr = if fett { scale } else { 0.0 };
             // Die schaerfste Lage auf dem Pixelraster (s. FontAtlas::sharpest_shift). Fett
             // bleibt, wo es ist: dort sitzen die Zeichen mittig im verbreiterten Vorschub.
-            let x = if fett { t.x } else { t.x + atlas.sharpest_shift(&atlas.display_text(&t.text), &positionen, t.x, scale) };
+            // Getippter Text auch: die Verschiebung haengt am ganzen Text, mit jedem Zeichen
+            // ruckte sonst alles samt dem ersten Buchstaben, und der Cursor stand daneben.
+            let getippt = std::mem::take(&mut getippt_naechster);
+            let x = if fett || getippt { t.x } else { t.x + atlas.sharpest_shift(&atlas.display_text(&t.text), &positionen, t.x, scale) };
             for &ist_rand in durchgaenge {
                 for (k, (ch, &rel)) in atlas.display_text(&t.text).chars().zip(&positionen).enumerate() {
                     let pen_x = x + rel + k as f32 * mehr;
@@ -8449,17 +8565,37 @@ impl GpuState {
     // Bedarf -- eine TTF zu rastern kostet einen Moment.
     fn ensure_fonts(&mut self, installation: &mut assets::MinecraftInstallation, wanted: &[FontKind]) {
         let allgemein = self.font_atlas.kind();
-        self.extra_fonts.retain(|a| a.kind() != allgemein && wanted.contains(&a.kind()));
+        let gewollt = |k: FontKind| k != allgemein && wanted.contains(&k);
+        self.extra_fonts.retain(|a| gewollt(a.kind()));
+        // Nicht mehr gewollt: der Thread rechnet zu Ende, sein Ergebnis verfaellt.
+        self.pending_fonts.retain(|p| gewollt(p.kind()));
         for &kind in wanted {
-            if kind == allgemein || self.extra_fonts.iter().any(|a| a.kind() == kind) {
+            if kind == allgemein || self.extra_fonts.iter().any(|a| a.kind() == kind) || self.pending_fonts.iter().any(|p| p.kind() == kind) {
                 continue;
             }
-            match FontAtlas::build_shared(&self.device, &self.queue, installation, kind, self.font_atlas.bind_group_layout.clone()) {
-                Ok(mut atlas) => {
-                    atlas.set_pack(&self.device, self.pack_glyphs.clone());
-                    self.extra_fonts.push(atlas);
-                }
+            match FontAtlas::build_in_background(installation, kind) {
+                Ok(p) => self.pending_fonts.push(p),
                 Err(e) => eprintln!("[font] Zweitschrift {} nicht geladen: {e}", kind.label()),
+            }
+        }
+        // Hochladen hoechstens einen je Bild: ein Atlas sind mit Mip-Stufen 45 bis 70 MB.
+        let mut fertig = None;
+        for (i, p) in self.pending_fonts.iter().enumerate() {
+            match p.try_finish(&self.device, &self.queue, self.font_atlas.bind_group_layout.clone()) {
+                Ok(None) => continue,
+                Ok(Some(atlas)) => fertig = Some((i, Some(atlas))),
+                Err(()) => {
+                    eprintln!("[font] Zweitschrift {} nicht geladen: Thread ohne Ergebnis beendet", p.kind().label());
+                    fertig = Some((i, None));
+                }
+            }
+            break;
+        }
+        if let Some((i, atlas)) = fertig {
+            self.pending_fonts.remove(i);
+            if let Some(mut atlas) = atlas {
+                atlas.set_pack(&self.device, self.pack_glyphs.clone());
+                self.extra_fonts.push(atlas);
             }
         }
     }
@@ -9732,6 +9868,8 @@ fn format_ui_pitch(halbtoene: i32) -> String {
 
 // "256 Frames · 5,3 ms", dahinter in Klammern die gemessene Callback-Groesse, wenn sie von
 // der Anfrage abweicht -- das Backend darf die Anfrage umbiegen (Windows tut es meist).
+// Ohne ms-Angabe in der Klammer: die las sich wie die Rechenzeit des Callbacks, gemessen wird
+// aber nur, wie viele Frames er zuletzt gefuellt hat.
 // Zeile "PipeWire-Grenze": ein Knopf mit Beschriftung und Aktion, oder nur ein Text, warum es
 // nichts zu tun gibt (s. App::pipewire_knopf).
 enum PipewireKnopf {
@@ -9751,7 +9889,7 @@ fn format_audio_buffer(info: Option<&audio::BufferInfo>) -> String {
         None => "Backend-Vorgabe".to_string(),
     };
     if gemessen != 0 && Some(gemessen) != info.requested_frames {
-        text.push_str(&format!(" (Callback {gemessen} · {} ms)", ms(gemessen)));
+        text.push_str(&format!(" (Callback füllte {gemessen} Frames)"));
     }
     text
 }
@@ -10092,7 +10230,7 @@ impl MenuScreen {
             MenuScreen::SettingsInventory => Some(SettingsPage { rows: 8, sections: &[("Allgemein", 0), ("Tränke", 5)] }),
             MenuScreen::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[] }),
             MenuScreen::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
-            MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_PIPEWIRE_SET_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
+            MenuScreen::SettingsAudio => Some(SettingsPage { rows: AUDIO_AUTO_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
             MenuScreen::SettingsFont => Some(SettingsPage { rows: STABLE_NUMBERS_ROW + 1, sections: &[("Standard", 0), ("Ausnahmen", FONT_EXCEPTIONS_ROW), ("Zahlen", STABLE_NUMBERS_ROW)] }),
             MenuScreen::SettingsLanguage => Some(SettingsPage { rows: LOANWORDS_ROW + 1, sections: &[("Sprachen", 0), ("Schreibweise", LATIN_MACRONS_ROW)] }),
@@ -10226,7 +10364,10 @@ enum EditableValue {
     GlintStrength,
     PlayerListScale,
     MenuBackdropOpacity,
+    ScrollInertia,
+    ScrollDistance,
     EntityRenderDistance,
+    BlockEntityRenderDistance,
     // Sens-Rechner (s. MenuScreen::SettingsSensCalc).
     CalcMinecraftSens,
     CalcDpi,
@@ -10305,15 +10446,44 @@ enum Choice {
 struct Dropdown {
     choice: Choice,
     anchor: Rect,
-    scroll: usize,
+    // Scrollstand in Eintraegen (s. tick_ui_anim).
+    scroll: smooth_scroll::SmoothScroll,
     mode: AppMode,
     screen: MenuScreen,
     module_menu: bool,
 }
 
+// Eine Liste, die sich mit gedrueckter linker Taste ziehen laesst (s. smooth_scroll::DragGrip).
+// Die Einstellungsseite merkt sich ihren Screen: wechselt er waehrend des Ziehens, gilt das
+// Ziehen als vorbei.
+#[derive(Clone, Copy, PartialEq)]
+enum ScrollList {
+    SettingsPage(MenuScreen),
+    Particles,
+    LightLevels,
+    ModuleMenu,
+    Dropdown,
+    Dialog,
+    CodeOfConduct,
+}
+
 const DROPDOWN_ITEM_H: f32 = 36.0;
 const DROPDOWN_MAX_ITEMS: usize = 8;
-const DROPDOWN_PAD: f32 = 6.0;
+// Innenabstand zum Rahmen. Oben und unten liegt darin die Linie am Listenende (s.
+// build_dropdown) -- sie soll nicht in den ersten Eintrag ragen.
+const DROPDOWN_PAD: f32 = 8.0;
+// Bildlaufleiste rechts, breit wie in osu!lazer; die Eintraege ruecken dafuer zur Seite.
+const DROPDOWN_BAR_W: f32 = 8.0;
+
+// Wie schnell eine Liste dem Mausrad nachgleitet, als Rate je Sekunde fuer
+// `1 - exp(-dt * rate)`: 0 % springt sofort, 50 % ist etwa die Rate der Serverliste (16/s),
+// 100 % gleitet traege mit 4/s aus.
+fn scroll_inertia_rate(prozent: u32) -> f32 {
+    if prozent == 0 {
+        return f32::INFINITY;
+    }
+    60.0 * (4.0f32 / 60.0).powf(prozent.min(100) as f32 / 100.0)
+}
 
 // Plaetze je Seite des Server-Icon-Atlas (8x8 = 64 Server).
 const SERVER_ICON_GRID: u32 = 8;
@@ -10380,9 +10550,11 @@ const SWATCH_W: f32 = 54.0;
 // Hintergrundbild und darunter dessen Knopf "Bild waehlen" bzw. der Pfad.
 const MENU_BACKDROP_ROW: usize = 0;
 const WALLPAPER_ROW: usize = 1;
+const SCROLL_INERTIA_ROW: usize = 2;
+const SCROLL_DISTANCE_ROW: usize = 3;
 // Rechts neben der Wahl: "Bild wählen..." bzw. der Pfad des Desktop-Bildes.
 const WALLPAPER_PICK_X: f32 = SETTINGS_CTRL_X + 230.0;
-const DESIGN_THEME_ROW: usize = 2;
+const DESIGN_THEME_ROW: usize = 4;
 // Trennlinie zwischen Kacheln und Farben.
 const THEME_DIVIDER_X: f32 = 856.0;
 const THEME_TILE_COLS: usize = 3;
@@ -10392,7 +10564,7 @@ const THEME_TILE_W: f32 = ((THEME_DIVIDER_X - 16.0 - SETTINGS_LABEL_X - (THEME_T
 const THEME_COLORS_X: f32 = THEME_DIVIDER_X + 24.0;
 const THEME_COLOR_COL_W: f32 = 400.0;
 const THEME_COLOR_SWATCH_DX: f32 = 220.0;
-const THEME_COLOR_ROWS: usize = theme::SLOT_COUNT.div_ceil(2);
+const THEME_COLOR_ROWS: usize = theme::EDITABLE.len().div_ceil(2);
 const THEME_NAME_MAX: usize = 24;
 // Anzahl der Kacheln (Presets, eigene Themes, "+"), gesetzt von App::sync_settings_scroll --
 // davon haengt ab, wie viele Zeilen die Seite hat (s. design_row_count).
@@ -10441,6 +10613,12 @@ fn parse_custom_theme(value: &str) -> Option<CustomTheme> {
     }
     if werte.len() <= theme::Slot::Selection.index() {
         colors[theme::Slot::Selection.index()] = colors[theme::Slot::Accent.index()];
+    }
+    if werte.len() <= theme::Slot::Accent2.index() {
+        colors[theme::Slot::Accent2.index()] = theme::accent2_for(colors[theme::Slot::Accent.index()]);
+    }
+    if werte.len() <= theme::Slot::Accent2Hover.index() {
+        theme::derive_accent2_tones(&mut colors);
     }
     let name: String = name.trim().chars().filter(|c| !c.is_control()).take(THEME_NAME_MAX).collect();
     (!name.is_empty()).then_some(CustomTheme { name, colors })
@@ -10628,7 +10806,7 @@ impl EditableValue {
     // statt am Geschmack: Chunk-Update-Threads (1..32, an der Kernzahl bemessen),
     // Render-Ahead (0..4), sowie alles, was gar keine Zahl ist (Projektion,
     // Fadenkreuz-Farbe, Audiogeraet).
-    const ALL: [EditableValue; 67] = [
+    const ALL: [EditableValue; 70] = [
         EditableValue::MouseSensitivity,
         EditableValue::MouseSensitivityY,
         EditableValue::CursorSensitivity,
@@ -10647,7 +10825,10 @@ impl EditableValue {
         EditableValue::GlintStrength,
         EditableValue::PlayerListScale,
         EditableValue::MenuBackdropOpacity,
+        EditableValue::ScrollInertia,
+        EditableValue::ScrollDistance,
         EditableValue::EntityRenderDistance,
+        EditableValue::BlockEntityRenderDistance,
         EditableValue::CalcMinecraftSens,
         EditableValue::CalcDpi,
         EditableValue::MasterVolume,
@@ -10717,6 +10898,8 @@ impl EditableValue {
                 r(MAX_RENDER_DISTANCE_MIN as f64, (MAX_RENDER_DISTANCE_MAX as f64 / 2.0).max(8.0).min(MAX_RENDER_DISTANCE_MAX as f64), MAX_RENDER_DISTANCE_MAX as f64, 0)
             }
             EditableValue::EntityRenderDistance => r(ENTITY_DISTANCE_MIN as f64, 128.0, ENTITY_DISTANCE_MAX as f64, 0),
+            EditableValue::BlockEntityRenderDistance => r(BLOCK_ENTITY_DISTANCE_MIN as f64, 128.0, BLOCK_ENTITY_DISTANCE_MAX as f64, 0),
+            EditableValue::ScrollDistance => r(SCROLL_DISTANCE_MIN as f64, SCROLL_DISTANCE_MAX as f64, SCROLL_DISTANCE_MAX as f64, 0),
             EditableValue::CalcMinecraftSens => r(0.0, 200.0, 200.0, 0),
             EditableValue::CalcDpi => r(SENS_CALC_DPI_MIN as f64, 3200.0, SENS_CALC_DPI_MAX as f64, 0),
             EditableValue::PlayerListScale => r(HUD_SCALE_PCT_MIN as f64, HUD_SCALE_PCT_MAX as f64, HUD_SCALE_PCT_MAX as f64, 0),
@@ -10724,6 +10907,7 @@ impl EditableValue {
             | EditableValue::GlintSpeed
             | EditableValue::GlintStrength
             | EditableValue::MenuBackdropOpacity
+            | EditableValue::ScrollInertia
             | EditableValue::MasterVolume
             | EditableValue::CategoryVolume(_)
             | EditableValue::UiSoundVolume(_)
@@ -10767,7 +10951,7 @@ impl EditableValue {
     fn box_digits(self) -> u8 {
         match self {
             EditableValue::MouseSensitivity | EditableValue::MouseSensitivityY | EditableValue::CursorSensitivity => 6,
-            EditableValue::FpsLimit | EditableValue::EntityRenderDistance | EditableValue::CalcDpi => 4,
+            EditableValue::FpsLimit | EditableValue::EntityRenderDistance | EditableValue::BlockEntityRenderDistance | EditableValue::CalcDpi => 4,
             _ => 3,
         }
     }
@@ -10782,10 +10966,11 @@ impl EditableValue {
             | EditableValue::CameraDistance(_)
             | EditableValue::CameraYOffset(_)
             | EditableValue::MaxRenderDistance
-            | EditableValue::EntityRenderDistance => MenuScreen::SettingsVideo,
+            | EditableValue::EntityRenderDistance
+            | EditableValue::BlockEntityRenderDistance => MenuScreen::SettingsVideo,
             EditableValue::InventoryTransparency => MenuScreen::SettingsInventory,
             EditableValue::GlintSpeed | EditableValue::GlintStrength | EditableValue::PlayerListScale => MenuScreen::SettingsVideo,
-            EditableValue::MenuBackdropOpacity => MenuScreen::SettingsDesign,
+            EditableValue::MenuBackdropOpacity | EditableValue::ScrollInertia | EditableValue::ScrollDistance => MenuScreen::SettingsDesign,
             EditableValue::CalcMinecraftSens | EditableValue::CalcDpi => MenuScreen::SettingsSensCalc,
             EditableValue::MasterVolume | EditableValue::CategoryVolume(_) | EditableValue::UiSoundVolume(_) => MenuScreen::SettingsAudio,
             EditableValue::ShadowThickness(_) | EditableValue::ShadowOpacity(_) => MenuScreen::SettingsFont,
@@ -10822,7 +11007,7 @@ impl EditableValue {
     }
 
     fn allows_unlimited(self) -> bool {
-        matches!(self, EditableValue::FpsLimit | EditableValue::MaxRenderDistance | EditableValue::EntityRenderDistance)
+        matches!(self, EditableValue::FpsLimit | EditableValue::MaxRenderDistance | EditableValue::EntityRenderDistance | EditableValue::BlockEntityRenderDistance)
     }
 
     // Bildschirm-Rechteck des Wertfelds -- dieselbe Position, die auch die normale Anzeige
@@ -10849,7 +11034,10 @@ impl EditableValue {
             EditableValue::GlintStrength => stepper_value_rect(GLINT_STRENGTH_ROW),
             EditableValue::PlayerListScale => stepper_value_rect(PLAYER_LIST_SCALE_ROW),
             EditableValue::MenuBackdropOpacity => stepper_value_rect(MENU_BACKDROP_ROW),
+            EditableValue::ScrollInertia => stepper_value_rect(SCROLL_INERTIA_ROW),
+            EditableValue::ScrollDistance => stepper_value_rect(SCROLL_DISTANCE_ROW),
             EditableValue::EntityRenderDistance => stepper_value_rect(ENTITY_DISTANCE_ROW),
+            EditableValue::BlockEntityRenderDistance => stepper_value_rect(BLOCK_ENTITY_DISTANCE_ROW),
             EditableValue::CalcMinecraftSens => stepper_value_rect(SENS_CALC_MC_ROW),
             EditableValue::CalcDpi => stepper_value_rect(SENS_CALC_DPI_ROW),
             EditableValue::MasterVolume => stepper_value_rect(AUDIO_MASTER_ROW),
@@ -12058,7 +12246,7 @@ struct Settings {
     // Groesse in Prozent der GUI-Skala, wie bei den Effekten.
     hud_bossbar_scale: u32,
     // GUI-Skalierung der Hotbar: 0 = Auto (Vanillas "Auto", so gross wie das Grundraster
-    // erlaubt, s. inventory::gui_scale), 1..4 = fest wie Vanillas x1..x4.
+    // erlaubt, s. inventory::gui_scale), sonst fest (bis inventory::max_gui_scale).
     hud_hotbar_scale: u32,
     // Haltbarkeitsbalken in der Hotbar erst, wenn hoechstens so viel Prozent uebrig sind
     // (100 = immer, wie Vanilla).
@@ -12091,6 +12279,10 @@ struct Settings {
     // Abdunkeln ueber der Eingabezeile bei offenem Chat, in Prozent (s. build_chat_overlay).
     chat_open_dim: u32,
     chat_fade_secs: u32,
+    // Zusaetzlicher Abstand zwischen Chatzeilen, 0..100 % der Texthoehe (s. App::chat_line_height).
+    chat_line_spacing: u32,
+    // Chat im Spiel wie Bedrock: oben verankert statt unten (s. CHAT_TOOLTIPS).
+    chat_bedrock: bool,
     // Index in CROSSHAIR_COLOR_MODES.
     crosshair_color_mode: usize,
     // Farbe im Modus Einfarbig: Ton in Grad, Saettigung und Helligkeit in Prozent.
@@ -12140,7 +12332,7 @@ struct Settings {
     // Lichtstaerken: Faktor in Prozent je Blockname (nur Eintraege ungleich 100), s.
     // world::light::set_light_factors.
     light_factors: Vec<(String, u32)>,
-    // GUI-Skalierung des Inventarfensters: 0 = Auto, 1..4 = fest (Vanillas x1..x4).
+    // GUI-Skalierung des Inventarfensters: 0 = Auto, sonst fest (bis inventory::max_gui_scale).
     inventory_scale: u32,
     // Vanillas Barrierefreiheits-Optionen "Glint Speed" und "Glint Strength" in Prozent
     // (GameOptions.glintSpeed/glintStrength, 0..1, Vorgaben 0.5 und 0.75): wie schnell der
@@ -12151,9 +12343,16 @@ struct Settings {
     player_list_scale: u32,
     // Abdunklung des Weltbilds hinter den Menues, 0..100 %.
     menu_backdrop_opacity: u32,
+    // Aussehen: wie traege Listen dem Mausrad nachgleiten, 0..100 % (s. scroll_inertia_rate).
+    scroll_inertia: u32,
+    // Aussehen: Scrollweite in Prozent (s. SCROLL_DISTANCE_DEFAULT).
+    scroll_distance: u32,
     // Entities weiter weg als so viele Bloecke werden nicht gezeichnet (ENTITY_DISTANCE_MAX =
     // unbegrenzt), s. App::entity_in_render_distance.
     entity_render_distance: u32,
+    // Block-Entities weiter weg als so viele Bloecke werden nicht gezeichnet
+    // (BLOCK_ENTITY_DISTANCE_MAX = unbegrenzt), s. App::block_entity_shown.
+    block_entity_render_distance: u32,
     // Vertikales Sichtfeld in Grad (Vanilla-Default 70, Bereich FOV_MIN..FOV_MAX). Wird pro
     // Frame auf die Kamera uebertragen (s. render-Zweig), fliesst in die Perspektive UND als
     // tan(fov/2) in die nichtlinearen Projektionen.
@@ -12227,6 +12426,9 @@ struct Settings {
     // Angefragter Ausgabepuffer in Frames, 0 = Vorgabe des Systems (s. AUDIO_BUFFER_CHOICES).
     // Privat wie das Geraet: was ohne Knacksen geht, haengt an Rechner und Kopfhoerer.
     audio_buffer_frames: u32,
+    // Audio-Tab: PipeWire-Grenze und Prioritaet von pipewire-pulse selbst pflegen (s.
+    // pipewire::Status::auto_optimieren).
+    audio_auto_optimize: bool,
     // Master-Tonhoehe fuer UI-Klaenge aus Aufnahmen, in Halbtoenen (s. audio::semitone_factor).
     // Wirkt NUR auf den Aufnahme-Pfad von play_ui_sound, nicht auf Signaltoene wie den
     // Totem-Pop (audio::CueSink::play) -- der Regler ist zum Durchprobieren von
@@ -12768,6 +12970,7 @@ fn is_private_setting(key: &str) -> bool {
             | "fps_limit_hz"
             | "audio_output_device"
             | "audio_buffer_frames"
+            | "audio_auto_optimize"
             | "voice_mic_device"
             | "chunk_update_threads"
             | "chunk_saver_threads"
@@ -12811,6 +13014,9 @@ struct ServerEntry {
     // false = vom ersten (kurz nach dem Betreten). None = nicht eingestellt, dann nach
     // server_view_last_default.
     view_last: Option<bool>,
+    // Namen auf der Karte zeigen. Aus: die Karte zeigt nur die MOTD wie ohne Namen -- solange
+    // es eine gibt; sonst (Ping laeuft, offline) steht der Name weiter statt der Adresse.
+    show_name: bool,
 }
 
 // Ohne eigene Einstellung: Server mit "smp" im Namen oder in der Adresse vom letzten Moment
@@ -12837,16 +13043,17 @@ fn parse_servers(text: &str) -> Vec<ServerEntry> {
             if address.is_empty() {
                 return None;
             }
-            // Dritte Spalte (optional): Verbindungsbild "first" oder "last".
-            let (address, view_last) = match address.split_once('\t') {
-                Some((a, v)) => (a.trim(), match v.trim() {
-                    "last" => Some(true),
-                    "first" => Some(false),
-                    _ => None,
-                }),
-                None => (address, None),
+            // Dritte Spalte (optional): Verbindungsbild "first" oder "last" ("-" = Vorgabe).
+            // Vierte (optional): "noname" = Namen auf der Karte nicht zeigen.
+            let mut spalten = address.split('\t');
+            let address = spalten.next().unwrap_or("").trim();
+            let view_last = match spalten.next().map(str::trim) {
+                Some("last") => Some(true),
+                Some("first") => Some(false),
+                _ => None,
             };
-            Some(ServerEntry { name: name.trim().to_string(), address: address.to_string(), view_last })
+            let show_name = spalten.next().map(str::trim) != Some("noname");
+            Some(ServerEntry { name: name.trim().to_string(), address: address.to_string(), view_last, show_name })
         })
         .collect()
 }
@@ -12906,9 +13113,13 @@ fn save_servers(servers: &[ServerEntry]) -> std::io::Result<()> {
     }
     let body: String = servers
         .iter()
-        .map(|s| match s.view_last {
-            Some(v) => format!("{}\t{}\t{}\n", s.name, s.address, if v { "last" } else { "first" }),
-            None => format!("{}\t{}\n", s.name, s.address),
+        .map(|s| {
+            let ansicht = s.view_last.map(|v| if v { "last" } else { "first" });
+            match (ansicht, s.show_name) {
+                (Some(v), true) => format!("{}\t{}\t{v}\n", s.name, s.address),
+                (None, true) => format!("{}\t{}\n", s.name, s.address),
+                (v, false) => format!("{}\t{}\t{}\tnoname\n", s.name, s.address, v.unwrap_or("-")),
+            }
         })
         .collect();
     std::fs::write(&path, body)
@@ -12936,6 +13147,8 @@ struct ServerEdit {
     last_press: Option<(Instant, (f32, f32))>,
     // Verbindungsbild, s. ServerEntry::view_last.
     view_last: Option<bool>,
+    // s. ServerEntry::show_name.
+    show_name: bool,
 }
 
 impl ServerEdit {
@@ -13007,7 +13220,8 @@ struct SkinFilesWindow {
     title: String,
     entries: Vec<skin_tab::FileEntry>,
     expanded: std::collections::HashSet<String>,
-    scroll: usize,
+    // In Zeilen der aufgeklappten Liste.
+    scroll: smooth_scroll::SmoothScroll,
 }
 
 // Skin-Tab: zwei Spalten mit Kacheln, 4 cm hoch und so breit wie die Spalte.
@@ -13109,6 +13323,8 @@ fn skin_files_layout() -> (Rect, Rect, Rect, Rect) {
     (p, liste, alles, fertig)
 }
 const SKIN_FILES_ROW_H: f32 = 30.0;
+// Das Dateifenster scrollt drei Zeilen je Raste.
+const SKIN_FILES_ROWS_PER_NOTCH: f32 = 3.0;
 const SKIN_FILES_INDENT: f32 = 22.0;
 
 fn skin_files_rows_visible() -> usize {
@@ -14017,6 +14233,8 @@ impl Settings {
         // Dateien von vor der Theme-Farbe "Markierung": sie folgt dem Akzent wie in den Presets,
         // sonst galte ein Preset mit anderem Akzent danach als eigene Aenderung.
         let mut markierung_gelesen = false;
+        let mut akzent2_gelesen = false;
+        let mut akzent2_toene_gelesen = false;
         let mut theme_wahl: Option<String> = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
@@ -14244,7 +14462,7 @@ impl Settings {
                 }
                 "inventory_scale" => {
                     if let Ok(v) = value.parse::<u32>() {
-                        settings.inventory_scale = v.min(4);
+                        settings.inventory_scale = v.min(inventory::GUI_SCALE_SETTING_MAX);
                     }
                 }
                 "hotbar_durability_absolute" => settings.hotbar_durability_absolute = value == "true",
@@ -14266,7 +14484,7 @@ impl Settings {
                 }
                 "hud_hotbar_scale" => {
                     if let Ok(v) = value.parse::<u32>() {
-                        settings.hud_hotbar_scale = v.min(4);
+                        settings.hud_hotbar_scale = v.min(inventory::GUI_SCALE_SETTING_MAX);
                     }
                 }
                 // Alte Fassung (Auto/x1..x4) -> Prozent: xk ist k/2 von UI_SCALE_SMALL (x2).
@@ -14303,6 +14521,12 @@ impl Settings {
                 "chat_fade_secs" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.chat_fade_secs = v;
+                    }
+                }
+                "chat_bedrock" => settings.chat_bedrock = value == "1",
+                "chat_line_spacing" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.chat_line_spacing = v.min(CHAT_LINE_SPACING_MAX);
                     }
                 }
                 "chat_background" => {
@@ -14660,6 +14884,16 @@ impl Settings {
                         settings.player_list_scale = v;
                     }
                 }
+                "scroll_inertia" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.scroll_inertia = v.min(100);
+                    }
+                }
+                "scroll_distance" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.scroll_distance = v.clamp(SCROLL_DISTANCE_MIN, SCROLL_DISTANCE_MAX);
+                    }
+                }
                 "menu_backdrop_opacity" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.menu_backdrop_opacity = v;
@@ -14668,6 +14902,11 @@ impl Settings {
                 "entity_render_distance" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.entity_render_distance = v;
+                    }
+                }
+                "block_entity_render_distance" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.block_entity_render_distance = v;
                     }
                 }
                 "ghost_tolerance_ms" => {
@@ -14792,7 +15031,7 @@ impl Settings {
                 "module_keystrokes" => settings.module_keystrokes = value == "true",
                 "hurt_cam" => settings.hurt_cam = value == "true",
                 "armor_trims" => settings.armor_trims = value == "true",
-                "fire_mode" => settings.fire_mode = value.parse::<u8>().unwrap_or(0).min(FIRE_MODE_CROSSHAIR),
+                "fire_mode" => settings.fire_mode = value.parse::<u8>().unwrap_or(0).min(FIRE_MODE_OFF),
                 "hurt_cam_strength" | "fire_height" | "fire_crosshair_saturation" | "fire_crosshair_value" | "fire_crosshair_hue" => {
                     if let Ok(v) = value.parse::<u32>() {
                         match key {
@@ -15046,6 +15285,7 @@ impl Settings {
                 "no_ui_close_s2c" => settings.no_ui_close = if value == "true" { NO_UI_CLOSE_ALWAYS } else { NO_UI_CLOSE_NEVER },
                 "no_ui_close" => settings.no_ui_close = value.parse::<u8>().unwrap_or(NO_UI_CLOSE_NEVER).min(NO_UI_CLOSE_INVENTORY),
                 "no_chat_clear" => settings.no_chat_clear = value == "true",
+                "audio_auto_optimize" => settings.audio_auto_optimize = value == "true",
                 "skip_third_back" => settings.skip_third_back = value == "true",
                 "skip_third_front" => settings.skip_third_front = value == "true",
                 "sign_edit_in_world" => settings.sign_edit_in_world = value != "false",
@@ -15178,6 +15418,8 @@ impl Settings {
                     if let (Some(slot), Some(c)) = (slot, theme::parse_hex(value)) {
                         settings.theme[slot.index()] = c;
                         markierung_gelesen |= slot == theme::Slot::Selection;
+                        akzent2_gelesen |= slot == theme::Slot::Accent2;
+                        akzent2_toene_gelesen |= slot == theme::Slot::Accent2Hover;
                     }
                 }
                 "lang_ui" | "lang_items" | "lang_effects" | "lang_chat" => {
@@ -15238,6 +15480,12 @@ impl Settings {
         }
         if !markierung_gelesen {
             settings.theme[theme::Slot::Selection.index()] = settings.theme[theme::Slot::Accent.index()];
+        }
+        if !akzent2_gelesen {
+            settings.theme[theme::Slot::Accent2.index()] = theme::accent2_for(settings.theme[theme::Slot::Accent.index()]);
+        }
+        if !akzent2_toene_gelesen {
+            theme::derive_accent2_tones(&mut settings.theme);
         }
         let wahl = match theme_wahl.as_deref().and_then(|v| v.split_once(':')) {
             Some(("preset", name)) => theme::PRESETS.iter().position(|p| p.name == name).map(ThemeChoice::Preset),
@@ -15662,7 +15910,12 @@ impl Settings {
         body.push_str(&format!("glint_speed={}\nglint_strength={}\n", self.glint_speed, self.glint_strength));
         body.push_str(&format!("player_list_scale={}\n", self.player_list_scale));
         body.push_str(&format!("menu_backdrop_opacity={}\n", self.menu_backdrop_opacity));
+        body.push_str(&format!("scroll_inertia={}\n", self.scroll_inertia));
+        body.push_str(&format!("scroll_distance={}\n", self.scroll_distance));
+        body.push_str(&format!("chat_line_spacing={}\n", self.chat_line_spacing));
+        body.push_str(&format!("chat_bedrock={}\n", u8::from(self.chat_bedrock)));
         body.push_str(&format!("entity_render_distance={}\n", self.entity_render_distance));
+        body.push_str(&format!("block_entity_render_distance={}\n", self.block_entity_render_distance));
         body.push_str(&format!(
             "arrow_empty_feedback={}\nmodule_show_markers={}\nmodule_sound_debug={}\nmodule_connection_debug={}\n",
             self.arrow_empty_feedback, self.module_show_markers, self.module_sound_debug, self.module_connection_debug
@@ -15716,6 +15969,7 @@ impl Settings {
         body.push_str(&format!("creative_op_tab={}\n", self.creative_op_tab));
         body.push_str(&format!("no_ui_close={}\n", self.no_ui_close));
         body.push_str(&format!("no_chat_clear={}\n", self.no_chat_clear));
+        body.push_str(&format!("audio_auto_optimize={}\n", self.audio_auto_optimize));
         body.push_str(&format!("sign_edit_in_world={}\n", self.sign_edit_in_world));
         body.push_str(&format!("no_slot_set={}\nno_rotate_set={}\n", self.no_slot_set, self.no_rotate_set));
         body.push_str(&format!("skip_third_back={}\nskip_third_front={}\n", self.skip_third_back, self.skip_third_front));
@@ -15866,6 +16120,8 @@ impl Settings {
             chat_background: 40,
             chat_open_dim: 30,
             chat_fade_secs: 10,
+            chat_line_spacing: 0,
+            chat_bedrock: false,
             // Wie bisher fest verdrahtet: halb durchsichtig.
             master_volume: 100.0,
             category_volume: [100.0; VOLUME_CATEGORIES.len()],
@@ -15882,7 +16138,10 @@ impl Settings {
             glint_strength: 75,
             player_list_scale: 100,
             menu_backdrop_opacity: MENU_BACKDROP_OPACITY_DEFAULT,
+            scroll_inertia: SCROLL_INERTIA_DEFAULT,
+            scroll_distance: SCROLL_DISTANCE_DEFAULT,
             entity_render_distance: ENTITY_DISTANCE_DEFAULT,
+            block_entity_render_distance: BLOCK_ENTITY_DISTANCE_DEFAULT,
             inventory_scale: 0,      // Auto
             crosshair_color_mode: 0, // Komplementaer
             crosshair_hue: 0,
@@ -16101,6 +16360,7 @@ impl Settings {
             creative_op_tab: false,
             no_ui_close: NO_UI_CLOSE_NEVER,
             no_chat_clear: false,
+            audio_auto_optimize: false,
             sign_edit_in_world: true,
             no_slot_set: SERVER_SET_FOLLOW,
             no_rotate_set: SERVER_SET_FOLLOW,
@@ -16772,6 +17032,10 @@ enum ButtonAction {
     ChatOpenDimNext,
     ChatFadePrev,
     ChatFadeNext,
+    ChatLineSpacingPrev,
+    ChatLineSpacingNext,
+    // Chat im Spiel: false = Java, true = Bedrock.
+    ChatStyle(bool),
     // Nie mehr konstruiert, seit der CMAA2-Umschalter in buttons() auskommentiert ist (s.
     // CMAA2_ROW-Kommentar) -- Variante bleibt fuer eine spaetere Reaktivierung stehen.
     #[allow(dead_code)]
@@ -16812,7 +17076,7 @@ enum ButtonAction {
     EffectsNameColor(bool),
     EffectsTimerStyle(u8),
     EffectsTimerColor(bool),
-    // GUI-Skalierung: 0 = Auto, 1..4 = Vanillas feste Stufen (s. App::gui_scale_of).
+    // GUI-Skalierung: 0 = Auto, sonst feste Stufen (s. App::gui_scale_of).
     InventoryScalePrev,
     InventoryScaleNext,
     HotbarScalePrev,
@@ -16846,12 +17110,19 @@ enum ButtonAction {
     PlayerListScaleNext,
     MenuBackdropPrev,
     MenuBackdropNext,
+    ScrollInertiaPrev,
+    ScrollInertiaNext,
+    ScrollDistancePrev,
+    ScrollDistanceNext,
     EntityDistancePrev,
     EntityDistanceNext,
+    BlockEntityDistancePrev,
+    BlockEntityDistanceNext,
     AudioTestTone,
     AudioSpatialTest,
     // Eigene Untergrenze von pipewire-pulse in Frames setzen, None = entfernen.
     PipewireLimit(Option<u32>),
+    ToggleAudioAutoOptimize,
     MasterVolumeDown,
     MasterVolumeUp,
     // Index in VOLUME_CATEGORIES.
@@ -17416,6 +17687,10 @@ struct AutoclickChannel {
 enum ModuleCategory {
     CrystalPvp,
     Render,
+    // Was etwas anzeigt: HUD-Elemente, Hinweise am Fadenkreuz, Hitboxen.
+    Display,
+    // Was etwas hoerbar macht.
+    Akustik,
     Utility,
     Debug,
     // Die Kategorie eines Addons: Index in ADDON_CATEGORIES.
@@ -17423,7 +17698,8 @@ enum ModuleCategory {
 }
 
 impl ModuleCategory {
-    const ALL: [ModuleCategory; 4] = [ModuleCategory::CrystalPvp, ModuleCategory::Render, ModuleCategory::Utility, ModuleCategory::Debug];
+    const ALL: [ModuleCategory; 6] =
+        [ModuleCategory::CrystalPvp, ModuleCategory::Render, ModuleCategory::Display, ModuleCategory::Akustik, ModuleCategory::Utility, ModuleCategory::Debug];
 
     // Die eingebauten Kategorien, danach je angemeldetem Addon eine.
     fn all() -> Vec<ModuleCategory> {
@@ -17435,6 +17711,8 @@ impl ModuleCategory {
         match self {
             ModuleCategory::CrystalPvp => "Crystal PvP",
             ModuleCategory::Render => "Render",
+            ModuleCategory::Display => "Display",
+            ModuleCategory::Akustik => "Akustik",
             ModuleCategory::Utility => "Utility",
             ModuleCategory::Debug => "Debug",
             ModuleCategory::Addon(i) => ADDON_CATEGORIES.read().ok().and_then(|c| c.get(i as usize).copied()).unwrap_or("Addon"),
@@ -17455,32 +17733,30 @@ impl ModuleId {
     fn category(self) -> ModuleCategory {
         match self {
             ModuleId::Addon(i) => ModuleCategory::Addon(addon_module_info(i, |m| m.category).unwrap_or(0)),
+            ModuleId::PopVisuals | ModuleId::CrystalOptimizer => ModuleCategory::CrystalPvp,
+            ModuleId::SkyColor
+            | ModuleId::Weather
+            | ModuleId::DynamicFire
+            | ModuleId::BlockOutline
+            | ModuleId::Color
+            | ModuleId::ChunkSaver => ModuleCategory::Render,
             ModuleId::Totem
             | ModuleId::TotemWarning
             | ModuleId::TotemSlots
-            | ModuleId::PopSounds
-            | ModuleId::PopVisuals
-            | ModuleId::CrystalOptimizer => ModuleCategory::CrystalPvp,
-            ModuleId::Hitbox
+            | ModuleId::Hitbox
             | ModuleId::Teams
-            | ModuleId::SkyColor
-            | ModuleId::Weather
             | ModuleId::Shields
             | ModuleId::UseTimer
             | ModuleId::Arrows
             | ModuleId::ArmorHud
             | ModuleId::Keystrokes
             | ModuleId::SessionInfo
-            | ModuleId::DynamicFire
-            | ModuleId::BlockOutline
-            | ModuleId::SaturationHud
-            | ModuleId::EgoName
-            | ModuleId::Color
-            | ModuleId::ChunkSaver => ModuleCategory::Render,
-            ModuleId::NoToolBreak
+            | ModuleId::SaturationHud => ModuleCategory::Display,
+            ModuleId::PopSounds | ModuleId::VoiceChat => ModuleCategory::Akustik,
+            ModuleId::EgoName
+            | ModuleId::NoToolBreak
             | ModuleId::ConsumableOptimizer
             | ModuleId::Zoom
-            | ModuleId::VoiceChat
             | ModuleId::DiscordStatus
             | ModuleId::InputLog
             | ModuleId::Sustainability => ModuleCategory::Utility,
@@ -18054,15 +18330,12 @@ struct App {
     config_delete_armed: bool,
     // Lichtstaerken-Seite: Suchtext und erste sichtbare Zeile der Trefferliste.
     light_search: String,
-    light_scroll: usize,
+    light_scroll: smooth_scroll::SmoothScroll,
     // Erste sichtbare Zeile der Partikel-Anpassung.
-    particle_scroll: usize,
-    // Skin-Tab: erster sichtbarer Eintrag der Liste ("Kein Pack" zaehlt mit).
-    skin_scroll: usize,
-    // Dasselbe fuer die rechte Spalte (der gewaehlte Stapel).
-    skin_scroll_right: usize,
-    // Gleitender Scrollstand beider Spalten (links, rechts), wie server_scroll_anim.
-    skin_scroll_anim: [f32; 2],
+    particle_scroll: smooth_scroll::SmoothScroll,
+    // Skin-Tab: Scrollstand beider Spalten (links die Liste, "Kein Pack" zaehlt mit; rechts der
+    // gewaehlte Stapel), in Kacheln.
+    skin_scroll: [smooth_scroll::SmoothScroll; 2],
     start_time: Instant,
     // Direkter evdev-Zugriff auf die Maus (X11-Bypass). None = kein Zugriff moeglich,
     // dann faellt device_event() auf den ueblichen winit/X11-Weg zurueck.
@@ -18110,6 +18383,9 @@ struct App {
     hero_done: bool,
     // Sichtfeld der Szene, solange sie steht (statt der Einstellung, s. draw_world_frame).
     hero_fov: Option<f32>,
+    // Fenster, das der Ladebildschirm schon geoeffnet hat (s. loading_screen); resumed nimmt es
+    // statt ein neues anzulegen.
+    startup_window: Option<(Arc<Window>, winit::monitor::VideoModeHandle)>,
     hero_render_distance: Option<u32>,
     // No Tool Break: wann zuletzt benachrichtigt wurde (s. block_mining_guarded).
     tool_break_notified_at: Option<Instant>,
@@ -18144,10 +18420,16 @@ struct App {
     // Rechtsklick-Menue einer Karte und eine gedrueckte/gezogene Karte (s. ServerDrag).
     server_context: Option<ServerContextMenu>,
     server_drag: Option<ServerDrag>,
-    // Erste sichtbare Server-Karte (Mausrad ueber der Liste), und derselbe Stand gleitend
-    // nachgezogen (s. tick_ui_anim) -- gezeichnet wird mit dem gleitenden.
-    server_scroll: usize,
-    server_scroll_anim: f32,
+    // Scrollstand der Server-Karten (Mausrad ueber der Liste), in Karten.
+    server_scroll: smooth_scroll::SmoothScroll,
+    // Griff der Bildlaufleiste links neben den Karten gefasst: Abstand des Zeigers zur
+    // Oberkante des Griffs (s. App::server_bar_press).
+    server_bar_grab: Option<f32>,
+    // Suche wie in osu!: einfach lostippen, dann steht das Feld an der Stelle der ersten Karte
+    // und nur passende Karten bleiben (Name, Adresse, MOTD). `server_search_applied` ist der
+    // Suchtext, auf den der Scrollstand zuletzt zurueckgesetzt wurde.
+    server_search: Option<text_field::TextField>,
+    server_search_applied: String,
     ui_anim_at: Instant,
     // Quick Connect: Fenster mit Adresse und "Los" (Leiste unten). Das Feld ist beim Oeffnen
     // leer; erst "Los" uebernimmt es in server_address. Ziehen markiert, Doppelklick nimmt das
@@ -18228,6 +18510,25 @@ struct App {
     chat_wrap_cache: std::cell::RefCell<Option<((u64, u32, u32, u8), std::rc::Rc<Vec<ChatLine>>)>>,
     // Wie viele Zeilen der offene Chat vom Ende weg zurueckgeblaettert ist (0 = neueste unten).
     chat_scroll: usize,
+    // chat_scroll gleitend nachgezogen (s. tick_ui_anim) -- gezeichnet wird damit.
+    chat_scroll_glide: smooth_scroll::SmoothScroll,
+    // Um so viele Zeilen steht der geschlossene Chat noch zu tief: jede neue Nachricht legt ihre
+    // Zeilen DRAUF, der Wert laeuft gleitend gegen 0 (s. tick_ui_anim). Kommt die zweite
+    // Nachricht, waehrend die erste noch hochgleitet, geht es von der aktuellen Lage aus
+    // weiter -- nichts springt.
+    chat_rise: f32,
+    // Dasselbe fuer den offenen Chat (andere Breite, also andere Zeilenzahl).
+    chat_rise_open: f32,
+    // Bedrock-Chat: Zeilen aller Nachrichten bisher, in der Breite des Chats im Spiel (je Tab).
+    // Daran haengen die festen Plaetze der Zeilen, auch wenn oben welche ausblenden.
+    chat_lines_total: u64,
+    // Bedrock-Chat: (erste gezeigte Zeile, Ende) wie das letzte Bild sie wollte, und derselbe
+    // Stand gleitend (s. tick_ui_anim). None = beim naechsten Mal ohne Gleiten uebernehmen.
+    chat_bedrock_target: std::cell::Cell<(f32, f32)>,
+    chat_bedrock_anim: Option<(f32, f32)>,
+    // Der Anfang, den das letzte Bild wollte -- um zu trennen, wie viel davon neue Nachrichten
+    // weitergeschoben haben (springt) und wie viel ausgeblendete (gleitet).
+    chat_bedrock_last_start: f32,
     // Zeilenstand des offenen Chats im letzten Bild: Index (ueber den ganzen Verlauf, auch
     // schon verworfene Nachrichten mitgezaehlt) der Zeile hinter der untersten sichtbaren,
     // und die Zeilenhoehe. Daran haengt die mitwandernde Auswahl (s. TextSelection::chat_anchor).
@@ -18240,6 +18541,7 @@ struct App {
     // Verlaufsliste neben der Eingabe: wie weit zurueckgeblaettert, und wo ihre Eintraege
     // zuletzt standen (fuer Klicks, s. chat_click).
     chat_history_scroll: usize,
+    chat_history_glide: smooth_scroll::SmoothScroll,
     chat_history_hits: std::cell::RefCell<Vec<(Rect, String)>>,
     // Klickflaechen der Links im zuletzt gezeichneten offenen Chat (s. chat_click).
     chat_link_hits: std::cell::RefCell<Vec<(Rect, ChatHit)>>,
@@ -18539,9 +18841,9 @@ struct App {
     keybind_press_counter: u64,
     // Scroll-Offset (in Zeilen) der Tastenbelegungs-Tabelle im Steuerung-Screen, s.
     // build_settings_controls_tab.
-    keybind_scroll: usize,
+    keybind_scroll: smooth_scroll::SmoothScroll,
     // Erste sichtbare Zeile der Haupt-Einstellungen (s. settings_row_y/sync_settings_scroll).
-    settings_scroll: usize,
+    settings_scroll: smooth_scroll::SmoothScroll,
     // Zuletzt an den Server gesendete Player-Input-Flags (protocol::packets::
     // player_input_payload) -- nur bei Aenderung neu senden.
     last_sent_player_input: Option<(bool, bool, bool, bool, bool, bool, bool)>,
@@ -18599,6 +18901,8 @@ struct App {
     // Wann jeder UI-Klang zuletzt spielte (Index wie ui_sound::UiSound::ALL), fuer den
     // Mindestabstand.
     ui_sound_last: [Option<Instant>; ui_sound::UiSound::ALL.len()],
+    // Mit welchem Pegel der Klang zuletzt kam (s. ui_sound::repeat_level), 1 = voll.
+    ui_sound_level: [f32; ui_sound::UiSound::ALL.len()],
     erase_pending: bool,
     // Wo der Schreibcursor in diesem Frame steht (s. push_caret) und wo im letzten -- das
     // Loeschen laesst die Zeichen dort herausfallen (s. erased_pieces).
@@ -18640,6 +18944,9 @@ struct App {
     color_popup: Option<ColorPopup>,
     // Offene Aufklappliste (s. Choice), liegt wie das Farbfenster ueber allem.
     dropdown: Option<Dropdown>,
+    // Linke Taste in einer Liste gedrueckt (s. App::drag_scroll_grab): bis zum Loslassen
+    // wartet der Klick, ob daraus ein Ziehen wird.
+    drag_scroll: Option<(ScrollList, smooth_scroll::DragGrip)>,
     // Die laufenden Addons (s. addons.rs); None bis zum ersten Durchlauf der Ereignisschleife.
     addons: Option<addons::Addons>,
     // Letztes Tick-Ereignis an die Addons und letzte Chatzeile eines Addons (gedrosselt).
@@ -18659,7 +18966,7 @@ struct App {
     ego_sound_at: Option<Instant>,
     // Seiten-Scroll der uebrigen Einstellungsseiten (s. MenuScreen::settings_page), je
     // settings_key. Render behaelt settings_scroll, das gespeichert wird.
-    page_scrolls: std::collections::BTreeMap<&'static str, usize>,
+    page_scrolls: std::collections::BTreeMap<&'static str, smooth_scroll::SmoothScroll>,
     // Zuletzt angeklickter Abschnitts-Reiter: (Seite, Abschnitt, erste Zeile danach). Bleibt
     // hervorgehoben, solange die Seite so steht -- ein Abschnitt am Ende laesst sich nicht
     // ganz nach oben scrollen und waere sonst nie der aktive.
@@ -18897,6 +19204,11 @@ struct App {
     volume_unsaved: bool,
     // Laufender Pack-Wechsel im Hintergrund (s. reload_resource_pack), sonst None.
     pack_load_job: Option<PackLoadJob>,
+    // Packs, die schon fuer die anderen Tabs gebaut werden oder fertig daliegen, nach dem
+    // Schluessel ihres Stapels (s. pack_stack_key) -- beim Wechsel wird dann nur eingesetzt.
+    pack_vorrat: Vec<(String, PackVorrat)>,
+    // Schluessel des eingesetzten Stapels.
+    pack_aktiv: Option<String>,
     // Zips im Skin-Ordner, die von selbst entpackt werden (s. skin_zips).
     skin_zips: skin_zips::SkinZips,
     // Vom Server angebotene Resourcepacks dieser Verbindung (s. server_packs).
@@ -18912,7 +19224,7 @@ struct App {
     // Erste sichtbare Detailzeile (s. module_visible_rows). Wird beim Lesen gedeckelt statt
     // beim Schreiben korrigiert -- die Zeilenzahl aendert sich auch ohne Scrollen, sobald
     // der Farbeditor auf- oder zuklappt.
-    module_menu_scroll: usize,
+    module_menu_scroll: smooth_scroll::SmoothScroll,
     // Welche Kategorie die Kacheln zeigen, und ob gerade die Einstellungen EINES Moduls das
     // ganze Fenster fuellen (s. module_menu_selected).
     module_menu_category: ModuleCategory,
@@ -19363,12 +19675,9 @@ struct WorldAssets {
 }
 
 impl WorldAssets {
-    fn build(installation: &mut assets::MinecraftInstallation) -> Result<Self, assets::AssetsError> {
-        Self::build_with_progress(installation, &mut |_| {})
-    }
-
-    // Wie build, meldet unterwegs den Fortschritt in Prozent (0..=90 -- den Rest belegen beim
-    // Pack-Wechsel Klaenge und Glint, s. App::reload_resource_pack).
+    // Baut alles, meldet unterwegs den Fortschritt in Prozent (0..=90 -- den Rest belegen beim
+    // Pack-Wechsel Klaenge und Glint, s. App::reload_resource_pack; beim Start die GPU, s.
+    // loading_screen).
     fn build_with_progress(installation: &mut assets::MinecraftInstallation, fortschritt: &mut dyn FnMut(u32)) -> Result<Self, assets::AssetsError> {
         fortschritt(0);
         let atlas = assets::BlockAtlas::build(installation, &world::block_registry::all_block_names())?;
@@ -19730,6 +20039,63 @@ enum PackLoadMsg {
 
 // Ein laufender Pack-Wechsel: woher die Meldungen kommen, welche Benachrichtigung den
 // Fortschritt zeigt und welcher Pack es wird.
+enum PackVorrat {
+    Laeuft(std::sync::mpsc::Receiver<PackLoadMsg>),
+    Fertig(Box<LoadedPack>),
+}
+
+// Ein Stapel, wie reload_resource_pack ihn baut (s. App::pack_plan).
+struct PackPlan {
+    skins: Vec<String>,
+    exclusions: std::collections::BTreeMap<String, Vec<String>>,
+    server_ids: Vec<[u8; 16]>,
+    oben: Vec<assets::PackDir>,
+    unten: Vec<assets::PackDir>,
+    key: String,
+}
+
+// Woran zwei Stapel als gleich erkannt werden: die Ordner beider Haelften samt dem, was darin
+// ausgeschaltet ist.
+fn pack_stack_key(oben: &[assets::PackDir], unten: &[assets::PackDir]) -> String {
+    let teil = |dirs: &[assets::PackDir]| dirs.iter().map(|d| format!("{}[{}]", d.path.display(), d.excluded.join(","))).collect::<Vec<_>>().join(";");
+    format!("{}|{}", teil(oben), teil(unten))
+}
+
+// Baut ein Pack in einem eigenen Thread; Fortschritt und Ergebnis kommen ueber den Kanal.
+// `leise`: Vorrat fuer einen anderen Tab -- der Thread laeuft mit niedrigster Prioritaet, das
+// laufende Spiel soll davon nichts merken.
+fn spawn_pack_build(oben: Vec<assets::PackDir>, unten: Vec<assets::PackDir>, leise: bool) -> std::io::Result<std::sync::mpsc::Receiver<PackLoadMsg>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new().name("resource-pack".into()).spawn(move || {
+        #[cfg(target_os = "linux")]
+        if leise {
+            // SAFETY: setpriority auf den eigenen Thread (unter Linux gilt PRIO_PROCESS mit 0
+            // nur fuer den aufrufenden Thread).
+            unsafe {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = leise;
+        let ergebnis = (|| -> Result<Box<LoadedPack>, String> {
+            let mut installation = assets::MinecraftInstallation::locate_stack(MC_VERSION, oben, unten).map_err(|e| e.to_string())?;
+            let assets = WorldAssets::build_with_progress(&mut installation, &mut |p| {
+                let _ = tx.send(PackLoadMsg::Progress(p));
+            })
+            .map_err(|e| e.to_string())?;
+            let sounds = vanilla_sounds::VanillaSounds::load(&mut installation);
+            let _ = tx.send(PackLoadMsg::Progress(95));
+            let glint = load_glint_textures(&mut installation);
+            let weather = load_weather_textures(&mut installation);
+            let fonts = installation.load_pack_fonts();
+            let sky = custom_sky::load_defs(&mut installation);
+            Ok(Box::new(LoadedPack { installation, sky, assets, sounds, glint, weather, fonts }))
+        })();
+        let _ = tx.send(PackLoadMsg::Done(ergebnis));
+    })?;
+    Ok(rx)
+}
+
 struct PackLoadJob {
     rx: std::sync::mpsc::Receiver<PackLoadMsg>,
     note: notifications::NotificationId,
@@ -19753,7 +20119,9 @@ fn pack_load_note_text(skins: &[String], server: bool, prozent: u32) -> (String,
 }
 
 impl App {
-    fn new(mut installation: assets::MinecraftInstallation, settings: Settings) -> Self {
+    // `assets`: schon gebaut (s. loading_screen -- das dauert, und solange zeigt das Fenster den
+    // Ladebildschirm).
+    fn new(mut installation: assets::MinecraftInstallation, settings: Settings, assets: WorldAssets) -> Self {
         let (status_tx, status_rx) = std::sync::mpsc::channel();
         // "Sprinten an bei Spielstart": der Umschalt-Zustand startet eingeschaltet, als waere
         // die Taste einmal gedrueckt worden. Mit "Halten" gibt es keinen solchen Zustand.
@@ -19768,21 +20136,6 @@ impl App {
         let custom_sky = custom_sky::CustomSky::new(custom_sky::load_defs(&mut installation));
         world::light::set_light_factors(settings.light_factor_table());
 
-        // Alles Installation-abhaengige (Atlas, Colormaps, block_uvs, Formen/Kreuz-Bloecke)
-        // kommt aus WorldAssets::build (s. dortigen Struct-Kommentar) -- dieselbe Funktion
-        // baut es beim Skin-Wechsel (reload_resource_pack) neu. Der Atlas ist harte
-        // Voraussetzung -- schlaegt der Bau fehl, liegt die Installation kaputt/
-        // unvollstaendig vor; Abbruch mit klarer Meldung statt texturloser Welt.
-        // Vor dem Struct-Literal, weil die Klangbank die Installation noch VERAENDERLICH
-        // braucht (sie liest sounds.json) -- danach wandert die Installation ins Feld.
-        let assets = match WorldAssets::build(&mut installation) {
-            Ok(assets) => assets,
-            Err(e) => {
-                eprintln!("Coral Client konnte den Block-Textur-Atlas nicht bauen: {e}");
-                eprintln!("  Die Minecraft-Installation von {MC_VERSION} scheint unvollständig.");
-                std::process::exit(1);
-            }
-        };
         let WorldAssets {
             atlas,
             ui_atlas,
@@ -19918,11 +20271,9 @@ impl App {
             menu_world_frozen: false,
             config_delete_armed: false,
             light_search: String::new(),
-            light_scroll: 0,
-            particle_scroll: 0,
-            skin_scroll: 0,
-            skin_scroll_right: 0,
-            skin_scroll_anim: [0.0; 2],
+            light_scroll: Default::default(),
+            particle_scroll: Default::default(),
+            skin_scroll: Default::default(),
             start_time: Instant::now(),
             raw_mouse,
             raw_keyboard,
@@ -19945,6 +20296,7 @@ impl App {
             hero_building: None,
             hero_done: false,
             hero_fov: None,
+            startup_window: None,
             hero_render_distance: None,
             tool_break_notified_at: None,
             server_address: "127.0.0.1:25565".to_string(),
@@ -19963,8 +20315,10 @@ impl App {
             servers: load_servers(),
             server_context: None,
             server_drag: None,
-            server_scroll: 0,
-            server_scroll_anim: 0.0,
+            server_scroll: Default::default(),
+            server_bar_grab: None,
+            server_search: None,
+            server_search_applied: String::new(),
             ui_anim_at: Instant::now(),
             quick_connect_open: false,
             theme_name_dialog: None,
@@ -20001,10 +20355,18 @@ impl App {
             chat_generation: 0,
             chat_wrap_cache: Default::default(),
             chat_scroll: 0,
+            chat_scroll_glide: Default::default(),
+            chat_rise: 0.0,
+            chat_rise_open: 0.0,
+            chat_lines_total: 0,
+            chat_bedrock_target: Default::default(),
+            chat_bedrock_anim: None,
+            chat_bedrock_last_start: 0.0,
             chat_view: Default::default(),
             dimension_types: Vec::new(),
             chat_dropped_lines: 0,
             chat_history_scroll: 0,
+            chat_history_glide: Default::default(),
             chat_history_hits: Default::default(),
             chat_link_hits: Default::default(),
             text_selection: None,
@@ -20130,8 +20492,8 @@ impl App {
             binds_down: Vec::new(),
             keybind_press_order: [0; KeyBindAction::ALL.len()],
             keybind_press_counter: 0,
-            keybind_scroll: 0,
-            settings_scroll: 0,
+            keybind_scroll: Default::default(),
+            settings_scroll: Default::default(),
             // Vanillas LocalPlayer-Konstruktor bekommt lastSentInput = Input.EMPTY und
             // wasSprinting = false mit. Stuende hier None ("noch nie etwas gesendet"), ginge
             // beim Join ein leeres PlayerInput und ein ueberfluessiges STOP_SPRINTING raus,
@@ -20157,6 +20519,7 @@ impl App {
             notification_panel_since: Instant::now() - Duration::from_secs(1),
             typed_prev: Vec::new(),
             ui_sound_last: [None; ui_sound::UiSound::ALL.len()],
+            ui_sound_level: [1.0; ui_sound::UiSound::ALL.len()],
             erase_pending: false,
             caret_drawn: std::cell::Cell::new(None),
             caret_prev: None,
@@ -20179,6 +20542,7 @@ impl App {
             persist_paused: false,
             color_popup: None,
             dropdown: None,
+            drag_scroll: None,
             addons: None,
             addon_frame_at: Instant::now(),
             addon_deaths_seen: 0,
@@ -20271,13 +20635,15 @@ impl App {
             volume_key_repeat: None,
             volume_unsaved: false,
             pack_load_job: None,
+            pack_vorrat: Vec::new(),
+            pack_aktiv: None,
             skin_zips: skin_zips::SkinZips::default(),
             server_packs: server_packs::ServerPacks::default(),
             shield_color_editor: None,
             shield_cooldowns: rustc_hash::FxHashMap::default(),
             trails: rustc_hash::FxHashMap::default(),
             trail_tick: 0,
-            module_menu_scroll: 0,
+            module_menu_scroll: Default::default(),
             module_menu_category: ModuleCategory::CrystalPvp,
             module_menu_detail: false,
             swallow_text_key: None,
@@ -20464,14 +20830,46 @@ impl App {
             self.notify(notifications::Notification::warning("Skin wird schon geladen", "Bitte warten, bis der laufende Wechsel fertig ist."));
             return;
         }
+        self.server_packs.begin_reload();
+        let PackPlan { skins, exclusions, server_ids, oben, unten, key } = self.pack_plan(skins);
+        let server = self.server_packs.ready();
+        let platz = (!server.is_empty()).then(|| self.server_pack_position(&server));
+        skin_tab::normalize_stack(&mut self.selected_skins, platz);
+        // Fuer diesen Stapel schon vorgebaut (anderer Tab): das nehmen statt neu zu bauen.
+        let rx = match self.pack_vorrat.iter().position(|(k, _)| *k == key).map(|i| self.pack_vorrat.remove(i).1) {
+            Some(PackVorrat::Fertig(pack)) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let _ = tx.send(PackLoadMsg::Done(Ok(pack)));
+                rx
+            }
+            Some(PackVorrat::Laeuft(rx)) => rx,
+            None => match spawn_pack_build(oben, unten, false) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    self.push_log(format!("Skin konnte nicht geladen werden: {e}"));
+                    return;
+                }
+            },
+        };
+        self.pack_aktiv = Some(key);
+        let (titel, text) = pack_load_note_text(&skins, !server_ids.is_empty(), 0);
+        // Steht, bis der Wechsel fertig ist -- dann wird sie geschlossen (s. poll_resource_pack_job).
+        // Kommt das Pack aus dem Vorrat, ist sie schon im naechsten Bild wieder weg.
+        let note = self.notify(notifications::Notification::info(titel, text).with_lifetime(Duration::from_secs(3600)));
+        self.pack_load_job = Some(PackLoadJob { rx, note, skins, exclusions, server_ids });
+    }
+
+    // Der Stapel, den reload_resource_pack fuer `skins` und die fertigen Server-Packs baut --
+    // ohne etwas umzustellen, damit er sich auch fuer einen anderen Tab ausrechnen laesst (s.
+    // fill_pack_vorrat).
+    fn pack_plan(&self, skins: Vec<String>) -> PackPlan {
         // Server-Resourcepacks kommen neu an ihren gemerkten Platz im Stapel, sonst ganz oben wie
         // bei Vanilla; im Skin-Tab lassen sie sich danach beliebig verschieben.
-        let server = self.server_packs.begin_reload();
+        let server = self.server_packs.ready();
         let server_ids: Vec<[u8; 16]> = server.iter().map(|(id, _)| *id).collect();
         let platz = (!server.is_empty()).then(|| self.server_pack_position(&server));
         let mut skins = skins;
         skin_tab::normalize_stack(&mut skins, platz);
-        skin_tab::normalize_stack(&mut self.selected_skins, platz);
         let exclusions = self.skin_exclusions_of(&skins);
         let server_pfade: Vec<(std::path::PathBuf, Vec<String>)> = server
             .into_iter()
@@ -20481,37 +20879,59 @@ impl App {
             })
             .collect();
         let (oben, unten) = skin_stack_dirs(&skins, &exclusions, &server_pfade);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let gestartet = std::thread::Builder::new().name("resource-pack".into()).spawn(move || {
-            let ergebnis = (|| -> Result<Box<LoadedPack>, String> {
-                let mut installation = assets::MinecraftInstallation::locate_stack(MC_VERSION, oben, unten).map_err(|e| e.to_string())?;
-                let assets = WorldAssets::build_with_progress(&mut installation, &mut |p| {
-                    let _ = tx.send(PackLoadMsg::Progress(p));
-                })
-                .map_err(|e| e.to_string())?;
-                let sounds = vanilla_sounds::VanillaSounds::load(&mut installation);
-                let _ = tx.send(PackLoadMsg::Progress(95));
-                let glint = load_glint_textures(&mut installation);
-                let weather = load_weather_textures(&mut installation);
-                let fonts = installation.load_pack_fonts();
-                let sky = custom_sky::load_defs(&mut installation);
-                Ok(Box::new(LoadedPack { installation, sky, assets, sounds, glint, weather, fonts }))
-            })();
-            let _ = tx.send(PackLoadMsg::Done(ergebnis));
-        });
-        if let Err(e) = gestartet {
-            self.push_log(format!("Skin konnte nicht geladen werden: {e}"));
-            return;
+        let key = pack_stack_key(&oben, &unten);
+        PackPlan { skins, exclusions, server_ids, oben, unten, key }
+    }
+
+    // Mehrere Tabs: die Packs der anderen Tabs im Hintergrund vorbauen, damit ein Wechsel sie nur
+    // noch einsetzt. Was kein Tab mehr braucht, faellt weg.
+    fn fill_pack_vorrat(&mut self) {
+        let mut gebraucht = Vec::new();
+        for j in 0..self.tabs.len() {
+            if j == self.active_tab {
+                continue;
+            }
+            std::mem::swap(&mut self.server_packs, &mut self.tabs[j].server_packs);
+            let plan = self.pack_plan(self.settings.active_skins.clone());
+            std::mem::swap(&mut self.server_packs, &mut self.tabs[j].server_packs);
+            if self.pack_aktiv.as_ref() != Some(&plan.key) && !gebraucht.contains(&plan.key) {
+                gebraucht.push(plan.key.clone());
+                if !self.pack_vorrat.iter().any(|(k, _)| *k == plan.key) {
+                    match spawn_pack_build(plan.oben, plan.unten, true) {
+                        Ok(rx) => self.pack_vorrat.push((plan.key, PackVorrat::Laeuft(rx))),
+                        Err(e) => self.push_log(format!("Pack fuer den anderen Tab nicht vorgebaut: {e}")),
+                    }
+                }
+            }
         }
-        let (titel, text) = pack_load_note_text(&skins, !server_ids.is_empty(), 0);
-        // Steht, bis der Wechsel fertig ist -- dann wird sie geschlossen (s. poll_resource_pack_job).
-        let note = self.notify(notifications::Notification::info(titel, text).with_lifetime(Duration::from_secs(3600)));
-        self.pack_load_job = Some(PackLoadJob { rx, note, skins, exclusions, server_ids });
+        self.pack_vorrat.retain(|(k, _)| gebraucht.contains(k));
+    }
+
+    // Vorgebaute Packs abholen, sobald ihr Thread fertig ist.
+    fn poll_pack_vorrat(&mut self) {
+        for (key, eintrag) in &mut self.pack_vorrat {
+            let PackVorrat::Laeuft(rx) = eintrag else { continue };
+            loop {
+                match rx.try_recv() {
+                    Ok(PackLoadMsg::Progress(_)) => {}
+                    Ok(PackLoadMsg::Done(Ok(pack))) => {
+                        *eintrag = PackVorrat::Fertig(pack);
+                        break;
+                    }
+                    Ok(PackLoadMsg::Done(Err(e))) => {
+                        eprintln!("[pack] Vorrat {key}: {e}");
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
     }
 
     // Einmal je Bild: Meldungen des Pack-Threads abholen, den Fortschritt anzeigen und am
     // Ende das fertige Pack einsetzen.
     fn poll_resource_pack_job(&mut self) {
+        self.poll_pack_vorrat();
         // Server-Packs fertig geladen (oder weggefallen): neu zusammenstellen, sobald nichts
         // anderes laedt.
         if self.pack_load_job.is_none() && self.server_packs.wants_reload() {
@@ -20557,6 +20977,9 @@ impl App {
                 };
                 self.apply_resource_pack(*pack, name);
                 self.loaded_skin_exclusions = exclusions;
+                if self.tabs.len() > 1 {
+                    self.fill_pack_vorrat();
+                }
                 self.notify(notifications::Notification::success(
                     titel,
                     "",
@@ -20782,6 +21205,16 @@ impl ShownEffect {
         let vergangen = (now.saturating_duration_since(self.since).as_secs_f64() * 20.0) as i32;
         (self.duration - vergangen).max(0)
     }
+
+    // Dasselbe ungerundet, zum Sortieren: zwei gleich lange Effekte, die einige Millisekunden
+    // auseinander kamen, springen in `remaining` abwechselnd um einen Tick vor -- die
+    // Reihenfolge kippte dann von Bild zu Bild hin und her.
+    fn remaining_exact(&self, now: Instant) -> f64 {
+        if self.duration == protocol::packets::MOB_EFFECT_INFINITE {
+            return self.duration as f64;
+        }
+        (self.duration as f64 - now.saturating_duration_since(self.since).as_secs_f64() * 20.0).max(0.0)
+    }
 }
 
 // Ein Effekt fuer die Anzeige: ID, ambient, Staerke, Restdauer.
@@ -20791,6 +21224,8 @@ struct EffectEntry {
     ambient: bool,
     amplifier: i32,
     remaining: i32,
+    // Restdauer ungerundet, nur zum Sortieren (s. ShownEffect::remaining_exact).
+    exact: f64,
     // Dauer beim Eintreffen des Effekts (fuer das dynamische Blinken, s. effect_timer_blink).
     received: i32,
 }
@@ -20806,7 +21241,7 @@ fn effect_order(a: &EffectEntry, b: &EffectEntry) -> std::cmp::Ordering {
         a.ambient
             .cmp(&b.ambient)
             .then(unendlich(a).cmp(&unendlich(b)))
-            .then(a.remaining.cmp(&b.remaining))
+            .then(a.exact.total_cmp(&b.exact))
             .then(farbe(a).cmp(&farbe(b)))
     } else {
         a.ambient.cmp(&b.ambient).then(farbe(a).cmp(&farbe(b)))
@@ -20816,8 +21251,8 @@ fn effect_order(a: &EffectEntry, b: &EffectEntry) -> std::cmp::Ordering {
 // Reihenfolge der detaillierten Anzeige: unendliche Effekte, dann nach Restdauer absteigend;
 // gleich lange nach ID, damit sie nicht gegeneinander springen.
 fn effect_longest_first(a: &EffectEntry, b: &EffectEntry) -> std::cmp::Ordering {
-    let dauer = |e: &EffectEntry| if e.remaining == protocol::packets::MOB_EFFECT_INFINITE { i32::MAX } else { e.remaining };
-    dauer(b).cmp(&dauer(a)).then(a.effect.cmp(&b.effect))
+    let dauer = |e: &EffectEntry| if e.remaining == protocol::packets::MOB_EFFECT_INFINITE { f64::MAX } else { e.exact };
+    dauer(b).total_cmp(&dauer(a)).then(a.effect.cmp(&b.effect))
 }
 
 // Gui.extractEffects: Deckkraft des Symbols. Endet ein nicht-ambienter Effekt in hoechstens
@@ -21069,18 +21504,51 @@ fn air_bubbles(air_ticks: i32) -> i32 {
     ((air_ticks.max(0) as f32 * 10.0) / MAX_AIR_TICKS as f32).ceil() as i32
 }
 
+// Das Spielfenster: exklusives Vollbild im groessten Modus des Hauptmonitors. Legt beim Start
+// der Ladebildschirm an (s. loading_screen), sonst App::resumed.
+fn create_game_window(event_loop: &ActiveEventLoop) -> (Arc<Window>, winit::monitor::VideoModeHandle) {
+    let monitor = event_loop.primary_monitor().expect("kein Monitor gefunden");
+    let video_mode = monitor
+        .video_modes()
+        .max_by_key(|m| (m.size().width as u64) * (m.size().height as u64) * m.refresh_rate_millihertz() as u64)
+        .expect("kein Video-Mode verfügbar");
+
+    // Exclusive statt Borderless: probeweise getauscht, um zu pruefen, ob der
+    // XRandR-Modus-Wechsel das Tearing bei Fifo verursacht -- tat er nicht, beide
+    // Modi reissen mit unseren eigenen (verlaesslichen) Tearing-Balken identisch.
+    // Zurueckgesetzt auf Exclusive (bewusste Wahl von vorher, unabhaengig davon).
+    // Bleibt auch unter Windows Exclusive -- Borderless kostet genau die Latenz, um
+    // die es dem Projekt geht. Das Alt-Tab/Win+D-Problem dort wird stattdessen bei
+    // Fokusverlust geloest (s. WindowEvent::Focused: set_minimized unter Windows).
+    let window_attrs = Window::default_attributes()
+        .with_title("Coral Client")
+        .with_fullscreen(Some(Fullscreen::Exclusive(video_mode.clone())));
+    // Stabile WM_CLASS statt dem vom Fenstermanager erratenen Standardwert --
+    // scripts/tearfree-auto.sh erkennt unser Fenster daran zuverlaessig. Nur X11.
+    #[cfg(target_os = "linux")]
+    let window_attrs = {
+        use winit::platform::x11::WindowAttributesExtX11;
+        window_attrs.with_name("coral-client", "coral-client")
+    };
+
+    let window = event_loop.create_window(window_attrs).expect("Fenster konnte nicht erstellt werden");
+    // KEIN eigener _NET_WM_BYPASS_COMPOSITOR-Hint mehr: empirisch bestaetigt, dass er
+    // mit Muffins eigener "Komposit fuer Vollbildfenster deaktivieren"-Heuristik
+    // kollidiert und einen echten Hardware-Flip verhindert, statt ihn zu erzwingen --
+    // mit Hint riss Fifo trotz exakt getakteter 120 FPS, ohne Hint (Muffins Heuristik
+    // allein entscheidet) nicht mehr. TearFree brauchte es dadurch ueberhaupt erst,
+    // was wiederum eine zusaetzliche Scanout-Pufferstufe (und damit Latenz) kostet.
+    let window = Arc::new(window);
+    (window, video_mode)
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
         }
 
-        let monitor = event_loop.primary_monitor().expect("kein Monitor gefunden");
-        let video_mode = monitor
-            .video_modes()
-            .max_by_key(|m| (m.size().width as u64) * (m.size().height as u64) * m.refresh_rate_millihertz() as u64)
-            .expect("kein Video-Mode verfügbar");
-
+        let (window, video_mode) = self.startup_window.take().unwrap_or_else(|| create_game_window(event_loop));
         let breite = video_mode.size().width;
         if let Some(mm) = monitor_size::width_mm(breite) {
             PX_PER_MM.store((breite as f32 / mm).to_bits(), std::sync::atomic::Ordering::Relaxed);
@@ -21089,33 +21557,6 @@ impl ApplicationHandler for App {
         if refresh_mhz > 0 {
             self.monitor_frame_interval = Duration::from_secs_f64(1000.0 / refresh_mhz as f64);
         }
-
-        // Exclusive statt Borderless: probeweise getauscht, um zu pruefen, ob der
-        // XRandR-Modus-Wechsel das Tearing bei Fifo verursacht -- tat er nicht, beide
-        // Modi reissen mit unseren eigenen (verlaesslichen) Tearing-Balken identisch.
-        // Zurueckgesetzt auf Exclusive (bewusste Wahl von vorher, unabhaengig davon).
-        // Bleibt auch unter Windows Exclusive -- Borderless kostet genau die Latenz, um
-        // die es dem Projekt geht. Das Alt-Tab/Win+D-Problem dort wird stattdessen bei
-        // Fokusverlust geloest (s. WindowEvent::Focused: set_minimized unter Windows).
-        let window_attrs = Window::default_attributes()
-            .with_title("Coral Client")
-            .with_fullscreen(Some(Fullscreen::Exclusive(video_mode)));
-        // Stabile WM_CLASS statt dem vom Fenstermanager erratenen Standardwert --
-        // scripts/tearfree-auto.sh erkennt unser Fenster daran zuverlaessig. Nur X11.
-        #[cfg(target_os = "linux")]
-        let window_attrs = {
-            use winit::platform::x11::WindowAttributesExtX11;
-            window_attrs.with_name("coral-client", "coral-client")
-        };
-
-        let window = event_loop.create_window(window_attrs).expect("Fenster konnte nicht erstellt werden");
-        // KEIN eigener _NET_WM_BYPASS_COMPOSITOR-Hint mehr: empirisch bestaetigt, dass er
-        // mit Muffins eigener "Komposit fuer Vollbildfenster deaktivieren"-Heuristik
-        // kollidiert und einen echten Hardware-Flip verhindert, statt ihn zu erzwingen --
-        // mit Hint riss Fifo trotz exakt getakteter 120 FPS, ohne Hint (Muffins Heuristik
-        // allein entscheidet) nicht mehr. TearFree brauchte es dadurch ueberhaupt erst,
-        // was wiederum eine zusaetzliche Scanout-Pufferstufe (und damit Latenz) kostet.
-        let window = Arc::new(window);
 
         let mut gpu = GpuState::new(
             window,
@@ -21159,6 +21600,11 @@ impl ApplicationHandler for App {
     // Deckt jeden Ausstiegsweg ab (Fenster zu, Alt+F4, Strg+C) an einer einzigen Stelle,
     // statt an jedem event_loop.exit()-Aufruf einzeln daran zu denken.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Zuerst das Fenster weg (auch aus Taskleiste und Alt-Tab): das Aufraeumen danach
+        // (TearFree, Fernsicht speichern, GPU freigeben) soll man nicht als haengendes Fenster sehen.
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.set_visible(false);
+        }
         self.restore_original_tearfree();
         // Chunk-Saver: Geaendertes noch speichern, dann schreibt er beim Beenden alles weg.
         self.lod_save_dirty();
@@ -21320,8 +21766,14 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::PlayerListScaleNext
         | ButtonAction::MenuBackdropPrev
         | ButtonAction::MenuBackdropNext
+        | ButtonAction::ScrollInertiaPrev
+        | ButtonAction::ScrollInertiaNext
+        | ButtonAction::ScrollDistancePrev
+        | ButtonAction::ScrollDistanceNext
         | ButtonAction::EntityDistancePrev
         | ButtonAction::EntityDistanceNext
+        | ButtonAction::BlockEntityDistancePrev
+        | ButtonAction::BlockEntityDistanceNext
         | ButtonAction::HitboxDensityPrev
         | ButtonAction::HitboxDensityNext
         | ButtonAction::ArrowOpacityPrev
@@ -21374,6 +21826,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleInventoryCursorToSlot => umschalten(settings.inventory_cursor_to_slot),
         ButtonAction::ToggleCreativeOpTab => umschalten(settings.creative_op_tab),
         ButtonAction::ToggleNoChatClear => umschalten(settings.no_chat_clear),
+        ButtonAction::ToggleAudioAutoOptimize => umschalten(settings.audio_auto_optimize),
         ButtonAction::ToggleSignEditInWorld => umschalten(settings.sign_edit_in_world),
         ButtonAction::SkipPerspective(p) => umschalten(settings.perspective_skipped(p)),
         ButtonAction::ToggleInventoryMergeHover => umschalten(settings.inventory_merge_hover),
@@ -21650,8 +22103,9 @@ fn main() {
     let event_loop = EventLoop::new().expect("Event-Loop konnte nicht erstellt werden");
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = App::new(installation, settings);
-    event_loop.run_app(&mut app).expect("Event-Loop-Fehler");
+    // Das Fenster kommt sofort, die Assets baut ein Thread (s. loading_screen).
+    let mut start = loading_screen::Startup::new(installation, settings);
+    event_loop.run_app(&mut start).expect("Event-Loop-Fehler");
 }
 
 #[cfg(test)]
@@ -21785,7 +22239,8 @@ mod module_menu_tests {
         for k in ModuleCategory::ALL {
             assert!(!k.modules().is_empty(), "{k:?} ist leer");
         }
-        assert_eq!(ModuleId::Shields.category(), ModuleCategory::Render);
+        assert_eq!(ModuleId::Shields.category(), ModuleCategory::Display);
+        assert_eq!(ModuleId::VoiceChat.category(), ModuleCategory::Akustik);
         assert_eq!(ModuleId::GhostTolerance.category(), ModuleCategory::Debug);
     }
 
@@ -22592,7 +23047,7 @@ mod hud_split_tests {
 
     #[test]
     fn timer_blinkt_in_den_letzten_10_sekunden() {
-        let e = |remaining| EffectEntry { effect: 0, ambient: false, amplifier: 0, remaining, received: 600 };
+        let e = |remaining| EffectEntry { effect: 0, ambient: false, amplifier: 0, remaining, exact: remaining as f64, received: 600 };
         let an = EFFECTS_BLINK_ON;
         assert_eq!(effect_timer_blink(&e(201), an), None);
         assert_eq!(effect_timer_blink(&e(200), an), Some(true));
@@ -22614,7 +23069,7 @@ mod hud_split_tests {
 
     #[test]
     fn laengster_effekt_zuerst() {
-        let e = |effect, remaining| EffectEntry { effect, ambient: false, amplifier: 0, remaining, received: remaining };
+        let e = |effect, remaining: i32| EffectEntry { effect, ambient: false, amplifier: 0, remaining, exact: remaining as f64, received: remaining };
         let mut liste = [e(1, 100), e(5, protocol::packets::MOB_EFFECT_INFINITE), e(3, 900), e(2, 900)];
         liste.sort_by(effect_longest_first);
         assert_eq!(liste.iter().map(|e| e.effect).collect::<Vec<_>>(), [5, 2, 3, 1]);
@@ -23308,6 +23763,22 @@ mod tests {
         );
         let got: Vec<(&str, &str)> = servers.iter().map(|s| (s.name.as_str(), s.address.as_str())).collect();
         assert_eq!(got, vec![("Hypixel", "mc.hypixel.net"), ("", "namenlos.example.com"), ("Lokal", "127.0.0.1:25566")]);
+    }
+
+    #[test]
+    fn motd_rand_faellt_weg_ausrichtung_bleibt() {
+        let span = |t: &str| protocol::nbt::TextSpan { text: t.to_string(), ..Default::default() };
+        let mut zeilen = vec![vec![span("      "), span("CatPvP  "), span(" ")], vec![span("    Duels"), span("   ")]];
+        trim_motd_padding(&mut zeilen);
+        let text: Vec<String> = zeilen.iter().map(|z| z.iter().map(|s| s.text.as_str()).collect()).collect();
+        assert_eq!(text, vec!["  CatPvP".to_string(), "Duels".to_string()]);
+    }
+
+    #[test]
+    fn parse_servers_liest_verbindungsbild_und_namen_aus() {
+        let servers = parse_servers("A\ta.net\nB\tb.net\tlast\nC\tc.net\t-\tnoname\nD\td.net\tfirst\tnoname\n");
+        let got: Vec<(&str, Option<bool>, bool)> = servers.iter().map(|s| (s.address.as_str(), s.view_last, s.show_name)).collect();
+        assert_eq!(got, vec![("a.net", None, true), ("b.net", Some(true), true), ("c.net", None, false), ("d.net", Some(false), false)]);
     }
 
     // Das FPS-Limit stand frueher als INDEX in settings.conf ("fps_limit=4" = 5. Eintrag der
@@ -24354,7 +24825,7 @@ mod tests {
         let seite = SettingsPage { rows: 7, sections: &[("Allgemein", 0), ("Tränke", 4)] };
         let starts = seite.section_starts();
         assert_eq!(starts, 1 << 4);
-        let y = |row, erste| settings_row_y_in(row, erste, starts, f32::INFINITY);
+        let y = |row, erste: usize| settings_row_y_in(row, erste as f32, starts, f32::INFINITY);
         assert_eq!(y(0, 0), Some(SETTINGS_FIRST_Y));
         assert_eq!(y(3, 0), Some(SETTINGS_FIRST_Y + 3.0 * SETTINGS_ROW_H));
         assert_eq!(y(4, 0), Some(SETTINGS_FIRST_Y + 4.0 * SETTINGS_ROW_H + SETTINGS_SECTION_GAP));
@@ -24362,10 +24833,13 @@ mod tests {
         assert_eq!(y(5, 4), Some(SETTINGS_FIRST_Y + SETTINGS_ROW_H));
         assert_eq!(y(3, 4), None);
         let unten = SETTINGS_FIRST_Y + 5.0 * SETTINGS_ROW_H;
-        assert_eq!(settings_row_y_in(6, 0, starts, unten), None);
+        assert_eq!(settings_row_y_in(6, 0.0, starts, unten), None);
         let max = settings_max_first(seite.rows, starts, unten);
-        assert!(settings_row_y_in(6, max, starts, unten).is_some());
-        assert!(settings_row_y_in(6, max - 1, starts, unten).is_none());
+        assert!(settings_row_y_in(6, max as f32, starts, unten).is_some());
+        assert!(settings_row_y_in(6, max as f32 - 1.0, starts, unten).is_none());
+        // Gleitend: halb zwischen zwei Zeilen steht alles um eine halbe Zeile hoeher.
+        assert_eq!(y(5, 4).map(|v| v - SETTINGS_ROW_H / 2.0), settings_row_y_in(5, 4.5, starts, f32::INFINITY));
+        assert_eq!(settings_row_y_in(4, 4.5, starts, f32::INFINITY), None);
         assert_eq!(settings_max_first(seite.rows, starts, f32::INFINITY), 0);
         // Jede Seite mit Abschnitten: der erste beginnt bei 0, alle aufsteigend und innerhalb.
         for (screen, _) in SETTINGS_CATEGORIES {
@@ -24396,6 +24870,10 @@ mod tests {
         assert_eq!(Settings::parse_onto(Settings::base(), "entity_render_distance=64\n").entity_render_distance, 64);
         assert_eq!(Settings::parse_onto(Settings::base(), "entity_render_distance=3\n").entity_render_distance, 3);
         assert_eq!(Settings::parse_onto(Settings::base(), "entity_render_distance=99999\n").entity_render_distance, 99999);
+        assert_eq!(Settings::parse_onto(Settings::base(), "").block_entity_render_distance, BLOCK_ENTITY_DISTANCE_DEFAULT);
+        let mut set = Settings::parse_onto(Settings::base(), "");
+        set.block_entity_render_distance = 96;
+        assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).block_entity_render_distance, 96);
     }
 
     #[test]
@@ -24514,7 +24992,7 @@ mod tests {
     }
 
     // GUI-Skalierung: 0 muss Vanillas Auto-Rechnung ergeben (so gross wie das 320x240-Raster
-    // erlaubt, gedeckelt bei 4), 1..4 die feste Stufe -- unabhaengig von der Aufloesung.
+    // erlaubt), 1..4 die feste Stufe -- unabhaengig von der Aufloesung.
     #[test]
     fn skalierung_null_ist_auto_der_rest_fest() {
         let hd = (1920.0, 1080.0);
@@ -24530,6 +25008,12 @@ mod tests {
         }
         // Ein von Hand zu gross eingetragener Wert darf nicht durchschlagen.
         assert_eq!(App::gui_scale_of(99, hd), 4.0);
+        // Hohe Aufloesungen: Auto wie Vanilla ohne Deckel, feste Stufen bis dorthin.
+        let uhd = (3840.0, 2160.0);
+        assert_eq!(App::gui_scale_of(0, uhd), 9.0);
+        assert_eq!(App::gui_scale_of(7, uhd), 7.0);
+        assert_eq!(App::gui_scale_of(99, uhd), 9.0);
+        assert_eq!(inventory::max_gui_scale(klein), 4, "kleine Fenster behalten x1..x4");
     }
 
     // Die Skalierungen sind drei GETRENNTE Einstellungen -- eine zu aendern darf die anderen
@@ -24543,8 +25027,9 @@ mod tests {
         // Die alte Chat-Stufe x4 wird zu 200 % (x4 ist das Doppelte von UI_SCALE_SMALL).
         assert_eq!(settings.chat_scale_percent, 200);
         assert_eq!(Settings::parse_onto(Settings::base(), "hud_chat_scale=0\n").chat_scale_percent, 100, "Auto = 100 %");
-        // Ueber 4 wird beim Einlesen geklemmt, nicht erst beim Anwenden.
-        assert_eq!(Settings::parse_onto(Settings::base(), "inventory_scale=9\n").inventory_scale, 4);
+        // Hohe Stufen fuer grosse Bildschirme bleiben erhalten, Unsinn wird beim Einlesen geklemmt.
+        assert_eq!(Settings::parse_onto(Settings::base(), "inventory_scale=9\n").inventory_scale, 9);
+        assert_eq!(Settings::parse_onto(Settings::base(), "inventory_scale=999\n").inventory_scale, inventory::GUI_SCALE_SETTING_MAX);
     }
 
     // Die Kontur gehoert in den Fadenkreuz-Pass, nicht in den UI-Pass. Sie MUSS also als eigene
@@ -24735,9 +25220,9 @@ mod tests {
         let screen = (1920.0, 1080.0);
         let tip_pos = (400.0, 300.0);
         for fx in [
-            CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 1.0, circle: true, width: 1.0 },
-            CursorFxFrame { scale: 1.0, rotation_deg: 137.0, additive: 0.0, circle: true, width: 1.0 },
-            CursorFxFrame { scale: 0.9, rotation_deg: -204.0, additive: 0.4, circle: true, width: 1.0 },
+            CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 1.0, right: false, circle: true, width: 1.0 },
+            CursorFxFrame { scale: 1.0, rotation_deg: 137.0, additive: 0.0, right: false, circle: true, width: 1.0 },
+            CursorFxFrame { scale: 0.9, rotation_deg: -204.0, additive: 0.4, right: false, circle: true, width: 1.0 },
         ] {
             let u = cursor_polygons(tip_pos, screen, fx);
             assert!(
@@ -24758,8 +25243,8 @@ mod tests {
             let u = cursor_polygons(tip, screen, fx);
             u.bounds[3] - u.bounds[1]
         };
-        let ruhe = spanne(CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, circle: true, width: 1.0 });
-        let gedrueckt = spanne(CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 0.0, circle: true, width: 1.0 });
+        let ruhe = spanne(CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: false, circle: true, width: 1.0 });
+        let gedrueckt = spanne(CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 0.0, right: false, circle: true, width: 1.0 });
         assert!(gedrueckt < ruhe, "gedrückt {gedrueckt} muss kleiner sein als in Ruhe {ruhe}");
     }
 
@@ -24768,14 +25253,17 @@ mod tests {
     fn das_aufleuchten_aendert_nur_die_farbe() {
         let screen = (1920.0, 1080.0);
         let tip = (400.0, 300.0);
-        let ohne = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, circle: true, width: 1.0 });
-        let mit = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, circle: true, width: 1.0 });
+        let ohne = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: false, circle: true, width: 1.0 });
+        let mit = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, right: false, circle: true, width: 1.0 });
         assert_eq!(ohne.points, mit.points);
         assert_eq!(ohne.colors, mit.colors, "die Grundfarben bleiben, das Leuchten kommt DAZU");
         assert_eq!(ohne.additive[3], 0.0);
         assert_eq!(mit.additive[3], CURSOR_PRESS_TINT);
         let [r, g, b, _] = theme::get(theme::Slot::Accent);
         assert_eq!([mit.additive[0], mit.additive[1], mit.additive[2]], [r, g, b], "Leuchten in der Akzentfarbe des Themes");
+        let rechts = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, right: true, circle: true, width: 1.0 });
+        let [r, g, b, _] = theme::get(theme::Slot::Accent2);
+        assert_eq!([rechts.additive[0], rechts.additive[1], rechts.additive[2]], [r, g, b], "Rechtsklick leuchtet in Akzent 2");
     }
 
     // Die Pfeilspitze ist der Hotspot: ohne diese Garantie klickt man mit der falschen
@@ -24805,7 +25293,7 @@ mod tests {
         let screen = (1920.0, 1080.0);
         let tip_pos = (400.0, 300.0);
         // Ruhezustand: volle Groesse, ungedreht, kein Leuchten.
-        let u = cursor_polygons(tip_pos, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, circle: true, width: 1.0 });
+        let u = cursor_polygons(tip_pos, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: false, circle: true, width: 1.0 });
 
         // Erster Punkt der aeussersten (Kontur-)Schicht ist die Pfeilspitze (Reihenfolge
         // s. cursor_polygons: Schicht 0, Kite, Punkt 0 = CURSOR_KITE[0]).
@@ -25658,7 +26146,7 @@ mod effect_display_tests {
     use super::*;
 
     fn e(effect: i32, remaining: i32) -> EffectEntry {
-        EffectEntry { effect, ambient: false, amplifier: 0, remaining, received: remaining }
+        EffectEntry { effect, ambient: false, amplifier: 0, remaining, exact: remaining as f64, received: remaining }
     }
 
     #[test]

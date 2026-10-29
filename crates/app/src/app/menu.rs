@@ -18,6 +18,7 @@ impl App {
     }
 
     // Derselbe Regler mit Platz fuer vier Ziffern.
+    #[cfg(test)]
     pub(crate) fn wide_slider(mut b: Button) -> Button {
         if let Some(s) = b.slider.as_mut() {
             s.digits = 4;
@@ -139,22 +140,79 @@ impl App {
         let jetzt = Instant::now();
         let dt = jetzt.duration_since(self.ui_anim_at).as_secs_f32().min(0.1);
         self.ui_anim_at = jetzt;
-        let ziel = self.server_first() as f32;
-        let k = 1.0 - (-dt * 16.0).exp();
-        self.server_scroll_anim += (ziel - self.server_scroll_anim) * k;
-        if (ziel - self.server_scroll_anim).abs() < 0.002 {
-            self.server_scroll_anim = ziel;
+        // Alle Listen gleiten gleich (s. smooth_scroll): jede mit ihrem aktuellen Ende.
+        let rate = scroll_inertia_rate(self.settings.scroll_inertia);
+        if let Some(n) = self.dropdown.as_ref().map(|d| self.choice_options(d.choice).0.len()) {
+            if let Some(d) = self.dropdown.as_mut() {
+                d.scroll.tick(dt, rate, n.saturating_sub(DROPDOWN_MAX_ITEMS) as f32);
+            }
         }
+        // Die Suche gilt nur auf dem Connect-Screen; leergeloescht verschwindet das Feld. Jeder
+        // neue Suchtext faengt oben an.
+        if self.mode != AppMode::Menu || self.screen != MenuScreen::Connect || self.server_search.as_ref().is_some_and(|f| f.text().is_empty()) {
+            self.server_search = None;
+        }
+        let suche = self.server_search.as_ref().map_or("", |f| f.text());
+        if suche != self.server_search_applied {
+            self.server_search_applied = suche.to_string();
+            self.server_scroll.jump(0.0);
+        }
+        let max = self.server_max_scroll();
+        self.server_scroll.tick(dt, rate, max);
         if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsSkin {
             for (i, c) in [skin_tab::Column::Available, skin_tab::Column::Selected].into_iter().enumerate() {
-                let ziel = self.skin_first(c, self.skin_column_len(c)) as f32;
-                let a = &mut self.skin_scroll_anim[i];
-                *a += (ziel - *a) * k;
-                if (ziel - *a).abs() < 0.002 {
-                    *a = ziel;
+                let max = self.skin_max_scroll(c);
+                self.skin_scroll[i].tick(dt, rate, max);
+            }
+            if let Some(max) = self.skin_files_max_scroll() {
+                if let Some(w) = self.skin_files.as_mut() {
+                    w.scroll.tick(dt, rate, max);
                 }
             }
         }
+        if self.mode == AppMode::Menu && self.screen.settings_page().is_some() {
+            let max = self.page_max_scroll() as f32;
+            self.page_scroll_mut().tick(dt, rate, max);
+        }
+        if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles {
+            let max = self.particle_max_scroll();
+            self.particle_scroll.tick(dt, rate, max);
+        }
+        if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsLightLevels {
+            let max = self.light_max_scroll();
+            self.light_scroll.tick(dt, rate, max);
+        }
+        if let Some(max) = self.gpu.as_ref().filter(|_| self.module_menu_shown()).map(|gpu| self.module_max_scroll(gpu) as f32) {
+            self.module_menu_scroll.tick(dt, rate, max);
+        }
+        self.tick_dialog_scroll(dt, rate);
+        self.drag_scroll_hold();
+        // Der Chat blaettert weiter in ganzen Zeilen (Wachsen, Auswahl und neue Nachrichten
+        // haengen daran); gezeichnet wird mit dem gleitenden Stand dahinter.
+        self.chat_scroll_glide.ziel = self.chat_scroll as f32;
+        self.chat_scroll_glide.tick(dt, rate, f32::INFINITY);
+        self.chat_history_glide.ziel = self.chat_history_scroll as f32;
+        self.chat_history_glide.tick(dt, rate, f32::INFINITY);
+        for rise in [&mut self.chat_rise, &mut self.chat_rise_open] {
+            *rise = if rate.is_finite() { *rise * (-dt * rate).exp() } else { 0.0 };
+            if *rise < 0.002 {
+                *rise = 0.0;
+            }
+        }
+        let ziel = self.chat_bedrock_target.get();
+        // Bedrock: neue Nachrichten sind sofort da -- das Ende springt, und was sie den vollen
+        // Chat weiterschieben, springt am Anfang mit. Nur das Nachruecken, wenn oben eine
+        // Nachricht ausgeblendet ist, gleitet.
+        self.chat_bedrock_anim = Some(match self.chat_bedrock_anim {
+            Some((s, e)) if rate.is_finite() => {
+                let geschoben = (ziel.0 - self.chat_bedrock_last_start).clamp(0.0, (ziel.1 - e).max(0.0));
+                let s = s + geschoben;
+                let k = 1.0 - (-dt * rate).exp();
+                (if (ziel.0 - s).abs() < 0.002 { ziel.0 } else { s + (ziel.0 - s) * k }, ziel.1)
+            }
+            _ => ziel,
+        });
+        self.chat_bedrock_last_start = ziel.0;
         if self.mode == AppMode::Menu && self.screen == MenuScreen::Connect {
             self.refresh_server_status();
         }
@@ -244,23 +302,152 @@ impl App {
     // Karten, die gerade (ganz oder teilweise) in der Liste stehen: Index und Rechteck beim
     // gleitenden Scrollstand. Die ausgewaehlte ragt nach links heraus.
     // Waehrend eine Karte gezogen wird, fehlt sie, und die uebrigen ruecken zusammen.
+    // Bei offener Suche nur die Treffer, und die ruecken um einen Platz nach unten: oben steht
+    // das Suchfeld.
     pub(crate) fn server_cards(&self) -> Vec<(usize, Rect)> {
-        let s = self.server_scroll_anim;
+        let s = self.server_scroll.stand;
         let gezogen = self.server_drag_active();
-        let reihe: Vec<usize> = (0..self.servers.len()).filter(|&i| Some(i) != gezogen).collect();
-        let von = (s.floor() as isize - 1).max(0) as usize;
+        let versatz = usize::from(self.server_search.is_some());
+        let reihe: Vec<usize> = self.server_search_hits().into_iter().filter(|&i| Some(i) != gezogen).collect();
+        let von = (s.floor() as isize - 1 - versatz as isize).max(0) as usize;
         let bis = (s.ceil() as usize + server_rows_visible() + 1).min(reihe.len());
         (von..bis)
             .map(|platz| {
-                (reihe[platz], server_card_rect(platz, s))
+                (reihe[platz], server_card_rect(platz + versatz, s))
             })
             .filter(|(_, r)| r.y + r.h > server_list_top() && r.y < server_list_bottom())
             .collect()
     }
 
-    // Erste sichtbare Karte (Scrollstand, auf das Ende geklemmt).
-    pub(crate) fn server_first(&self) -> usize {
-        self.server_scroll.min(self.servers.len().saturating_sub(server_rows_visible()))
+    // So weit laesst sich die Serverliste scrollen, in Karten.
+    pub(crate) fn server_max_scroll(&self) -> f32 {
+        (self.server_search_hits().len() + usize::from(self.server_search.is_some())).saturating_sub(server_rows_visible()) as f32
+    }
+
+    // Eintraege, die zur Suche passen, in Listenreihenfolge; ohne Suche alle. Gesucht wird
+    // ohne Gross/klein in Name, Adresse und MOTD.
+    pub(crate) fn server_search_hits(&self) -> Vec<usize> {
+        let Some(suche) = self.server_search.as_ref().map(|f| f.text().to_lowercase()) else {
+            return (0..self.servers.len()).collect();
+        };
+        (0..self.servers.len())
+            .filter(|&i| {
+                let entry = &self.servers[i];
+                let mut text = format!("{}\n{}", entry.name, entry.address);
+                if let Some(server_status::State::Ok(st)) = self.server_status.get(&entry.address).map(|e| &e.state) {
+                    for zeile in &st.motd {
+                        text.push('\n');
+                        text.extend(zeile.iter().map(|span| span.text.as_str()));
+                    }
+                }
+                text.to_lowercase().contains(&suche)
+            })
+            .collect()
+    }
+
+    // Wird gerade in die Serversuche getippt? Fenster darueber haben Vorrang.
+    pub(crate) fn server_search_typing(&self) -> bool {
+        self.server_search.is_some()
+            && self.mode == AppMode::Menu
+            && self.screen == MenuScreen::Connect
+            && !self.quick_connect_open
+            && self.server_edit.is_none()
+            && self.theme_name_dialog.is_none()
+            && self.dialog.is_none()
+    }
+
+    // Erstes getipptes Zeichen auf dem Connect-Screen, solange sonst nichts offen ist: oeffnet
+    // die Suche damit. Leerzeichen und Steuerzeichen oeffnen nichts.
+    pub(crate) fn server_search_start(&mut self, text: &str) -> bool {
+        let frei = self.mode == AppMode::Menu
+            && self.screen == MenuScreen::Connect
+            && self.server_search.is_none()
+            && !self.quick_connect_open
+            && self.server_edit.is_none()
+            && self.server_context.is_none()
+            && self.dialog.is_none()
+            && self.disconnect_popup.is_none()
+            && !self.account_menu_open
+            && !self.account_manager_open
+            && !self.notification_panel_open
+            && self.dropdown.is_none();
+        if !frei || !text.chars().next().is_some_and(|c| !c.is_control() && !c.is_whitespace()) {
+            return false;
+        }
+        let mut feld = text_field::TextField::new("", SERVER_SEARCH_MAX_CHARS);
+        feld.insert(text);
+        self.server_search = Some(feld);
+        true
+    }
+
+    // Enter in der Suche: wie in osu! mit dem ersten Treffer verbinden. Ohne Treffer nur der
+    // Ablehnungsklang.
+    pub(crate) fn server_search_submit(&mut self) {
+        let Some(&i) = self.server_search_hits().first() else {
+            self.play_ui_sound(ui_sound::UiSound::Denied);
+            return;
+        };
+        let action = ButtonAction::ConnectToServer(i);
+        self.play_ui_sound(ui_sound_for_action(action, &self.settings));
+        self.run_menu_action(action);
+    }
+
+    // Bildlaufleiste links neben den Karten: Spur und Griff beim gezeichneten Stand. None,
+    // solange alle Karten (und das Suchfeld) passen.
+    pub(crate) fn server_scrollbar(&self) -> Option<(Rect, Rect)> {
+        let max = self.server_max_scroll();
+        if max <= 0.0 {
+            return None;
+        }
+        let p = server_panel();
+        let (oben, unten) = (server_list_top(), server_list_bottom());
+        let spur = Rect { x: p.x - SERVER_BAR_GAP - SERVER_BAR_W, y: oben, w: SERVER_BAR_W, h: unten - oben };
+        let sichtbar = server_rows_visible() as f32;
+        let griff_h = (spur.h * sichtbar / (max + sichtbar)).max(32.0);
+        let griff = Rect { y: spur.y + (spur.h - griff_h) * (self.server_scroll.stand / max).clamp(0.0, 1.0), h: griff_h, ..spur };
+        Some((spur, griff))
+    }
+
+    // Flaeche, in der ein Druck die Leiste trifft: etwas breiter als sie selbst.
+    pub(crate) fn server_bar_hit(&self) -> Option<Rect> {
+        self.server_scrollbar().map(|(spur, _)| Rect { x: spur.x - SERVER_BAR_HIT, w: spur.w + 2.0 * SERVER_BAR_HIT, ..spur })
+    }
+
+    // Linke Taste auf der Leiste: am Griff fasst sie ihn, wo man ihn gepackt hat; daneben
+    // springt seine Mitte unter den Zeiger. Ziehen fuehrt weiter (s. server_bar_drag).
+    pub(crate) fn server_bar_press(&mut self) -> bool {
+        if self.mode != AppMode::Menu || self.screen != MenuScreen::Connect || self.server_edit.is_some() {
+            return false;
+        }
+        let Some((_, griff)) = self.server_scrollbar() else { return false };
+        let (cx, cy) = self.cursor_pos;
+        if !self.server_bar_hit().is_some_and(|r| r.contains(cx, cy)) {
+            return false;
+        }
+        let fass = if cy >= griff.y && cy <= griff.y + griff.h { cy - griff.y } else { griff.h / 2.0 };
+        self.server_bar_grab = Some(fass);
+        self.server_bar_drag();
+        true
+    }
+
+    // Der gefasste Griff folgt dem Zeiger, die Liste sofort mit (ohne Gleiten).
+    pub(crate) fn server_bar_drag(&mut self) {
+        let Some(fass) = self.server_bar_grab else { return };
+        let Some((spur, griff)) = self.server_scrollbar() else {
+            self.server_bar_grab = None;
+            return;
+        };
+        let t = ((self.cursor_pos.1 - fass - spur.y) / (spur.h - griff.h).max(1.0)).clamp(0.0, 1.0);
+        self.server_scroll.jump(t * self.server_max_scroll());
+    }
+
+    // Mausrad in Einheiten einer Liste, Richtung Listenende positiv: eine Raste sind `je_raste`
+    // Einheiten mal Scrollweite; ein Touchpad (Pixel) folgt dem Finger, `px` Pixel je Einheit.
+    pub(crate) fn wheel_units(&self, delta: winit::event::MouseScrollDelta, je_raste: f32, px: f32) -> f32 {
+        match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => -y * je_raste * self.settings.scroll_distance as f32 / 100.0,
+            winit::event::MouseScrollDelta::PixelDelta(p) => -p.y as f32 / px,
+        }
     }
 
     // Trefferflaechen der Karten rechts auf dem Connect-Screen. Die Karten zeichnet
@@ -309,7 +496,8 @@ impl App {
                 d.moved.set(true);
             }
         }
-        d.moved.get().then_some(d.index)
+        // In der gefilterten Liste gibt es keine sinnvolle Luecke zum Ablegen.
+        d.moved.get().then_some(d.index).filter(|_| self.server_search.is_none())
     }
 
     // Wohin die gezogene Karte fiele: Platz 0..=n unter den uebrigen n Karten, die Luecke
@@ -322,7 +510,7 @@ impl App {
         }
         let n = self.servers.len().saturating_sub(1);
         let schritt = server_row_h() + SERVER_ROW_GAP;
-        let platz = ((y - server_list_top() + SERVER_ROW_GAP / 2.0) / schritt + self.server_scroll_anim + 0.5).floor();
+        let platz = ((y - server_list_top() + SERVER_ROW_GAP / 2.0) / schritt + self.server_scroll.stand + 0.5).floor();
         Some((platz.max(0.0) as usize).min(n))
     }
 
@@ -357,7 +545,9 @@ impl App {
         let Some(d) = self.server_drag.take() else { return };
         let Some(i) = gezogen else {
             // Nicht bewegt: ein Rechtsklick auf die Karte, also ihr Kontextmenue.
-            self.server_context = Some(ServerContextMenu { index: d.index, at: d.press });
+            if !d.moved.get() {
+                self.server_context = Some(ServerContextMenu { index: d.index, at: d.press });
+            }
             return;
         };
         let Some(ziel) = ziel.filter(|_| i < self.servers.len()) else { return };
@@ -371,9 +561,9 @@ impl App {
     }
 
     pub(crate) fn open_server_dialog(&mut self, index: Option<usize>) {
-        let (name, address, view_last) = match index.and_then(|i| self.servers.get(i)) {
-            Some(e) => (e.name.as_str(), e.address.as_str(), e.view_last),
-            None => ("", "", None),
+        let (name, address, view_last, show_name) = match index.and_then(|i| self.servers.get(i)) {
+            Some(e) => (e.name.as_str(), e.address.as_str(), e.view_last, e.show_name),
+            None => ("", "", None, true),
         };
         self.server_edit = Some(ServerEdit {
             index,
@@ -383,6 +573,7 @@ impl App {
             dragging: false,
             last_press: None,
             view_last,
+            show_name,
         });
         self.server_context = None;
     }
@@ -447,6 +638,12 @@ impl App {
             self.play_ui_sound(ui_sound::UiSound::Click);
             return;
         }
+        if server_dialog_name_toggle().contains(cx, cy) {
+            edit.show_name = !edit.show_name;
+            let ton = if edit.show_name { ui_sound::UiSound::ToggleOn } else { ui_sound::UiSound::ToggleOff };
+            self.play_ui_sound(ton);
+            return;
+        }
         if speichern.contains(cx, cy) {
             if edit.address.text().trim().is_empty() {
                 self.play_ui_sound(ui_sound::UiSound::Denied);
@@ -501,10 +698,10 @@ impl App {
         let address = edit.address.text().trim().to_string();
         // Leerer Name bleibt leer: die Karte zeigt dann die MOTD (s. build_server_panel).
         let name = edit.name.text().trim().to_string();
-        let view_last = edit.view_last;
+        let (view_last, show_name) = (edit.view_last, edit.show_name);
         match edit.index {
-            Some(i) if i < self.servers.len() => self.servers[i] = ServerEntry { name, address, view_last },
-            _ => self.servers.push(ServerEntry { name, address, view_last }),
+            Some(i) if i < self.servers.len() => self.servers[i] = ServerEntry { name, address, view_last, show_name },
+            _ => self.servers.push(ServerEntry { name, address, view_last, show_name }),
         }
         self.persist_servers();
     }
@@ -779,6 +976,13 @@ impl App {
                     set.entity_render_distance > ENTITY_DISTANCE_MIN,
                     set.entity_render_distance < ENTITY_DISTANCE_MAX,
                 ));
+                out.extend(Self::stepper(
+                    ButtonAction::BlockEntityDistancePrev,
+                    ButtonAction::BlockEntityDistanceNext,
+                    BLOCK_ENTITY_DISTANCE_ROW,
+                    set.block_entity_render_distance > BLOCK_ENTITY_DISTANCE_MIN,
+                    set.block_entity_render_distance < BLOCK_ENTITY_DISTANCE_MAX,
+                ));
                 out.push(Self::toggle(ButtonAction::ToggleBlockRngRotation, BLOCK_ROTATION_ROW, set.block_rng_rotation));
                 out.push(Self::toggle(ButtonAction::ToggleArmorTrims, ARMOR_TRIMS_ROW, set.armor_trims));
                 out.extend(Self::stepper(
@@ -811,7 +1015,7 @@ impl App {
                 out.extend(pick_buttons(settings_wide_rect(FIRE_MODE_ROW), &modi, true));
                 if set.fire_mode == FIRE_MODE_CROSSHAIR {
                     out.push(Self::swatch(ColorTarget::FireCrosshair, settings_ctrl_rect(FIRE_DETAIL_ROW), set.fire_crosshair_rgba()));
-                } else {
+                } else if set.fire_mode == FIRE_MODE_VANILLA {
                     out.push(Self::step_slider(
                         ButtonAction::FireHeightPrev,
                         ButtonAction::FireHeightNext,
@@ -877,6 +1081,10 @@ impl App {
                 }
                 let abdunkeln = self.settings.menu_backdrop_opacity;
                 out.extend(Self::stepper(ButtonAction::MenuBackdropPrev, ButtonAction::MenuBackdropNext, MENU_BACKDROP_ROW, abdunkeln > 0, abdunkeln < 100));
+                let traegheit = self.settings.scroll_inertia;
+                out.extend(Self::stepper(ButtonAction::ScrollInertiaPrev, ButtonAction::ScrollInertiaNext, SCROLL_INERTIA_ROW, traegheit > 0, traegheit < 100));
+                let weite = self.settings.scroll_distance;
+                out.extend(Self::stepper(ButtonAction::ScrollDistancePrev, ButtonAction::ScrollDistanceNext, SCROLL_DISTANCE_ROW, weite > SCROLL_DISTANCE_MIN, weite < SCROLL_DISTANCE_MAX));
                 // Kacheln: zeichnen sich selbst (build_settings_design_tab), hier nur die
                 // Trefferflaechen.
                 let eigene = self.settings.custom_themes.len();
@@ -890,7 +1098,7 @@ impl App {
                 // Farbfelder nur bei eigenen Themes -- ein Preset ist fest (seine Farben zeichnet
                 // build_settings_design_tab ohne Knopf).
                 if matches!(self.settings.theme_choice, ThemeChoice::Custom(_)) {
-                    for (i, slot) in theme::Slot::ALL.into_iter().enumerate() {
+                    for (i, slot) in theme::EDITABLE.into_iter().enumerate() {
                         let (row, x) = theme_slot_cell(i);
                         out.push(Self::swatch(ColorTarget::Theme(slot), Rect { x: x + THEME_COLOR_SWATCH_DX, y: settings_row_y(row), w: SWATCH_W, h: SETTINGS_CTRL_H }, theme::get(slot)));
                     }
@@ -924,20 +1132,19 @@ impl App {
             }
             MenuScreen::SettingsParticles => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
-                let schalter = |action: ButtonAction, x: f32, row: usize, an: bool| Button {
+                let schalter = |action: ButtonAction, x: f32, y: f32, an: bool| Button {
                     action,
-                    rect: Rect { x, y: settings_row_y(row), w: PARTICLE_TOGGLE_W, h: SETTINGS_CTRL_H },
+                    rect: Rect { x, y, w: PARTICLE_TOGGLE_W, h: SETTINGS_CTRL_H },
                     label: if an { "AN" } else { "AUS" }.to_string(),
                     enabled: true,
                     color: if an { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::Surface2) },
                     scale: UI_SCALE_SMALL,
                     slider: None,
                 };
-                for (zeile, i) in (0..particles::KINDS.len()).skip(self.particle_scroll).take(self.particle_visible_rows()).enumerate() {
+                for (i, y) in header_list_rows(particles::KINDS.len(), self.particle_scroll.stand, self.particle_visible_rows()) {
                     let t = self.settings.particle_tuning[i];
                     let art = particles::KINDS[i].spawn;
-                    let row = 1 + zeile;
-                    out.push(schalter(ButtonAction::ParticleToggle(i), PARTICLE_TOGGLE_X, row, t.enabled));
+                    out.push(schalter(ButtonAction::ParticleToggle(i), PARTICLE_TOGGLE_X, y, t.enabled));
                     let mut regler = vec![
                         (t.lifetime_pct, PARTICLE_LIFETIME_STEPS[0], *PARTICLE_LIFETIME_STEPS.last().unwrap()),
                         (t.opacity_pct, PARTICLE_OPACITY_STEP, 100),
@@ -952,7 +1159,7 @@ impl App {
                         let b = Self::step_slider(
                             ButtonAction::ParticleStep(i, col as u8, false),
                             ButtonAction::ParticleStep(i, col as u8, true),
-                            particle_value_rect(col, row),
+                            Rect { y, ..particle_value_rect(col, 0) },
                             wert as f64,
                             min as f64,
                             max as f64,
@@ -961,16 +1168,17 @@ impl App {
                         out.push(Self::slider_with_track(b, PARTICLE_TRACK_W));
                     }
                     if art.has_all_at_once() {
-                        out.push(schalter(ButtonAction::ParticleAllAtOnce(i), particle_column_x(PARTICLE_ALL_AT_ONCE_COL), row, t.all_at_once));
+                        out.push(schalter(ButtonAction::ParticleAllAtOnce(i), particle_column_x(PARTICLE_ALL_AT_ONCE_COL), y, t.all_at_once));
                     }
                 }
             }
             MenuScreen::SettingsLightLevels => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
                 let treffer = self.light_search_hits();
-                for (zeile, &i) in treffer.iter().skip(self.light_scroll).take(self.light_visible_rows()).enumerate() {
+                for (k, y) in header_list_rows(treffer.len(), self.light_scroll.stand, self.light_visible_rows()) {
+                    let i = treffer[k];
                     let p = self.settings.light_factor_of(light_source_blocks()[i]);
-                    out.push(Self::step_slider(ButtonAction::LightFactorPrev(i), ButtonAction::LightFactorNext(i), stepper_value_rect(1 + zeile), p as f64, 0.0, LIGHT_FACTOR_MAX as f64, true));
+                    out.push(Self::step_slider(ButtonAction::LightFactorPrev(i), ButtonAction::LightFactorNext(i), Rect { y, ..stepper_value_rect(0) }, p as f64, 0.0, LIGHT_FACTOR_MAX as f64, true));
                 }
             }
             MenuScreen::SettingsInventory => {
@@ -984,7 +1192,7 @@ impl App {
                     value < 100,
                 ));
                 let scale = self.settings.inventory_scale;
-                out.extend(Self::stepper(ButtonAction::InventoryScalePrev, ButtonAction::InventoryScaleNext, 1, scale > 0, scale < 4));
+                out.extend(Self::stepper(ButtonAction::InventoryScalePrev, ButtonAction::InventoryScaleNext, 1, scale > 0, scale < self.max_gui_scale_setting()));
                 out.push(Self::toggle(ButtonAction::ToggleInventoryCursorToSlot, 2, self.settings.inventory_cursor_to_slot));
                 out.push(Self::toggle(ButtonAction::ToggleCreativeOpTab, 3, self.settings.creative_op_tab));
                 out.push(Self::toggle(ButtonAction::ToggleInventoryMergeHover, 4, self.settings.inventory_merge_hover));
@@ -1018,6 +1226,7 @@ impl App {
                 if let PipewireKnopf::Knopf(text, ziel) = self.pipewire_knopf() {
                     out.push(Self::nav_button(ButtonAction::PipewireLimit(ziel), settings_wide_rect(AUDIO_PIPEWIRE_SET_ROW), &text, UI_SCALE_SMALL));
                 }
+                out.push(Self::toggle(ButtonAction::ToggleAudioAutoOptimize, AUDIO_AUTO_ROW, self.settings.audio_auto_optimize));
                 out.push(Self::nav_button(ButtonAction::AudioTestTone, stepper_value_rect(AUDIO_TEST_TONE_ROW), "Testton abspielen", UI_SCALE_SMALL));
                 // Ohne Grenze -- beide Pfeile bleiben immer anklickbar, s. Kommentar an
                 // Settings::ui_pitch_semitones.
@@ -1314,7 +1523,7 @@ impl App {
                                     ButtonAction::HotbarScaleNext,
                                     0,
                                     scale > 0,
-                                    scale < 4,
+                                    scale < self.max_gui_scale_setting(),
                                 ));
                                 let (weniger, mehr) = if self.settings.hotbar_durability_absolute {
                                     let p = self.settings.hotbar_durability_points;
@@ -1342,10 +1551,13 @@ impl App {
                                     (ButtonAction::ChatLinesPrev, ButtonAction::ChatLinesNext, set.chat_lines, 1, CHAT_LINES_MAX),
                                     (ButtonAction::ChatLinesOpenPrev, ButtonAction::ChatLinesOpenNext, set.chat_lines_open, 1, CHAT_LINES_OPEN_MAX),
                                     (ButtonAction::ChatFadePrev, ButtonAction::ChatFadeNext, set.chat_fade_secs, 0, CHAT_FADE_STEPS[CHAT_FADE_STEPS.len() - 1]),
+                                    (ButtonAction::ChatLineSpacingPrev, ButtonAction::ChatLineSpacingNext, set.chat_line_spacing, 0, CHAT_LINE_SPACING_MAX),
                                 ];
                                 for (row, (prev, next, wert, min, max)) in zeilen.into_iter().enumerate() {
                                     out.push(Self::step_slider(prev, next, stepper_value_rect(row), wert as f64, min as f64, max as f64, true));
                                 }
+                                let b = set.chat_bedrock;
+                                out.extend(pick_buttons(settings_wide_rect(CHAT_STYLE_ROW), &[("Java", ButtonAction::ChatStyle(false), !b), ("Bedrock", ButtonAction::ChatStyle(true), b)], true));
                             }
                             HudElement::BossBar => {
                                 let pct = self.settings.hud_bossbar_scale;
@@ -1822,6 +2034,7 @@ impl App {
                 | ButtonAction::CloseModuleMenu
         );
 
+        let max_scale = self.max_gui_scale_setting();
         let set = &mut self.settings;
         match action {
             ButtonAction::Nothing => {}
@@ -2250,6 +2463,10 @@ impl App {
             ButtonAction::PlayerListScaleNext => set.player_list_scale = (set.player_list_scale + HUD_SCALE_PCT_STEP).min(HUD_SCALE_PCT_MAX),
             ButtonAction::MenuBackdropPrev => set.menu_backdrop_opacity = set.menu_backdrop_opacity.saturating_sub(5),
             ButtonAction::MenuBackdropNext => set.menu_backdrop_opacity = (set.menu_backdrop_opacity + 5).min(100),
+            ButtonAction::ScrollInertiaPrev => set.scroll_inertia = set.scroll_inertia.saturating_sub(5),
+            ButtonAction::ScrollInertiaNext => set.scroll_inertia = (set.scroll_inertia + 5).min(100),
+            ButtonAction::ScrollDistancePrev => set.scroll_distance = set.scroll_distance.saturating_sub(SCROLL_DISTANCE_STEP).max(SCROLL_DISTANCE_MIN),
+            ButtonAction::ScrollDistanceNext => set.scroll_distance = (set.scroll_distance + SCROLL_DISTANCE_STEP).min(SCROLL_DISTANCE_MAX),
             // Auf das Raster einrasten: ein eingetippter Wert wie 100 geht zu 96 bzw. 112.
             ButtonAction::EntityDistancePrev => {
                 set.entity_render_distance =
@@ -2259,12 +2476,21 @@ impl App {
                 set.entity_render_distance =
                     ((set.entity_render_distance / ENTITY_DISTANCE_STEP + 1) * ENTITY_DISTANCE_STEP).min(ENTITY_DISTANCE_MAX)
             }
+            ButtonAction::BlockEntityDistancePrev => {
+                set.block_entity_render_distance = ((set.block_entity_render_distance.max(1) - 1) / BLOCK_ENTITY_DISTANCE_STEP * BLOCK_ENTITY_DISTANCE_STEP)
+                    .max(BLOCK_ENTITY_DISTANCE_MIN)
+            }
+            ButtonAction::BlockEntityDistanceNext => {
+                set.block_entity_render_distance = ((set.block_entity_render_distance / BLOCK_ENTITY_DISTANCE_STEP + 1) * BLOCK_ENTITY_DISTANCE_STEP)
+                    .min(BLOCK_ENTITY_DISTANCE_MAX)
+            }
             ButtonAction::InventoryScalePrev => set.inventory_scale = set.inventory_scale.saturating_sub(1),
-            ButtonAction::InventoryScaleNext => set.inventory_scale = (set.inventory_scale + 1).min(4),
+            ButtonAction::InventoryScaleNext => set.inventory_scale = (set.inventory_scale + 1).min(max_scale),
             ButtonAction::ToggleInventoryCursorToSlot => set.inventory_cursor_to_slot = !set.inventory_cursor_to_slot,
             ButtonAction::ToggleCreativeOpTab => set.creative_op_tab = !set.creative_op_tab,
             ButtonAction::NoUiClose(m) => set.no_ui_close = m,
             ButtonAction::ToggleNoChatClear => set.no_chat_clear = !set.no_chat_clear,
+            ButtonAction::ToggleAudioAutoOptimize => set.audio_auto_optimize = !set.audio_auto_optimize,
             ButtonAction::ToggleSignEditInWorld => set.sign_edit_in_world = !set.sign_edit_in_world,
             ButtonAction::NoSlotSet(m) => set.no_slot_set = m,
             ButtonAction::NoRotateSet(m) => set.no_rotate_set = m,
@@ -2282,7 +2508,7 @@ impl App {
             ButtonAction::OpenLightLevels => {
                 self.screen = MenuScreen::SettingsLightLevels;
                 self.light_search.clear();
-                self.light_scroll = 0;
+                self.light_scroll = Default::default();
             }
             ButtonAction::LightFactorPrev(i) | ButtonAction::LightFactorNext(i) => {
                 if let Some(name) = light_source_blocks().get(i) {
@@ -2300,7 +2526,7 @@ impl App {
                 set.shader_block_softness_deg = (set.shader_block_softness_deg + BLOCK_SOFTNESS_STEP_DEG).min(BLOCK_SOFTNESS_MAX_DEG)
             }
             ButtonAction::HotbarScalePrev => set.hud_hotbar_scale = set.hud_hotbar_scale.saturating_sub(1),
-            ButtonAction::HotbarScaleNext => set.hud_hotbar_scale = (set.hud_hotbar_scale + 1).min(4),
+            ButtonAction::HotbarScaleNext => set.hud_hotbar_scale = (set.hud_hotbar_scale + 1).min(max_scale),
             ButtonAction::HotbarDurabilityPrev if set.hotbar_durability_absolute => {
                 let i = HOTBAR_DURABILITY_POINTS.iter().position(|&p| p == set.hotbar_durability_points).unwrap_or(0);
                 set.hotbar_durability_points = HOTBAR_DURABILITY_POINTS[i.saturating_sub(1)];
@@ -2337,6 +2563,9 @@ impl App {
             ButtonAction::ChatOpenDimNext => set.chat_open_dim = (set.chat_open_dim + 10).min(100),
             ButtonAction::ChatFadePrev => set.chat_fade_secs = chat_fade_step(set.chat_fade_secs, -1),
             ButtonAction::ChatFadeNext => set.chat_fade_secs = chat_fade_step(set.chat_fade_secs, 1),
+            ButtonAction::ChatLineSpacingPrev => set.chat_line_spacing = set.chat_line_spacing.saturating_sub(CHAT_LINE_SPACING_STEP),
+            ButtonAction::ChatLineSpacingNext => set.chat_line_spacing = (set.chat_line_spacing + CHAT_LINE_SPACING_STEP).min(CHAT_LINE_SPACING_MAX),
+            ButtonAction::ChatStyle(b) => set.chat_bedrock = b,
             ButtonAction::ToggleCrosshairOutline => set.crosshair_outline = !set.crosshair_outline,
             ButtonAction::ToggleCrosshairRingOutline => set.crosshair_ring_outline = !set.crosshair_ring_outline,
             ButtonAction::CrosshairSizePrev => set.step_crosshair_size(-1),
@@ -2356,7 +2585,7 @@ impl App {
             ButtonAction::ToggleEffectsHud => set.show_effects_hud = !set.show_effects_hud,
             ButtonAction::OpenParticleSettings => {
                 self.screen = MenuScreen::SettingsParticles;
-                self.particle_scroll = 0;
+                self.particle_scroll = Default::default();
             }
             ButtonAction::ParticleToggle(i) => {
                 if let Some(t) = set.particle_tuning.get_mut(i) {
@@ -2790,11 +3019,28 @@ impl App {
                     self.settings.menu_backdrop_opacity = v;
                 }
             }
+            EditableValue::ScrollInertia => {
+                if let Ok(v) = buf.parse::<u32>() {
+                    self.settings.scroll_inertia = v.min(100);
+                }
+            }
+            EditableValue::ScrollDistance => {
+                if let Ok(v) = buf.parse::<u32>() {
+                    self.settings.scroll_distance = v.clamp(SCROLL_DISTANCE_MIN, SCROLL_DISTANCE_MAX);
+                }
+            }
             EditableValue::EntityRenderDistance => {
                 if unlimited {
                     self.settings.entity_render_distance = ENTITY_DISTANCE_MAX;
                 } else if let Ok(v) = buf.parse::<u32>() {
                     self.settings.entity_render_distance = v;
+                }
+            }
+            EditableValue::BlockEntityRenderDistance => {
+                if unlimited {
+                    self.settings.block_entity_render_distance = BLOCK_ENTITY_DISTANCE_MAX;
+                } else if let Ok(v) = buf.parse::<u32>() {
+                    self.settings.block_entity_render_distance = v;
                 }
             }
             EditableValue::CalcMinecraftSens => {
@@ -2856,7 +3102,10 @@ impl App {
             EditableValue::GlintStrength => s.glint_strength as f64,
             EditableValue::PlayerListScale => s.player_list_scale as f64,
             EditableValue::MenuBackdropOpacity => s.menu_backdrop_opacity as f64,
+            EditableValue::ScrollInertia => s.scroll_inertia as f64,
+            EditableValue::ScrollDistance => s.scroll_distance as f64,
             EditableValue::EntityRenderDistance => s.entity_render_distance as f64,
+            EditableValue::BlockEntityRenderDistance => s.block_entity_render_distance as f64,
             EditableValue::CalcMinecraftSens => s.sens_calc_mc_percent as f64,
             EditableValue::CalcDpi => s.sens_calc_dpi as f64,
             EditableValue::MasterVolume => s.master_volume as f64,
@@ -3233,6 +3482,7 @@ impl App {
             ButtonAction::ChatLinesPrev => (&mut set.chat_lines).into(),
             ButtonAction::ChatLinesOpenPrev => (&mut set.chat_lines_open).into(),
             ButtonAction::ChatFadePrev => (&mut set.chat_fade_secs).into(),
+            ButtonAction::ChatLineSpacingPrev => (&mut set.chat_line_spacing).into(),
             _ => return None,
         })
     }
@@ -3242,7 +3492,7 @@ impl App {
         match prev {
             ButtonAction::ChunkUpdateThreadsDown => {
                 self.mesh_pool.resize(self.settings.chunk_update_threads);
-                self.light_scroll = 0;
+                self.light_scroll = Default::default();
             }
             ButtonAction::VoiceStep(VoiceKnob::OutputBuffer, _) => self.audio.sink().set_stream_buffer(self.settings.voice.output_buffer_frames as usize),
             ButtonAction::VoiceStep(VoiceKnob::PacketThreshold, _) => {
@@ -3276,7 +3526,7 @@ impl App {
         let text_x = if buf.is_empty() { x + CARET_WIDTH_PX + 3.0 } else { x };
         push_typed_marker(texts);
         texts.push(UiText { text: shown, x: text_x, y, color, scale: UI_SCALE_SMALL });
-        self.push_caret(rects, Rect { x: caret_x, y, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
+        self.push_caret(rects, gpu.caret_rect(caret_x, y, UI_SCALE_SMALL));
     }
 
     // Schieberegler zeichnen: Bahn, gefuellter Teil, Daumen (mit Ring beim Zeigen/Ziehen).
@@ -3409,6 +3659,7 @@ impl App {
             ColorTarget::Theme(slot) => {
                 if let ThemeChoice::Custom(i) = set.theme_choice {
                     set.theme[slot.index()] = theme::from_hsv(c[0], c[1] / 100.0, c[2] / 100.0);
+                    theme::derive(&mut set.theme, slot);
                     if let Some(t) = set.custom_themes.get_mut(i) {
                         t.colors = set.theme;
                     }
@@ -3893,12 +4144,14 @@ impl App {
         let sichtbar = optionen.len().min(DROPDOWN_MAX_ITEMS);
         // Der gewaehlte Eintrag steht moeglichst in der Mitte.
         let scroll = jetzt.unwrap_or(0).saturating_sub(sichtbar / 2).min(optionen.len() - sichtbar);
-        self.dropdown = Some(Dropdown { choice, anchor, scroll, mode: self.mode, screen: self.screen, module_menu: self.module_menu_shown() });
+        self.dropdown = Some(Dropdown { choice, anchor, scroll: smooth_scroll::SmoothScroll::at(scroll as f32), mode: self.mode, screen: self.screen, module_menu: self.module_menu_shown() });
         self.play_ui_sound(ui_sound::UiSound::Open);
     }
 
     // Kasten der Liste und die sichtbaren Eintraege (Index, Flaeche), in Bildschirmkoordinaten:
-    // unter dem Knopf, passt sie dort nicht hin, darueber.
+    // unter dem Knopf, passt sie dort nicht hin, darueber. Beim gleitenden Scrollen ragen die
+    // Eintraege am Rand nur halb herein -- ihre Flaeche ist dann auf den Innenraum gekuerzt
+    // (s. dropdown_clip), zum Treffen wie zum Zeichnen.
     pub(crate) fn dropdown_layout(&self, d: &Dropdown) -> (Rect, Vec<(usize, Rect)>) {
         let Some(gpu) = self.gpu.as_ref() else { return (Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Vec::new()) };
         let (sw, sh) = gpu.size();
@@ -3911,11 +4164,15 @@ impl App {
         let y = if unten + h <= sh - 8.0 { unten } else { (d.anchor.y - 4.0 - h).max(8.0) };
         let x = d.anchor.x.min(sw - w - 8.0).max(8.0);
         let kasten = Rect { x, y, w, h };
-        let eintraege = (0..sichtbar)
-            .map(|k| {
-                let r = Rect { x: x + DROPDOWN_PAD, y: y + DROPDOWN_PAD + k as f32 * DROPDOWN_ITEM_H, w: w - 2.0 * DROPDOWN_PAD, h: DROPDOWN_ITEM_H };
-                (d.scroll + k, r)
+        let balken = if optionen.len() > sichtbar { DROPDOWN_BAR_W + DROPDOWN_PAD } else { 0.0 };
+        let stand = d.scroll.stand;
+        let erster = d.scroll.first();
+        let eintraege = (erster..(erster + sichtbar + 1).min(optionen.len()))
+            .map(|i| {
+                let r = Rect { x: x + DROPDOWN_PAD, y: y + DROPDOWN_PAD + (i as f32 - stand) * DROPDOWN_ITEM_H, w: w - 2.0 * DROPDOWN_PAD - balken, h: DROPDOWN_ITEM_H };
+                (i, r)
             })
+            .filter(|(_, r)| dropdown_clip(kasten, *r).is_some())
             .collect();
         (kasten, eintraege)
     }
@@ -3930,7 +4187,7 @@ impl App {
         let choice = d.choice;
         let (kasten, eintraege) = self.dropdown_layout(d);
         let (cx, cy) = self.cursor_pos;
-        if let Some(&(i, _)) = eintraege.iter().find(|(_, r)| r.contains(cx, cy)) {
+        if let Some(&(i, _)) = eintraege.iter().find(|(_, r)| dropdown_clip(kasten, *r).is_some_and(|r| r.contains(cx, cy))) {
             self.dropdown = None;
             self.play_ui_sound(ui_sound::UiSound::Click);
             self.pick_choice(choice, i);
@@ -3942,13 +4199,13 @@ impl App {
     }
 
     // Mausrad ueber offener Liste: eine Zeile je Raste.
-    pub(crate) fn dropdown_scroll(&mut self, rasten: f32) {
+    pub(crate) fn dropdown_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
         let Some(choice) = self.dropdown_active().map(|d| d.choice) else { return };
         let n = self.choice_options(choice).0.len();
         let max = n.saturating_sub(DROPDOWN_MAX_ITEMS);
+        let weg = self.wheel_units(delta, 1.0, DROPDOWN_ITEM_H);
         if let Some(d) = self.dropdown.as_mut() {
-            let schritt = rasten.abs().round().max(1.0) as usize;
-            d.scroll = if rasten > 0.0 { d.scroll.saturating_sub(schritt) } else { (d.scroll + schritt).min(max) };
+            d.scroll.push(weg, 1.0, max as f32);
         }
     }
 
@@ -3983,26 +4240,46 @@ impl App {
         let mut rects = vec![UiRect::shadow(kasten, 8.0, 8.0, 24.0, 0.55), UiRect::framed(kasten, g(Slot::BgPanel), 8.0, 1.5, g(Slot::Accent))];
         let mut texts = Vec::new();
         let (cx, cy) = self.cursor_pos;
+        let innen = (kasten.y + DROPDOWN_PAD, kasten.y + kasten.h - DROPDOWN_PAD);
         for (i, r) in eintraege {
-            let k = self.hover_level(r, r.contains(cx, cy)).min(1.0);
+            let Some(sichtbar) = dropdown_clip(kasten, r) else { continue };
+            // Nachleuchten am Eintrag, nicht an seiner Lage -- die wandert beim Gleiten.
+            let schluessel = Rect { y: -100_000.0 - i as f32 * DROPDOWN_ITEM_H, ..r };
+            let k = self.hover_level(schluessel, sichtbar.contains(cx, cy)).min(1.0);
             if jetzt == Some(i) {
-                rects.push(UiRect::rounded(r, mix_color(g(Slot::AccentSurface), g(Slot::AccentSurfaceHover), k), 6.0));
+                rects.push(UiRect::rounded(sichtbar, mix_color(g(Slot::AccentSurface), g(Slot::AccentSurfaceHover), k), 6.0));
             } else if k > 0.0 {
-                rects.push(UiRect::rounded(r, theme::with_alpha(g(Slot::Surface3), k), 6.0));
+                rects.push(UiRect::rounded(sichtbar, theme::with_alpha(g(Slot::Surface3), k), 6.0));
             }
             let Some(name) = optionen.get(i) else { continue };
             let text = Self::fit_text(gpu, name, r.w - 24.0, UI_SCALE_SMALL);
             let y = (r.y + (r.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+            // Text nur, wo er ganz hineinpasst (wie in der Serverliste).
+            if y < innen.0 || y + gpu.text_height(UI_SCALE_SMALL) > innen.1 {
+                continue;
+            }
             let farbe = if jetzt == Some(i) { g(Slot::AccentText) } else { theme::text() };
             texts.push(UiText { text, x: r.x + 12.0, y, color: farbe, scale: UI_SCALE_SMALL });
         }
         let n = optionen.len();
         if n > DROPDOWN_MAX_ITEMS {
-            let bahn = Rect { x: kasten.x + kasten.w - 5.0, y: kasten.y + DROPDOWN_PAD, w: 3.0, h: kasten.h - 2.0 * DROPDOWN_PAD };
+            let max = (n - DROPDOWN_MAX_ITEMS) as f32;
+            let bahn = Rect { x: kasten.x + kasten.w - DROPDOWN_PAD - DROPDOWN_BAR_W, y: innen.0, w: DROPDOWN_BAR_W, h: innen.1 - innen.0 };
+            rects.push(UiRect::rounded(bahn, g(Slot::Surface1), DROPDOWN_BAR_W / 2.0));
             let anteil = DROPDOWN_MAX_ITEMS as f32 / n as f32;
-            let daumen_h = (bahn.h * anteil).max(12.0);
-            let daumen_y = bahn.y + (bahn.h - daumen_h) * (d.scroll as f32 / (n - DROPDOWN_MAX_ITEMS) as f32);
-            rects.push(UiRect::rounded(Rect { y: daumen_y, h: daumen_h, ..bahn }, g(Slot::Border2), 1.5));
+            let daumen_h = (bahn.h * anteil).max(24.0);
+            let daumen_y = bahn.y + (bahn.h - daumen_h) * (d.scroll.stand / max).clamp(0.0, 1.0);
+            let ueber = bahn.contains(cx, cy);
+            rects.push(UiRect::rounded(Rect { y: daumen_y, h: daumen_h, ..bahn }, g(if ueber { Slot::Accent } else { Slot::Border2 }), DROPDOWN_BAR_W / 2.0));
+            // Am Ende angekommen: eine Linie im Abstand zwischen Rahmen und erstem bzw. letztem
+            // Eintrag, eingeblendet auf dem letzten Viertel Eintrag davor.
+            let breite = kasten.w - 2.0 * DROPDOWN_PAD - DROPDOWN_BAR_W - DROPDOWN_PAD;
+            for (deckung, y) in [((1.0 - d.scroll.stand * 4.0).clamp(0.0, 1.0), kasten.y + DROPDOWN_PAD / 2.0 - 1.0), ((1.0 - (max - d.scroll.stand) * 4.0).clamp(0.0, 1.0), kasten.y + kasten.h - DROPDOWN_PAD / 2.0 - 1.0)] {
+                if deckung > 0.0 {
+                    let linie = Rect { x: kasten.x + DROPDOWN_PAD + 6.0, y: y.round(), w: breite - 12.0, h: 2.0 };
+                    rects.push(UiRect::rounded(linie, theme::with_alpha(g(Slot::Accent), deckung), 1.0));
+                }
+            }
         }
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
     }
@@ -4120,7 +4397,7 @@ impl App {
             });
         }
         self.settings = neu;
-        self.settings_scroll = 0;
+        self.settings_scroll = Default::default();
         self.page_scrolls.clear();
         self.apply_switched_settings(&alt);
         self.persist_settings();
@@ -4194,6 +4471,14 @@ impl App {
     }
 
 
+    pub(crate) fn particle_max_scroll(&self) -> f32 {
+        particles::KINDS.len().saturating_sub(self.particle_visible_rows()) as f32
+    }
+
+    pub(crate) fn light_max_scroll(&self) -> f32 {
+        self.light_search_hits().len().saturating_sub(self.light_visible_rows()) as f32
+    }
+
     pub(crate) fn particle_visible_rows(&self) -> usize {
         self.light_visible_rows()
     }
@@ -4222,7 +4507,7 @@ impl App {
         }
         // Scrollstaende mitschreiben -- sie aendern sich ohne eigenes Speichern (Mausrad).
         if self.scrolls_loaded {
-            let staende: Vec<(&str, usize)> = self.scroll_slots().into_iter().map(|(n, w)| (n, *w)).collect();
+            let staende: Vec<(&str, usize)> = self.scroll_slots().into_iter().map(|(n, w)| (n, w.ziel.max(0.0).round() as usize)).collect();
             for (name, wert) in staende {
                 self.settings.settings_scrolls.insert(name.to_string(), wert);
             }
@@ -4357,12 +4642,13 @@ impl App {
     }
 
     // Scrollstaende, die beim Verlassen erhalten bleiben (s. Settings::settings_scrolls).
-    pub(crate) fn scroll_slots(&mut self) -> [(&'static str, &mut usize); 7] {
+    pub(crate) fn scroll_slots(&mut self) -> [(&'static str, &mut smooth_scroll::SmoothScroll); 7] {
+        let [links, rechts] = &mut self.skin_scroll;
         [
             ("render", &mut self.settings_scroll),
             ("controls", &mut self.keybind_scroll),
-            ("skin", &mut self.skin_scroll),
-            ("skin_right", &mut self.skin_scroll_right),
+            ("skin", links),
+            ("skin_right", rechts),
             ("modules", &mut self.module_menu_scroll),
             ("light_levels", &mut self.light_scroll),
             ("particles", &mut self.particle_scroll),
@@ -4376,7 +4662,7 @@ impl App {
             let gespeichert = self.settings.settings_scrolls.clone();
             for (name, feld) in self.scroll_slots() {
                 if let Some(&v) = gespeichert.get(name) {
-                    *feld = v;
+                    feld.jump(v as f32);
                 }
             }
             self.scrolls_loaded = true;
@@ -4836,7 +5122,7 @@ impl App {
                     let gezeigt = token_display(gpu, wert, e.rect.w - 24.0);
                     let ty = mitte_y(e.rect, UI_SCALE_SMALL);
                     let x = e.rect.x + 12.0 + gpu.measure_raw(&gezeigt, UI_SCALE_SMALL);
-                    self.push_caret(&mut rects, Rect { x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, theme::text());
+                    self.push_caret(&mut rects, gpu.caret_rect(x, ty, UI_SCALE_SMALL));
                     push_typed_marker(&mut texts);
                     texts.push(UiText { text: gezeigt, x: e.rect.x + 12.0, y: ty, color: theme::text(), scale: UI_SCALE_SMALL });
                 }
@@ -5009,6 +5295,14 @@ impl App {
             rects.push(flaeche);
             texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
         }
+        // Namen anzeigen: ein Schalter wie in den Einstellungen, die Beschriftung links daneben.
+        let schalter = Self::toggle(ButtonAction::NewServer, 0, edit.show_name);
+        let schalter = Button { rect: server_dialog_name_toggle(), ..schalter };
+        let (flaeche, farbe) = styled_button(&schalter, self.hover_level(schalter.rect, schalter.rect.contains(cx, cy)));
+        rects.push(flaeche);
+        texts.push(gpu.centered_text(schalter.rect, schalter.label.clone(), farbe, UI_SCALE_SMALL));
+        let label_y = (schalter.rect.y + (schalter.rect.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+        texts.push(UiText { text: "Namen anzeigen".to_string(), x: knoepfe[0].x, y: label_y, color: theme::text(), scale: UI_SCALE_SMALL });
         for (r, label, primaer) in [(abbrechen, "Abbrechen", false), (speichern, "Speichern", true)] {
             let b = Button {
                 slider: None,
@@ -5168,7 +5462,7 @@ impl App {
             rects.push(UiRect::rounded(spur, g(Slot::Surface1), 2.0));
             let griff_h = (spur.h * sichtbar as f32 / n as f32).max(24.0);
             let max = n - sichtbar;
-            let griff = Rect { y: spur.y + (spur.h - griff_h) * w.scroll.min(max) as f32 / max as f32, h: griff_h, ..spur };
+            let griff = Rect { y: spur.y + (spur.h - griff_h) * (w.scroll.stand / max as f32).clamp(0.0, 1.0), h: griff_h, ..spur };
             rects.push(UiRect::rounded(griff, g(Slot::Border2), 2.0));
         }
         for (r, label, primaer) in [(alles, "Alles an", false), (fertig, "Fertig", true)] {
@@ -5291,8 +5585,13 @@ impl App {
         if self.theme_name_dialog.is_some() {
             return self.theme_name_dialog.as_mut().map(|d| &mut d.field);
         }
-        let quick = self.quick_typing();
-        quick.then_some(&mut self.quick_field)
+        if self.quick_typing() {
+            return Some(&mut self.quick_field);
+        }
+        if self.server_search_typing() {
+            return self.server_search.as_mut();
+        }
+        None
     }
 
     // Leiste oben und (in den Einstellungen) die Kategorienleiste links.
@@ -6026,6 +6325,8 @@ impl App {
                     Some(RENDER_DISTANCE_TOOLTIP)
                 } else if settings_row_hover_rect(ENTITY_DISTANCE_ROW).contains(cx, cy) {
                     Some(ENTITY_DISTANCE_TOOLTIP)
+                } else if settings_row_hover_rect(BLOCK_ENTITY_DISTANCE_ROW).contains(cx, cy) {
+                    Some(BLOCK_ENTITY_DISTANCE_TOOLTIP)
                 } else if settings_row_hover_rect(LOD_DETAIL_ROW).contains(cx, cy) {
                     Some(LOD_DETAIL_TOOLTIP)
 
@@ -6046,6 +6347,10 @@ impl App {
                     Some("Womit der Stream gerade läuft: angefragte Größe, in Klammern was das System tatsächlich je Durchlauf anfordert, falls es abweicht.")
                 } else if settings_row_hover_rect(AUDIO_PIPEWIRE_ROW).contains(cx, cy) {
                     Some("In welchen Blöcken PipeWire die Soundkarte gerade bedient, gemessen mit pw-top, solange dieser Tab offen ist. PipeWire rundet auf eine Zweierpotenz ab: ein Puffer von 48 läuft hier als 32 oder 64.")
+                } else if settings_row_hover_rect(AUDIO_AUTO_ROW).contains(cx, cy) {
+                    Some("Nur unter Linux mit PipeWire. Senkt die PipeWire-Grenze passend zum Puffer und startet pipewire-pulse dafür nur neu, wenn die Grenze noch nicht stimmt. Fehlen pipewire-pulse Echtzeit oder Nice -11, holt der Client das alle 10 Sekunden über RTKit nach, ohne Neustart. Der eigene Ton-Faden des Clients bekommt ebenfalls Echtzeit, damit es beim Laden nicht knackt.")
+                } else if settings_row_hover_rect(AUDIO_PIPEWIRE_PRIO_ROW).contains(cx, cy) {
+                    Some("Wie pipewire-pulse eingeplant ist: Echtzeit-Priorität seiner Ton-Fäden und Nice des Haupt-Threads. Normal ist Echtzeit 20 · Nice -11. Ohne Echtzeit kommt der Ton bei kleinen Blöcken ab und zu zu spät und rauscht; nach dem Setzen der Grenze holt der Client die Priorität über RTKit nach.")
                 } else if settings_row_hover_rect(AUDIO_PIPEWIRE_SET_ROW).contains(cx, cy) {
                     Some("Unter PipeWire läuft der Ton über pipewire-pulse, und das mischt nie in kleineren Blöcken als 128 Frames (2,7 ms) -- ein kleinerer Puffer bringt dann nichts. Der Knopf legt ~/.config/pipewire/pipewire-pulse.conf.d/90-coral-client.conf an und startet pipewire-pulse neu: alle Programme verlieren kurz den Ton, und die Grenze gilt danach für alle. Entfernen stellt die Vorgabe wieder her.")
                 } else if settings_row_hover_rect(AUDIO_SPATIAL_ROW).contains(cx, cy) {
@@ -6352,6 +6657,10 @@ impl App {
                 for (row, (label, wert)) in self.chat_setting_rows().into_iter().enumerate() {
                     let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                     texts.push(UiText { text: label.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                    // Die Wahl Java/Bedrock sind zwei Knoepfe (s. buttons), kein Wertfeld.
+                    if row == CHAT_STYLE_ROW {
+                        continue;
+                    }
                     let rect = stepper_value_rect(row);
                     rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
                     texts.push(gpu.centered_text(rect, wert, theme::text(), UI_SCALE_SMALL));
@@ -6626,7 +6935,7 @@ impl App {
                 })
             };
             self.begin_text_area(gpu, texts, ShadowArea::Hotbar);
-            self.push_armor_hud(gpu, [teile[0].as_ref(), teile[1].as_ref(), teile[2].as_ref(), teile[3].as_ref()], [false; 4], sprites, texts);
+            self.push_armor_hud(gpu, [teile[0].as_ref(), teile[1].as_ref(), teile[2].as_ref(), teile[3].as_ref()], [false; 4], rects, sprites, texts);
             Self::end_text_area(gpu, texts);
         }
 
@@ -6856,6 +7165,20 @@ impl App {
             }
             let (cx, cy) = self.pointer();
             let (oben, unten) = (server_list_top(), server_list_bottom());
+            // Suchfeld an der Stelle der ersten Karte; ohne Treffer darunter ein Hinweis.
+            if let Some(suche) = self.server_search.as_ref() {
+                let r = server_card_rect(0, self.server_scroll.stand);
+                if r.y + r.h > oben && r.y < unten {
+                    rects.push(UiRect::shadow(r, 8.0, 2.0, 8.0, 0.35));
+                    rects.push(UiRect::framed(r, g(Slot::SurfaceSunken), 8.0, 1.0, g(Slot::Accent)));
+                    let feld = Rect { x: r.x + 16.0, y: r.y, w: r.w - 32.0, h: r.h };
+                    self.push_text_field(gpu, suche, feld, self.server_search_typing(), rects, texts);
+                }
+                if self.server_search_hits().is_empty() {
+                    let y = server_card_rect(1, self.server_scroll.stand).y + 8.0;
+                    texts.push(UiText { text: "Keine Treffer".to_string(), x: panel.x + 16.0, y, color: theme::text_3(), scale: UI_SCALE_SMALL });
+                }
+            }
             // Was aus der Liste ragt, verdecken die Leisten: sie liegen auf dem Server-Screen als
             // eigene Ebene darueber (s. build_menu_ui).
             let icon = server_icon_px();
@@ -6900,23 +7223,27 @@ impl App {
                         motd.extend(z.iter().cloned());
                     }
                 }
+                // "Namen anzeigen" aus: mit MOTD wie ohne Namen, ohne MOTD bleibt der Name.
+                let name = if entry.show_name || motd.is_empty() { entry.name.as_str() } else { "" };
                 // Ohne Namen ist die MOTD das Einzige in der Karte: umbrochen wie in Vanilla (an
                 // derselben Stelle, gemessen in Vanillas Breiten -- Server richten ihre MOTD
                 // darauf aus), hoechstens zwei Zeilen, so gross wie sonst der Name, wenn beide
                 // so passen, sonst klein. Unter einem Namen bleibt sie klein.
-                let vanilla: Vec<Vec<protocol::nbt::TextSpan>> =
+                let mut vanilla: Vec<Vec<protocol::nbt::TextSpan>> =
                     wrap_spans_styled(&motd, MOTD_VANILLA_WIDTH, |t, stil| gpu.vanilla_width(t, stil), 0.0).into_iter().map(|l| l.spans).filter(|z| !z.is_empty()).take(2).collect();
+                trim_motd_padding(&mut vanilla);
+                vanilla.retain(|z| !z.is_empty());
                 let passt_bei = |scale: f32| vanilla.iter().all(|z| span_row_width(gpu, z, scale) <= breite);
-                let motd_scale = if entry.name.is_empty() && passt_bei(UI_SCALE_NORMAL) { UI_SCALE_NORMAL } else { UI_SCALE_SMALL };
+                let motd_scale = if name.is_empty() && passt_bei(UI_SCALE_NORMAL) { UI_SCALE_NORMAL } else { UI_SCALE_SMALL };
                 let klein = gpu.text_height(motd_scale);
-                let zeilen: Vec<Vec<protocol::nbt::TextSpan>> = if entry.name.is_empty() && passt_bei(motd_scale) {
+                let zeilen: Vec<Vec<protocol::nbt::TextSpan>> = if name.is_empty() && passt_bei(motd_scale) {
                     vanilla
                 } else {
                     wrap_spans(&motd, breite, |t| gpu.measure_text(t, motd_scale), 0.0).into_iter().map(|l| l.spans).filter(|z| !z.is_empty()).collect()
                 };
                 let mut setzen: Vec<(f32, Vec<protocol::nbt::TextSpan>)> = Vec::new();
-                if !entry.name.is_empty() {
-                    texts.push(UiText { text: ellipsize(gpu, &entry.name, UI_SCALE_NORMAL, breite), x: tx, y: zeile1, color: theme::text(), scale: UI_SCALE_NORMAL });
+                if !name.is_empty() {
+                    texts.push(UiText { text: ellipsize(gpu, name, UI_SCALE_NORMAL, breite), x: tx, y: zeile1, color: theme::text(), scale: UI_SCALE_NORMAL });
                     if let Some(erste) = zeilen.first() {
                         let mut z = erste.clone();
                         if zeilen.len() > 1 {
@@ -6944,20 +7271,18 @@ impl App {
             // Gezogene Karte: weisse Linie in der Luecke, in der sie landen wuerde.
             if self.server_drag_active().is_some() {
                 if let Some(platz) = self.server_drop_slot() {
-                    let y = (server_card_rect(platz, self.server_scroll_anim).y - SERVER_ROW_GAP / 2.0 - 1.0).round();
+                    let y = (server_card_rect(platz, self.server_scroll.stand).y - SERVER_ROW_GAP / 2.0 - 1.0).round();
                     if y >= oben - SERVER_ROW_GAP && y <= unten {
                         rects.push(UiRect::rounded(Rect { x: panel.x, y, w: panel.w, h: 2.0 }, theme::text(), 1.0));
                     }
                 }
             }
-            // Scrollleiste rechts neben den Karten, sobald nicht alle passen.
-            let max = self.servers.len().saturating_sub(server_rows_visible());
-            if max > 0 {
-                let spur = Rect { x: panel.x + panel.w + 8.0, y: oben, w: 4.0, h: unten - oben };
-                rects.push(UiRect::rounded(spur, g(Slot::Surface1), 2.0));
-                let griff_h = (spur.h * server_rows_visible() as f32 / self.servers.len() as f32).max(32.0);
-                let griff = Rect { y: spur.y + (spur.h - griff_h) * (self.server_scroll_anim / max as f32).clamp(0.0, 1.0), h: griff_h, ..spur };
-                rects.push(UiRect::rounded(griff, g(Slot::Border2), 2.0));
+            // Bildlaufleiste links neben den Karten, sobald nicht alle passen. Zum Anfassen: unter
+            // dem Zeiger und gefasst in der Akzentfarbe.
+            if let Some((spur, griff)) = self.server_scrollbar() {
+                rects.push(UiRect::rounded(spur, g(Slot::Surface1), SERVER_BAR_W / 2.0));
+                let aktiv = self.server_bar_grab.is_some() || self.server_bar_hit().is_some_and(|r| r.contains(cx, cy));
+                rects.push(UiRect::rounded(griff, g(if aktiv { Slot::Accent } else { Slot::Border2 }), SERVER_BAR_W / 2.0));
             }
         }
     }
@@ -7021,7 +7346,7 @@ impl App {
             push_typed_marker(texts);
             texts.push(UiText { text: shown.clone(), x: tx, y: ty, color: theme::text(), scale: UI_SCALE_SMALL });
             let caret_x = tx + gpu.measure_raw(&shown, UI_SCALE_SMALL);
-            self.push_caret(rects, Rect { x: caret_x, y: ty, w: CARET_WIDTH_PX, h: gpu.text_height(UI_SCALE_SMALL) }, COLOR_CARET);
+            self.push_caret(rects, gpu.caret_rect(caret_x, ty, UI_SCALE_SMALL));
         }
     }
 }
@@ -7081,4 +7406,11 @@ impl<'a> From<&'a mut f32> for NumMut<'a> {
     fn from(f: &'a mut f32) -> Self {
         NumMut::F32(f)
     }
+}
+
+// Eintrag `r` einer offenen Liste, gekuerzt auf ihren Innenraum (ohne Abstand zum Rahmen).
+fn dropdown_clip(kasten: Rect, r: Rect) -> Option<Rect> {
+    let oben = r.y.max(kasten.y + DROPDOWN_PAD);
+    let unten = (r.y + r.h).min(kasten.y + kasten.h - DROPDOWN_PAD);
+    (unten - oben >= 1.0).then_some(Rect { y: oben, h: unten - oben, ..r })
 }

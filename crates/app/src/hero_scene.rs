@@ -34,15 +34,15 @@ pub struct Scene {
 }
 
 pub fn path() -> Option<PathBuf> {
-    Some(assets::data_dir()?.join("storage").join(FILE))
+    Some(assets::storage_dir()?.join(FILE))
 }
 
 // Stand von Szene und Renderweg. Steht neben dem Bild ein anderer, wird neu gerendert -- sonst
 // bliebe nach einer Korrektur am Rendern das alte, falsche Bild fuer immer liegen.
-pub const VERSION: &str = "4";
+pub const VERSION: &str = "6";
 
 pub fn version_path() -> Option<PathBuf> {
-    Some(assets::data_dir()?.join("storage").join("launcher-hero.version"))
+    Some(assets::storage_dir()?.join("launcher-hero.version"))
 }
 
 pub fn is_current() -> bool {

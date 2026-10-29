@@ -58,6 +58,7 @@ tab_state! {
     chat_times: std::collections::VecDeque<Instant> = std::collections::VecDeque::new(),
     chat_scroll: usize = 0,
     chat_dropped_lines: usize = 0,
+    chat_lines_total: u64 = 0,
     action_bar: Option<(Vec<protocol::nbt::TextSpan>, Instant)> = None,
     title_text: Option<Vec<protocol::nbt::TextSpan>> = None,
     subtitle_text: Option<Vec<protocol::nbt::TextSpan>> = None,
@@ -225,7 +226,7 @@ pub(crate) struct ServerTab {
     pub(crate) background: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // Die Fernsicht-Welt (s. lod) und die Server-Packs dieses Tabs, solange er hinten liegt.
     lod_identity: Option<(String, i64)>,
-    server_packs: server_packs::ServerPacks,
+    pub(crate) server_packs: server_packs::ServerPacks,
 }
 
 impl ServerTab {
@@ -387,17 +388,22 @@ impl App {
 
         self.chat_generation += 1;
         self.chat_view.set(None);
+        self.chat_scroll_glide.jump(self.chat_scroll as f32);
+        self.chat_bedrock_anim = None;
+        self.chat_rise = 0.0;
+        self.chat_rise_open = 0.0;
     }
 
     // Beschriftung eines Tabs: Name aus der Serverliste, sonst die Adresse; ohne Verbindung
-    // "Serverliste".
+    // "Serverliste", oder "Einstellungen", solange der aktive Tab dort steht.
     pub(crate) fn tab_title(&self, i: usize) -> String {
         let (adresse, status) = match self.tabs.get(i).and_then(|t| t.state.as_ref()) {
             Some(s) => (&s.server_address, s.conn_status),
             None => (&self.server_address, self.conn_status),
         };
         if status == ConnStatus::Disconnected {
-            return "Serverliste".to_string();
+            let einstellungen = i == self.active_tab && self.mode == AppMode::Menu && self.screen.settings_category().is_some();
+            return if einstellungen { "Einstellungen" } else { "Serverliste" }.to_string();
         }
         // Eintraege ohne eigenen Namen zeigen in der Liste auch nur die Adresse.
         self.servers
