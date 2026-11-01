@@ -74,8 +74,9 @@ pub fn glint_vertices(normal: &[BlockVertex], lokal: &[BlockVertex], scale: f32,
 // TextureTransform.getGlintTransformation: l = ms * glintSpeed * 8, dann
 // translation(-f, g) * rotateZ(pi/18) * scale -- der Massstab steckt schon in den Vertices.
 // `speed` ist die Option glintSpeed (0..1, Vorgabe 0.5).
+#[must_use] 
 pub fn glint_matrix(ms: u64, speed: f32) -> [[f32; 4]; 2] {
-    let l = (ms as f64 * speed as f64 * 8.0) as u64;
+    let l = (ms as f64 * f64::from(speed) * 8.0) as u64;
     let f = (l % 110_000) as f32 / 110_000.0;
     let g = (l % 30_000) as f32 / 30_000.0;
     let (s, c) = (std::f32::consts::PI / 18.0).sin_cos();
@@ -123,6 +124,7 @@ pub(crate) fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroup
 }
 
 // Eine Glint-Textur (RGBA8, sRGB-kodiert wie jede Vanilla-Textur).
+#[must_use] 
 pub fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, rgba: &[u8], width: u32, height: u32) -> wgpu::TextureView {
     let extent = wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -151,6 +153,7 @@ pub fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, rgba: &[u8], w
 // NEAREST. Die .mcmeta beider Texturen sagt zwar "blur": true, im Spiel haben die Glint-
 // Streifen aber harte, treppenfoermige Kanten (am Vanilla-Screenshot nachgemessen) -- mit
 // linearem Filter verschwammen sie.
+#[must_use] 
 pub fn create_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("glint sampler"),
@@ -194,13 +197,13 @@ impl GlintBuffer {
         if self.count == 0 {
             return;
         }
-        let bytes = self.count as u64 * std::mem::size_of::<BlockVertex>() as u64;
+        let bytes = u64::from(self.count) * std::mem::size_of::<BlockVertex>() as u64;
         pass.set_vertex_buffer(0, self.buffer.slice(..bytes));
         pass.set_vertex_buffer(1, zero_offset.slice(..));
         pass.draw(0..self.count, 0..1);
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.count == 0
     }
 }

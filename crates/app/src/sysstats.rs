@@ -138,7 +138,7 @@ struct Quellen {
 }
 
 impl Quellen {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             cpu_vorher: None,
             #[cfg(target_os = "linux")]
@@ -150,7 +150,7 @@ impl Quellen {
         }
     }
 
-    fn vergessen(&mut self) {
+    const fn vergessen(&mut self) {
         self.cpu_vorher = None;
         #[cfg(target_os = "linux")]
         {
@@ -291,7 +291,7 @@ fn read_cpu_jiffies() -> Vec<CpuJiffies> {
 fn process_cpu_ns() -> Option<u64> {
     // SAFETY: rusage ist ein reines Datenstruct, getrusage fuellt es.
     let mut r: libc::rusage = unsafe { std::mem::zeroed() };
-    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut r) } != 0 {
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &raw mut r) } != 0 {
         return None;
     }
     let us = |t: libc::timeval| t.tv_sec as u64 * 1_000_000 + t.tv_usec as u64;

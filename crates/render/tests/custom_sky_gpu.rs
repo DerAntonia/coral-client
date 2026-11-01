@@ -52,7 +52,7 @@ fn mitte(device: &wgpu::Device, queue: &wgpu::Queue, sky: &SkyRenderer, blick: V
         });
         sky.draw(queue, &mut pass, view_proj, &[layer]);
     }
-    let lese = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (W * W * 4) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let lese = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(W * W * 4), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
     enc.copy_texture_to_buffer(
         ziel.as_image_copy(),
         wgpu::ImageCopyBuffer { buffer: &lese, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(W * 4), rows_per_image: Some(W) } },
@@ -84,7 +84,7 @@ fn jede_richtung_zeigt_ihre_zelle() {
     }
     let halb = mitte(&device, &queue, &sky, Vec3::X, ebene(0.5));
     for (h, f) in halb.iter().zip(FARBEN[2]) {
-        assert!((*h as i32 - f as i32 / 2).abs() <= 1, "halbe Helligkeit: {halb:?}");
+        assert!((i32::from(*h) - i32::from(f) / 2).abs() <= 1, "halbe Helligkeit: {halb:?}");
     }
     // Die Ebene gedreht: 90 Grad um Y bringt die +X-Zelle nach -Z (to_local bildet die
     // Welt-Richtung -Z auf +X ab).

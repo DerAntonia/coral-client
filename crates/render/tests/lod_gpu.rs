@@ -82,7 +82,7 @@ fn draw(g: &Gpu, lod: &mut LodRenderer, camera: &render::Camera) -> Vec<[u8; 4]>
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let readback = g.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (W * H * 4) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let readback = g.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(W * H * 4), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
     let mut enc = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     {
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {

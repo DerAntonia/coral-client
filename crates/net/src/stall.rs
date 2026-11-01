@@ -1,5 +1,5 @@
 //! Stockungen im Paketfluss erkennen -- das, was man im Spiel als Rubberbanding spuert (s.
-//! ClientEvent::PacketStall). Frei von Netz- und Zeitquellen: bekommt Zeitpunkte, liefert die
+//! `ClientEvent::PacketStall`). Frei von Netz- und Zeitquellen: bekommt Zeitpunkte, liefert die
 //! Laenge einer erkannten Stockung.
 //!
 //! Eingehend (I): erst lange nichts, dann viele Pakete auf einmal -- der Server (oder die
@@ -7,7 +7,7 @@
 //! Server ohne Entities in der Naehe schickt auch mal eine Sekunde nichts, danach aber nur
 //! einzelne Pakete.
 //!
-//! Ausgehend (O): Client Tick End geht in jedem Tick raus (s. packets::SB_PLAY_CLIENT_TICK_END)
+//! Ausgehend (O): Client Tick End geht in jedem Tick raus (s. `packets::SB_PLAY_CLIENT_TICK_END`)
 //! -- eine grosse Luecke dazwischen heisst, dass der Server so lange nichts von uns gehoert hat.
 
 use std::time::{Duration, Instant};
@@ -79,7 +79,7 @@ mod tests {
         let mut w = StallWatch::default();
         assert_eq!(w.incoming(t0), None);
         let nach = t0 + ms(600);
-        let treffer: Vec<_> = (0..BURST_MIN as u64).map(|i| w.incoming(nach + ms(i))).collect();
+        let treffer: Vec<_> = (0..u64::from(BURST_MIN)).map(|i| w.incoming(nach + ms(i))).collect();
         assert_eq!(treffer.iter().filter(|t| t.is_some()).count(), 1);
         assert_eq!(treffer.last().copied().flatten(), Some(ms(600)));
     }

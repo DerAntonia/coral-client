@@ -22,7 +22,7 @@
 use crate::mesher::BlockVertex;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TerrainVertex {
     // x, y, z relativ zur Section-Ecke (s. POS_SCALE/POS_BIAS). [3]: Section-Index ab min_y in
     // den unteren 5 Bit, darueber die oberen 11 Bit des Lichts (s. LIGHT_*).
@@ -47,25 +47,28 @@ impl TerrainVertex {
     // Lichtberechnung (Shader-Pfad) ueberschreibt es; dort gibt es das Abschneiden nicht.
     pub const CUTOUT_MARK: u8 = 255;
 
-    pub fn with_light(mut self, light: u32) -> Self {
+    #[must_use] 
+    pub const fn with_light(mut self, light: u32) -> Self {
         self.color[3] = (light & 0xFF) as u8;
         self.pos[3] = (self.pos[3] & Self::SECTION_MASK) | (((light >> 8) & 0x7FF) << 5) as u16;
         self
     }
 
+    #[must_use] 
     pub fn light(&self) -> u32 {
-        self.color[3] as u32 | ((self.pos[3] >> 5) as u32) << 8
+        u32::from(self.color[3]) | u32::from(self.pos[3] >> 5) << 8
     }
 
     // `section`: Index der Section, zu der die Flaeche gehoert; `min_y`: Unterkante der Spalte.
+    #[must_use] 
     pub fn from_block(v: &BlockVertex, section: u8, min_y: i32) -> Self {
         let c = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
         let t = |x: f32| (x.clamp(0.0, 1.0) * 65536.0).round().min(65535.0) as u16;
-        let base_y = (min_y + section as i32 * 16) as f32;
+        let base_y = (min_y + i32::from(section) * 16) as f32;
         let q = |x: f32| ((x + Self::POS_BIAS) * Self::POS_SCALE).round().clamp(0.0, 65535.0) as u16;
         let [x, y, z] = v.position;
         let farbe = v.plain_color();
-        let mut out = Self { pos: [q(x), q(y - base_y), q(z), section as u16], color: [c(farbe[0]), c(farbe[1]), c(farbe[2]), 0], uv: [t(v.uv[0]), t(v.uv[1])] }
+        let mut out = Self { pos: [q(x), q(y - base_y), q(z), u16::from(section)], color: [c(farbe[0]), c(farbe[1]), c(farbe[2]), 0], uv: [t(v.uv[0]), t(v.uv[1])] }
             .with_light(Self::NO_LIGHT);
         if v.color[0] < -0.5 {
             out.color[3] = Self::CUTOUT_MARK;
@@ -74,12 +77,14 @@ impl TerrainVertex {
     }
 
     // Spalten-lokale Position (x/z ab Spaltenecke, y ab min_y), wie der Shader sie rechnet.
+    #[must_use] 
     pub fn position(&self) -> [f32; 3] {
-        let d = |q: u16| q as f32 / Self::POS_SCALE - Self::POS_BIAS;
-        [d(self.pos[0]), d(self.pos[1]) + self.section() as f32 * 16.0, d(self.pos[2])]
+        let d = |q: u16| f32::from(q) / Self::POS_SCALE - Self::POS_BIAS;
+        [d(self.pos[0]), d(self.pos[1]) + f32::from(self.section()) * 16.0, d(self.pos[2])]
     }
 
-    pub fn section(&self) -> u8 {
+    #[must_use] 
+    pub const fn section(&self) -> u8 {
         (self.pos[3] & Self::SECTION_MASK) as u8
     }
 }
@@ -182,6 +187,7 @@ pub struct FaceGroup {
 impl FaceGroup {
     // Kann von `eye` (spalten-lokal) aus irgendeine Flaeche dieser Gruppe ihre Vorderseite
     // zeigen? Gruppe 6 (schraeg) immer.
+    #[must_use] 
     pub fn faces_eye(&self, group: usize, eye: [f32; 3]) -> bool {
         match group {
             0 => eye[0] > self.plane_min,
@@ -273,7 +279,7 @@ pub fn group_by_direction(packed: &[TerrainVertex], starts: &mut [u32]) -> (Vec<
         group.quads += 1;
     }
     let mut first = 0;
-    for group in groups.iter_mut() {
+    for group in &mut groups {
         group.first_quad = first;
         first += group.quads;
     }

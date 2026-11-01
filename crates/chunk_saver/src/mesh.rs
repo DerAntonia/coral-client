@@ -54,7 +54,8 @@ pub struct NodeMesh {
 }
 
 impl NodeMesh {
-    pub fn is_empty(&self) -> bool {
+    #[must_use] 
+    pub const fn is_empty(&self) -> bool {
         self.opaque.is_empty() && self.translucent.is_empty()
     }
 }
@@ -118,6 +119,7 @@ fn neighbor_slot(p: [i32; 3]) -> Option<(usize, [usize; 3])> {
     slot.map(|f| (f, q))
 }
 
+#[must_use] 
 pub fn mesh_node(node: &Node, nachbarn: &Neighbors, states: &LodStates, palette: &BiomePalette) -> NodeMesh {
     let mut out = NodeMesh::default();
     let cell_of = |v: Voxel| {
@@ -268,11 +270,11 @@ pub fn mesh_node(node: &Node, nachbarn: &Neighbors, states: &LodStates, palette:
                     let t = tint(states, palette, a.state, biome_of(vox), face);
                     let shape = a.shape;
                     mask[v * N + u] = 1
-                        | (a.state as u128) << 1
-                        | (t as u128) << 17
-                        | (licht as u128) << 41
-                        | (ao as u128) << 49
-                        | (shape as u128) << 61
+                        | u128::from(a.state) << 1
+                        | u128::from(t) << 17
+                        | u128::from(licht) << 41
+                        | u128::from(ao) << 49
+                        | u128::from(shape) << 61
                         | (u128::from(a.cat == CAT_TRANSLUCENT)) << 91;
                     any = true;
                 }

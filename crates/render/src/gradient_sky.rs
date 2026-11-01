@@ -37,6 +37,7 @@ pub struct GradientSky {
 
 impl GradientSky {
     // `format`: das Format der Ansicht, in die gezeichnet wird (die sRGB-Ansicht des Bildes).
+    #[must_use] 
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gradient sky"),
@@ -93,9 +94,9 @@ impl GradientSky {
         let params = Params {
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             sky: [frame.sky[0], frame.sky[1], frame.sky[2], frame.clear],
-            sun_dir: [sonne.x, sonne.y, sonne.z, frame.sun as u32 as f32],
-            sun_axis: [achse.x, achse.y, achse.z, frame.moon as u32 as f32],
-            extra: [frame.stars as u32 as f32, 0.0, 0.0, 0.0],
+            sun_dir: [sonne.x, sonne.y, sonne.z, u32::from(frame.sun) as f32],
+            sun_axis: [achse.x, achse.y, achse.z, u32::from(frame.moon) as f32],
+            extra: [u32::from(frame.stars) as f32, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&params));
         pass.set_pipeline(&self.pipeline);

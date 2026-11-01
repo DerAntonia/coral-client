@@ -104,7 +104,7 @@ fn emit_special(kind: SpecialKind, tex: TexRect, base: Affine, brightness: f32, 
     match kind {
         SpecialKind::Chest => world::emit_entity_model(em::chest_model(world::ChestHalf::Single), &em::chest_pose(0.0), base, tex, brightness, out),
         SpecialKind::ShulkerBox => {
-            world::emit_entity_model(em::shulker_box_model(), &em::shulker_box_pose(0.0), base.then(em::shulker_box_transform([0.0; 3], "up")), tex, brightness, out)
+            world::emit_entity_model(em::shulker_box_model(), &em::shulker_box_pose(0.0), base.then(em::shulker_box_transform([0.0; 3], "up")), tex, brightness, out);
         }
         SpecialKind::CopperGolemStatue => {
             if let Some(model) = world::model_data::layer_model("copper_golem#main") {
@@ -136,6 +136,26 @@ pub fn emit_skull_at(tex: TexRect, hut: bool, base: Affine, yaw_deg: f32, bright
     let model = Model { texture: "", tex_size: [64.0, if hut { 64.0 } else { 32.0 }], parts: vec![Part::new("head", [0.0; 3], cuboids)] };
     let base = base.then(Affine::scale([-1.0, -1.0, 1.0])).then(Affine::rotation_y_deg(yaw_deg));
     world::emit_entity_model(&model, &world::Pose::new(), base, tex, brightness, out);
+}
+
+// Die Ego-Haltung der Hand, wie emit_resolved_hand sie anwendet (links: Linkshand-Eintrag,
+// gespiegelt).
+fn fp_display(d: &Displays, right: bool) -> ItemDisplay {
+    if right {
+        d.first_person
+    } else {
+        d.first_person_left.mirrored()
+    }
+}
+
+// Ein Punkt/eine Richtung der linken Hand in den Raum der rechten gespiegelt (x umgedreht) --
+// die Aufrufer spiegeln fuer links wieder zurueck.
+fn right_space(p: [f32; 3], right: bool) -> [f32; 3] {
+    if right {
+        p
+    } else {
+        [-p[0], p[1], p[2]]
+    }
 }
 
 // Die beiden Haltungen eines Items. Vanilla fuehrt sie getrennt
@@ -467,7 +487,7 @@ impl HeldItems {
             if *getoent {
                 for px in rgba.chunks_exact_mut(4) {
                     for (c, f) in px.iter_mut().zip(faktor) {
-                        *c = ((*c as u32 * f) / 255) as u8;
+                        *c = ((u32::from(*c) * f) / 255) as u8;
                     }
                 }
             }
@@ -478,11 +498,11 @@ impl HeldItems {
                 Some((bw, bh, _)) if (*bw, *bh) != (w, h) => {}
                 Some((_, _, unten)) => {
                     for (d, o) in unten.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
-                        let a = o[3] as u32;
+                        let a = u32::from(o[3]);
                         for i in 0..3 {
-                            d[i] = ((o[i] as u32 * a + d[i] as u32 * (255 - a)) / 255) as u8;
+                            d[i] = ((u32::from(o[i]) * a + u32::from(d[i]) * (255 - a)) / 255) as u8;
                         }
-                        d[3] = (a + d[3] as u32 * (255 - a) / 255) as u8;
+                        d[3] = (a + u32::from(d[3]) * (255 - a) / 255) as u8;
                     }
                 }
             }
@@ -626,6 +646,97 @@ impl HeldItems {
     // beim Grundmodell des Items zu bleiben.
     pub fn has_model(&self, model: &str) -> bool {
         matches!(self.models.get(model), Some(Some(_)))
+    }
+
+    // Wo die Ego-Faust das Item haelt (s. world::item_inspect::arm_to): ein Punkt des
+    // Modells durch dessen firstperson_righthand-Haltung, relativ zum Handgelenk. Flache Items
+    // am untersten linken deckenden Pixel ihrer Textur (s. SpriteMask::grip, damit auch Packs
+    // passen), die waagerechte Armbrust am Ende des Schafts, Bloecke und
+    // 3D-Modelle von unten. Dass der Arm damit in Ruhe nicht im Bild liegt, prueft
+    // world::item_inspect::tests::arm_in_ruhe_unsichtbar. None, solange das Modell nicht
+    // geladen ist.
+    //
+    // `right` = false: in Vanillas Linkshand-Haltung (s. emit_resolved_hand), aber wie alle diese
+    // Punkte im Raum der RECHTEN Hand angegeben -- der Aufrufer spiegelt x fuer links (s.
+    // fp_display). Die linke Haltung ist nicht immer das Spiegelbild der rechten: item/generated
+    // dreht links andersherum, item/handheld gleich herum.
+    // `potion`: die Trankfarbe, unter der ein mehrlagiges Bild (Trank) geladen ist.
+    pub fn first_person_grip(&self, model_id: u32, potion: Option<u32>, crossbow: bool, right: bool) -> Option<[f32; 3]> {
+        self.grip_of(self.items.get(&model_id)?.as_ref()?, potion, crossbow, right)
+    }
+
+    // Die Mitte des Item-Modells in der Ego-Ansicht, im selben Raum wie first_person_grip.
+    pub fn first_person_center(&self, model_id: u32, right: bool) -> Option<[f32; 3]> {
+        Self::center_of(self.items.get(&model_id)?.as_ref()?, right)
+    }
+
+    // Fuers Jonglieren: das Item wie im Inventar zur Kamera gedreht, aber so gross wie in der
+    // Ego-Hand. Zurueck: Mitte der GUI-Haltung und der Faktor von GUI- auf Hand-Groesse.
+    pub fn gui_center_and_hand_scale(&self, model_id: u32) -> Option<([f32; 3], f32)> {
+        let resolved = self.items.get(&model_id)?.as_ref()?;
+        let d = match resolved {
+            Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => display,
+        };
+        let faktor = if d.gui.scale[0] > 0.0 { d.first_person.scale[0] / d.gui.scale[0] } else { 1.0 };
+        // Bloecke wirken als Wuerfel zur Kamera gedreht groesser als flache Items.
+        let faktor = if matches!(resolved, Resolved::Block { .. }) { faktor * 0.6 } else { faktor };
+        Some((d.gui.translation, faktor))
+    }
+
+    // Dasselbe in der dritten Person (rechte Hand).
+    pub fn third_person_center(&self, model_id: u32) -> Option<[f32; 3]> {
+        let d = match self.items.get(&model_id)?.as_ref()? {
+            Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => display.third_person,
+        };
+        Some(d.translation)
+    }
+
+    // Die Normale der flachen Seite (Modell-Z) in der Ego-Haltung, im selben Raum wie
+    // first_person_center (rechte Hand).
+    pub fn first_person_face_normal(&self, model_id: u32, right: bool) -> Option<[f32; 3]> {
+        let d = match self.items.get(&model_id)?.as_ref()? {
+            Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => fp_display(display, right),
+        };
+        let r = Affine::rotation_xyz_deg(d.rotation[0], d.rotation[1], d.rotation[2]);
+        let (a, b) = (r.apply([0.0; 3]), r.apply([0.0, 0.0, 1.0]));
+        Some(right_space([b[0] - a[0], b[1] - a[1], b[2] - a[2]], right))
+    }
+
+    pub fn first_person_center_model(&self, model: &str, right: bool) -> Option<[f32; 3]> {
+        Self::center_of(self.models.get(model)?.as_ref()?, right)
+    }
+
+    fn center_of(resolved: &Resolved, right: bool) -> Option<[f32; 3]> {
+        let d = match resolved {
+            Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => fp_display(display, right),
+        };
+        Some(right_space(d.translation, right))
+    }
+
+    // Dasselbe fuer ein ausdruecklich gewaehltes Modell (s. App::hand_model_of): Packs geben der
+    // Hand oft ein eigenes Modell mit eigener Haltung -- gegriffen wird, was gezeichnet wird.
+    pub fn first_person_grip_model(&self, model: &str, potion: Option<u32>, crossbow: bool, right: bool) -> Option<[f32; 3]> {
+        self.grip_of(self.models.get(model)?.as_ref()?, potion, crossbow, right)
+    }
+
+    fn grip_of(&self, resolved: &Resolved, potion: Option<u32>, crossbow: bool, right: bool) -> Option<[f32; 3]> {
+        let (punkt, d) = match resolved {
+            Resolved::Sprite { display, .. } if crossbow => ([0.85, 0.15, 0.4], fp_display(display, right)),
+            Resolved::Sprite { texture, layers, display } => {
+                let mask = self.textures.get(composite_key(layers, potion).as_deref().unwrap_or(texture))?.mask.as_ref()?;
+                let [u, v] = mask.grip()?;
+                ([u, v, 0.5], fp_display(display, right))
+            }
+            Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => {
+                ([0.5, -0.3, 0.5], fp_display(display, right))
+            }
+        };
+        let p = Affine::translation(d.translation)
+            .then(Affine::rotation_xyz_deg(d.rotation[0], d.rotation[1], d.rotation[2]))
+            .then(Affine::scale(d.scale))
+            .then(Affine::translation([-0.5, -0.5, -0.5]))
+            .apply(punkt);
+        Some(right_space(p, right))
     }
 
     #[allow(clippy::too_many_arguments)]

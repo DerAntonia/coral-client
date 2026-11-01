@@ -36,6 +36,7 @@ fn is_true(state: u32, key: &str) -> bool {
 }
 
 // None = keine der drei Sonderfamilien -- Aufrufer nimmt den generischen Weg.
+#[must_use] 
 pub fn fence_wall_gate_boxes(name: &str, state: u32) -> Option<Vec<ShapeBox>> {
     if name.ends_with("_fence_gate") {
         return Some(fence_gate_boxes(state));
@@ -61,6 +62,7 @@ pub fn fence_wall_gate_boxes(name: &str, state: u32) -> Option<Vec<ShapeBox>> {
 //
 // `facing` ist die Richtung, in die die Leiter ZEIGT; die Platte liegt auf der
 // gegenueberliegenden Seite, also an der trage nden Wand.
+#[must_use] 
 pub fn ladder_boxes(state: u32) -> Vec<ShapeBox> {
     match property(state, "facing") {
         Some("south") => vec![box16(0.0, 0.0, 0.0, 16.0, 16.0, 3.0)],
@@ -90,6 +92,7 @@ pub fn ladder_boxes(state: u32) -> Vec<ShapeBox> {
 // Konstanten (FLOOR_Z_AXIS_SHAPE (5,0,4)-(11,6,12), CEILING_Z_AXIS_SHAPE (5,10,4)-(11,16,12),
 // X-Achse jeweils mit vertauschtem x/z) -- bis auf die Wandhoehe, die von 3..13 auf 4..12
 // geschrumpft ist.
+#[must_use] 
 pub fn lever_boxes(state: u32) -> Vec<ShapeBox> {
     let facing = property(state, "facing").unwrap_or("north");
     // Bei Boden/Decke zaehlt nur die ACHSE, nicht die Richtung -- der Hebel liegt laengs.
@@ -117,6 +120,7 @@ pub fn lever_boxes(state: u32) -> Vec<ShapeBox> {
 // Die Kurven-/Steigungsformen des MODELLS sind gedrehte Elemente und loesen deshalb nicht auf
 // (s. lever_boxes) -- Vanilla benutzt fuer den Umriss ohnehin nur diese beiden Kaesten, die
 // Handfassung ist hier also nicht nur ein Ersatz, sondern das Original.
+#[must_use] 
 pub fn rail_boxes(state: u32) -> Vec<ShapeBox> {
     let steigend = property(state, "shape").is_some_and(|s| s.starts_with("ascending_"));
     let hoehe = if steigend { 8.0 } else { 2.0 };
@@ -129,6 +133,7 @@ pub fn rail_boxes(state: u32) -> Vec<ShapeBox> {
 //   -> createCuboidZShape(sizeX=6, minY=0, maxY=10, minZ=10, maxZ=16)
 //      = createCuboidShape(5, 0, 10, 11, 10, 16)
 // Grundform ist wie beim Hebel facing=north (Platte an z=16), Rest sind die Y-Drehungen.
+#[must_use] 
 pub fn tripwire_hook_boxes(state: u32) -> Vec<ShapeBox> {
     match property(state, "facing") {
         Some("south") => vec![box16(5.0, 0.0, 0.0, 11.0, 10.0, 6.0)],
@@ -152,8 +157,9 @@ pub fn tripwire_hook_boxes(state: u32) -> Vec<ShapeBox> {
 //
 // Genau daran haengt das Heruntersteigen: schleichend (isDescending) faellt die Deckplatte weg,
 // und man sinkt durchs Geruest, statt darauf zu stehen.
+#[must_use] 
 pub fn scaffolding_boxes(state: u32, feet_y: f64, descending: bool, block_y: i32) -> Vec<ShapeBox> {
-    if feet_y > block_y as f64 + 1.0 - 1.0e-5 && !descending {
+    if feet_y > f64::from(block_y) + 1.0 - 1.0e-5 && !descending {
         return vec![
             box16(0.0, 14.0, 0.0, 16.0, 16.0, 16.0),
             box16(0.0, 0.0, 0.0, 2.0, 16.0, 2.0),
@@ -163,7 +169,7 @@ pub fn scaffolding_boxes(state: u32, feet_y: f64, descending: bool, block_y: i32
         ];
     }
     let distanz_ungleich_null = property(state, "distance").is_none_or(|d| d != "0");
-    if distanz_ungleich_null && is_true(state, "bottom") && feet_y > block_y as f64 - 1.0e-5 {
+    if distanz_ungleich_null && is_true(state, "bottom") && feet_y > f64::from(block_y) - 1.0e-5 {
         return vec![box16(0.0, 0.0, 0.0, 16.0, 2.0, 16.0)];
     }
     Vec::new()
@@ -181,6 +187,7 @@ pub fn scaffolding_boxes(state: u32, feet_y: f64, descending: bool, block_y: i32
 // einem BlockEntity-Renderer gezeichnet, aus den Modelldateien laesst sich also gar keine Form
 // ableiten. Der Spieler stuende auf 1.0 statt auf 9/16 -- 7/16 Unterschied zum Server bei jedem
 // Schritt auf ein Bett.
+#[must_use] 
 pub fn bed_boxes(state: u32) -> Vec<ShapeBox> {
     let matratze = box16(0.0, 3.0, 0.0, 16.0, 9.0, 16.0);
     let kopfteil = property(state, "part") == Some("head");
@@ -217,6 +224,7 @@ pub fn bed_boxes(state: u32) -> Vec<ShapeBox> {
 // NUR die Kollision ist kleiner. Der Umriss (getOutlineShape, also das Zielkreuz beim Bauen)
 // bleibt bei beiden der Vollwuerfel, und Seelensand setzt zusaetzlich getCameraCollisionShape
 // auf den Vollwuerfel -- s. collision::outline_boxes/camera_collision_boxes.
+#[must_use] 
 pub fn sinking_collision_boxes(name: &str) -> Option<Vec<ShapeBox>> {
     match name {
         "soul_sand" => Some(vec![box16(0.0, 0.0, 0.0, 16.0, 14.0, 16.0)]),
@@ -255,7 +263,7 @@ fn wall_boxes(state: u32) -> Vec<ShapeBox> {
     if property(state, "up") != Some("false") {
         out.push(box16(4.0, 0.0, 4.0, 12.0, 24.0, 12.0));
     }
-    let connected = |dir: &str| property(state, dir).map(|v| v != "none").unwrap_or(false);
+    let connected = |dir: &str| property(state, dir).is_some_and(|v| v != "none");
     if connected("north") {
         out.push(box16(5.0, 0.0, 0.0, 11.0, 24.0, 11.0));
     }
@@ -279,7 +287,7 @@ fn fence_gate_boxes(state: u32) -> Vec<ShapeBox> {
         return Vec::new();
     }
     match property(state, "facing") {
-        Some("north") | Some("south") => vec![box16(0.0, 0.0, 6.0, 16.0, 24.0, 10.0)],
+        Some("north" | "south") => vec![box16(0.0, 0.0, 6.0, 16.0, 24.0, 10.0)],
         _ => vec![box16(6.0, 0.0, 0.0, 10.0, 24.0, 16.0)],
     }
 }

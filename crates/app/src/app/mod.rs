@@ -2,6 +2,7 @@
 // `impl App`-Block; als Untermodule der Wurzel sehen sie alle privaten Felder und Typen aus main.rs.
 
 mod addon_host;
+mod anims;
 mod chat;
 mod combat;
 mod connection;
@@ -15,12 +16,18 @@ mod main_loop;
 mod menu;
 mod module_menu;
 mod movement;
+mod recording;
+mod replay;
+mod snapshot;
 mod render;
 mod screens;
 mod settings_screens;
+mod setup;
 mod skins;
 mod sound;
 mod tabs;
 mod window_events;
 
+pub(crate) use recording::AppRecorder;
+pub(crate) use replay::{RecordingEntry, Replay};
 pub(crate) use tabs::ServerTab;

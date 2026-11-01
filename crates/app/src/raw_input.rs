@@ -31,12 +31,12 @@ pub struct DeviceAdded {
     pub name: String,
     pub keyboard: bool,
     pub pointer: bool,
-    /// Worueber gleiche Meldungen zusammengefasst werden (s. physical_device).
+    /// Worueber gleiche Meldungen zusammengefasst werden (s. `physical_device`).
     pub key: String,
 }
 
 impl DeviceAdded {
-    pub fn kind_label(&self) -> &'static str {
+    pub const fn kind_label(&self) -> &'static str {
         match (self.keyboard, self.pointer) {
             (true, true) => "Tastatur und Maus",
             (true, false) => "Tastatur",
@@ -347,7 +347,8 @@ mod linux {
     // stehen Position und Tastendruck im selben geordneten Eventstrom.
     #[derive(Clone, Copy, Debug)]
     pub enum RawMouseEvent {
-        Motion(f64, f64),
+        // Deltas und die Zeit des Kernels zum letzten Teil davon (fuer coral-record).
+        Motion(f64, f64, Instant),
         Button(MouseButton, bool),
         // Mausrad in Rasten, positiv = hoch (evdev REL_WHEEL). Laeuft im selben geordneten
         // Strom, damit die Hotbar im Spiel ueber denselben schnellen Weg blaettert wie der
@@ -397,6 +398,9 @@ mod linux {
                 Ok(events) => events,
                 Err(_) => break, // Device weg (z.B. abgesteckt) -> Thread beenden
             };
+            // Bezug, um die Kernel-Zeit (CLOCK_REALTIME) in ein Instant umzurechnen.
+            let jetzt = (Instant::now(), std::time::SystemTime::now());
+            let mut zuletzt = jetzt.1;
 
             // Bewegung wird weiterhin zusammengefasst -- aber nur bis zum naechsten Klick,
             // der sie vorher rausschickt (s. RawMouseEvent). Damit bleibt die Reihenfolge
@@ -406,15 +410,21 @@ mod linux {
             for ev in events {
                 match ev.kind() {
                     InputEventKind::RelAxis(axis) => match axis {
-                        RelativeAxisType::REL_X => delta.0 += ev.value() as f64,
-                        RelativeAxisType::REL_Y => delta.1 += ev.value() as f64,
+                        RelativeAxisType::REL_X => {
+                            delta.0 += f64::from(ev.value());
+                            zuletzt = ev.timestamp();
+                        }
+                        RelativeAxisType::REL_Y => {
+                            delta.1 += f64::from(ev.value());
+                            zuletzt = ev.timestamp();
+                        }
                         // Nur die ganzen Rasten (REL_WHEEL), nicht REL_WHEEL_HI_RES: ein Rad
                         // mit feiner Aufloesung meldet beides, und eine Raste soll genau ein
                         // Hotbar-Platz sein.
                         RelativeAxisType::REL_WHEEL if ev.value() != 0 => {
                             // Wie beim Klick: die Bewegung davor zuerst.
                             if delta != (0.0, 0.0) {
-                                if tx.send(RawMouseEvent::Motion(delta.0, delta.1)).is_err() {
+                                if tx.send(RawMouseEvent::Motion(delta.0, delta.1, kernel_zeit(zuletzt, jetzt))).is_err() {
                                     receiver_gone = true;
                                 }
                                 delta = (0.0, 0.0);
@@ -442,7 +452,7 @@ mod linux {
                             // Die bis hierher gesammelte Bewegung MUSS vor dem Klick raus,
                             // sonst wertet der Frame den Klick an der Position danach aus.
                             if delta != (0.0, 0.0) {
-                                if tx.send(RawMouseEvent::Motion(delta.0, delta.1)).is_err() {
+                                if tx.send(RawMouseEvent::Motion(delta.0, delta.1, kernel_zeit(zuletzt, jetzt))).is_err() {
                                     receiver_gone = true;
                                 }
                                 delta = (0.0, 0.0);
@@ -456,10 +466,16 @@ mod linux {
                 }
             }
 
-            if receiver_gone || (delta != (0.0, 0.0) && tx.send(RawMouseEvent::Motion(delta.0, delta.1)).is_err()) {
+            if receiver_gone || (delta != (0.0, 0.0) && tx.send(RawMouseEvent::Motion(delta.0, delta.1, kernel_zeit(zuletzt, jetzt))).is_err()) {
                 break; // Empfaenger weg -> Thread beenden
             }
         });
+    }
+
+    // Zeitpunkt eines evdev-Ereignisses als Instant, ueber das Paar (Instant, Uhrzeit) beim
+    // Lesen. Liegt es in der Zukunft (Uhr verstellt), gilt der Lesezeitpunkt.
+    fn kernel_zeit(ts: std::time::SystemTime, jetzt: (Instant, std::time::SystemTime)) -> Instant {
+        jetzt.1.duration_since(ts).ok().and_then(|d| jetzt.0.checked_sub(d)).unwrap_or(jetzt.0)
     }
 
     // Tastatur-Pendant zu RawMouse. Liefert einzelne Tasten-Uebergaenge (KeyCode, gedrueckt)
@@ -524,7 +540,7 @@ mod linux {
 // aus (dann muesste der Nutzer auf eine abgebildete Taste umbelegen). Auch fuer Windows:
 // die evdev-Codes 1..88 SIND die PC-Scancodes (Satz 1), s. windows::scancode_to_evdev.
 #[cfg(any(target_os = "linux", windows))]
-fn evdev_key_to_keycode(code: u16) -> Option<winit::keyboard::KeyCode> {
+const fn evdev_key_to_keycode(code: u16) -> Option<winit::keyboard::KeyCode> {
     use winit::keyboard::KeyCode;
     {
         Some(match code {
@@ -745,7 +761,7 @@ mod windows {
         // der Position NACH der Bewegung gelten (s. RawMouseEvent). Absolute Meldungen
         // (Grafiktablett, Fernsitzung) sind keine Maus-Deltas.
         if m.usFlags & MOUSE_MOVE_ABSOLUTE == 0 && (m.lLastX != 0 || m.lLastY != 0) {
-            out.push(RawMouseEvent::Motion(m.lLastX as f64, m.lLastY as f64));
+            out.push(RawMouseEvent::Motion(m.lLastX as f64, m.lLastY as f64, std::time::Instant::now()));
         }
         // SAFETY: bei RIM_TYPEMOUSE ist der Tasten-Zweig der Union belegt.
         let (flags, daten) = unsafe { (m.Anonymous.Anonymous.usButtonFlags as u32, m.Anonymous.Anonymous.usButtonData) };
@@ -933,7 +949,7 @@ impl RawMouse {
 #[cfg(not(target_os = "linux"))]
 #[derive(Clone, Copy, Debug)]
 pub enum RawMouseEvent {
-    Motion(f64, f64),
+    Motion(f64, f64, std::time::Instant),
     Button(MouseButton, bool),
     Wheel(f32),
 }

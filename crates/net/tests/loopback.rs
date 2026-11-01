@@ -61,7 +61,7 @@ async fn join_local_server() {
                     if chunks <= 3 {
                         // block_count aus dem Packet vs. selbst gezaehlte Nicht-Luft-Bloecke:
                         // Stimmen die ueberein, ist das Bit-Unpacking korrekt.
-                        let claimed: i32 = chunk.sections.iter().map(|s| s.block_count as i32).sum();
+                        let claimed: i32 = chunk.sections.iter().map(|s| i32::from(s.block_count)).sum();
                         println!(
                             "[chunk] ({}, {}) Sections={} | block_count laut Server={} | selbst gezaehlt={}  {}",
                             chunk.x,

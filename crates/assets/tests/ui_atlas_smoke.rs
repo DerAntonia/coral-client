@@ -121,7 +121,7 @@ fn alle_items_bekommen_ein_icon() {
     let names = world::item_registry::all_item_names();
     let (atlas, icons, definitions) = assets::build_ui_atlas(&mut mc, names, &block_atlas);
 
-    let missing: Vec<&str> = names.iter().map(|s| s.as_str()).filter(|n| *n != "air" && !icons.contains_key(*n)).collect();
+    let missing: Vec<&str> = names.iter().map(std::string::String::as_str).filter(|n| *n != "air" && !icons.contains_key(*n)).collect();
     println!("UI-Atlas {}x{} px, {} von {} Items mit Icon", atlas.size, atlas.size, names.len() - 1 - missing.len(), names.len() - 1);
     let zweige: Vec<&String> = definitions.values().flat_map(|d| d.icon_keys.iter()).collect();
     let ohne: Vec<&&String> = zweige.iter().filter(|k| !icons.contains_key(k.as_str())).collect();

@@ -12,6 +12,7 @@ pub struct Frustum {
 }
 
 impl Frustum {
+    #[must_use] 
     pub fn from_view_proj(m: Mat4) -> Self {
         // Zeilen der Matrix (glam ist spaltenweise gespeichert -- row(i) holt die i-te Zeile).
         let row = |i: usize| m.row(i);
@@ -38,7 +39,8 @@ impl Frustum {
     }
 
     // Ohne Fernebene (fuer die Fernsicht, die weit hinter der Fernebene des Gelaendes liegt).
-    pub fn without_far(mut self) -> Self {
+    #[must_use] 
+    pub const fn without_far(mut self) -> Self {
         self.planes[5] = (Vec3::ZERO, 1.0);
         self
     }
@@ -46,6 +48,7 @@ impl Frustum {
     // Grobtest: liegt die AABB komplett auf der Aussenseite irgendeiner Ebene, ist sie
     // sicher unsichtbar (kein exaktes Culling noetig -- ein paar falsch-positive Treffer
     // an den Raendern kosten nur ein paar zusaetzliche, tatsaechlich unsichtbare Draws).
+    #[must_use] 
     pub fn intersects_aabb(&self, min: Vec3, max: Vec3) -> bool {
         for (normal, d) in &self.planes {
             // Die von der Normale aus "am weitesten entfernte" Ecke der Box (positive

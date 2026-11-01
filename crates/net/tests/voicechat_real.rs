@@ -17,14 +17,14 @@ struct Bot {
 }
 
 impl Bot {
-    fn start(rt: &tokio::runtime::Runtime, name: String) -> Bot {
+    fn start(rt: &tokio::runtime::Runtime, name: String) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (out, out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         rt.spawn(async move {
             let rotation = std::sync::Arc::new(net::SharedLook::default());
             let _ = net::join("127.0.0.1:25565", &name, None, net::Events::new(tx), out_rx, rotation).await;
         });
-        Bot { events: rx, out, voice: None, verbunden: false }
+        Self { events: rx, out, voice: None, verbunden: false }
     }
 
     // Netz-Ereignisse abarbeiten; Rueckgabe: empfangene Sprach-Ereignisse.
@@ -42,7 +42,7 @@ impl Bot {
                 _ => {}
             }
         }
-        let ereignisse = self.voice.as_ref().map(|v| v.poll()).unwrap_or_default();
+        let ereignisse = self.voice.as_ref().map(voice::VoiceClient::poll).unwrap_or_default();
         if ereignisse.iter().any(|e| matches!(e, voice::VoiceEvent::Connected)) {
             self.verbunden = true;
             self.out.send(protocol::packets::custom_payload(voice::packets::CH_UPDATE_STATE, &voice::packets::update_state_payload(false))).unwrap();

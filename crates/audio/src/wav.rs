@@ -10,7 +10,7 @@
 // toter Code -- unsere Dateien haben ein einziges Format, und ein Leser, der mehr verspricht,
 // als je gebraucht wird, ist nur mehr Flaeche fuer Fehler.
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WavError {
     ZuKurz,
     KeinRiffWave,
@@ -21,7 +21,7 @@ pub enum WavError {
 
 #[derive(Debug)]
 pub struct Wav {
-    /// Abtastwerte in -1..1. Mehrkanalige Dateien werden gemischt (s. from_bytes).
+    /// Abtastwerte in -1..1. Mehrkanalige Dateien werden gemischt (s. `from_bytes`).
     pub samples: Vec<f32>,
     pub sample_rate: f32,
 }
@@ -35,7 +35,7 @@ fn u32_at(b: &[u8], i: usize) -> u32 {
 }
 
 impl Wav {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Wav, WavError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, WavError> {
         if bytes.len() < 12 {
             return Err(WavError::ZuKurz);
         }
@@ -82,18 +82,19 @@ impl Wav {
         // Mehrkanaliges wird zu Mono gemittelt: die Stereo-Lage machen wir selbst (s.
         // pan_gains), eine mitgelieferte Lage wuerde damit nur in Konflikt geraten.
         let kanaele = kanaele as usize;
-        let werte: Vec<f32> = daten.chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]]) as f32 / 32_768.0).collect();
+        let werte: Vec<f32> = daten.chunks_exact(2).map(|p| f32::from(i16::from_le_bytes([p[0], p[1]])) / 32_768.0).collect();
         let samples = if kanaele == 1 { werte } else { werte.chunks(kanaele).map(|f| f.iter().sum::<f32>() / f.len() as f32).collect() };
 
-        Ok(Wav { samples, sample_rate: rate as f32 })
+        Ok(Self { samples, sample_rate: rate as f32 })
     }
 
     /// Wert an einer Position in Sekunden, linear zwischen den Abtastwerten interpoliert.
     ///
     /// Die Interpolation ist das Resampling: unsere Dateien liegen mit 48 kHz vor, das Geraet
-    /// laeuft aber nicht zwingend mit 48 kHz (s. low_latency_config -- die bevorzugte Rate ist
+    /// laeuft aber nicht zwingend mit 48 kHz (s. `low_latency_config` -- die bevorzugte Rate ist
     /// nur ein Wunsch). Ohne Umrechnung waere ein Klang auf einem 44,1-kHz-Geraet um knapp einen
     /// Halbton zu hoch und entsprechend zu kurz.
+    #[must_use] 
     pub fn sample_at(&self, sekunden: f32) -> f32 {
         if self.samples.is_empty() || sekunden < 0.0 {
             return 0.0;
@@ -107,6 +108,7 @@ impl Wav {
         self.samples[i] * (1.0 - bruch) + self.samples[i + 1] * bruch
     }
 
+    #[must_use] 
     pub fn duration(&self) -> f32 {
         self.samples.len() as f32 / self.sample_rate.max(1.0)
     }
@@ -128,7 +130,7 @@ mod tests {
         b.extend_from_slice(&1u16.to_le_bytes()); // PCM
         b.extend_from_slice(&kanaele.to_le_bytes());
         b.extend_from_slice(&rate.to_le_bytes());
-        b.extend_from_slice(&(rate * kanaele as u32 * 2).to_le_bytes());
+        b.extend_from_slice(&(rate * u32::from(kanaele) * 2).to_le_bytes());
         b.extend_from_slice(&(kanaele * 2).to_le_bytes());
         b.extend_from_slice(&16u16.to_le_bytes());
         b.extend_from_slice(b"data");

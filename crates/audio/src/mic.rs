@@ -19,8 +19,8 @@ struct Resampler {
 }
 
 impl Resampler {
-    fn new(input_rate: f64) -> Resampler {
-        Resampler { step: input_rate / RATE, pos: 0.0, last: 0.0 }
+    fn new(input_rate: f64) -> Self {
+        Self { step: input_rate / RATE, pos: 0.0, last: 0.0 }
     }
 
     // Mono-Eingang -> 48-kHz-Samples in `out`.
@@ -73,6 +73,7 @@ impl<F: FnMut(&[i16])> Framer<F> {
     }
 }
 
+#[must_use] 
 pub fn list_input_devices() -> Vec<String> {
     cpal::default_host().input_devices().map(|ds| ds.filter_map(|d| d.name().ok()).collect()).unwrap_or_default()
 }
@@ -86,13 +87,13 @@ pub struct Microphone {
 impl Microphone {
     // `on_frame` laeuft im Audio-Thread des Systems -- dort nur weiterreichen (z.B. in einen
     // Kanal), nicht kodieren oder blockieren.
-    pub fn open(device: Option<&str>, on_frame: impl FnMut(&[i16]) + Send + 'static) -> Result<Microphone, AudioError> {
+    pub fn open(device: Option<&str>, on_frame: impl FnMut(&[i16]) + Send + 'static) -> Result<Self, AudioError> {
         let host = cpal::default_host();
         let device = match device {
             Some(name) => host
                 .input_devices()
                 .map_err(|_| AudioError::NoOutputDevice)?
-                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                .find(|d| d.name().is_ok_and(|n| n == name))
                 .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?,
             None => host.default_input_device().ok_or(AudioError::NoOutputDevice)?,
         };
@@ -101,7 +102,7 @@ impl Microphone {
         let config: cpal::StreamConfig = supported.into();
         let channels = config.channels.max(1) as usize;
         let mut framer = Framer {
-            resampler: Resampler::new(config.sample_rate.0 as f64),
+            resampler: Resampler::new(f64::from(config.sample_rate.0)),
             mono: Vec::with_capacity(4096),
             rate48: Vec::with_capacity(4096),
             frame: Vec::with_capacity(FRAME),
@@ -111,11 +112,11 @@ impl Microphone {
         let stream = match format {
             SampleFormat::F32 => device.build_input_stream(&config, move |d: &[f32], _| framer.feed(d.iter().copied(), channels), err_fn, None),
             SampleFormat::I16 => {
-                device.build_input_stream(&config, move |d: &[i16], _| framer.feed(d.iter().map(|s| *s as f32 / 32768.0), channels), err_fn, None)
+                device.build_input_stream(&config, move |d: &[i16], _| framer.feed(d.iter().map(|s| f32::from(*s) / 32768.0), channels), err_fn, None)
             }
             SampleFormat::U16 => device.build_input_stream(
                 &config,
-                move |d: &[u16], _| framer.feed(d.iter().map(|s| (*s as f32 - 32768.0) / 32768.0), channels),
+                move |d: &[u16], _| framer.feed(d.iter().map(|s| (f32::from(*s) - 32768.0) / 32768.0), channels),
                 err_fn,
                 None,
             ),
@@ -123,7 +124,7 @@ impl Microphone {
         }
         .map_err(|e| AudioError::BuildStream(e.to_string()))?;
         stream.play().map_err(|e| AudioError::PlayStream(e.to_string()))?;
-        Ok(Microphone { _stream: stream, device_name: device.name().unwrap_or_default() })
+        Ok(Self { _stream: stream, device_name: device.name().unwrap_or_default() })
     }
 }
 

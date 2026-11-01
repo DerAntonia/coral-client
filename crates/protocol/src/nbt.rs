@@ -13,7 +13,7 @@ use crate::buffer::{PacketReader, ReadError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum NbtValue {
     Byte(i8),
     Short(i16),
@@ -23,8 +23,8 @@ pub enum NbtValue {
     Double(f64),
     ByteArray(Vec<i8>),
     String(String),
-    List(Vec<NbtValue>),
-    Compound(HashMap<String, NbtValue>),
+    List(Vec<Self>),
+    Compound(HashMap<String, Self>),
     IntArray(Vec<i32>),
     LongArray(Vec<i64>),
 }
@@ -42,41 +42,46 @@ fn unwrap_list_element(v: NbtValue) -> NbtValue {
 }
 
 impl NbtValue {
-    pub fn as_compound(&self) -> Option<&HashMap<String, NbtValue>> {
+    #[must_use] 
+    pub const fn as_compound(&self) -> Option<&HashMap<String, Self>> {
         match self {
-            NbtValue::Compound(m) => Some(m),
+            Self::Compound(m) => Some(m),
             _ => None,
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<&NbtValue> {
+    #[must_use] 
+    pub fn get(&self, key: &str) -> Option<&Self> {
         self.as_compound()?.get(key)
     }
 
+    #[must_use] 
     pub fn as_f32(&self) -> Option<f32> {
         match self {
-            NbtValue::Float(v) => Some(*v),
-            NbtValue::Double(v) => Some(*v as f32),
-            NbtValue::Byte(v) => Some(*v as f32),
-            NbtValue::Short(v) => Some(*v as f32),
-            NbtValue::Int(v) => Some(*v as f32),
+            Self::Float(v) => Some(*v),
+            Self::Double(v) => Some(*v as f32),
+            Self::Byte(v) => Some(f32::from(*v)),
+            Self::Short(v) => Some(f32::from(*v)),
+            Self::Int(v) => Some(*v as f32),
             _ => None,
         }
     }
 
+    #[must_use] 
     pub fn as_i32(&self) -> Option<i32> {
         match self {
-            NbtValue::Int(v) => Some(*v),
-            NbtValue::Byte(v) => Some(*v as i32),
-            NbtValue::Short(v) => Some(*v as i32),
-            NbtValue::Long(v) => Some(*v as i32),
+            Self::Int(v) => Some(*v),
+            Self::Byte(v) => Some(i32::from(*v)),
+            Self::Short(v) => Some(i32::from(*v)),
+            Self::Long(v) => Some(*v as i32),
             _ => None,
         }
     }
 
-    pub fn as_str(&self) -> Option<&str> {
+    #[must_use] 
+    pub const fn as_str(&self) -> Option<&str> {
         match self {
-            NbtValue::String(s) => Some(s.as_str()),
+            Self::String(s) => Some(s.as_str()),
             _ => None,
         }
     }
@@ -122,11 +127,11 @@ fn decode_modified_utf8(bytes: &[u8]) -> Result<String, ReadError> {
         let b = bytes[i];
         let folge = |k: usize| bytes.get(i + k).copied().filter(|c| c & 0xC0 == 0x80).ok_or(ReadError);
         let (unit, laenge) = if b & 0x80 == 0 {
-            (b as u16, 1)
+            (u16::from(b), 1)
         } else if b & 0xE0 == 0xC0 {
-            ((((b & 0x1F) as u16) << 6) | (folge(1)? & 0x3F) as u16, 2)
+            ((u16::from(b & 0x1F) << 6) | u16::from(folge(1)? & 0x3F), 2)
         } else if b & 0xF0 == 0xE0 {
-            ((((b & 0x0F) as u16) << 12) | (((folge(1)? & 0x3F) as u16) << 6) | (folge(2)? & 0x3F) as u16, 3)
+            ((u16::from(b & 0x0F) << 12) | (u16::from(folge(1)? & 0x3F) << 6) | u16::from(folge(2)? & 0x3F), 3)
         } else {
             return Err(ReadError);
         };
@@ -213,7 +218,7 @@ pub fn write_root(w: &mut crate::buffer::PacketWriter, value: &NbtValue) {
     write_payload(w, value);
 }
 
-fn tag_type(value: &NbtValue) -> u8 {
+const fn tag_type(value: &NbtValue) -> u8 {
     match value {
         NbtValue::Byte(_) => TAG_BYTE,
         NbtValue::Short(_) => TAG_SHORT,
@@ -348,7 +353,7 @@ fn write_payload(w: &mut crate::buffer::PacketWriter, value: &NbtValue) {
 // Clients hat keine Schnitte dafuer, und ein sichtbares Steuerzeichen waere schlechter als
 // nichts.
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct TextSpan {
     pub text: String,
     // 0xRRGGBB. None = keine eigene Farbe, der Aufrufer nimmt seine Vorgabe.
@@ -380,7 +385,7 @@ const STYLE_FIELDS: [(&str, u8); 5] =
 // die Faelle aus Vanillas Screen.handleClickEvent, die ein Server in eine Chatzeile legen
 // kann. Nicht dabei: open_file (nur fuer clientseitig erzeugten Text, "userDefinable" =
 // false), change_page (nur Buecher) und show_dialog.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub enum ClickAction {
     RunCommand(String),
     SuggestCommand(String),
@@ -390,7 +395,7 @@ pub enum ClickAction {
     Custom { id: String, payload: Option<NbtValue> },
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SpanAction {
     pub click: Option<ClickAction>,
     // Tooltip beim Drueberfahren (HoverEvent show_text / show_item). "\n" trennt Zeilen.
@@ -400,7 +405,7 @@ pub struct SpanAction {
 }
 
 impl SpanAction {
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.click.is_none() && self.hover.is_none() && self.insertion.is_none()
     }
 }
@@ -506,14 +511,11 @@ pub fn font_char(font: &str, c: char) -> char {
     if is_default_font(font) || c == '\n' {
         return c;
     }
-    let mut lock = FONT_CHARS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut lock = FONT_CHARS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let fc = lock.get_or_insert_with(FontChars::default);
-    let idx = match fc.fonts.iter().position(|f| &**f == font) {
-        Some(i) => i as u16,
-        None => {
-            fc.fonts.push(Arc::from(font));
-            (fc.fonts.len() - 1) as u16
-        }
+    let idx = if let Some(i) = fc.fonts.iter().position(|f| &**f == font) { i as u16 } else {
+        fc.fonts.push(Arc::from(font));
+        (fc.fonts.len() - 1) as u16
     };
     if let Some(&m) = fc.vorwaerts.get(&(idx, c)) {
         return m;
@@ -532,7 +534,7 @@ pub fn font_char_origin(c: char) -> Option<(Arc<str>, char)> {
     if (c as u32) < FONT_CHAR_FIRST {
         return None;
     }
-    let lock = FONT_CHARS.lock().unwrap_or_else(|e| e.into_inner());
+    let lock = FONT_CHARS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let fc = lock.as_ref()?;
     let &(idx, orig) = fc.zurueck.get(&c)?;
     Some((fc.fonts[idx as usize].clone(), orig))
@@ -549,7 +551,7 @@ fn own_action(value: &NbtValue, inherited: Option<&Arc<SpanAction>>) -> Option<A
     if eigen.is_empty() {
         return inherited.cloned();
     }
-    let erbe = inherited.map(|a| a.as_ref());
+    let erbe = inherited.map(std::convert::AsRef::as_ref);
     Some(Arc::new(SpanAction {
         click: eigen.click.or_else(|| erbe.and_then(|a| a.click.clone())),
         hover: eigen.hover.or_else(|| erbe.and_then(|a| a.hover.clone())),
@@ -682,6 +684,7 @@ fn parse_color(name: &str) -> Option<u32> {
 // Frueherer Fehler: im Log stand die rohe Zeichenkette
 // `{"italic":false,"color":"red","extra":[...],"text":"You are already online!"}` statt der
 // Meldung -- lesbar war sie nur mit Muehe.
+#[must_use] 
 pub fn json_text_to_spans(json: &str) -> Vec<TextSpan> {
     match serde_json::from_str::<serde_json::Value>(json) {
         Ok(value) => text_to_spans(&json_to_nbt(&value)),
@@ -711,6 +714,7 @@ pub fn style_color(value: &NbtValue) -> Option<u32> {
     value.get("color").and_then(NbtValue::as_str).and_then(parse_color)
 }
 
+#[must_use] 
 pub fn text_to_spans(value: &NbtValue) -> Vec<TextSpan> {
     let mut out = Vec::new();
     collect_spans(value, &Style::default(), &mut out);
@@ -822,13 +826,14 @@ pub fn with_lang_area<R>(area: LangArea, f: impl FnOnce() -> R) -> R {
 }
 
 // Eine Sprachdatei (assets/<ns>/lang/<sprache>.json: flaches Objekt Schluessel -> Text).
+#[must_use] 
 pub fn parse_language_json(bytes: &[u8]) -> Option<HashMap<String, String>> {
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
     Some(value.as_object()?.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
 }
 
 pub fn translate(key: &str) -> Option<String> {
-    let area = AREA.with(|a| a.get()) as usize;
+    let area = AREA.with(std::cell::Cell::get) as usize;
     let guard = LANGUAGES.read().ok()?;
     guard[area].as_ref().or(guard[LangArea::Text as usize].as_ref())?.get(key).cloned()
 }
@@ -852,7 +857,7 @@ fn split_translation(pattern: &str) -> Vec<TranslationPart> {
     let mut out = Vec::new();
     let mut text = String::new();
     let mut next = 0usize;
-    let mut chars = pattern.char_indices().peekable();
+    let mut chars = pattern.char_indices();
     while let Some((i, c)) = chars.next() {
         if c != '%' {
             text.push(c);
@@ -935,6 +940,7 @@ fn push_legacy_styled(text: &str, style: &Style, out: &mut Vec<TextSpan>) {
 
 // Die Farbe eines Formatting-Index (dieselbe Reihenfolge wie die Paragraphen-Codes 0..9,a..f).
 // Werte ausserhalb 0..15 heissen "keine eigene Farbe" -- Vanillas RESET/None.
+#[must_use] 
 pub fn formatting_color(index: i32) -> Option<u32> {
     usize::try_from(index).ok().and_then(|i| LEGACY_COLORS.get(i).copied())
 }
@@ -942,6 +948,7 @@ pub fn formatting_color(index: i32) -> Option<u32> {
 // Ein Stueck Text mit Paragraphen-Codes in Abschnitte zerlegen -- fuer alles, was NICHT als
 // Component ankommt, sondern als blanke Zeichenkette mit eingebetteten Codes (Team-Prefix
 // und -Suffix sind der Hauptfall).
+#[must_use] 
 pub fn legacy_to_spans(text: &str, inherited: Option<u32>) -> Vec<TextSpan> {
     let mut out = Vec::new();
     push_legacy(text, inherited, &mut out);
@@ -1055,6 +1062,7 @@ fn push_legacy_with(text: &str, inherited: Option<u32>, inherited_style: u8, inh
 // (Team-Prefix + Name + Suffix, Seitenleisten-Zeilen) -- so ueberleben ihre Farben den Weg.
 // Farben ausserhalb der 16 klassischen kommen als §x-Hexfolge; ohne eigene Farbe steht §r
 // (= die geerbte Farbe, s. push_legacy).
+#[must_use] 
 pub fn spans_to_legacy(spans: &[TextSpan]) -> String {
     let mut out = String::new();
     // Der Schatten, der gerade gilt: §r setzt ihn zurueck, Farbcodes lassen ihn stehen.
@@ -1065,17 +1073,14 @@ pub fn spans_to_legacy(spans: &[TextSpan]) -> String {
                 out.push_str("\u{a7}r");
                 schatten = None;
             }
-            Some(c) => match LEGACY_COLORS.iter().position(|&l| l == c) {
-                Some(i) => {
+            Some(c) => if let Some(i) = LEGACY_COLORS.iter().position(|&l| l == c) {
+                out.push('\u{a7}');
+                out.push(char::from_digit(i as u32, 16).unwrap_or('f'));
+            } else {
+                out.push_str("\u{a7}x");
+                for h in format!("{:06x}", c & 0xFF_FFFF).chars() {
                     out.push('\u{a7}');
-                    out.push(char::from_digit(i as u32, 16).unwrap_or('f'));
-                }
-                None => {
-                    out.push_str("\u{a7}x");
-                    for h in format!("{:06x}", c & 0xFF_FFFF).chars() {
-                        out.push('\u{a7}');
-                        out.push(h);
-                    }
+                    out.push(h);
                 }
             },
         }
@@ -1215,7 +1220,7 @@ mod span_tests {
         let bytes = [0xed, 0xa0, 0xbd, 0xed, 0xb7, 0xa1, 0x20];
         assert_eq!(decode_modified_utf8(&bytes).unwrap(), "\u{1F5E1} ");
         assert_eq!(decode_modified_utf8(&[0x61, 0xC0, 0x80, 0x62]).unwrap(), "a\u{0}b");
-        assert_eq!(decode_modified_utf8("Kit Editor".as_bytes()).unwrap(), "Kit Editor");
+        assert_eq!(decode_modified_utf8(b"Kit Editor").unwrap(), "Kit Editor");
     }
     use std::collections::HashMap;
 

@@ -8,15 +8,18 @@ pub struct CrossBlocks {
 }
 
 impl CrossBlocks {
-    pub fn new(per_state: Vec<bool>) -> Self {
+    #[must_use] 
+    pub const fn new(per_state: Vec<bool>) -> Self {
         Self { per_state }
     }
 
     // Kein Kreuz-Block bekannt -- fuer Tests und Aufrufer ohne echte Modell-Daten.
-    pub fn none() -> Self {
+    #[must_use] 
+    pub const fn none() -> Self {
         Self { per_state: Vec::new() }
     }
 
+    #[must_use] 
     pub fn is_cross(&self, state: u32) -> bool {
         self.per_state.get(state as usize).copied().unwrap_or(false)
     }

@@ -145,7 +145,7 @@ impl RecipeBook {
         out
     }
 
-    pub fn max_scroll(&self, anzahl: usize) -> usize {
+    pub const fn max_scroll(&self, anzahl: usize) -> usize {
         anzahl.div_ceil(COLS).saturating_sub(ROWS)
     }
 
@@ -183,7 +183,7 @@ pub struct Panel {
 impl Panel {
     // Links neben dem Fenster, oben buendig.
     pub fn beside(bg_x: f32, bg_y: f32, scale: f32) -> Self {
-        Panel { x: bg_x - (PANEL_W + GAP) * scale, y: bg_y, scale }
+        Self { x: bg_x - (PANEL_W + GAP) * scale, y: bg_y, scale }
     }
 
     pub fn contains(&self, px: f32, py: f32) -> bool {
@@ -216,7 +216,7 @@ impl Panel {
 
 // Wo der Knopf im Fenster sitzt (GUI-Pixel relativ zum Fenster), wie in Vanilla: im Inventar
 // rechts neben der Figur, an der Werkbank links vom Feld.
-pub fn button_offset(kante: i32) -> (f32, f32) {
+pub const fn button_offset(kante: i32) -> (f32, f32) {
     if kante == 2 { (104.0, 61.0) } else { (5.0, 34.0) }
 }
 

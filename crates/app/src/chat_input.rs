@@ -41,7 +41,7 @@ pub enum Move {
 // Cursor daran stand (Ruecktaste, Entf, Tastaturmarkierung -- nicht bei einer Mausmarkierung,
 // dort bleibt der Cursor, wo er war). Fuer das Herausfallen der Zeichen (s. main.rs,
 // erased_pieces): aus dem Text allein ist die Stelle oft nicht eindeutig.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Erased {
     pub start: usize,
     pub text: String,
@@ -91,7 +91,7 @@ impl ChatInput {
         &self.text
     }
 
-    pub fn cursor(&self) -> usize {
+    pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
@@ -102,12 +102,12 @@ impl ChatInput {
     }
 
     // Markierung aufheben (Strg+D).
-    pub fn deselect(&mut self) {
+    pub const fn deselect(&mut self) {
         self.anchor = None;
     }
 
     // Alles markieren (Strg+A): Anker am Anfang, Cursor am Ende.
-    pub fn select_all(&mut self) {
+    pub const fn select_all(&mut self) {
         self.anchor = Some(0);
         self.cursor = self.text.len();
     }
@@ -180,11 +180,11 @@ impl ChatInput {
         &self.suggestions
     }
 
-    pub fn selected(&self) -> usize {
+    pub const fn selected(&self) -> usize {
         self.selected
     }
 
-    pub fn has_suggestions(&self) -> bool {
+    pub const fn has_suggestions(&self) -> bool {
         !self.suggestions.is_empty()
     }
 

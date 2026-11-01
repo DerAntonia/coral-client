@@ -188,6 +188,7 @@ pub const ENTITY_TYPE_IS_LIVING: &[bool] = &[
 // .dimensions(...) aus dem Yarn-1.21.11-Jar, maschinell aus dem Jar ausgelesen (alle
 // 157 register-Aufrufe). Groessenabhaengige Wesen (Schleim, Babys) stehen mit ihrer
 // Grundgroesse drin.
+#[must_use] 
 pub fn vanilla_dimensions(name: &str) -> Option<(f64, f64)> {
     Some(match name {
         "acacia_boat" => (1.375, 0.5625),

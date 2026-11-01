@@ -30,49 +30,60 @@ pub const AIR: Voxel = 15 << 24;
 
 pub const FULL_SHAPE: u32 = 16 << 15 | 16 << 20 | 16 << 25;
 
+#[must_use] 
 pub fn voxel(state: u32, biome: u32) -> Voxel {
-    (state.min(0xFFFF) as u64) | ((biome.min(0xFF) as u64) << 16)
+    u64::from(state.min(0xFFFF)) | (u64::from(biome.min(0xFF)) << 16)
 }
 
+#[must_use] 
 pub fn with_light(v: Voxel, block: u8, sky: u8) -> Voxel {
-    (v & !(0xFF << 24)) | ((((block.min(15) << 4) | sky.min(15)) as u64) << 24)
+    (v & !(0xFF << 24)) | (u64::from((block.min(15) << 4) | sky.min(15)) << 24)
 }
 
+#[must_use] 
 pub fn with_shape(v: Voxel, shape: u32) -> Voxel {
-    (v & !(0x3FFF_FFFF << 32)) | ((shape as u64 & 0x3FFF_FFFF) << 32)
+    (v & !(0x3FFF_FFFF << 32)) | ((u64::from(shape) & 0x3FFF_FFFF) << 32)
 }
 
-pub fn state_of(v: Voxel) -> u32 {
+#[must_use] 
+pub const fn state_of(v: Voxel) -> u32 {
     (v & 0xFFFF) as u32
 }
 
-pub fn biome_of(v: Voxel) -> u32 {
+#[must_use] 
+pub const fn biome_of(v: Voxel) -> u32 {
     ((v >> 16) & 0xFF) as u32
 }
 
-pub fn light_of(v: Voxel) -> u8 {
+#[must_use] 
+pub const fn light_of(v: Voxel) -> u8 {
     ((v >> 24) & 0xFF) as u8
 }
 
-pub fn is_air(v: Voxel) -> bool {
+#[must_use] 
+pub const fn is_air(v: Voxel) -> bool {
     state_of(v) == 0
 }
 
 // Gespeicherte Form (0 = die des States, s. LodStates::shape).
-pub fn shape_bits(v: Voxel) -> u32 {
+#[must_use] 
+pub const fn shape_bits(v: Voxel) -> u32 {
     ((v >> 32) & 0x3FFF_FFFF) as u32
 }
 
 // Huellbox als [min x, min y, min z, max x, max y, max z] in 1/16.
+#[must_use] 
 pub fn unpack_shape(s: u32) -> [u32; 6] {
     std::array::from_fn(|i| (s >> (i * 5)) & 31)
 }
 
+#[must_use] 
 pub fn pack_shape(b: [u32; 6]) -> u32 {
     b.iter().enumerate().fold(0, |acc, (i, &v)| acc | (v.min(16) << (i * 5)))
 }
 
-pub fn index(x: usize, y: usize, z: usize) -> usize {
+#[must_use] 
+pub const fn index(x: usize, y: usize, z: usize) -> usize {
     (y * N + z) * N + x
 }
 
@@ -85,54 +96,63 @@ pub struct NodeKey {
 }
 
 impl NodeKey {
-    pub fn new(level: u8, x: i32, y: i32, z: i32) -> Self {
+    #[must_use] 
+    pub const fn new(level: u8, x: i32, y: i32, z: i32) -> Self {
         Self { level, x, y, z }
     }
 
     // Kantenlaenge in Bloecken.
-    pub fn size(&self) -> i64 {
+    #[must_use] 
+    pub const fn size(&self) -> i64 {
         (N as i64) << self.level
     }
 
     // Groesse eines Voxels in Bloecken.
-    pub fn voxel_size(&self) -> i64 {
+    #[must_use] 
+    pub const fn voxel_size(&self) -> i64 {
         1 << self.level
     }
 
     // Untere Ecke in Blockkoordinaten.
+    #[must_use] 
     pub fn origin(&self) -> [i64; 3] {
         let s = self.size();
-        [self.x as i64 * s, self.y as i64 * s, self.z as i64 * s]
+        [i64::from(self.x) * s, i64::from(self.y) * s, i64::from(self.z) * s]
     }
 
     // Arithmetisches Schieben rundet nach unten -- auch fuer negative Koordinaten richtig.
-    pub fn parent(&self) -> NodeKey {
-        NodeKey { level: self.level + 1, x: self.x >> 1, y: self.y >> 1, z: self.z >> 1 }
+    #[must_use] 
+    pub const fn parent(&self) -> Self {
+        Self { level: self.level + 1, x: self.x >> 1, y: self.y >> 1, z: self.z >> 1 }
     }
 
     // In welchem Oktanten des Elternknotens dieser Knoten liegt (je Achse 0 oder 1).
-    pub fn octant(&self) -> [usize; 3] {
+    #[must_use] 
+    pub const fn octant(&self) -> [usize; 3] {
         [(self.x & 1) as usize, (self.y & 1) as usize, (self.z & 1) as usize]
     }
 
-    pub fn children(&self) -> [NodeKey; 8] {
+    #[must_use] 
+    pub fn children(&self) -> [Self; 8] {
         debug_assert!(self.level > 0);
         let l = self.level - 1;
         let (x, y, z) = (self.x * 2, self.y * 2, self.z * 2);
-        std::array::from_fn(|i| NodeKey { level: l, x: x + (i & 1) as i32, y: y + ((i >> 1) & 1) as i32, z: z + ((i >> 2) & 1) as i32 })
+        std::array::from_fn(|i| Self { level: l, x: x + (i & 1) as i32, y: y + ((i >> 1) & 1) as i32, z: z + ((i >> 2) & 1) as i32 })
     }
 
     // Die sechs Nachbarn derselben Stufe in der Reihenfolge von mesh::FACES (unten, oben,
     // Norden, Sueden, Westen, Osten).
-    pub fn neighbors(&self) -> [NodeKey; 6] {
-        let k = |dx: i32, dy: i32, dz: i32| NodeKey { level: self.level, x: self.x + dx, y: self.y + dy, z: self.z + dz };
+    #[must_use] 
+    pub fn neighbors(&self) -> [Self; 6] {
+        let k = |dx: i32, dy: i32, dz: i32| Self { level: self.level, x: self.x + dx, y: self.y + dy, z: self.z + dz };
         [k(0, -1, 0), k(0, 1, 0), k(0, 0, -1), k(0, 0, 1), k(-1, 0, 0), k(1, 0, 0)]
     }
 
     // Der Knoten der Stufe 0, in dem ein Block liegt.
-    pub fn of_block(x: i64, y: i64, z: i64) -> NodeKey {
+    #[must_use] 
+    pub const fn of_block(x: i64, y: i64, z: i64) -> Self {
         let n = N as i64;
-        NodeKey { level: 0, x: x.div_euclid(n) as i32, y: y.div_euclid(n) as i32, z: z.div_euclid(n) as i32 }
+        Self { level: 0, x: x.div_euclid(n) as i32, y: y.div_euclid(n) as i32, z: z.div_euclid(n) as i32 }
     }
 }
 
@@ -148,10 +168,12 @@ impl Default for Node {
 }
 
 impl Node {
+    #[must_use] 
     pub fn empty() -> Self {
         Self { voxels: vec![AIR; VOLUME].into_boxed_slice() }
     }
 
+    #[must_use] 
     pub fn get(&self, x: usize, y: usize, z: usize) -> Voxel {
         self.voxels[index(x, y, z)]
     }
@@ -161,6 +183,7 @@ impl Node {
     }
 
     // Nur Luft? Dann wird der Knoten nicht gespeichert (sein Licht gilt dann als Himmel).
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.voxels.iter().all(|&v| is_air(v))
     }
@@ -174,7 +197,7 @@ impl Node {
     // Die Form ist die Huelle aller zaehlenden Kinder: eine Lage Schnee auf Gras ergibt einen
     // Voxel, der etwas mehr als halb hoch ist, statt eines vollen. Bleibt nur Luft, bekommt der
     // Voxel das hellste Licht seiner Kinder -- von weitem sieht man, wo es hell ist.
-    pub fn downsample_octant(&mut self, child: &Node, octant: [usize; 3], states: &LodStates) {
+    pub fn downsample_octant(&mut self, child: &Self, octant: [usize; 3], states: &LodStates) {
         let h = N / 2;
         let [ox, oy, oz] = octant.map(|o| o * h);
         for py in 0..h {
@@ -224,11 +247,12 @@ impl Node {
     // Platzsparend fuer die Platte: Palette der vorkommenden Voxel, dann je Voxel ein Index
     // (ein oder zwei Byte), alles mit Deflate gepackt. Ein typischer Knoten schrumpft so von
     // 256 KB auf wenige KB.
+    #[must_use] 
     pub fn encode(&self) -> Vec<u8> {
         let mut palette: Vec<Voxel> = Vec::new();
         let mut lookup: rustc_hash::FxHashMap<Voxel, u16> = rustc_hash::FxHashMap::default();
         let mut indices: Vec<u16> = Vec::with_capacity(VOLUME);
-        for &v in self.voxels.iter() {
+        for &v in &self.voxels {
             let i = *lookup.entry(v).or_insert_with(|| {
                 palette.push(v);
                 (palette.len() - 1) as u16
@@ -253,7 +277,8 @@ impl Node {
         enc.finish().expect("in den Speicher schreiben")
     }
 
-    pub fn decode(bytes: &[u8]) -> Option<Node> {
+    #[must_use] 
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
         let mut raw = Vec::new();
         std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(bytes), &mut raw).ok()?;
         if raw.len() < 5 {
@@ -266,14 +291,14 @@ impl Node {
             1 => (0..count)
                 .map(|i| {
                     let v = u32::from_le_bytes(raw.get(at + i * 4..at + i * 4 + 4)?.try_into().ok()?);
-                    Some(if v & 0xFFFF == 0 { AIR } else { v as u64 })
+                    Some(if v & 0xFFFF == 0 { AIR } else { u64::from(v) })
                 })
                 .collect::<Option<_>>()?,
             FORMAT_VERSION => (0..count).map(|i| Some(u64::from_le_bytes(raw.get(at + i * 8..at + i * 8 + 8)?.try_into().ok()?))).collect::<Option<_>>()?,
             _ => return None,
         };
         at += count * if raw[0] == 1 { 4 } else { 8 };
-        let mut node = Node::empty();
+        let mut node = Self::empty();
         match count {
             0 => {}
             1 => node.voxels.fill(palette[0]),
@@ -384,7 +409,7 @@ mod tests {
         raw.extend_from_slice(&2u32.to_le_bytes());
         raw.extend_from_slice(&0u32.to_le_bytes());
         raw.extend_from_slice(&(7u32 | 3 << 16).to_le_bytes());
-        raw.extend((0..VOLUME).map(|i| (i == 5) as u8));
+        raw.extend((0..VOLUME).map(|i| u8::from(i == 5)));
         let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
         std::io::Write::write_all(&mut enc, &raw).unwrap();
         let n = Node::decode(&enc.finish().unwrap()).unwrap();

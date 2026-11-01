@@ -88,11 +88,11 @@ pub fn weapon_damage(item: Option<&str>) -> f64 {
 // (0 = Stufe I), None = Effekt nicht aktiv.
 pub fn can_destroy_crystal(main_hand: Option<&str>, weakness: Option<i32>, strength: Option<i32>) -> bool {
     let Some(weakness) = weakness else { return true };
-    let weakness_penalty = 4.0 * (weakness + 1) as f64;
+    let weakness_penalty = 4.0 * f64::from(weakness + 1);
     if BASE_ATTACK_DAMAGE > weakness_penalty + 5.0 {
         return true;
     }
-    let strength_bonus = strength.map_or(0.0, |s| 3.0 * (s + 1) as f64);
+    let strength_bonus = strength.map_or(0.0, |s| 3.0 * f64::from(s + 1));
     let total = (BASE_ATTACK_DAMAGE + weapon_damage(main_hand) + strength_bonus - weakness_penalty).max(0.0);
     total > 0.0
 }

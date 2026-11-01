@@ -18,7 +18,8 @@ use crate::chunk::{is_solid, ChunkSection, SECTION_SIZE};
 pub type SectionVis = u64;
 pub const VIS_ALL: SectionVis = (1 << 36) - 1;
 
-pub fn sees_through(vis: SectionVis, from: usize, to: usize) -> bool {
+#[must_use] 
+pub const fn sees_through(vis: SectionVis, from: usize, to: usize) -> bool {
     vis & (1 << (from * 6 + to)) != 0
 }
 
@@ -54,7 +55,7 @@ const N: usize = SECTION_SIZE as usize;
 const VOLUME: usize = N * N * N;
 
 // Welche Seiten der Section die Zelle beruehrt, als Bitmaske.
-fn faces_of(x: usize, y: usize, z: usize) -> u8 {
+const fn faces_of(x: usize, y: usize, z: usize) -> u8 {
     let mut m = 0;
     if y == 0 {
         m |= 1 << 0;

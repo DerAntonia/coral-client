@@ -16,7 +16,9 @@
 // mit drei einzelnen f32 -- ein vec3 waere auf 16 ausgerichtet und machte daraus 32 Byte.
 struct ColorSettings {
     saturation: f32,
-    _pad0: f32,
+    // Hand-Debug (s. Settings::module_hand_debug): das Bild verkleinert in einen Viewport links
+    // oben -- gelesen wird dann an Pixel / scale. 0 heisst unveraendert (1).
+    scale: f32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -37,7 +39,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let c = textureLoad(src, vec2<i32>(in.clip_position.xy), 0);
+    let scale = select(1.0, settings.scale, settings.scale > 0.0);
+    let c = textureLoad(src, vec2<i32>(in.clip_position.xy / scale), 0);
     let luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     let rgb = clamp(mix(vec3<f32>(luma), c.rgb, settings.saturation), vec3<f32>(0.0), vec3<f32>(1.0));
     return vec4<f32>(rgb, c.a);

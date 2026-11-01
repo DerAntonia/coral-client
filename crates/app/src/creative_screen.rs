@@ -21,7 +21,7 @@ const WHITE: [f32; 4] = [1.0; 4];
 impl App {
     // Zeigt das offene Inventar gerade das Kreativinventar? Nur im Kreativmodus, ohne
     // Container und sobald die Tabs da sind.
-    pub(crate) fn creative_shown(&self) -> bool {
+    pub(crate) const fn creative_shown(&self) -> bool {
         self.inventory.screen_open && self.inventory.open.is_none() && self.game_mode == GAME_MODE_CREATIVE && self.creative.ready()
     }
 
@@ -164,7 +164,7 @@ impl App {
                 let mut sx = if right_aligned { x - breite } else { x };
                 for span in zeile {
                     let w = gpu.measure_text(&span.text, UI_SCALE_SMALL);
-                    let color = span.color.map(rgb_to_rgba).unwrap_or(WHITE);
+                    let color = span.color.map_or(WHITE, rgb_to_rgba);
                     crate::push_span_shadow(texts, span.shadow);
                     texts.push(UiText { text: span.text, x: sx.round(), y: y.round(), color, scale: UI_SCALE_SMALL });
                     sx += w;

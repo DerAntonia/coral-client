@@ -42,13 +42,15 @@ pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME_SIZE: usize = 960;
 pub const MAX_OPUS_PAYLOAD: usize = 1275;
 
+#[must_use] 
 pub fn request_secret_payload() -> Vec<u8> {
     COMPATIBILITY_VERSION.to_be_bytes().to_vec()
 }
 
 // Eigener Zustand: `disabled` = Sprachchat stumm geschaltet (nichts hoeren, nichts senden).
+#[must_use] 
 pub fn update_state_payload(disabled: bool) -> Vec<u8> {
-    vec![disabled as u8]
+    vec![u8::from(disabled)]
 }
 
 // Antwort des Servers auf request_secret: alles, was die UDP-Verbindung braucht.
@@ -92,6 +94,7 @@ impl SecretInfo {
     // Wohin die UDP-Pakete gehen (InitializationData.parseAddress): ohne voice_host der
     // Minecraft-Server mit dem mitgeteilten Port; eine reine Zahl ersetzt nur den Port; sonst
     // Host und optional Port aus "host[:port]".
+    #[must_use] 
     pub fn voice_address(&self, server_host: &str) -> (String, u16) {
         let port = u16::try_from(self.port).unwrap_or(24454);
         let host = self.voice_host.trim();
@@ -117,7 +120,7 @@ impl SecretInfo {
 }
 
 // Zustand eines Spielers im Sprachchat.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayerState {
     pub disabled: bool,
     pub disconnected: bool,
@@ -216,15 +219,16 @@ fn read_bytes(r: &mut PacketReader, max: usize) -> Result<Vec<u8>, ReadError> {
 
 impl UdpPacket {
     // Klartext des verschluesselten Blocks: Typ-Byte + Felder.
+    #[must_use] 
     pub fn encode(&self) -> Vec<u8> {
         let mut w = PacketWriter::new();
         match self {
-            UdpPacket::Mic { data, sequence, whisper } => {
+            Self::Mic { data, sequence, whisper } => {
                 w.write_u8(ID_MIC);
                 write_bytes(&mut w, data);
                 w.write_i64(*sequence).write_bool(*whisper);
             }
-            UdpPacket::Sound(s) => {
+            Self::Sound(s) => {
                 let id = match s.source {
                     SoundSource::Player { .. } => ID_PLAYER_SOUND,
                     SoundSource::Group => ID_GROUP_SOUND,
@@ -254,33 +258,33 @@ impl UdpPacket {
                     w.write_string(c);
                 }
             }
-            UdpPacket::Authenticate { player, secret } => {
+            Self::Authenticate { player, secret } => {
                 w.write_u8(ID_AUTHENTICATE).write_uuid(*player).write_raw_bytes(secret);
             }
-            UdpPacket::AuthenticateAck => {
+            Self::AuthenticateAck => {
                 w.write_u8(ID_AUTHENTICATE_ACK);
             }
-            UdpPacket::Ping { id, timestamp } => {
+            Self::Ping { id, timestamp } => {
                 w.write_u8(ID_PING).write_uuid(*id).write_i64(*timestamp);
             }
-            UdpPacket::KeepAlive => {
+            Self::KeepAlive => {
                 w.write_u8(ID_KEEP_ALIVE);
             }
-            UdpPacket::ConnectionCheck => {
+            Self::ConnectionCheck => {
                 w.write_u8(ID_CONNECTION_CHECK);
             }
-            UdpPacket::ConnectionCheckAck => {
+            Self::ConnectionCheckAck => {
                 w.write_u8(ID_CONNECTION_CHECK_ACK);
             }
         }
         w.into_bytes()
     }
 
-    pub fn decode(plain: &[u8]) -> Result<UdpPacket, ReadError> {
+    pub fn decode(plain: &[u8]) -> Result<Self, ReadError> {
         let mut r = PacketReader::new(plain);
         let id = r.read_u8()?;
         Ok(match id {
-            ID_MIC => UdpPacket::Mic { data: read_bytes(&mut r, MAX_OPUS_PAYLOAD)?, sequence: r.read_i64()?, whisper: r.read_bool()? },
+            ID_MIC => Self::Mic { data: read_bytes(&mut r, MAX_OPUS_PAYLOAD)?, sequence: r.read_i64()?, whisper: r.read_bool()? },
             ID_PLAYER_SOUND | ID_GROUP_SOUND | ID_LOCATION_SOUND => {
                 let channel = r.read_uuid()?;
                 let sender = r.read_uuid()?;
@@ -295,25 +299,26 @@ impl UdpPacket {
                     (ID_LOCATION_SOUND, Some(pos)) => SoundSource::Location { pos, distance },
                     _ => SoundSource::Group,
                 };
-                UdpPacket::Sound(Sound { channel, sender, data, sequence, source, category })
+                Self::Sound(Sound { channel, sender, data, sequence, source, category })
             }
             ID_AUTHENTICATE => {
                 let player = r.read_uuid()?;
                 let mut secret = [0u8; 16];
                 secret.copy_from_slice(r.read_bytes(16)?);
-                UdpPacket::Authenticate { player, secret }
+                Self::Authenticate { player, secret }
             }
-            ID_AUTHENTICATE_ACK => UdpPacket::AuthenticateAck,
-            ID_PING => UdpPacket::Ping { id: r.read_uuid()?, timestamp: r.read_i64()? },
-            ID_KEEP_ALIVE => UdpPacket::KeepAlive,
-            ID_CONNECTION_CHECK => UdpPacket::ConnectionCheck,
-            ID_CONNECTION_CHECK_ACK => UdpPacket::ConnectionCheckAck,
+            ID_AUTHENTICATE_ACK => Self::AuthenticateAck,
+            ID_PING => Self::Ping { id: r.read_uuid()?, timestamp: r.read_i64()? },
+            ID_KEEP_ALIVE => Self::KeepAlive,
+            ID_CONNECTION_CHECK => Self::ConnectionCheck,
+            ID_CONNECTION_CHECK_ACK => Self::ConnectionCheckAck,
             _ => return Err(ReadError),
         })
     }
 }
 
 // Datagramm Client -> Server: 0xFF, eigene UUID, verschluesselter Block mit Laenge.
+#[must_use] 
 pub fn client_datagram(player: Uuid, encrypted: &[u8]) -> Vec<u8> {
     let mut w = PacketWriter::new();
     w.write_u8(MAGIC).write_uuid(player);

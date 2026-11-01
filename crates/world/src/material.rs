@@ -47,6 +47,7 @@ fn kupfer(name: &str) -> Option<Material> {
     }
 }
 
+#[must_use] 
 pub fn material(name: &str) -> Option<Material> {
     if let Some(k) = kupfer(name) {
         return Some(k);

@@ -244,6 +244,7 @@ impl VoxelClasses {
         Self { class_of_state, headers, boxes, cross_uvs, state_info }
     }
 
+    #[must_use] 
     pub fn class(&self, state: u32) -> u16 {
         self.class_of_state.get(state as usize).copied().unwrap_or(CLASS_AIR)
     }
@@ -270,7 +271,7 @@ impl VoxelClasses {
         match section {
             Some(section) => {
                 for (o, &s) in out.iter_mut().zip(section.states()) {
-                    *o = s.min(u16::MAX as u32) as u16;
+                    *o = s.min(u32::from(u16::MAX)) as u16;
                 }
             }
             None => out.fill(0),

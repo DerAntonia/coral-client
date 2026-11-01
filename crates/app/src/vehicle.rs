@@ -138,7 +138,7 @@ fn water_at(world: &World, x: i32, y: i32, z: i32) -> Option<(f64, bool)> {
 
 impl BoatSim {
     #[cfg(test)]
-    pub fn location(&self) -> Option<BoatLocation> {
+    pub const fn location(&self) -> Option<BoatLocation> {
         self.location
     }
 
@@ -194,7 +194,7 @@ impl BoatSim {
             for y in hi.y.floor() as i32..d.ceil() as i32 {
                 for z in lo.z.floor() as i32..hi.z.ceil() as i32 {
                     if let Some((h, still)) = water_at(world, x, y, z) {
-                        if d < y as f64 + h {
+                        if d < f64::from(y) + h {
                             if !still {
                                 return Some(BoatLocation::UnderFlowingWater);
                             }
@@ -216,7 +216,7 @@ impl BoatSim {
                 for z in lo.z.floor() as i32..hi.z.ceil() as i32 {
                     if let Some((h, _)) = water_at(world, x, y, z) {
                         // Vanilla rechnet die Oberflaeche als float.
-                        let f = (y as f32 + h as f32) as f64;
+                        let f = f64::from(y as f32 + h as f32);
                         self.water_level = self.water_level.max(f);
                         drin |= lo.y < f;
                     }
@@ -247,10 +247,10 @@ impl BoatSim {
                 }
             }
             if f < 1.0 {
-                return (y as f32 + f) as f64;
+                return f64::from(y as f32 + f);
             }
         }
-        (l + 1) as f64
+        f64::from(l + 1)
     }
 
     // updateVelocity: Schwerkraft, Auftrieb und Reibung je nach Lage.
@@ -282,7 +282,7 @@ impl BoatSim {
                 f = 0.9;
             }
             BoatLocation::UnderWater => {
-                e = 0.01f32 as f64;
+                e = f64::from(0.01f32);
                 f = 0.45;
             }
             BoatLocation::InAir => f = 0.9,
@@ -295,7 +295,7 @@ impl BoatSim {
                 }
             }
         }
-        self.vel = DVec3::new(self.vel.x * f as f64, self.vel.y + d, self.vel.z * f as f64);
+        self.vel = DVec3::new(self.vel.x * f64::from(f), self.vel.y + d, self.vel.z * f64::from(f));
         self.yaw_velocity *= f;
         if e > 0.0 {
             self.vel.y = (self.vel.y + e * (BOAT_GRAVITY / 0.65)) * 0.75;
@@ -322,9 +322,9 @@ impl BoatSim {
             f -= 0.005;
         }
         let rad = std::f32::consts::PI / 180.0;
-        let sx = physics::mc_sin((-*yaw * rad) as f64) * f;
-        let cz = physics::mc_cos((*yaw * rad) as f64) * f;
-        self.vel += DVec3::new(sx as f64, 0.0, cz as f64);
+        let sx = physics::mc_sin(f64::from(-*yaw * rad)) * f;
+        let cz = physics::mc_cos(f64::from(*yaw * rad)) * f;
+        self.vel += DVec3::new(f64::from(sx), 0.0, f64::from(cz));
         self.paddles = (input.right && !input.left || input.forward, input.left && !input.right || input.forward);
     }
 
@@ -390,7 +390,7 @@ fn nearby_slipperiness(lo: DVec3, hi: DVec3, world: &World, shapes: &world::Bloc
     let mut zahl = 0u32;
     for x in i..j {
         for z in m..n {
-            let rand = (x == i || x == j - 1) as u8 + (z == m || z == n - 1) as u8;
+            let rand = u8::from(x == i || x == j - 1) + u8::from(z == m || z == n - 1);
             if rand == 2 {
                 continue;
             }
@@ -459,7 +459,7 @@ mod tests {
         }
         // Gleichgewicht: (-0.04 + e * 0.04 / 0.65) * 0.75 = 0, also e = 0.65 -- die Unterkante
         // liegt 0.65 Bootshoehen unter der Oberflaeche.
-        let oberflaeche = (63.0f32 + 8.0 / 9.0) as f64;
+        let oberflaeche = f64::from(63.0f32 + 8.0 / 9.0);
         assert!((pos.y - (oberflaeche - 0.65 * BOAT_HEIGHT)).abs() < 1e-3, "y = {}", pos.y);
         assert_eq!(sim.location(), Some(BoatLocation::InWater));
         assert!(sim.vel.y.abs() < 0.01);

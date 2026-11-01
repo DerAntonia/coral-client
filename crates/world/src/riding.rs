@@ -23,6 +23,7 @@ pub struct Seat {
 // je Tick setzt. `vehicle_yaw_deg` ist die Drehung des Fahrzeugs, nicht die seines Kopfes;
 // `vehicle_height` die Hoehe seiner Box in der aktuellen Pose (ein schleichender Spieler ist
 // niedriger, und der Standard-Sitz ist "oben auf der Box").
+#[must_use] 
 pub fn riding_pos(vehicle: &str, vehicle_height: f64, vehicle_pos: [f64; 3], vehicle_yaw_deg: f32, seat: Seat, passenger: &str) -> [f64; 3] {
     let p = passenger_offset(vehicle, vehicle_height, vehicle_yaw_deg, seat, passenger);
     let v = vehicle_attachment_y(passenger);
@@ -30,6 +31,7 @@ pub fn riding_pos(vehicle: &str, vehicle_height: f64, vehicle_pos: [f64; 3], veh
 }
 
 // Der PASSENGER-Anker des Fahrzeugs fuer diesen Sitz, schon mit dem Fahrzeug gedreht.
+#[must_use] 
 pub fn passenger_offset(vehicle: &str, hoehe: f64, vehicle_yaw_deg: f32, seat: Seat, passenger: &str) -> [f64; 3] {
     if let Some(boot) = boat_kind(vehicle) {
         // AbstractBoatEntity.getPassengerAttachmentPos: allein mittig (Kistenboote 0.15 nach
@@ -43,7 +45,7 @@ pub fn passenger_offset(vehicle: &str, hoehe: f64, vehicle_yaw_deg: f32, seat: S
             }
         }
         // Boote sitzen auf einem Drittel ihrer Hoehe, Floesse fast oben (8/9).
-        let y = if boot.raft { hoehe * (0.888_888_9_f32 as f64) } else { hoehe / 3.0 };
+        let y = if boot.raft { hoehe * f64::from(0.888_888_9_f32) } else { hoehe / 3.0 };
         return rotate_yaw([0.0, y, vorn], vehicle_yaw_deg);
     }
     if matches!(vehicle, "camel" | "camel_husk") {
@@ -74,9 +76,10 @@ pub fn passenger_offset(vehicle: &str, hoehe: f64, vehicle_yaw_deg: f32, seat: S
 }
 
 // Vec3d.rotateY(-yaw * pi/180), in f32 wie Vanilla (rotateY nimmt einen float-Winkel).
+#[must_use] 
 pub fn rotate_yaw(p: [f64; 3], yaw_deg: f32) -> [f64; 3] {
     let winkel = -yaw_deg * (std::f32::consts::PI / 180.0);
-    let (c, s) = (winkel.cos() as f64, winkel.sin() as f64);
+    let (c, s) = (f64::from(winkel.cos()), f64::from(winkel.sin()));
     [p[0] * c + p[2] * s, p[1], p[2] * c - p[0] * s]
 }
 
@@ -87,6 +90,7 @@ pub struct BoatKind {
 }
 
 // Boote und Floesse (mit und ohne Kiste) -- alles, was AbstractBoatEntity ist.
+#[must_use] 
 pub fn boat_kind(name: &str) -> Option<BoatKind> {
     if name.ends_with("_chest_raft") {
         Some(BoatKind { raft: true, chest: true })
@@ -101,6 +105,7 @@ pub fn boat_kind(name: &str) -> Option<BoatKind> {
     }
 }
 
+#[must_use] 
 pub fn is_minecart(name: &str) -> bool {
     name == "minecart" || name.ends_with("_minecart")
 }
@@ -125,6 +130,7 @@ pub enum Steering {
 
 // Welche Art Lenkung der Typ ueberhaupt kennt (ob sie gerade greift -- Sattel, Rute -- haengt
 // am Zustand und steht in Steering-Pruefungen beim Aufrufer).
+#[must_use] 
 pub fn steering_kind(vehicle: &str) -> Option<Steering> {
     if boat_kind(vehicle).is_some() {
         return Some(Steering::Boat);
@@ -141,6 +147,7 @@ pub fn steering_kind(vehicle: &str) -> Option<Steering> {
 // AnimalEntity und alles darunter -- maschinell aus der Klassenhierarchie des Jars (fuer jede
 // Registrierung die Oberklassen-Kette bis AnimalEntity). Zaehlt nur fuer die Sitzordnung in
 // Booten und auf Kamelen.
+#[must_use] 
 pub fn is_animal(name: &str) -> bool {
     matches!(
         name,
@@ -151,6 +158,7 @@ pub fn is_animal(name: &str) -> bool {
 }
 
 // PASSENGER-Anker aus EntityType.Builder.passengerAttachments, je Sitz ein Punkt.
+#[must_use] 
 pub fn passenger_points(name: &str) -> Option<&'static [[f64; 3]]> {
     Some(match name {
         "cat" => &[[0.0, 0.5125, 0.0]],
@@ -216,6 +224,7 @@ pub fn passenger_points(name: &str) -> Option<&'static [[f64; 3]]> {
 
 // VEHICLE-Anker aus EntityType.Builder.vehicleAttachment -- immer senkrecht, also nur Y.
 // Spieler und Puppen: PlayerLikeEntity.VEHICLE_ATTACHMENT.
+#[must_use] 
 pub fn vehicle_attachment_y(name: &str) -> f64 {
     match name {
         "allay" => 0.04,

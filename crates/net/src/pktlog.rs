@@ -43,10 +43,10 @@ pub enum Dir {
 }
 
 impl Dir {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
-            Dir::C2S => "C2S",
-            Dir::S2C => "S2C",
+            Self::C2S => "C2S",
+            Self::S2C => "S2C",
         }
     }
 }
@@ -288,11 +288,10 @@ fn describe(dir: Dir, id: i32, body: &[u8]) -> String {
         // Nur die Entity-ID (erstes Feld aller dieser Pakete). Die Deltas selbst sind fuer die
         // Frage, wie OFT ein bestimmtes Entity geschickt wird, ohne Belang -- und ohne ID laesst
         // sich die Summe ueber alle Entities nicht auf einzelne herunterrechnen.
-        (Dir::S2C, packets::CB_PLAY_MOVE_ENTITY_POS)
-        | (Dir::S2C, packets::CB_PLAY_MOVE_ENTITY_POS_ROT)
-        | (Dir::S2C, packets::CB_PLAY_MOVE_ENTITY_ROT)
-        | (Dir::S2C, packets::CB_PLAY_ENTITY_POSITION_SYNC)
-        | (Dir::S2C, packets::CB_PLAY_ROTATE_HEAD) => match decode_varint(body, 0) {
+        (Dir::S2C,
+packets::CB_PLAY_MOVE_ENTITY_POS | packets::CB_PLAY_MOVE_ENTITY_POS_ROT |
+packets::CB_PLAY_MOVE_ENTITY_ROT | packets::CB_PLAY_ENTITY_POSITION_SYNC |
+packets::CB_PLAY_ROTATE_HEAD) => match decode_varint(body, 0) {
             Ok((entity, _)) => format!("entity={entity}"),
             Err(_) => String::new(),
         },

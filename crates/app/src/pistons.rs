@@ -33,11 +33,11 @@ const UP: u8 = 1;
 // Hoechstens so viele Bloecke schiebt ein Kolben.
 const MAX_PUSH: usize = 12;
 
-fn opposite(d: u8) -> u8 {
+const fn opposite(d: u8) -> u8 {
     d ^ 1
 }
 
-fn axis(d: u8) -> usize {
+const fn axis(d: u8) -> usize {
     match d {
         0 | 1 => 1,
         2 | 3 => 2,
@@ -45,12 +45,12 @@ fn axis(d: u8) -> usize {
     }
 }
 
-fn rel(p: Pos, d: u8, n: i32) -> Pos {
+const fn rel(p: Pos, d: u8, n: i32) -> Pos {
     let s = STEP[d as usize];
     (p.0 + s.0 * n, p.1 + s.1 * n, p.2 + s.2 * n)
 }
 
-fn step_vec(d: u8) -> DVec3 {
+const fn step_vec(d: u8) -> DVec3 {
     let s = STEP[d as usize];
     DVec3::new(s.0 as f64, s.1 as f64, s.2 as f64)
 }
@@ -141,7 +141,7 @@ fn state_of(block: &str, props: &[(&str, &str)]) -> Option<u32> {
     Some(s)
 }
 
-fn air() -> u32 {
+const fn air() -> u32 {
     world::STATE_AIR
 }
 
@@ -165,7 +165,7 @@ fn max_y(world: &World, x: i32, z: i32) -> i32 {
 // PistonBaseBlock.isPushable.
 fn is_pushable(world: &World, state: u32, pos: Pos, move_dir: u8, allow_destroy: bool, piston_facing: u8) -> bool {
     let top = max_y(world, pos.0, pos.2);
-    if pos.1 < world.min_y() || pos.1 > top || !world.border.is_within_bounds(pos.0 as f64, pos.2 as f64, 0.0) {
+    if pos.1 < world.min_y() || pos.1 > top || !world.border.is_within_bounds(f64::from(pos.0), f64::from(pos.2), 0.0) {
         return false;
     }
     if is_air(state) {
@@ -208,7 +208,7 @@ struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
-    fn new(world: &'a World, piston: Pos, facing: u8, extending: bool) -> Self {
+    const fn new(world: &'a World, piston: Pos, facing: u8, extending: bool) -> Self {
         let (push, start) = if extending { (facing, rel(piston, facing, 1)) } else { (opposite(facing), rel(piston, facing, 2)) };
         Self { world, piston, piston_facing: facing, push, start, to_push: Vec::new(), to_destroy: Vec::new(), extending }
     }
@@ -348,11 +348,11 @@ pub struct MovingBlock {
 }
 
 impl MovingBlock {
-    fn new(pos: Pos, moved: u32, facing: u8, extending: bool, source: bool) -> Self {
+    const fn new(pos: Pos, moved: u32, facing: u8, extending: bool, source: bool) -> Self {
         Self { pos, moved, facing, extending, source, progress: 0.0, progress_old: 0.0, death_ticks: 0 }
     }
 
-    pub fn movement(&self) -> u8 {
+    pub const fn movement(&self) -> u8 {
         if self.extending {
             self.facing
         } else {
@@ -371,7 +371,7 @@ impl MovingBlock {
     // Versatz gegenueber der Zielzelle, mit dem Teilschritt zwischen zwei Ticks.
     pub fn offset(&self, partial: f32) -> DVec3 {
         let p = self.progress_old + (self.progress - self.progress_old) * partial.min(1.0);
-        step_vec(self.facing) * self.extended_progress(p) as f64
+        step_vec(self.facing) * f64::from(self.extended_progress(p))
     }
 
     fn sticky_piston(&self) -> bool {
@@ -411,11 +411,11 @@ impl MovingBlock {
 
     // getCollisionShape als Weltboxen (s. World::moving_boxes).
     fn collision(&self, shapes: &world::BlockShapes, out: &mut Vec<world::MovingBox>) {
-        let zelle = DVec3::new(self.pos.0 as f64, self.pos.1 as f64, self.pos.2 as f64);
+        let zelle = DVec3::new(f64::from(self.pos.0), f64::from(self.pos.1), f64::from(self.pos.2));
         let boxen = |state: u32, versatz: DVec3, noclip: Option<u8>, out: &mut Vec<world::MovingBox>| {
             for b in world::collision_boxes_at(state, shapes, self.pos.1, world::ShapeContext::ABSENT) {
-                let min = zelle + versatz + DVec3::new(b.min[0] as f64, b.min[1] as f64, b.min[2] as f64);
-                let max = zelle + versatz + DVec3::new(b.max[0] as f64, b.max[1] as f64, b.max[2] as f64);
+                let min = zelle + versatz + DVec3::new(f64::from(b.min[0]), f64::from(b.min[1]), f64::from(b.min[2]));
+                let max = zelle + versatz + DVec3::new(f64::from(b.max[0]), f64::from(b.max[1]), f64::from(b.max[2]));
                 out.push(world::MovingBox { min: min.to_array(), max: max.to_array(), noclip });
             }
         };
@@ -432,7 +432,7 @@ impl MovingBlock {
             Some(self.moved)
         };
         let Some(state) = state else { return };
-        let versatz = step_vec(self.facing) * self.extended_progress(self.progress) as f64;
+        let versatz = step_vec(self.facing) * f64::from(self.extended_progress(self.progress));
         let noclip = (self.progress < 1.0).then_some(self.movement());
         boxen(state, versatz, noclip, out);
     }
@@ -446,16 +446,16 @@ struct Aabb {
 }
 
 impl Aabb {
-    fn intersects(&self, o: &Aabb) -> bool {
+    fn intersects(&self, o: &Self) -> bool {
         self.min.x < o.max.x && self.max.x > o.min.x && self.min.y < o.max.y && self.max.y > o.min.y && self.min.z < o.max.z && self.max.z > o.min.z
     }
 
-    fn union(&self, o: &Aabb) -> Aabb {
-        Aabb { min: self.min.min(o.min), max: self.max.max(o.max) }
+    fn union(&self, o: &Self) -> Self {
+        Self { min: self.min.min(o.min), max: self.max.max(o.max) }
     }
 
-    fn intersect(&self, o: &Aabb) -> Aabb {
-        Aabb { min: self.min.max(o.min), max: self.max.min(o.max) }
+    fn intersect(&self, o: &Self) -> Self {
+        Self { min: self.min.max(o.min), max: self.max.min(o.max) }
     }
 }
 
@@ -675,14 +675,14 @@ fn player_box(p: &PlayerPhysics) -> Aabb {
 
 // moveByPositionAndProgress: eine zellrelative Box an die aktuelle Stelle des Blocks.
 fn placed(m: &MovingBlock, b: &world::ShapeBox) -> Aabb {
-    let lokal = |v: [f32; 3]| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64);
+    let lokal = |v: [f32; 3]| DVec3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
     placed_raw(m, lokal(b.min), lokal(b.max))
 }
 
 fn placed_raw(m: &MovingBlock, min: DVec3, max: DVec3) -> Aabb {
-    let d = m.extended_progress(m.progress) as f64;
+    let d = f64::from(m.extended_progress(m.progress));
     let s = step_vec(m.facing);
-    let o = DVec3::new(m.pos.0 as f64 + d * s.x, m.pos.1 as f64 + d * s.y, m.pos.2 as f64 + d * s.z);
+    let o = DVec3::new(f64::from(m.pos.0) + d * s.x, f64::from(m.pos.1) + d * s.y, f64::from(m.pos.2) + d * s.z);
     Aabb { min: o + min, max: o + max }
 }
 
@@ -695,7 +695,7 @@ fn move_by_piston(noclip: u8, player: &mut PlayerPhysics, amount: f64, dir: u8, 
 // moveCollidedEntities fuer den eigenen Spieler.
 fn push_player(m: &MovingBlock, ziel: f32, world: &World, shapes: &world::BlockShapes, player: &mut PlayerPhysics, game_tick: u64) {
     let dir = m.movement();
-    let d = (ziel - m.progress) as f64;
+    let d = f64::from(ziel - m.progress);
     let boxen = world::collision_boxes_at(m.push_state(), shapes, m.pos.1, world::ShapeContext::ABSENT);
     let Some(erste) = boxen.first() else { return };
     let grenzen = boxen.iter().skip(1).fold(placed(m, erste), |a, b| a.union(&placed(m, b)));
@@ -732,7 +732,7 @@ fn push_player(m: &MovingBlock, ziel: f32, world: &World, shapes: &world::BlockS
 // geschoben.
 fn fix_within_base(pos: Pos, player: &mut PlayerPhysics, dir: u8, d: f64, world: &World, shapes: &world::BlockShapes, game_tick: u64) {
     let spieler = player_box(player);
-    let zelle = Aabb { min: DVec3::new(pos.0 as f64, pos.1 as f64, pos.2 as f64), max: DVec3::new(pos.0 as f64 + 1.0, pos.1 as f64 + 1.0, pos.2 as f64 + 1.0) };
+    let zelle = Aabb { min: DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)), max: DVec3::new(f64::from(pos.0) + 1.0, f64::from(pos.1) + 1.0, f64::from(pos.2) + 1.0) };
     if !spieler.intersects(&zelle) {
         return;
     }
@@ -754,10 +754,10 @@ fn carry_player(m: &MovingBlock, ziel: f32, world: &World, shapes: &world::Block
     if axis(dir) == 1 {
         return;
     }
-    let oben = world::collision_boxes_at(m.moved, shapes, m.pos.1, world::ShapeContext::ABSENT).iter().map(|b| b.max[1] as f64).fold(0.0, f64::max);
+    let oben = world::collision_boxes_at(m.moved, shapes, m.pos.1, world::ShapeContext::ABSENT).iter().map(|b| f64::from(b.max[1])).fold(0.0, f64::max);
     // Die Obergrenze ist in Vanilla 1.500001, nicht exakt anderthalb.
     let bereich = placed_raw(m, DVec3::new(0.0, oben, 0.0), DVec3::new(1.0, 1.500001, 1.0));
-    let d = (ziel - m.progress) as f64;
+    let d = f64::from(ziel - m.progress);
     let p = player.pos;
     let steht = player.on_ground && p.x >= bereich.min.x && p.x <= bereich.max.x && p.z >= bereich.min.z && p.z <= bereich.max.z;
     if steht && bereich.intersects(&player_box(player)) {

@@ -26,7 +26,7 @@ use std::sync::{OnceLock, RwLock};
 use crate::block_registry::block_name;
 
 // Die Blockmenge einer Werkzeugregel -- ein Tag oder eine feste Liste (Block-Roh-IDs).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockSet {
     Tag(String),
     Ids(Vec<u32>),
@@ -116,20 +116,24 @@ fn parse(text: &str) -> Data {
 }
 
 // Block-Roh-ID eines Zustands (Registry-Reihenfolge).
+#[must_use] 
 pub fn block_id(state: u32) -> Option<u32> {
     data().block_ids.get(block_name(state)?).copied()
 }
 
 // Haerte des Blocks; -1 = unzerstoerbar.
+#[must_use] 
 pub fn hardness(state: u32) -> f32 {
     block_id(state).map_or(0.0, |id| data().hardness[id as usize])
 }
 
+#[must_use] 
 pub fn requires_tool(state: u32) -> bool {
     block_id(state).is_some_and(|id| data().requires_tool[id as usize])
 }
 
 // Das Werkzeug-Component eines Items ab Werk.
+#[must_use] 
 pub fn default_tool(item: &str) -> Option<&'static Tool> {
     data().tools.get(item)
 }
@@ -168,6 +172,7 @@ fn set_contains(set: &BlockSet, block: u32) -> bool {
 
 impl BlockSet {
     // Liegt der Block dieses Zustands in der Menge?
+    #[must_use] 
     pub fn contains_state(&self, state: u32) -> bool {
         block_id(state).is_some_and(|b| set_contains(self, b))
     }
@@ -175,6 +180,7 @@ impl BlockSet {
 
 impl Tool {
     // ToolComponent.getSpeed.
+    #[must_use] 
     pub fn speed(&self, state: u32) -> f32 {
         let Some(block) = block_id(state) else { return self.default_speed };
         self.rules
@@ -185,6 +191,7 @@ impl Tool {
     }
 
     // ToolComponent.isCorrectForDrops.
+    #[must_use] 
     pub fn correct_for_drops(&self, state: u32) -> bool {
         let Some(block) = block_id(state) else { return false };
         self.rules
@@ -224,6 +231,7 @@ impl Default for BreakSpeedInput {
 }
 
 // AbstractBlock.calcBlockBreakingDelta: Fortschritt pro Tick, >= 1 heisst sofort abgebaut.
+#[must_use] 
 pub fn breaking_delta(state: u32, tool: Option<&Tool>, input: &BreakSpeedInput) -> f32 {
     let h = hardness(state);
     if h == -1.0 {

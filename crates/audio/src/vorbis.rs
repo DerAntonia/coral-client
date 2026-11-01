@@ -4,7 +4,7 @@
 //! Als WAV waeren das mehrere hundert Megabyte, die entweder mitgeliefert (rechtlich nicht
 //! moeglich, s. assets/locate.rs) oder beim ersten Start erzeugt werden muessten. Direkt lesen
 //! kostet dagegen ein paar Millisekunden je Klang -- und zwar nur einmal, danach haelt die
-//! Klangbank ihn (s. app::vanilla_sounds).
+//! Klangbank ihn (s. `app::vanilla_sounds`).
 //!
 //! Das Ergebnis ist ein `Wav`, also derselbe Typ wie fuer die eigenen Aufnahmen: der Mixer
 //! soll nicht wissen muessen, woher ein Klang kam.
@@ -22,8 +22,8 @@ pub enum VorbisError {
 impl std::fmt::Display for VorbisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VorbisError::Decode(e) => write!(f, "Vorbis-Dekodierfehler: {e}"),
-            VorbisError::KeineKanaele => write!(f, "Datei enthaelt keine Kanaele"),
+            Self::Decode(e) => write!(f, "Vorbis-Dekodierfehler: {e}"),
+            Self::KeineKanaele => write!(f, "Datei enthaelt keine Kanaele"),
         }
     }
 }
@@ -51,7 +51,7 @@ pub fn decode(bytes: &[u8]) -> Result<Wav, VorbisError> {
         // read_dec_packet_itl gibt die Kanaele VERSCHRAENKT (L, R, L, R, ...) -- deshalb je
         // `channels` Werte zu einem Mono-Wert mitteln.
         for frame in paket.chunks(channels) {
-            let summe: f32 = frame.iter().map(|v| *v as f32 / 32768.0).sum();
+            let summe: f32 = frame.iter().map(|v| f32::from(*v) / 32768.0).sum();
             samples.push(summe / frame.len() as f32);
         }
     }

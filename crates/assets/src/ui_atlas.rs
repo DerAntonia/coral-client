@@ -249,6 +249,7 @@ impl AtlasRect {
     // Teilrechteck eines Sheets (Vanilla-GUI-Sheets enthalten mehrere Elemente in einer
     // Datei, z.B. inventory.png: 176x166 Hintergrund oben links in einer 256x256-Datei).
     // x/y/w/h in Vanilla-Pixeln des Sheets, auch bei einem hochaufgeloesten Pack-Bild.
+    #[must_use] 
     pub fn sub(&self, x: u32, y: u32, w: u32, h: u32) -> UvRect {
         let [u0, v0, u1, v1] = self.uv;
         let du = (u1 - u0) / self.width as f32;
@@ -268,6 +269,7 @@ pub struct UiAtlas {
 }
 
 impl UiAtlas {
+    #[must_use] 
     pub fn rect(&self, name: &str) -> Option<&AtlasRect> {
         self.rects.get(name)
     }
@@ -285,7 +287,8 @@ pub struct IconLayer {
 }
 
 impl IconLayer {
-    pub fn untinted(uv: UvRect) -> Self {
+    #[must_use] 
+    pub const fn untinted(uv: UvRect) -> Self {
         Self { uv, tint: [1.0, 1.0, 1.0], potion_tint: false }
     }
 }
@@ -346,18 +349,18 @@ struct ItemDefinitionJson {
 // die Farbe, die Vanilla ohne die jeweilige Komponente zeigt. Sonst bleibt es ungetoent.
 fn resolve_tint(entry: &serde_json::Value, grass: Option<&crate::Colormap>) -> Option<[f32; 3]> {
     let obj = entry.as_object()?;
-    let kind = obj.get("type").and_then(|t| t.as_str()).map(strip_ns).unwrap_or("");
+    let kind = obj.get("type").and_then(|t| t.as_str()).map_or("", strip_ns);
     let from_argb = |v: i64| {
         let v = v as u32;
         [((v >> 16) & 0xff) as f32 / 255.0, ((v >> 8) & 0xff) as f32 / 255.0, (v & 0xff) as f32 / 255.0]
     };
     match kind {
         "grass" => {
-            let temperature = obj.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-            let downfall = obj.get("downfall").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            let temperature = obj.get("temperature").and_then(serde_json::Value::as_f64).unwrap_or(0.5) as f32;
+            let downfall = obj.get("downfall").and_then(serde_json::Value::as_f64).unwrap_or(1.0) as f32;
             grass.map(|map| map.sample(temperature, downfall))
         }
-        _ => obj.get("value").or_else(|| obj.get("default")).and_then(|v| v.as_i64()).map(from_argb),
+        _ => obj.get("value").or_else(|| obj.get("default")).and_then(serde_json::Value::as_i64).map(from_argb),
     }
 }
 
@@ -546,9 +549,9 @@ fn logical_size(breite: u32, hoehe: u32, vanilla_breite: u32) -> (u32, u32) {
 // Stattdessen die am feinsten gerasterten Bilder halbieren, bis alles Platz hat -- sie bleiben
 // mindestens so fein wie Vanilla.
 fn shrink_to_fit(pending: &mut [Pending]) {
-    let budget = (MAX_ATLAS_SIZE as u64 * MAX_ATLAS_SIZE as u64) * 7 / 10;
+    let budget = (u64::from(MAX_ATLAS_SIZE) * u64::from(MAX_ATLAS_SIZE)) * 7 / 10;
     loop {
-        let flaeche: u64 = pending.iter().map(|p| ((p.width + PADDING) as u64) * ((p.height + PADDING) as u64)).sum();
+        let flaeche: u64 = pending.iter().map(|p| u64::from(p.width + PADDING) * u64::from(p.height + PADDING)).sum();
         if flaeche <= budget {
             return;
         }
@@ -571,9 +574,9 @@ fn halve(p: &mut Pending) {
             for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                 let (sx, sy) = ((x * 2 + dx).min(p.width - 1), (y * 2 + dy).min(p.height - 1));
                 let i = ((sy * p.width + sx) * 4) as usize;
-                let a = p.rgba[i + 3] as u32;
+                let a = u32::from(p.rgba[i + 3]);
                 for c in 0..3 {
-                    summe[c] += p.rgba[i + c] as u32 * a;
+                    summe[c] += u32::from(p.rgba[i + c]) * a;
                 }
                 summe[3] += a;
             }
@@ -717,6 +720,7 @@ fn item_animations(mc: &mut MinecraftInstallation, rects: &HashMap<String, Atlas
 }
 
 // Unter welchem Schluessel das Icon eines Zweigs einer Item-Definition steht.
+#[must_use] 
 pub fn leaf_icon_key(item: &str, model: &str) -> String {
     format!("{item}@{model}")
 }
@@ -881,7 +885,7 @@ fn block_entry(
 ) -> ([UvRect; 6], [Option<[f32; 3]>; 6], [Option<IconLayer>; 6]) {
     let mut face_tints: [Option<[f32; 3]>; 6] = Default::default();
     let mut overlay: [Option<IconLayer>; 6] = Default::default();
-    if tints.iter().all(|t| t.is_none()) {
+    if tints.iter().all(std::option::Option::is_none) {
         return (faces, face_tints, overlay);
     }
 
@@ -926,7 +930,7 @@ fn pack(pending: &[Pending]) -> (Vec<u8>, u32, HashMap<String, AtlasRect>) {
     let mut order: Vec<usize> = (0..pending.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse((pending[i].height, pending[i].width)));
 
-    let total_area: u64 = pending.iter().map(|p| ((p.width + PADDING) as u64) * ((p.height + PADDING) as u64)).sum();
+    let total_area: u64 = pending.iter().map(|p| u64::from(p.width + PADDING) * u64::from(p.height + PADDING)).sum();
     let mut size = (total_area as f64).sqrt().ceil() as u32;
     size = size.next_power_of_two().max(64);
 
@@ -1040,11 +1044,12 @@ pub struct ItemDisplay {
 }
 
 impl ItemDisplay {
-    pub const IDENTITY: ItemDisplay = ItemDisplay { rotation: [0.0; 3], translation: [0.0; 3], scale: [1.0; 3] };
+    pub const IDENTITY: Self = Self { rotation: [0.0; 3], translation: [0.0; 3], scale: [1.0; 3] };
 
     // Spiegelung fuer die linke Hand (Transformation.apply, leftHanded = true).
-    pub fn mirrored(self) -> ItemDisplay {
-        ItemDisplay {
+    #[must_use] 
+    pub fn mirrored(self) -> Self {
+        Self {
             rotation: [self.rotation[0], -self.rotation[1], -self.rotation[2]],
             translation: [-self.translation[0], self.translation[1], self.translation[2]],
             scale: self.scale,

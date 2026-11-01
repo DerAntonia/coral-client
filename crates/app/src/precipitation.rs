@@ -72,7 +72,7 @@ pub struct Precipitation {
 }
 
 impl Precipitation {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { ticks: 0, origin: (0, 0), size: 0, tops: Vec::new() }
     }
 
@@ -120,18 +120,18 @@ impl Precipitation {
             return [0, 0];
         }
         let r = bounds.outer as i32;
-        let (aussen, innen) = (bounds.outer as f64, bounds.inner as f64);
+        let (aussen, innen) = (f64::from(bounds.outer), f64::from(bounds.inner));
         let (bx, by, bz) = (eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32);
         let mut schnee = Vec::new();
         for z in bz - r..=bz + r {
             for x in bx - r..=bx + r {
                 let Some(top) = self.top_at(x, z) else { continue };
                 // Vanillas Heightmap zaehlt den Block DARUEBER.
-                let boden = top.saturating_add(1) as f64;
+                let boden = f64::from(top.saturating_add(1));
                 let (unten, oben) = if bounds.sphere {
                     // Das Quad steht quer zur Linie Kamera -> Spaltenmitte, die Mitte ist also
                     // sein naechster Punkt: waagerecht `d` entfernt.
-                    let d_sq = (x as f64 + 0.5 - eye.x).powi(2) + (z as f64 + 0.5 - eye.z).powi(2);
+                    let d_sq = (f64::from(x) + 0.5 - eye.x).powi(2) + (f64::from(z) + 0.5 - eye.z).powi(2);
                     if d_sq >= aussen * aussen {
                         continue;
                     }
@@ -144,7 +144,7 @@ impl Precipitation {
                     }
                     (unten, oben)
                 } else {
-                    ((by - r).max(top.saturating_add(1)) as f64, (by + r).max(top.saturating_add(1)) as f64)
+                    (f64::from((by - r).max(top.saturating_add(1))), f64::from((by + r).max(top.saturating_add(1))))
                 };
                 if oben <= unten {
                     continue;
@@ -173,8 +173,8 @@ impl Precipitation {
         bottom: f64,
         top: f64,
     ) {
-        let cx = (x as f64 + 0.5 - eye.x) as f32;
-        let cz = (z as f64 + 0.5 - eye.z) as f32;
+        let cx = (f64::from(x) + 0.5 - eye.x) as f32;
+        let cz = (f64::from(z) + 0.5 - eye.z) as f32;
         let abstand_sq = cx * cx + cz * cz;
         // Halbe Breite quer zur Blickrichtung auf die Spalte.
         let (hx, hz) = if abstand_sq > 1e-6 {
@@ -230,11 +230,11 @@ fn column_offsets(kind: Kind, x: i32, z: i32, ticks: u64, tick_progress: f32) ->
 struct ColumnRandom(u64);
 
 impl ColumnRandom {
-    fn new(x: i32, z: i32) -> Self {
+    const fn new(x: i32, z: i32) -> Self {
         Self(((x as u32 as u64) << 32 | z as u32 as u64) ^ 0x5745_5454_4552_0001)
     }
 
-    fn next_u64(&mut self) -> u64 {
+    const fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -348,7 +348,7 @@ mod tests {
         assert!(quads.len() < quader_quads.len(), "Ecken des Quaders fallen weg");
         for q in quads.chunks(6) {
             // Vertex 0 oben, 2 unten; die Mitte der Oberkante aus 0 und 1.
-            let d = ((q[0].position[0] + q[1].position[0]) / 2.0).hypot((q[0].position[2] + q[1].position[2]) / 2.0);
+            let d = f32::midpoint(q[0].position[0], q[1].position[0]).hypot(f32::midpoint(q[0].position[2], q[1].position[2]));
             assert!(d < 8.0, "Spalte bei {d} ausserhalb der Kugel");
             let h = (64.0 - d * d).sqrt();
             assert!((q[0].position[1] - h).abs() < 1e-4 && (q[2].position[1] + h).abs() < 1e-4, "Hoehe +-{h}: {:?}", q[0].position);
@@ -401,7 +401,7 @@ mod gpu_tests {
         let leer = vec![0u8; 16 * 16 * 4];
         let mut r = render::BlockRenderer::new(&device, &queue, format, W, W, std::slice::from_ref(&leer), 16, &leer, 16, &leer, 16);
         let (regen, schnee) = (textur("rain"), textur("snow"));
-        let alpha_summe: u64 = schnee.0.chunks(4).map(|p| p[3] as u64).sum();
+        let alpha_summe: u64 = schnee.0.chunks(4).map(|p| u64::from(p[3])).sum();
         println!("Schnee-Textur {}x{}, Alpha-Summe {alpha_summe}", schnee.1, schnee.2);
         r.set_weather_textures(&device, &queue, (&regen.0, regen.1, regen.2), (&schnee.0, schnee.1, schnee.2));
 
@@ -443,7 +443,7 @@ mod gpu_tests {
                 });
                 r.render(&mut pass, &mut |_, _| {});
             }
-            let lese = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (W * W * 4) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let lese = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(W * W * 4), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
             enc.copy_texture_to_buffer(
                 ziel.as_image_copy(),
                 wgpu::ImageCopyBuffer { buffer: &lese, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(W * 4), rows_per_image: Some(W) } },

@@ -72,7 +72,7 @@ pub struct Tab {
     pub items: Vec<DumpStack>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DumpStack {
     pub item: String,
     pub count: i32,
@@ -80,7 +80,7 @@ pub struct DumpStack {
     pub removed: Vec<i32>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DumpComponent {
     pub name: String,
     pub id: i32,
@@ -161,7 +161,7 @@ pub fn parse(text: &str) -> Vec<Tab> {
 
 // Die Namen der Eintraege der Server-Registries, in ID-Reihenfolge (aus den
 // Konfigurationsdaten, s. packets::read_enchantments/read_named_registry).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Registries {
     pub enchantment: Vec<String>,
     pub painting_variant: Vec<String>,
@@ -293,7 +293,7 @@ impl Creative {
         self.refresh_search();
     }
 
-    pub fn ready(&self) -> bool {
+    pub const fn ready(&self) -> bool {
         !self.tabs.is_empty()
     }
 
@@ -356,7 +356,7 @@ impl Creative {
 
     // Erste sichtbare Zeile (getRowIndexForScroll).
     pub fn first_row(&self) -> usize {
-        (self.scroll as f64 * self.extra_rows() as f64 + 0.5) as usize
+        (f64::from(self.scroll) * self.extra_rows() as f64 + 0.5) as usize
     }
 
     // Mausrad: eine Zeile je Raste (subtractInputFromScroll).
@@ -544,7 +544,7 @@ impl Drag {
     }
 
     // Zaehlt das Ziehen als Verteilen? Sonst ist es beim Loslassen ein gewoehnlicher Klick.
-    pub fn distributes(&self) -> bool {
+    pub const fn distributes(&self) -> bool {
         self.slots.len() > 1 || (self.button == 2 && !self.slots.is_empty())
     }
 

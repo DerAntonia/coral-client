@@ -31,33 +31,34 @@ pub const CATEGORY_CRAFTING_EQUIPMENT: i32 = 2;
 pub const CATEGORY_CRAFTING_MISC: i32 = 3;
 
 // Was in einem Feld einer Anzeige steht.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub enum SlotDisplay {
     Empty,
     AnyFuel,
     Item(u32),
     Stack(Box<ItemStack>),
     Tag(String),
-    SmithingTrim { base: Box<SlotDisplay>, material: Box<SlotDisplay> },
-    WithRemainder { input: Box<SlotDisplay>, remainder: Box<SlotDisplay> },
-    Composite(Vec<SlotDisplay>),
+    SmithingTrim { base: Box<Self>, material: Box<Self> },
+    WithRemainder { input: Box<Self>, remainder: Box<Self> },
+    Composite(Vec<Self>),
 }
 
 impl SlotDisplay {
     // Ein Stapel, der fuer dieses Feld stehen kann (zum Zeichnen), falls es einen gibt.
+    #[must_use] 
     pub fn first_stack(&self) -> Option<ItemStack> {
         match self {
-            SlotDisplay::Item(id) => Some(ItemStack::new(*id, 1)),
-            SlotDisplay::Stack(s) => Some((**s).clone()),
-            SlotDisplay::WithRemainder { input, .. } => input.first_stack(),
-            SlotDisplay::SmithingTrim { base, .. } => base.first_stack(),
-            SlotDisplay::Composite(alle) => alle.iter().find_map(|d| d.first_stack()),
-            SlotDisplay::Empty | SlotDisplay::AnyFuel | SlotDisplay::Tag(_) => None,
+            Self::Item(id) => Some(ItemStack::new(*id, 1)),
+            Self::Stack(s) => Some((**s).clone()),
+            Self::WithRemainder { input, .. } => input.first_stack(),
+            Self::SmithingTrim { base, .. } => base.first_stack(),
+            Self::Composite(alle) => alle.iter().find_map(Self::first_stack),
+            Self::Empty | Self::AnyFuel | Self::Tag(_) => None,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub enum RecipeDisplay {
     Shapeless { ingredients: Vec<SlotDisplay>, result: SlotDisplay, station: SlotDisplay },
     Shaped { width: i32, height: i32, ingredients: Vec<SlotDisplay>, result: SlotDisplay, station: SlotDisplay },
@@ -67,34 +68,36 @@ pub enum RecipeDisplay {
 }
 
 impl RecipeDisplay {
-    pub fn result(&self) -> &SlotDisplay {
+    #[must_use] 
+    pub const fn result(&self) -> &SlotDisplay {
         match self {
-            RecipeDisplay::Shapeless { result, .. }
-            | RecipeDisplay::Shaped { result, .. }
-            | RecipeDisplay::Furnace { result, .. }
-            | RecipeDisplay::Stonecutter { result, .. }
-            | RecipeDisplay::Smithing { result, .. } => result,
+            Self::Shapeless { result, .. }
+            | Self::Shaped { result, .. }
+            | Self::Furnace { result, .. }
+            | Self::Stonecutter { result, .. }
+            | Self::Smithing { result, .. } => result,
         }
     }
 
     // Passt das Rezept in ein Craftingfeld dieser Kantenlaenge (2 = Inventar, 3 = Werkbank)?
-    pub fn fits_grid(&self, kante: i32) -> bool {
+    #[must_use] 
+    pub const fn fits_grid(&self, kante: i32) -> bool {
         match self {
-            RecipeDisplay::Shaped { width, height, .. } => *width <= kante && *height <= kante,
-            RecipeDisplay::Shapeless { ingredients, .. } => ingredients.len() as i32 <= kante * kante,
+            Self::Shaped { width, height, .. } => *width <= kante && *height <= kante,
+            Self::Shapeless { ingredients, .. } => ingredients.len() as i32 <= kante * kante,
             _ => false,
         }
     }
 }
 
 // Eine Zutat: eine Liste von Items oder ein Item-Tag (HolderSet).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Ingredient {
     Items(Vec<u32>),
     Tag(String),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct RecipeEntry {
     // Die ID, mit der place_recipe das Rezept nennt.
     pub id: i32,
@@ -105,7 +108,7 @@ pub struct RecipeEntry {
     pub requirements: Option<Vec<Ingredient>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct RecipeBookAdd {
     // Eintrag und Flags (Bit 0 = Hinweis zeigen, Bit 1 = hervorheben).
     pub entries: Vec<(RecipeEntry, u8)>,
@@ -263,6 +266,7 @@ pub fn read_recipe_book_remove(payload: &[u8]) -> Result<Vec<i32>, ReadError> {
 }
 
 // "Ins Craftingfeld legen": `max` = so viele Saetze wie moeglich statt einem.
+#[must_use] 
 pub fn place_recipe_payload(container_id: i32, recipe_id: i32, max: bool) -> Vec<u8> {
     let mut w = PacketWriter::new();
     w.write_varint(SB_PLAY_PLACE_RECIPE).write_varint(container_id).write_varint(recipe_id).write_bool(max);

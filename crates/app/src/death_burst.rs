@@ -104,7 +104,7 @@ impl Burst {
             })
             .collect();
         let ground = FEET_Y + drop_blocks.max(0.0) * 16.0 / model_scale.max(0.01);
-        Burst { uuid, feet, yaw, scale, armor, age: 0, ground, pieces }
+        Self { uuid, feet, yaw, scale, armor, age: 0, ground, pieces }
     }
 
     // Ein Spieltick. false, wenn die Explosion vorbei ist.

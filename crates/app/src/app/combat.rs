@@ -1,6 +1,6 @@
 // Angreifen.
 
-use crate::*;
+use crate::{App, PendingInputAction, ConnStatus, GAME_MODE_SPECTATOR, CrosshairTarget, Instant, session_info, crystal_optimizer, inventory};
 
 impl App {
     // Move Player Pos+Rot -- einmal pro Physik-Tick, wie ein echter Vanilla-Client. Nur
@@ -119,7 +119,7 @@ impl App {
     pub(crate) fn attack_speed_attribute(&self) -> f32 {
         let item = self.last_attack_hand_item.map_or(4.0, world::item_registry::attack_speed) - 4.0;
         match self.attr_attack_speed {
-            Some((a, b, c)) => ((a + item as f64) * (1.0 + b) * c) as f32,
+            Some((a, b, c)) => ((a + f64::from(item)) * (1.0 + b) * c) as f32,
             None => 4.0 + item,
         }
     }

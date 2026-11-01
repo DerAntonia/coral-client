@@ -1,6 +1,6 @@
 // Bewegung, Fahrzeuge und Positionspakete.
 
-use crate::*;
+use crate::{App, Instant, ConnStatus, physics, Duration, use_speed_f64, GAME_MODE_SPECTATOR, vehicle, interaktions_log, equip_target, equip_step, tick_deadline, DVec3, KeyBindAction, bind_label};
 
 impl App {
     pub(crate) fn update_movement(&mut self) {
@@ -43,8 +43,8 @@ impl App {
         // von einem Timing-Cheat aus (5 Spielzuege in einer Millisekunde statt ueber 250ms
         // verteilt) und wurde sofort mit einer harten Spawn-Korrektur beantwortet.
         let (player_cx, player_cz) = (
-            (self.physics.pos.x / world::SECTION_SIZE as f64).floor() as i32,
-            (self.physics.pos.z / world::SECTION_SIZE as f64).floor() as i32,
+            (self.physics.pos.x / f64::from(world::SECTION_SIZE)).floor() as i32,
+            (self.physics.pos.z / f64::from(world::SECTION_SIZE)).floor() as i32,
         );
         let own_column_loaded = self.world.column_arc(player_cx, player_cz).is_some();
 
@@ -143,6 +143,17 @@ impl App {
         if move_right {
             strafe -= 1.0;
         }
+        // Schulterkamera frei vom Koerper: gesteuert wird relativ zur Kamera. Der Spieler dreht
+        // sich in die Laufrichtung und laeuft geradeaus -- ausser beim Zielen, dann schaut er
+        // zum Kameraziel und laeuft wie immer.
+        if (forward != 0.0 || strafe != 0.0) && self.camera_decoupled() && !self.camera_aiming() {
+            if let Some((kamera_yaw, _)) = self.cam_look {
+                let richtung = kamera_yaw - strafe.atan2(forward).to_degrees();
+                self.camera.yaw += ((richtung - self.camera.yaw + 180.0).rem_euclid(360.0)) - 180.0;
+                forward = 1.0;
+                strafe = 0.0;
+            }
+        }
         // `mut`, weil using_item erst NACH flush_input_actions() feststeht -- s. dort.
         let mut input = physics::Input {
             forward,
@@ -173,7 +184,7 @@ impl App {
             pitch_deg: self.look_pitch_deg(),
             glider_equipped: self.own_glider_equipped(),
             spectator: self.game_mode == GAME_MODE_SPECTATOR,
-            spectator_speed: self.settings.spectator_speed as f64 / 20.0,
+            spectator_speed: f64::from(self.settings.spectator_speed) / 20.0,
         };
         // LocalPlayer.isControlledCamera: wer durch fremde Augen sieht, bewegt sich nicht
         // selbst (das Eingabe-Paket mit Schleichen geht trotzdem raus -- damit verlaesst man
@@ -339,6 +350,11 @@ impl App {
             // TICK, nicht beim Paketeintreffen: ein stillstehendes Entity schickt keine
             // Bewegungspakete, und gerade im Stillstand faellt eine eingefrorene Armhaltung auf.
             self.own_age_ticks += 1.0;
+            let (haupt, neben) = self.own_hand_items();
+            self.own_swap.tick(haupt.map_or(0, |h| h.item_id), neben.map_or(0, |h| h.item_id));
+            self.own_last_sword = world::entity::remember_sword(self.own_last_sword, haupt, neben);
+            self.tick_anims();
+            self.tick_inspect();
             // Wie bei fremden Entities: ein Tick, ein Schritt (s. world::Entity::tick).
             self.own_hurt_ticks = self.own_hurt_ticks.saturating_sub(1);
             self.tick_shield_cooldowns();
@@ -366,7 +382,7 @@ impl App {
             let eigener = (self.health > 0.0 && self.game_mode != GAME_MODE_SPECTATOR).then(|| world::OrbPlayer {
                 id: self.own_entity_id.unwrap_or(i32::MIN),
                 pos: (self.physics.pos.x, self.physics.pos.y, self.physics.pos.z),
-                eye_height: self.physics.eye_height() as f64,
+                eye_height: f64::from(self.physics.eye_height()),
             });
             self.sync_own_body();
             self.entities.tick(&self.world, &self.block_shapes, eigener);
@@ -383,7 +399,7 @@ impl App {
             let mut umgebung = Vec::new();
             self.with_particles(|p, ctx, _| umgebung = p.animate_blocks(mitte, ctx));
             for klang in umgebung {
-                let seed = self.particles.rng().next_int(i32::MAX) as i64;
+                let seed = i64::from(self.particles.rng().next_int(i32::MAX));
                 self.play_sound_effect(protocol::packets::SoundEffect {
                     name: klang.name.to_string(),
                     category: protocol::packets::SoundCategory::Blocks,
@@ -403,7 +419,16 @@ impl App {
             // mit 0.5 pro Tick nach (s. own_render_yaw).
             self.own_last_render_yaw = self.own_render_yaw;
             self.own_last_render_pitch = self.own_render_pitch;
-            self.own_render_yaw += world::wrap_degrees(self.camera.yaw - self.own_render_yaw) * 0.5;
+            // Ohne Umbruch (s. build_hand_vertices). Nur ein Sprung um mehr als eine ganze
+            // Drehung (Teleport mit absolutem Blick, anderer Tab) wird um volle Umdrehungen
+            // ausgeglichen, sonst kreiselte die Hand hinterher.
+            let rest = self.camera.yaw - self.own_render_yaw;
+            if rest.abs() > 360.0 {
+                let ausgleich = (rest / 360.0).round() * 360.0;
+                self.own_render_yaw += ausgleich;
+                self.own_last_render_yaw += ausgleich;
+            }
+            self.own_render_yaw += (self.camera.yaw - self.own_render_yaw) * 0.5;
             self.own_render_pitch += (self.look_pitch_deg() - self.own_render_pitch) * 0.5;
             // HeldItemRenderer.updateHeldItems: die Hand folgt der Angriffs-Aufladung, mit
             // Vanillas Schrittweite von hoechstens 0.4 pro Tick.
@@ -534,7 +559,7 @@ impl App {
         // 240 FPS) sonst wuerde die Kamera 19 von 20 Frames lang stillstehen und dann
         // sichtbar "springen" -- stattdessen gleitet sie mit dem Rest-Bruchteil
         // (physics_accum/TICK_DT) sanft vom vorletzten zum letzten Tick-Ergebnis.
-        let alpha = (self.physics_accum / physics::TICK_DT).clamp(0.0, 1.0) as f64;
+        let alpha = f64::from((self.physics_accum / physics::TICK_DT).clamp(0.0, 1.0));
         // Die Drehung durchs Boot gleitend nachziehen (s. ride_yaw_spin).
         let (schritt, schon) = self.ride_yaw_spin;
         if schritt != 0.0 && (alpha as f32) > schon {
@@ -549,7 +574,7 @@ impl App {
         // Die beiden Stuetzwerte sind die pro Tick angenaeherte Hoehe, nicht die harte Pose-
         // Augenhoehe (s. Feldkommentar zu camera_eye_height).
         let eye_height = self.camera_eye_height_prev + (self.camera_eye_height - self.camera_eye_height_prev) * alpha as f32;
-        self.camera.position = interpolated_feet + DVec3::new(0.0, eye_height as f64, 0.0);
+        self.camera.position = interpolated_feet + DVec3::new(0.0, f64::from(eye_height), 0.0);
         // Zuschauer in einem fremden Entity: dessen Augen und Blick (Camera.setup mit dem
         // Kamera-Entity statt dem Spieler).
         if let Some(e) = self.spectated_entity() {
@@ -661,6 +686,7 @@ impl App {
                 ride.sim_yaw = yaw;
                 ride.sim_pitch = 0.0;
                 self.entities.drive(ride.vehicle, (pos.x, pos.y, pos.z), yaw, 0.0);
+                self.entities.set_paddles(ride.vehicle, [ride.boat.paddles.0, ride.boat.paddles.1]);
                 // AbstractBoatEntity.tick schickt den Ruderstand JEDEN Tick, nicht nur bei
                 // Aenderung -- und noch vor den Paketen des Spielers.
                 if let Some(tx) = &self.outgoing_tx {
@@ -825,9 +851,9 @@ impl App {
         // statt weiter blind zu raten.
         if std::env::var_os("CORAL_NET_DEBUG").is_some() {
             let kind = match &payload {
-                Some(p) if p[0] as i32 == protocol::packets::SB_PLAY_MOVE_PLAYER_POS_ROT => "Full",
-                Some(p) if p[0] as i32 == protocol::packets::SB_PLAY_MOVE_PLAYER_POS => "Pos",
-                Some(p) if p[0] as i32 == protocol::packets::SB_PLAY_MOVE_PLAYER_ROT => "Rot",
+                Some(p) if i32::from(p[0]) == protocol::packets::SB_PLAY_MOVE_PLAYER_POS_ROT => "Full",
+                Some(p) if i32::from(p[0]) == protocol::packets::SB_PLAY_MOVE_PLAYER_POS => "Pos",
+                Some(p) if i32::from(p[0]) == protocol::packets::SB_PLAY_MOVE_PLAYER_ROT => "Rot",
                 Some(_) => "StatusOnly",
                 None => "-",
             };
@@ -934,7 +960,7 @@ impl App {
         self.own_potion_swirls_ambient = false;
     }
 
-    pub(crate) fn forget_sent_input_state(&mut self) {
+    pub(crate) const fn forget_sent_input_state(&mut self) {
         self.last_sent_player_input = Some((false, false, false, false, false, false, false));
         self.last_sent_sprinting = Some(false);
     }

@@ -20,6 +20,7 @@ pub enum FluidKind {
 // Schwimmphysik/Auftrieb) UND world::mesher (fuer die sichtbare Wasserfuellung) -- beide
 // muessen exakt dieselben Bloecke als "nass" behandeln, sonst schwimmt man in Seegras, das
 // optisch trocken aussieht, oder umgekehrt.
+#[must_use] 
 pub fn always_wet(name: &str) -> bool {
     matches!(name, "seagrass" | "tall_seagrass" | "kelp" | "kelp_plant")
 }
@@ -33,6 +34,7 @@ pub fn always_wet(name: &str) -> bool {
 // macht -- der Pfosten selbst blockiert nach wie vor). Seegras/Kelp (s. always_wet) zaehlen
 // ebenfalls als Wasser -- man kann bislang unbehelligt "trocken" durch ein Seegrasfeld
 // laufen, obwohl es unter Wasser liegt.
+#[must_use] 
 pub fn fluid_kind(state: u32) -> Option<FluidKind> {
     if let Some(name) = block_name(state) {
         match name {
@@ -58,7 +60,7 @@ pub fn fluid_kind(state: u32) -> Option<FluidKind> {
 // dieselbe Kodierung wie FlowingFluid.getLegacyLevel: level = isSource ? 0 : 8 -
 // min(amount,8) + (falling?8:0)): level=0 -> Quelle (amount=8), level 1..7 -> abnehmende
 // Flusshoehe (amount=8-level), level 8..15 -> fallend (amount=16-level).
-fn amount_from_level(level: u8) -> u8 {
+const fn amount_from_level(level: u8) -> u8 {
     if level == 0 {
         8
     } else if level < 8 {
@@ -75,7 +77,7 @@ fn amount_from_level(level: u8) -> u8 {
 // eine volle Quelle (amount=8, s. fluid_kind-Kommentar), keine Teilmenge.
 pub(crate) fn own_height(state: u32) -> Option<f64> {
     if let Some(level) = property(state, "level").and_then(|s| s.parse::<u8>().ok()) {
-        return Some(amount_from_level(level) as f64 / 9.0);
+        return Some(f64::from(amount_from_level(level)) / 9.0);
     }
     // Die Blasensaeule ebenso: ihr FluidState ist eine volle Wasserquelle (s. fluid_kind).
     if property(state, "waterlogged") == Some("true") || block_name(state).is_some_and(|n| always_wet(n) || n == "bubble_column") {
@@ -87,6 +89,7 @@ pub(crate) fn own_height(state: u32) -> Option<f64> {
 // Tatsaechliche Hoehe (0..1) einer Fluessigkeits-Zelle inkl. Nachbar-Check: steht direkt
 // darueber dieselbe Fluessigkeit, ist die Zelle voll (1.0) -- sonst die eigene Hoehe (meist
 // 8/9 fuer eine Quelle). FlowingFluid.getHeight. None = keine Fluessigkeit an dieser Stelle.
+#[must_use] 
 pub fn height_at(world: &World, x: i32, y: i32, z: i32) -> Option<f64> {
     let state = world.block_at(x, y, z);
     let kind = fluid_kind(state)?;
@@ -135,7 +138,7 @@ fn is_flow_blocked(state: u32, kind: FluidKind, shapes: &crate::BlockShapes, dir
     }
     // IceBlock ist ausdruecklich ausgenommen -- das ist in Vanilla `ice` und das davon
     // abgeleitete `frosted_ice`; packed_ice/blue_ice sind KEINE IceBlock-Instanzen.
-    if matches!(crate::block_name(state), Some("ice") | Some("frosted_ice")) {
+    if matches!(crate::block_name(state), Some("ice" | "frosted_ice")) {
         return false;
     }
     is_side_solid_full_square(state, shapes, dir)
@@ -225,8 +228,8 @@ pub fn flow_velocity_at(block_at: &impl Fn(i32, i32, i32) -> u32, shapes: &crate
             own - h
         };
         if gefaelle != 0.0 {
-            dx += ox as f64 * gefaelle;
-            dz += oz as f64 * gefaelle;
+            dx += f64::from(ox) * gefaelle;
+            dz += f64::from(oz) * gefaelle;
         }
     }
 

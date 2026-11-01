@@ -34,7 +34,8 @@ pub const UNIFORM_BLOCKS: [(&str, u32); 6] =
 // Sampler0..2: Textur auf 6/8/10, Sampler auf 7/9/11.
 pub const SAMPLERS: [&str; 3] = ["Sampler0", "Sampler1", "Sampler2"];
 
-pub fn sampler_bindings(index: usize) -> (u32, u32) {
+#[must_use] 
+pub const fn sampler_bindings(index: usize) -> (u32, u32) {
     (6 + 2 * index as u32, 7 + 2 * index as u32)
 }
 
@@ -71,7 +72,7 @@ pub struct Program {
     pub attributes: Vec<Var>,
 }
 
-const PREAMBLE: &str = r#"#version 450
+const PREAMBLE: &str = r"#version 450
 layout(std140, set = 0, binding = 5) uniform McInternal {
     vec4 McViewport;
 };
@@ -136,7 +137,7 @@ vec3 mc_srgb_to_linear(vec3 c) {
 }
 
 #define inverse mc_inverse
-"#;
+";
 
 // Pfad einer Include-Datei: `<ns:pfad>` liegt unter <ns>/shaders/include/, `"pfad"` neben der
 // einschliessenden Datei (Vanillas GlslPreprocessor / ShaderLoader).

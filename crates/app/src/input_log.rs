@@ -102,17 +102,14 @@ impl InputLog {
     fn writer(&mut self) -> Option<&mut BufWriter<File>> {
         if self.writer.is_none() {
             let path = self.path.clone()?;
-            match OpenOptions::new().create(true).append(true).open(&path) {
-                Ok(file) => {
-                    let mut w = BufWriter::new(file);
-                    let _ = writeln!(w, "# --- Sitzung {} ---", now());
-                    let _ = w.flush();
-                    self.writer = Some(w);
-                }
-                Err(_) => {
-                    self.enabled = false;
-                    return None;
-                }
+            if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
+                let mut w = BufWriter::new(file);
+                let _ = writeln!(w, "# --- Sitzung {} ---", now());
+                let _ = w.flush();
+                self.writer = Some(w);
+            } else {
+                self.enabled = false;
+                return None;
             }
         }
         self.writer.as_mut()
@@ -130,7 +127,7 @@ impl InputLog {
     }
 }
 
-fn richtung(pressed: bool) -> &'static str {
+const fn richtung(pressed: bool) -> &'static str {
     if pressed {
         "RUNTER"
     } else {

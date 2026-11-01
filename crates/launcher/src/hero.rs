@@ -43,32 +43,32 @@ impl Hero {
             let _ = tx.send(load());
             ctx.request_repaint();
         });
-        Hero::Loading(rx)
+        Self::Loading(rx)
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
         match self {
-            Hero::Loading(rx) => {
+            Self::Loading(rx) => {
                 let Ok(image) = rx.try_recv() else { return };
                 *self = match image {
-                    Some(image) => Hero::Ready(Fitted { source: Arc::new(image), size: [0, 0], texture: None, job: None }),
-                    None => Hero::Missing(Instant::now()),
+                    Some(image) => Self::Ready(Fitted { source: Arc::new(image), size: [0, 0], texture: None, job: None }),
+                    None => Self::Missing(Instant::now()),
                 };
             }
-            Hero::Missing(seit) => {
+            Self::Missing(seit) => {
                 if seit.elapsed() >= RETRY {
-                    *self = Hero::start(ctx);
+                    *self = Self::start(ctx);
                 } else {
-                    ctx.request_repaint_after(RETRY - seit.elapsed());
+                    ctx.request_repaint_after(RETRY.saturating_sub(seit.elapsed()));
                 }
             }
-            Hero::Ready(fitted) => fitted.poll(ctx),
+            Self::Ready(fitted) => fitted.poll(ctx),
         }
     }
 
-    pub fn texture(&self) -> Option<&egui::TextureHandle> {
+    pub const fn texture(&self) -> Option<&egui::TextureHandle> {
         match self {
-            Hero::Ready(fitted) => fitted.texture.as_ref(),
+            Self::Ready(fitted) => fitted.texture.as_ref(),
             _ => None,
         }
     }

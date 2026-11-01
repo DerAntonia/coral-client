@@ -196,7 +196,7 @@ async fn read_varint_from_stream<R: AsyncReadExt + Unpin>(stream: &mut R) -> io:
     for i in 0..5 {
         let mut byte = [0u8; 1];
         stream.read_exact(&mut byte).await?;
-        value |= ((byte[0] & 0x7F) as i32) << (7 * i);
+        value |= i32::from(byte[0] & 0x7F) << (7 * i);
         if byte[0] & 0x80 == 0 {
             return Ok(value);
         }
@@ -256,8 +256,8 @@ async fn relay(
             }
         }
 
-        let name = id.map(|i| name_for(direction, was_playish, i)).unwrap_or_else(|| "?".to_string());
-        let id_str = id.map(|i| format!("0x{i:02X}")).unwrap_or_else(|| "??".to_string());
+        let name = id.map_or_else(|| "?".to_string(), |i| name_for(direction, was_playish, i));
+        let id_str = id.map_or_else(|| "??".to_string(), |i| format!("0x{i:02X}"));
         let extra = id.map(|i| extra_for(direction, was_playish, i, &body)).unwrap_or_default();
         let _ = log_tx.send(format!(
             "{:>8}ms [S{sid}] {direction} id={id_str:<6} {name:<28} raw_len={:<5} {note} {extra}",
@@ -272,31 +272,28 @@ async fn relay(
 // Restkoerper NACH der Packet-ID) zurueck, None als ID bei jedem Parse-Fehler (z.B. wenn die
 // Kompressions-Erkennung noch nicht zugeschlagen hat, waehrend der Server schon komprimiert).
 fn describe_frame(raw: &[u8], compression: Option<i32>) -> (Option<i32>, String, Vec<u8>) {
-    match compression {
-        None => match decode_varint(raw, 0) {
-            Ok((id, off)) => (Some(id), String::new(), raw[off..].to_vec()),
-            Err(_) => (None, "parse-error (id)".to_string(), Vec::new()),
-        },
-        Some(_) => {
-            let (data_len, offset) = match decode_varint(raw, 0) {
-                Ok(v) => v,
-                Err(_) => return (None, "parse-error (data_len)".to_string(), Vec::new()),
-            };
-            if data_len == 0 {
-                match decode_varint(raw, offset) {
-                    Ok((id, off2)) => (Some(id), "unkomprimiert".to_string(), raw[off2..].to_vec()),
-                    Err(_) => (None, "parse-error (id, unkomprimiert)".to_string(), Vec::new()),
-                }
-            } else {
-                let mut decoder = ZlibDecoder::new(&raw[offset..]);
-                let mut out = Vec::with_capacity(data_len as usize);
-                match decoder.read_to_end(&mut out) {
-                    Ok(_) => match decode_varint(&out, 0) {
-                        Ok((id, off2)) => (Some(id), format!("komprimiert, entpackt={}", out.len()), out[off2..].to_vec()),
-                        Err(_) => (None, "parse-error (id, entpackt)".to_string(), Vec::new()),
-                    },
-                    Err(_) => (None, "zlib-Fehler".to_string(), Vec::new()),
-                }
+    if compression.is_none() { match decode_varint(raw, 0) {
+        Ok((id, off)) => (Some(id), String::new(), raw[off..].to_vec()),
+        Err(_) => (None, "parse-error (id)".to_string(), Vec::new()),
+    } } else {
+        let (data_len, offset) = match decode_varint(raw, 0) {
+            Ok(v) => v,
+            Err(_) => return (None, "parse-error (data_len)".to_string(), Vec::new()),
+        };
+        if data_len == 0 {
+            match decode_varint(raw, offset) {
+                Ok((id, off2)) => (Some(id), "unkomprimiert".to_string(), raw[off2..].to_vec()),
+                Err(_) => (None, "parse-error (id, unkomprimiert)".to_string(), Vec::new()),
+            }
+        } else {
+            let mut decoder = ZlibDecoder::new(&raw[offset..]);
+            let mut out = Vec::with_capacity(data_len as usize);
+            match decoder.read_to_end(&mut out) {
+                Ok(_) => match decode_varint(&out, 0) {
+                    Ok((id, off2)) => (Some(id), format!("komprimiert, entpackt={}", out.len()), out[off2..].to_vec()),
+                    Err(_) => (None, "parse-error (id, entpackt)".to_string(), Vec::new()),
+                },
+                Err(_) => (None, "zlib-Fehler".to_string(), Vec::new()),
             }
         }
     }
@@ -340,8 +337,8 @@ pub(crate) fn extra_for(direction: &str, play_reached: bool, id: i32, body: &[u8
                     let flags = body.get(32).copied().unwrap_or(0);
                     return format!(
                         "pos=({x},{y},{z}) yaw={} pitch={} flags={flags:#04x}",
-                        yaw.map(|v| format!("{v:.2}")).unwrap_or_else(|| "?".into()),
-                        pitch.map(|v| format!("{v:.2}")).unwrap_or_else(|| "?".into())
+                        yaw.map_or_else(|| "?".into(), |v| format!("{v:.2}")),
+                        pitch.map_or_else(|| "?".into(), |v| format!("{v:.2}"))
                     );
                 }
             }
@@ -387,7 +384,7 @@ pub(crate) fn extra_for(direction: &str, play_reached: bool, id: i32, body: &[u8
                             8 => "ELYTRA_START",
                             _ => "?",
                         };
-                        let daten = decode_varint(body, off2).map(|(d, _)| d).unwrap_or(-1);
+                        let daten = decode_varint(body, off2).map_or(-1, |(d, _)| d);
                         return format!("entity={entity} aktion={aktion} ({name}) daten={daten}");
                     }
                 }
@@ -416,12 +413,10 @@ pub(crate) fn extra_for(direction: &str, play_reached: bool, id: i32, body: &[u8
         for &b in body {
             if (0x20..0x7f).contains(&b) {
                 aktuell.push(b as char);
+            } else if aktuell.len() >= 4 {
+                teile.push(std::mem::take(&mut aktuell));
             } else {
-                if aktuell.len() >= 4 {
-                    teile.push(std::mem::take(&mut aktuell));
-                } else {
-                    aktuell.clear();
-                }
+                aktuell.clear();
             }
         }
         if aktuell.len() >= 4 {
@@ -439,8 +434,8 @@ pub(crate) fn extra_for(direction: &str, play_reached: bool, id: i32, body: &[u8
                 if let Some(flags) = read_i32(body, off + 56) {
                     return format!(
                         "id={teleport_id} pos=({x:.4},{y:.4},{z:.4}) yaw={} pitch={} flags={flags:#x}",
-                        yaw.map(|v| format!("{v:.2}")).unwrap_or_else(|| "?".into()),
-                        pitch.map(|v| format!("{v:.2}")).unwrap_or_else(|| "?".into())
+                        yaw.map_or_else(|| "?".into(), |v| format!("{v:.2}")),
+                        pitch.map_or_else(|| "?".into(), |v| format!("{v:.2}"))
                     );
                 }
             }

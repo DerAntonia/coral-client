@@ -112,7 +112,7 @@ pub fn load(min_y: i32, sections: usize) -> Option<Scene> {
         return None;
     }
     let pos = DVec3::new(r.f64()?, r.f64()?, r.f64()?);
-    let (yaw, pitch, fov, time_of_day, render_distance) = (r.f32()?, r.f32()?, r.f32()?, r.i64()?, r.u8()? as u32);
+    let (yaw, pitch, fov, time_of_day, render_distance) = (r.f32()?, r.f32()?, r.f32()?, r.i64()?, u32::from(r.u8()?));
     let lookup = state_lookup();
     // Unbekannte Zustaende (andere Version) werden Luft statt Fehltextur.
     let zustaende: Vec<u32> = (0..r.u32()?).map(|_| r.text().map(|t| lookup.get(&t).copied().unwrap_or(0))).collect::<Option<_>>()?;
@@ -128,9 +128,9 @@ pub fn load(min_y: i32, sections: usize) -> Option<Scene> {
         let mut secs: Vec<world::ChunkSection> = (0..sections).map(|_| world::ChunkSection::from_states(vec![0; SECTION_VOLUME])).collect();
         let mut licht = protocol::chunk::LightData { sky: Vec::new(), sky_empty: Vec::new() };
         for _ in 0..n {
-            let sy = r.u8()? as i8 as i32;
+            let sy = i32::from(r.u8()? as i8);
             let states: Vec<u32> = (0..SECTION_VOLUME).map(|_| r.u16().map(|i| zustaende.get(i as usize).copied().unwrap_or(0))).collect::<Option<_>>()?;
-            let biome: Vec<u32> = r.take(64)?.iter().map(|&b| b as u32).collect();
+            let biome: Vec<u32> = r.take(64)?.iter().map(|&b| u32::from(b)).collect();
             let himmel = (r.u8()? != 0).then(|| r.take(2048).map(<[u8]>::to_vec)).flatten();
             let index = sy - min_y.div_euclid(16);
             if !(0..sections as i32).contains(&index) {

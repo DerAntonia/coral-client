@@ -11,7 +11,7 @@
 
 use std::time::Instant;
 
-/// Die drei Easing-Kurven, die der Zeiger braucht (osu!framework, DefaultEasingFunction).
+/// Die drei Easing-Kurven, die der Zeiger braucht (osu!framework, `DefaultEasingFunction`).
 // Die Namen wie in osu!framework.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -20,7 +20,7 @@ pub enum Easing {
     OutQuint,
     /// Federt ueber das Ziel hinaus und schwingt aus.
     OutElastic,
-    /// Wie OutElastic, aber mit einem Viertel der Schwingungen -- fuer den Rueckdreher.
+    /// Wie `OutElastic`, aber mit einem Viertel der Schwingungen -- fuer den Rueckdreher.
     OutElasticQuarter,
 }
 
@@ -33,17 +33,17 @@ impl Easing {
     pub fn apply(self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         match self {
-            Easing::OutQuint => {
+            Self::OutQuint => {
                 let u = t - 1.0;
                 u * u * u * u * u + 1.0
             }
             // Der letzte Summand ist kein Zierrat: ohne ihn endet die Kurve nicht exakt bei 1,
             // und der Zeiger bliebe um ein Haar neben seiner Ruhegroesse stehen.
-            Easing::OutElastic => {
+            Self::OutElastic => {
                 let offset = 2f32.powi(-11);
                 2f32.powf(-10.0 * t) * ((t - ELASTIC_CONST2) * ELASTIC_CONST).sin() + 1.0 - offset * t
             }
-            Easing::OutElasticQuarter => {
+            Self::OutElasticQuarter => {
                 let offset = 2f32.powi(-10) * ((0.25 - ELASTIC_CONST2) * ELASTIC_CONST).sin();
                 2f32.powf(-10.0 * t) * ((0.25 * t - ELASTIC_CONST2) * ELASTIC_CONST).sin() + 1.0 - offset * t
             }
@@ -66,8 +66,8 @@ pub struct Tween {
 }
 
 impl Tween {
-    pub fn constant(value: f32, now: Instant) -> Self {
-        Tween { from: value, to: value, start: now, duration_ms: 0.0, easing: Easing::OutQuint }
+    pub const fn constant(value: f32, now: Instant) -> Self {
+        Self { from: value, to: value, start: now, duration_ms: 0.0, easing: Easing::OutQuint }
     }
 
     pub fn value(&self, now: Instant) -> f32 {
@@ -79,11 +79,11 @@ impl Tween {
     }
 
     pub fn retarget(&mut self, now: Instant, to: f32, duration_ms: f32, easing: Easing) {
-        *self = Tween { from: self.value(now), to, start: now, duration_ms, easing };
+        *self = Self { from: self.value(now), to, start: now, duration_ms, easing };
     }
 }
 
-/// Wo im Zieh-Ablauf wir sind (osu!: DragRotationState).
+/// Wo im Zieh-Ablauf wir sind (osu!: `DragRotationState`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DragState {
     NotDragging,
@@ -108,6 +108,8 @@ const RELEASE_SCALE_MS: f32 = 500.0;
 const RELEASE_FADE_MS: f32 = 500.0;
 /// Drehen waehrend des Ziehens.
 const ROTATE_MS: f32 = 120.0;
+/// Wie schnell die Farbe des Leuchtens zwischen Akzent, Akzent 2 und ihrer Mischung wechselt.
+const TINT_MS: f32 = 150.0;
 
 /// Der ganze Zeiger-Zustand.
 pub struct CursorFx {
@@ -123,14 +125,15 @@ pub struct CursorFx {
     buttons_down: u32,
     /// Welche Tasten (Bit je Taste) unten sind, s. `button`.
     held: u32,
-    /// Der letzte Druck kam von der rechten Taste: dann leuchtet der Zeiger in Akzent 2 statt
-    /// im Akzent, auch noch beim Ausblenden nach dem Loslassen.
-    right: bool,
+    /// Farbe des Leuchtens als Anteil von Akzent 2 (0 = Akzent, 1 = Akzent 2): links 0, rechts 1,
+    /// beide zugleich die Mischung 0.5 -- weich uebergeblendet, und nach dem Loslassen bleibt
+    /// die letzte Farbe stehen.
+    tint: Tween,
 }
 
 impl CursorFx {
-    pub fn new(now: Instant) -> Self {
-        CursorFx {
+    pub const fn new(now: Instant) -> Self {
+        Self {
             scale: Tween::constant(1.0, now),
             additive: Tween::constant(0.0, now),
             rotation: Tween::constant(0.0, now),
@@ -138,7 +141,7 @@ impl CursorFx {
             tail: (0.0, 0.0),
             buttons_down: 0,
             held: 0,
-            right: false,
+            tint: Tween::constant(0.0, now),
         }
     }
 
@@ -151,8 +154,8 @@ impl CursorFx {
         self.additive.value(now).clamp(0.0, 1.0)
     }
 
-    pub fn right_tint(&self) -> bool {
-        self.right
+    pub fn tint(&self, now: Instant) -> f32 {
+        self.tint.value(now).clamp(0.0, 1.0)
     }
 
     pub fn rotation_deg(&self, now: Instant) -> f32 {
@@ -165,14 +168,19 @@ impl CursorFx {
 
     /// Eine Maustaste ging runter.
     pub fn press(&mut self, now: Instant, pos: (f32, f32)) {
+        // Haelt schon eine Taste, bleibt das Leuchten stehen und nur die Farbe wandert zur
+        // Mischung (s. button) -- sonst blendete es beim zweiten Druck erst von Schwarz ein.
+        let erste = self.buttons_down == 0;
         self.buttons_down += 1;
-        // osu! setzt die Groesse erst hart auf 1 und startet DANN das Schrumpfen -- ein zweiter
-        // Klick waehrend des Ausfederns faengt also wieder oben an.
-        self.scale = Tween::constant(1.0, now);
-        self.scale.retarget(now, PRESS_SCALE, PRESS_MS, Easing::OutQuint);
-        // FadeInFromZero: ebenfalls von vorn, nicht vom aktuellen Wert.
-        self.additive = Tween::constant(0.0, now);
-        self.additive.retarget(now, 1.0, PRESS_MS, Easing::OutQuint);
+        if erste {
+            // osu! setzt die Groesse erst hart auf 1 und startet DANN das Schrumpfen -- ein
+            // zweiter Klick waehrend des Ausfederns faengt also wieder oben an.
+            self.scale = Tween::constant(1.0, now);
+            self.scale.retarget(now, PRESS_SCALE, PRESS_MS, Easing::OutQuint);
+            // FadeInFromZero: ebenfalls von vorn, nicht vom aktuellen Wert.
+            self.additive = Tween::constant(0.0, now);
+            self.additive.retarget(now, 1.0, PRESS_MS, Easing::OutQuint);
+        }
 
         if self.drag == DragState::NotDragging {
             self.drag = DragState::DragStarted;
@@ -191,9 +199,20 @@ impl CursorFx {
         }
         self.held ^= bit;
         if down {
-            self.right = id == 1;
+            let ziel = match (self.held & 1 != 0, self.held & 2 != 0) {
+                (true, true) => 0.5,
+                (false, true) => 1.0,
+                _ => 0.0,
+            };
+            self.tint.retarget(now, ziel, TINT_MS, Easing::OutQuint);
             self.press(now, pos);
         } else {
+            // Eine von beiden losgelassen, die andere haelt noch: zurueck zu deren Farbe.
+            match (self.held & 1 != 0, self.held & 2 != 0) {
+                (true, false) => self.tint.retarget(now, 0.0, TINT_MS, Easing::OutQuint),
+                (false, true) => self.tint.retarget(now, 1.0, TINT_MS, Easing::OutQuint),
+                _ => {}
+            }
             self.release(now);
         }
     }
@@ -463,5 +482,33 @@ mod tests {
         fx.release(nach(t0, 200));
         // Die Ruecklaufdauer haengt am Winkel; nach reichlich Zeit muss er bei 0 stehen.
         assert!(fx.rotation_deg(nach(t0, 2000)).abs() < 0.5, "{}", fx.rotation_deg(nach(t0, 2000)));
+    }
+
+    // Links Akzent, rechts Akzent 2, beide zugleich die Mischung -- jeweils weich hinueber;
+    // laesst man eine los, geht es zur Farbe der anderen zurueck.
+    #[test]
+    fn beide_tasten_mischen_die_farbe() {
+        let t0 = Instant::now();
+        let mut fx = CursorFx::new(t0);
+        fx.button(t0, (0.0, 0.0), 0, true);
+        assert_eq!(fx.tint(nach(t0, 500)), 0.0);
+        fx.button(nach(t0, 500), (0.0, 0.0), 1, true);
+        let mitten = fx.tint(nach(t0, 520));
+        assert!(mitten > 0.0 && mitten < 0.5, "{mitten}");
+        assert!((fx.tint(nach(t0, 1000)) - 0.5).abs() < 1e-4);
+        fx.button(nach(t0, 1000), (0.0, 0.0), 0, false);
+        assert!((fx.tint(nach(t0, 1500)) - 1.0).abs() < 1e-4);
+    }
+
+    // Kommt die zweite Taste dazu, waehrend die erste haelt, bleibt das Leuchten voll.
+    #[test]
+    fn zweite_taste_blendet_nicht_von_schwarz_ein() {
+        let t0 = Instant::now();
+        let mut fx = CursorFx::new(t0);
+        fx.button(t0, (0.0, 0.0), 0, true);
+        let vorher = fx.additive_alpha(nach(t0, 300));
+        fx.button(nach(t0, 300), (0.0, 0.0), 1, true);
+        assert!(fx.additive_alpha(nach(t0, 301)) >= vorher, "sackte ab");
+        assert!((fx.additive_alpha(nach(t0, 2000)) - 1.0).abs() < 1e-4);
     }
 }

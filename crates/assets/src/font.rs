@@ -39,11 +39,13 @@ pub struct FontPage {
 }
 
 impl FontPage {
+    #[must_use] 
     pub fn cell_size(&self) -> (u32, u32) {
         (self.texture.width / self.chars[0].len() as u32, self.texture.height / self.chars.len() as u32)
     }
 
     // Vanillas Skalierungsfaktor der Seite (BitmapFont.Loader.load: `f = height / l`).
+    #[must_use] 
     pub fn scale(&self) -> f32 {
         let (_, cell_h) = self.cell_size();
         if cell_h == 0 {
@@ -56,6 +58,7 @@ impl FontPage {
     // gesucht wird die rechteste Spalte der Zelle, die ueberhaupt etwas zeichnet
     // (BitmapFont.Loader.findCharacterStartX). Genau deshalb ist ein "i" schmal und ein "W"
     // breit. Rueckgabe 0 = leere Zelle.
+    #[must_use] 
     pub fn glyph_width(&self, col: u32, row: u32) -> u32 {
         let (cw, ch) = self.cell_size();
         for x in (0..cw).rev() {
@@ -72,6 +75,7 @@ impl FontPage {
     }
 
     // Der Vorschub eines Zeichens, exakt nach Vanilla: `(int)(0.5 + q * f) + 1`.
+    #[must_use] 
     pub fn advance(&self, col: u32, row: u32) -> f32 {
         let q = self.glyph_width(col, row) as f32;
         ((0.5 + q * self.scale()) as i32 + 1) as f32
@@ -94,6 +98,7 @@ impl BitmapFont {
     // dem ASCII-Bereich. Alles Layout (Zeilenabstand, senkrechtes Zentrieren) haengt daran,
     // und es soll sich nicht aendern, nur weil ein Umlaut in der Zeile steht -- genau so
     // haelt es Vanilla mit seiner festen Zeilenhoehe.
+    #[must_use] 
     pub fn base_page(&self) -> &FontPage {
         self.pages.iter().find(|p| p.chars.iter().any(|row| row.contains(&'A'))).unwrap_or(&self.pages[0])
     }
@@ -116,6 +121,7 @@ pub struct AltFontGlyphs {
 
 impl AltFontGlyphs {
     // Breite eines Textes in GUI-Pixeln; unbekannte Zeichen zaehlen nicht.
+    #[must_use] 
     pub fn width(&self, text: &str) -> f32 {
         text.chars().map(|c| if c == ' ' { self.space_advance } else { self.glyphs.get(&c).map_or(0.0, |g| g.advance) }).sum()
     }
@@ -311,19 +317,22 @@ pub struct UniGlyph {
 }
 
 impl UniGlyph {
+    #[must_use] 
     pub fn width(&self) -> u32 {
-        self.right as u32 - self.left as u32 + 1
+        u32::from(self.right) - u32::from(self.left) + 1
     }
 
+    #[must_use] 
     pub fn advance(&self) -> f32 {
         (self.width() / 2 + 1) as f32
     }
 
     // Deckung (0/255) Zeile fuer Zeile, `width()` Pixel breit.
+    #[must_use] 
     pub fn pixels(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.width() as usize * 16);
         for row in self.rows {
-            for x in self.left as u32..=self.right as u32 {
+            for x in u32::from(self.left)..=u32::from(self.right) {
                 out.push(if x < 32 && row >> (31 - x) & 1 != 0 { 255 } else { 0 });
             }
         }
@@ -371,6 +380,7 @@ enum PackProvider {
 }
 
 // "peacock:hud" bzw. "hud" -> mit Namensraum.
+#[must_use] 
 pub fn full_font_id(id: &str) -> String {
     if id.contains(':') {
         id.to_string()
@@ -474,16 +484,13 @@ impl MinecraftInstallation {
         let mut glyphs = HashMap::with_capacity(roh.len());
         for (ch, (breite, rows)) in roh {
             let feste = ueber.iter().find(|(von, bis, _, _)| (*von..=*bis).contains(&(ch as u32)));
-            let (left, right) = match feste {
-                Some(&(_, _, l, r)) => (l, r),
-                None => {
-                    // getPackedDimensions: erste und letzte besetzte Spalte; leer = ganze Breite.
-                    let maske = rows.iter().fold(0u32, |a, r| a | r);
-                    if maske == 0 {
-                        (0, breite as u8)
-                    } else {
-                        (maske.leading_zeros() as u8, (31 - maske.trailing_zeros()) as u8)
-                    }
+            let (left, right) = if let Some(&(_, _, l, r)) = feste { (l, r) } else {
+                // getPackedDimensions: erste und letzte besetzte Spalte; leer = ganze Breite.
+                let maske = rows.iter().fold(0u32, |a, r| a | r);
+                if maske == 0 {
+                    (0, breite as u8)
+                } else {
+                    (maske.leading_zeros() as u8, (31 - maske.trailing_zeros()) as u8)
                 }
             };
             glyphs.insert(ch, UniGlyph { rows, left, right });
@@ -572,7 +579,7 @@ impl MinecraftInstallation {
                             let breite = glyph_width_in(tex, x, y, cw, ch);
                             // Vanillas Vorschub: (int)(0.5 + Breite * Faktor) + 1, Java rundet
                             // dabei zur Null hin -- auch bei negativem Faktor.
-                            let advance = ((0.5 + breite as f32 * scale) as f64).trunc() as f32 + 1.0;
+                            let advance = f64::from(0.5 + breite as f32 * scale).trunc() as f32 + 1.0;
                             let text_shift = vorlage
                                 .filter(|v| !is_private_char(c) && v.chars[row].get(col) == Some(&c))
                                 .map(|v| (v.ascent - *ascent) as f32);

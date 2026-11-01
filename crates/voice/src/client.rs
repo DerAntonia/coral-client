@@ -63,7 +63,7 @@ pub struct VoiceClient {
     pub info: SecretInfo,
 }
 
-fn application(codec: u8) -> Application {
+const fn application(codec: u8) -> Application {
     match codec {
         1 => Application::Audio,
         2 => Application::RestrictedLowDelay,
@@ -74,7 +74,7 @@ fn application(codec: u8) -> Application {
 impl VoiceClient {
     // `server_host`: der Host, mit dem die Minecraft-Verbindung steht -- der Sprachserver
     // laeuft dort, wenn das Secret keinen eigenen nennt.
-    pub fn connect(info: SecretInfo, server_host: &str) -> std::io::Result<VoiceClient> {
+    pub fn connect(info: SecretInfo, server_host: &str) -> std::io::Result<Self> {
         let (host, port) = info.voice_address(server_host);
         let ziel = (host.as_str(), port).to_socket_addrs()?.next().ok_or_else(|| std::io::Error::other(format!("Sprachserver {host}:{port} nicht aufloesbar")))?;
         let lokal = if ziel.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
@@ -97,7 +97,7 @@ impl VoiceClient {
         let keep_alive = Duration::from_millis(info.keep_alive.max(100) as u64);
         let s = shared.clone();
         let thread = std::thread::Builder::new().name("voicechat".into()).spawn(move || run(s, tx, keep_alive))?;
-        Ok(VoiceClient {
+        Ok(Self {
             shared,
             encoder: Mutex::new(encoder),
             sequence: AtomicI64::new(0),
@@ -189,7 +189,7 @@ fn decode(e: &mut Empfang, data: &[u8]) -> Vec<i16> {
 
 fn run(s: Arc<Shared>, tx: Sender<VoiceEvent>, keep_alive: Duration) {
     let mut authenticated = false;
-    let mut last_try = Instant::now() - Duration::from_secs(10);
+    let mut last_try = Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now);
     let mut last_keep_alive = Instant::now();
     let mut kanaele: HashMap<[u8; 16], Empfang> = HashMap::new();
     let mut buf = [0u8; 4096];
@@ -224,7 +224,7 @@ fn run(s: Arc<Shared>, tx: Sender<VoiceEvent>, keep_alive: Duration) {
         match packet {
             UdpPacket::AuthenticateAck => {
                 authenticated = true;
-                last_try = Instant::now() - Duration::from_secs(10);
+                last_try = Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now);
             }
             UdpPacket::ConnectionCheckAck if !connected => {
                 s.connected.store(true, Ordering::Relaxed);
@@ -243,7 +243,7 @@ fn run(s: Arc<Shared>, tx: Sender<VoiceEvent>, keep_alive: Duration) {
             _ => {}
         }
         // Bleibt der Nachschub aus, waren die fehlenden Pakete verloren: Wartendes ausgeben.
-        for (kanal, e) in kanaele.iter_mut() {
+        for (kanal, e) in &mut kanaele {
             if !e.wartend.is_empty() && e.last_seen.elapsed() > Duration::from_millis(150) {
                 abarbeiten(e, Uuid(*kanal), &tx, 0);
             }
@@ -426,7 +426,7 @@ mod tests {
         let (port, server) = testserver(secret);
         let info = SecretInfo {
             secret,
-            port: port as i32,
+            port: i32::from(port),
             player: Uuid([1; 16]),
             codec: 0,
             mtu: 1024,

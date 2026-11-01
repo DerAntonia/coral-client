@@ -1,6 +1,6 @@
 // Skins, Umhaenge, Koepfe und Server-Ressourcenpakete.
 
-use crate::*;
+use crate::{App, TabEntry, PlayerSkin, head_skin_key, entity_head_items, uuid_bytes_from_hex, Instant, DVec3, AuthEvent, SKIN_MAX_RETRIES, server_packs, MC_VERSION, notifications, claim_atlas_slot_near, claim_atlas_slot};
 
 // Obergrenze fuer App::skin_pixels (s. apply_loaded_skin).
 const SKIN_PIXELS_MAX: usize = 1024;
@@ -44,6 +44,7 @@ impl App {
                 self.player_names.insert(entry.uuid, name);
             }
             let Some(property) = entry.textures_property.as_deref() else { continue };
+            self.textures_props.insert(entry.uuid, property.to_string());
             let Some(skin) = auth::parse_textures_property(property) else { continue };
             // Hat dieser Eintrag einen ANDEREN Skin als zuletzt? Tab-Plugins aendern die Koepfe
             // ihrer Platzhalter-Eintraege genau so: dieselbe UUID, neue Textur. Der alte Skin
@@ -298,7 +299,7 @@ impl App {
         }
         for (p, k) in &self.placed_heads {
             if self.near_eye(*p, 64.0) {
-                merke(*k, weite((p.0 as f64 + 0.5, p.1 as f64 + 0.5, p.2 as f64 + 0.5)));
+                merke(*k, weite((f64::from(p.0) + 0.5, f64::from(p.1) + 0.5, f64::from(p.2) + 0.5)));
             }
         }
         for k in self.skins_anywhere() {
@@ -439,7 +440,7 @@ impl App {
                 let dir = server_packs::cache_dir().ok_or((S::FailedDownload, "kein Home-Ordner".to_string()))?;
                 let pfad = dir.join(format!("{hash}.zip"));
                 std::fs::create_dir_all(&dir)
-                    .and_then(|_| std::fs::write(&pfad, &bytes))
+                    .and_then(|()| std::fs::write(&pfad, &bytes))
                     .map_err(|e| (S::FailedDownload, format!("Server-Resourcepack nicht gespeichert: {e}")))?;
                 Ok(pfad)
             }
@@ -478,14 +479,11 @@ impl App {
         let tx = self.auth_tx.clone();
         self.tokio_rt.spawn(async move {
             match auth::fetch_skin_png(&url).await {
-                Ok(png) => match assets::decode_cape_png(&png) {
-                    Some(rgba) => {
-                        let _ = tx.send(AuthEvent::CapeLoaded { uuid, url: url.clone(), rgba });
-                    }
-                    None => {
-                        let meldung = format!("Umhang nicht dekodierbar (kein 64x32?): {url}");
-                        let _ = tx.send(AuthEvent::SkinFailed { url, permanent: true, meldung });
-                    }
+                Ok(png) => if let Some(rgba) = assets::decode_cape_png(&png) {
+                    let _ = tx.send(AuthEvent::CapeLoaded { uuid, url: url.clone(), rgba });
+                } else {
+                    let meldung = format!("Umhang nicht dekodierbar (kein 64x32?): {url}");
+                    let _ = tx.send(AuthEvent::SkinFailed { url, permanent: true, meldung });
                 },
                 Err(e) => {
                     let meldung = format!("Umhang nicht geladen: {e}");
@@ -509,14 +507,11 @@ impl App {
         }
         self.tokio_rt.spawn(async move {
             match auth::fetch_skin_png(&url).await {
-                Ok(png) => match assets::decode_skin_png(&png) {
-                    Some(rgba) => {
-                        let _ = tx.send(AuthEvent::SkinLoaded { uuid, url: url.clone(), rgba, slim });
-                    }
-                    None => {
-                        let meldung = format!("Skin nicht dekodierbar: {url}");
-                        let _ = tx.send(AuthEvent::SkinFailed { url, permanent: true, meldung });
-                    }
+                Ok(png) => if let Some(rgba) = assets::decode_skin_png(&png) {
+                    let _ = tx.send(AuthEvent::SkinLoaded { uuid, url: url.clone(), rgba, slim });
+                } else {
+                    let meldung = format!("Skin nicht dekodierbar: {url}");
+                    let _ = tx.send(AuthEvent::SkinFailed { url, permanent: true, meldung });
                 },
                 Err(e) => {
                     let meldung = format!("Skin nicht geladen: {e}");
@@ -652,7 +647,7 @@ impl App {
         let existing = self.skins.get(&uuid).copied();
         self.skins.insert(
             uuid,
-            PlayerSkin { slot: existing.and_then(|s| s.slot), slim: existing.map(|s| s.slim).unwrap_or(false), cape_slot: Some(slot) },
+            PlayerSkin { slot: existing.and_then(|s| s.slot), slim: existing.is_some_and(|s| s.slim), cape_slot: Some(slot) },
         );
         if self.own_uuid == Some(uuid) {
             self.push_log("eigener Umhang geladen.".to_string());

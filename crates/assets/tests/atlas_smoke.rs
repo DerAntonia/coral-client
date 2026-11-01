@@ -42,8 +42,8 @@ fn kesselinhalt_bekommt_eigene_kachel() {
     assert_ne!(water_content, lava_content, "Wasser- und Lava-Inhalt muessen verschiedene Kacheln sein");
 
     // Leerer Kessel und Kreuz-Bloecke (Cobweb) haben KEINEN Inhalt.
-    assert!(atlas.content_uvs.get("cauldron").is_none_or(|c| c.iter().all(|f| f.is_none())));
-    assert!(atlas.content_uvs.get("cobweb").is_none_or(|c| c.iter().all(|f| f.is_none())));
+    assert!(atlas.content_uvs.get("cauldron").is_none_or(|c| c.iter().all(std::option::Option::is_none)));
+    assert!(atlas.content_uvs.get("cobweb").is_none_or(|c| c.iter().all(std::option::Option::is_none)));
 }
 
 // Auf Nutzerwunsch: Laub soll nicht mehr durchsichtig sein (Performance -- Alpha-Test/
@@ -151,7 +151,7 @@ fn feuer_hat_versetzte_kopien() {
     let mut mc = MinecraftInstallation::locate("1.21.11", None).expect("Installation fehlt");
     let atlas = BlockAtlas::build(&mut mc, &["fire", "soul_fire", "stone"]).expect("Atlas-Bau fehlgeschlagen");
     for path in ["block/fire_0", "block/fire_1", "block/soul_fire_0", "block/soul_fire_1"] {
-        assert_eq!(atlas.texture_variants.get(path).map(|p| p.len()), Some(8), "{path}");
+        assert_eq!(atlas.texture_variants.get(path).map(std::vec::Vec::len), Some(8), "{path}");
     }
     assert_eq!(atlas.animations.len(), 16, "4 Texturen x 4 Kopien");
     // Je Textur starten die vier Kopien mit vier verschiedenen Bildern und laufen verschieden schnell.

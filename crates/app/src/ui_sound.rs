@@ -56,21 +56,21 @@ pub enum UiSound {
 
 impl UiSound {
     /// Alle Klänge, in der Reihenfolge der Lautstärke-Regler im Audio-Tab (s.
-    /// main.rs::Settings::ui_sound_volume).
-    pub const ALL: [UiSound; 13] = [
-        UiSound::Hover,
-        UiSound::Click,
-        UiSound::ToggleOn,
-        UiSound::ToggleOff,
-        UiSound::Open,
-        UiSound::Close,
-        UiSound::Step,
-        UiSound::Denied,
-        UiSound::Type,
-        UiSound::Erase,
-        UiSound::Slider,
-        UiSound::Popup,
-        UiSound::Send,
+    /// `main.rs::Settings::ui_sound_volume`).
+    pub const ALL: [Self; 13] = [
+        Self::Hover,
+        Self::Click,
+        Self::ToggleOn,
+        Self::ToggleOff,
+        Self::Open,
+        Self::Close,
+        Self::Step,
+        Self::Denied,
+        Self::Type,
+        Self::Erase,
+        Self::Slider,
+        Self::Popup,
+        Self::Send,
     ];
 
     /// Stelle in `ALL`.
@@ -79,59 +79,59 @@ impl UiSound {
     }
 
     /// Schlüssel in der Config (`ui_volume_<key>`).
-    pub fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
-            UiSound::Hover => "hover",
-            UiSound::Click => "click",
-            UiSound::ToggleOn => "toggle_on",
-            UiSound::ToggleOff => "toggle_off",
-            UiSound::Open => "open",
-            UiSound::Close => "close",
-            UiSound::Step => "step",
-            UiSound::Denied => "denied",
-            UiSound::Type => "type",
-            UiSound::Erase => "erase",
-            UiSound::Slider => "slider",
-            UiSound::Popup => "popup",
-            UiSound::Send => "send",
+            Self::Hover => "hover",
+            Self::Click => "click",
+            Self::ToggleOn => "toggle_on",
+            Self::ToggleOff => "toggle_off",
+            Self::Open => "open",
+            Self::Close => "close",
+            Self::Step => "step",
+            Self::Denied => "denied",
+            Self::Type => "type",
+            Self::Erase => "erase",
+            Self::Slider => "slider",
+            Self::Popup => "popup",
+            Self::Send => "send",
         }
     }
 
     /// Name im Audio-Tab, wie im Sound-Baukasten.
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            UiSound::Hover => "Hover",
-            UiSound::Click => "Klick",
-            UiSound::ToggleOn => "Schalter an",
-            UiSound::ToggleOff => "Schalter aus",
-            UiSound::Open => "Öffnen",
-            UiSound::Close => "Schließen",
-            UiSound::Step => "Schritt",
-            UiSound::Denied => "Gesperrt",
-            UiSound::Type => "Tippen",
-            UiSound::Erase => "Löschen",
-            UiSound::Slider => "Slider-Tick",
-            UiSound::Popup => "Aufploppen",
-            UiSound::Send => "Absenden",
+            Self::Hover => "Hover",
+            Self::Click => "Klick",
+            Self::ToggleOn => "Schalter an",
+            Self::ToggleOff => "Schalter aus",
+            Self::Open => "Öffnen",
+            Self::Close => "Schließen",
+            Self::Step => "Schritt",
+            Self::Denied => "Gesperrt",
+            Self::Type => "Tippen",
+            Self::Erase => "Löschen",
+            Self::Slider => "Slider-Tick",
+            Self::Popup => "Aufploppen",
+            Self::Send => "Absenden",
         }
     }
 
     /// Wann er spielt -- als Erklärung beim Draufzeigen im Audio-Tab.
-    pub fn tooltip(self) -> &'static str {
+    pub const fn tooltip(self) -> &'static str {
         match self {
-            UiSound::Hover => "Lautstärke des Hover-Klangs: die Maus betritt ein klickbares Element. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Click => "Lautstärke des Klicks: eine Aktion wird ausgeführt. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::ToggleOn => "Lautstärke beim Einschalten eines Schalters. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::ToggleOff => "Lautstärke beim Ausschalten eines Schalters. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Open => "Lautstärke, wenn eine Fläche oder ein Fenster aufgeht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Close => "Lautstärke, wenn eine Fläche oder ein Fenster zugeht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Step => "Lautstärke der Schritte: Stepper, Hotbar-Platz, Vorschlagsliste, Chat-Verlauf. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Denied => "Lautstärke, wenn eine Aktion nicht möglich ist (abgeblendeter Knopf). Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Type => "Lautstärke des Tippens: ein Zeichen wurde getippt. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Erase => "Lautstärke des Löschens: ein Zeichen wurde gelöscht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Slider => "Lautstärke des Slider-Ticks: ein Schieberegler ändert seinen Wert, die Tonhöhe steigt mit dem Wert. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Popup => "Lautstärke des Aufploppens: ein Eintrag erscheint, etwa eine Zeile einer Rangliste. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
-            UiSound::Send => "Lautstärke beim Absenden einer Chat-Nachricht, auch per /msg, /w, /tc und Ähnlichem. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Hover => "Lautstärke des Hover-Klangs: die Maus betritt ein klickbares Element. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Click => "Lautstärke des Klicks: eine Aktion wird ausgeführt. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::ToggleOn => "Lautstärke beim Einschalten eines Schalters. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::ToggleOff => "Lautstärke beim Ausschalten eines Schalters. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Open => "Lautstärke, wenn eine Fläche oder ein Fenster aufgeht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Close => "Lautstärke, wenn eine Fläche oder ein Fenster zugeht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Step => "Lautstärke der Schritte: Stepper, Hotbar-Platz, Vorschlagsliste, Chat-Verlauf. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Denied => "Lautstärke, wenn eine Aktion nicht möglich ist (abgeblendeter Knopf). Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Type => "Lautstärke des Tippens: ein Zeichen wurde getippt. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Erase => "Lautstärke des Löschens: ein Zeichen wurde gelöscht. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Slider => "Lautstärke des Slider-Ticks: ein Schieberegler ändert seinen Wert, die Tonhöhe steigt mit dem Wert. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Popup => "Lautstärke des Aufploppens: ein Eintrag erscheint, etwa eine Zeile einer Rangliste. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
+            Self::Send => "Lautstärke beim Absenden einer Chat-Nachricht, auch per /msg, /w, /tc und Ähnlichem. Relativ zu UI-Sounds oben. Ändern spielt ihn zur Probe.",
         }
     }
 
@@ -142,31 +142,31 @@ impl UiSound {
     /// dort klingt (s. assets/sounds/custom/README.md). Gesperrt ist dort leer und bleibt
     /// stumm. `None` = stumm, nicht synthetisieren: die Synthese (`cue()`) war schon einmal
     /// verworfen worden.
-    pub fn sample(self) -> Option<&'static str> {
+    pub const fn sample(self) -> Option<&'static str> {
         Some(match self {
-            UiSound::Hover => "custom/ui/ui_hover",
-            UiSound::Click => "custom/ui/ui_click",
-            UiSound::ToggleOn => "custom/ui/ui_toggle_on",
-            UiSound::ToggleOff => "custom/ui/ui_toggle_off",
-            UiSound::Open => "custom/ui/ui_open",
-            UiSound::Close => "custom/ui/ui_close",
-            UiSound::Step => "custom/ui/ui_step",
-            UiSound::Denied => return None,
-            UiSound::Type => "custom/ui/ui_type",
-            UiSound::Erase => "custom/ui/ui_erase",
-            UiSound::Slider => "custom/ui/ui_slider",
-            UiSound::Popup => "custom/ui/ui_popup",
-            UiSound::Send => "custom/ui/ui_send",
+            Self::Hover => "custom/ui/ui_hover",
+            Self::Click => "custom/ui/ui_click",
+            Self::ToggleOn => "custom/ui/ui_toggle_on",
+            Self::ToggleOff => "custom/ui/ui_toggle_off",
+            Self::Open => "custom/ui/ui_open",
+            Self::Close => "custom/ui/ui_close",
+            Self::Step => "custom/ui/ui_step",
+            Self::Denied => return None,
+            Self::Type => "custom/ui/ui_type",
+            Self::Erase => "custom/ui/ui_erase",
+            Self::Slider => "custom/ui/ui_slider",
+            Self::Popup => "custom/ui/ui_popup",
+            Self::Send => "custom/ui/ui_send",
         })
     }
 
     /// Streuung der Tonhöhe in Halbtönen: bei jedem Abspielen gleichverteilt in ±diesem Wert,
     /// wie im Baukasten. Dort eingestellt, nur bei den Klängen, die in schnellen Folgen kommen.
-    pub fn spread_semitones(self) -> f32 {
+    pub const fn spread_semitones(self) -> f32 {
         match self {
-            UiSound::Hover | UiSound::Step => 0.75,
-            UiSound::Type => 1.5,
-            UiSound::Send => 0.5,
+            Self::Hover | Self::Step => 0.75,
+            Self::Type => 1.5,
+            Self::Send => 0.5,
             _ => 0.0,
         }
     }
@@ -174,12 +174,12 @@ impl UiSound {
     /// Mindestabstand zwischen zwei Mal demselben Klang -- schneller Folgendes wird geschluckt,
     /// sonst stapeln sich beim Überstreichen einer Liste oder beim Ziehen eines Reglers die
     /// Stimmen. Werte wie im Baukasten.
-    pub fn min_gap(self) -> std::time::Duration {
+    pub const fn min_gap(self) -> std::time::Duration {
         std::time::Duration::from_millis(match self {
-            UiSound::Hover => 30,
-            UiSound::Slider => 35,
-            UiSound::Step => 25,
-            UiSound::Type | UiSound::Erase => 15,
+            Self::Hover => 30,
+            Self::Slider => 35,
+            Self::Step => 25,
+            Self::Type | Self::Erase => 15,
             _ => 0,
         })
     }
@@ -188,18 +188,18 @@ impl UiSound {
     /// sich die Stimmen (Löschen klingt bis zu 200 ms nach, die Wiederholung kommt alle 30 ms)
     /// und es wurde sehr laut. Deshalb drückt jeder Anschlag den nächsten leiser, mit der Zeit
     /// kommt die Lautstärke zurück (s. `repeat_level`).
-    pub fn ducks(self) -> bool {
-        matches!(self, UiSound::Type | UiSound::Erase)
+    pub const fn ducks(self) -> bool {
+        matches!(self, Self::Type | Self::Erase)
     }
 
     /// Obergrenze für die Länge der Aufnahme. Dieselbe Regel wie bei der Synthese: was oft
     /// kommt, sollte kurz sein, sonst stapeln sich die Klänge übereinander. 70 ms für die
     /// Klänge in schnellen Folgen; Löschen kommt seltener am Stück, die übrigen einzeln.
     #[cfg(test)]
-    pub fn max_sample_ms(self) -> f32 {
+    pub const fn max_sample_ms(self) -> f32 {
         match self {
-            UiSound::Hover | UiSound::Step | UiSound::Type | UiSound::Slider | UiSound::Popup => 70.0,
-            UiSound::Erase => 200.0,
+            Self::Hover | Self::Step | Self::Type | Self::Slider | Self::Popup => 70.0,
+            Self::Erase => 200.0,
             _ => 400.0,
         }
     }
@@ -208,7 +208,7 @@ impl UiSound {
     /// (mehrere Rohdateien im Kenney-Satz sind 7 bis 12 ms lang). Der kürzeste gehörte und
     /// bestätigte Klang ist der Slider-Tick mit 17 ms.
     #[cfg(test)]
-    pub fn min_sample_ms(self) -> f32 {
+    pub const fn min_sample_ms(self) -> f32 {
         10.0
     }
 
@@ -224,9 +224,9 @@ impl UiSound {
     ///
     /// Das Aufploppen ist lauter gewuenscht (2026-10-15: 250 %), seit es auch beim Markieren
     /// jedes Zeichens kommt; die Datei hat Spitzen um 0,03, das bleibt weit unter der Grenze.
-    pub fn sample_gain(self) -> f32 {
+    pub const fn sample_gain(self) -> f32 {
         match self {
-            UiSound::Popup => 2.5,
+            Self::Popup => 2.5,
             _ => 1.0,
         }
     }
@@ -241,15 +241,15 @@ impl UiSound {
     // durchdachtes Klangkonzept, das zurückkommt, sobald für einen weiteren Klang eine
     // Aufnahme feststeht und `cue()` wieder als Rückfall gebraucht wird.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn variation(self) -> f32 {
+    pub const fn variation(self) -> f32 {
         match self {
-            UiSound::Hover => 0.10,
+            Self::Hover => 0.10,
             // Beim Tippen die stärkste Streuung von allen: eine Folge gleicher Anschläge in
             // Schreibgeschwindigkeit wäre das Maschinengewehr, vor dem ich beim Hover
             // fälschlich gewarnt habe. Mit Streuung wird daraus ein Tastaturgeräusch.
-            UiSound::Type => 0.14,
-            UiSound::Erase => 0.10,
-            UiSound::Step | UiSound::Slider => 0.04,
+            Self::Type => 0.14,
+            Self::Erase => 0.10,
+            Self::Step | Self::Slider => 0.04,
             _ => 0.0,
         }
     }
@@ -259,33 +259,33 @@ impl UiSound {
     //
     // Aktuell nur von Tests aufgerufen, s. Kommentar an `variation`.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn cue(self) -> Cue {
+    pub const fn cue(self) -> Cue {
         match self {
             // Sehr kurz, sehr leise, hoch. Muss beim Überstreichen einer Liste zu einem
             // Rascheln verschmelzen, nicht zu einer Folge erkennbarer Töne.
-            UiSound::Hover => Cue { hz_start: 1512.0, hz_end: 1512.0, noise: 0.25, attack: 0.001, decay: 0.024, gain: 0.055, pan: 0.0 },
+            Self::Hover => Cue { hz_start: 1512.0, hz_end: 1512.0, noise: 0.25, attack: 0.001, decay: 0.024, gain: 0.055, pan: 0.0 },
             // Trocken und breitbandig. Der hohe Rauschanteil ist der Grund, warum es nach
             // Klick klingt und nicht nach Piep -- ein Klick ist ein Geräusch, kein Ton.
-            UiSound::Click | UiSound::Send => Cue { hz_start: 1260.0, hz_end: 1080.0, noise: 0.72, attack: 0.0015, decay: 0.032, gain: 0.20, pan: 0.0 },
+            Self::Click | Self::Send => Cue { hz_start: 1260.0, hz_end: 1080.0, noise: 0.72, attack: 0.0015, decay: 0.032, gain: 0.20, pan: 0.0 },
             // Schalter: derselbe trockene Anschlag, aber mit deutlicher Richtung. Steigend =
             // an, fallend = aus. Die Richtung trägt die Information, nicht die Tonhöhe --
             // deshalb reicht dasselbe Intervall in beide Richtungen.
-            UiSound::ToggleOn => Cue { hz_start: 648.0, hz_end: 1080.0, noise: 0.30, attack: 0.0015, decay: 0.055, gain: 0.18, pan: 0.0 },
-            UiSound::ToggleOff => Cue { hz_start: 1080.0, hz_end: 648.0, noise: 0.30, attack: 0.0015, decay: 0.055, gain: 0.18, pan: 0.0 },
+            Self::ToggleOn => Cue { hz_start: 648.0, hz_end: 1080.0, noise: 0.30, attack: 0.0015, decay: 0.055, gain: 0.18, pan: 0.0 },
+            Self::ToggleOff => Cue { hz_start: 1080.0, hz_end: 648.0, noise: 0.30, attack: 0.0015, decay: 0.055, gain: 0.18, pan: 0.0 },
             // Flächen: dieselbe Idee eine Oktave tiefer und deutlich länger -- das
             // "Aufploppen". Öffnen und Schließen sind exakt gespiegelt.
-            UiSound::Open => Cue { hz_start: 302.0, hz_end: 605.0, noise: 0.10, attack: 0.003, decay: 0.085, gain: 0.22, pan: 0.0 },
-            UiSound::Close => Cue { hz_start: 605.0, hz_end: 302.0, noise: 0.10, attack: 0.003, decay: 0.085, gain: 0.22, pan: 0.0 },
+            Self::Open => Cue { hz_start: 302.0, hz_end: 605.0, noise: 0.10, attack: 0.003, decay: 0.085, gain: 0.22, pan: 0.0 },
+            Self::Close => Cue { hz_start: 605.0, hz_end: 302.0, noise: 0.10, attack: 0.003, decay: 0.085, gain: 0.22, pan: 0.0 },
             // Neutraler Tick ohne Richtung: er sagt "eins weiter", nicht "an" oder "aus".
-            UiSound::Step | UiSound::Slider | UiSound::Popup => Cue { hz_start: 1008.0, hz_end: 1008.0, noise: 0.45, attack: 0.001, decay: 0.020, gain: 0.10, pan: 0.0 },
+            Self::Step | Self::Slider | Self::Popup => Cue { hz_start: 1008.0, hz_end: 1008.0, noise: 0.45, attack: 0.001, decay: 0.020, gain: 0.10, pan: 0.0 },
             // Tief und stumpf. Muss sich klar vom Klick unterscheiden, ohne unangenehm zu
             // sein -- man löst ihn versehentlich aus, nicht absichtlich.
-            UiSound::Denied => Cue { hz_start: 230.0, hz_end: 187.0, noise: 0.20, attack: 0.002, decay: 0.090, gain: 0.16, pan: 0.0 },
+            Self::Denied => Cue { hz_start: 230.0, hz_end: 187.0, noise: 0.20, attack: 0.002, decay: 0.090, gain: 0.16, pan: 0.0 },
             // Trocken und sehr kurz, fast reines Rauschen -- der Anschlag einer Taste ist ein
             // Klacken, kein Ton. Leiser als der Hover, weil in Schreibgeschwindigkeit noch
             // mehr davon kommen.
-            UiSound::Type => Cue { hz_start: 1728.0, hz_end: 1368.0, noise: 0.85, attack: 0.0008, decay: 0.016, gain: 0.045, pan: 0.0 },
-            UiSound::Erase => Cue { hz_start: 864.0, hz_end: 648.0, noise: 0.75, attack: 0.0008, decay: 0.022, gain: 0.055, pan: 0.0 },
+            Self::Type => Cue { hz_start: 1728.0, hz_end: 1368.0, noise: 0.85, attack: 0.0008, decay: 0.016, gain: 0.045, pan: 0.0 },
+            Self::Erase => Cue { hz_start: 864.0, hz_end: 648.0, noise: 0.75, attack: 0.0008, decay: 0.022, gain: 0.055, pan: 0.0 },
         }
     }
 }
@@ -330,12 +330,12 @@ mod mess {
         while hz < rate * 0.45 {
             let (mut re, mut im) = (0.0f64, 0.0f64);
             for (i, s) in samples.iter().enumerate() {
-                let w = std::f64::consts::TAU * hz as f64 * i as f64 / rate as f64;
-                re += *s as f64 * w.cos();
-                im += *s as f64 * w.sin();
+                let w = std::f64::consts::TAU * f64::from(hz) * i as f64 / f64::from(rate);
+                re += f64::from(*s) * w.cos();
+                im += f64::from(*s) * w.sin();
             }
             let energie = (re * re + im * im).sqrt();
-            summe += energie * hz as f64;
+            summe += energie * f64::from(hz);
             gewicht += energie;
             hz *= 1.12;
         }
@@ -430,7 +430,7 @@ mod tests {
             assert_eq!(sound.index(), i);
         }
         let mut keys: Vec<_> = UiSound::ALL.iter().map(|s| s.key()).collect();
-        keys.sort();
+        keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), UiSound::ALL.len(), "Schluessel doppelt");
     }

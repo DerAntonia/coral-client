@@ -27,11 +27,12 @@ pub struct MicSettings {
 }
 
 // Pegel eines Rahmens in dBFS (RMS); -127 fuer Stille.
+#[must_use] 
 pub fn level_db(pcm: &[i16]) -> f32 {
     if pcm.is_empty() {
         return -127.0;
     }
-    let sum: f64 = pcm.iter().map(|&s| (s as f64) * (s as f64)).sum();
+    let sum: f64 = pcm.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
     let rms = (sum / pcm.len() as f64).sqrt() / 32768.0;
     if rms <= 0.0 {
         return -127.0;
@@ -54,7 +55,7 @@ pub struct MicProcessor {
 
 impl Default for MicProcessor {
     fn default() -> Self {
-        MicProcessor { denoiser: None, agc_gain_db: 0.0, since_active: u32::MAX }
+        Self { denoiser: None, agc_gain_db: 0.0, since_active: u32::MAX }
     }
 }
 
@@ -64,7 +65,7 @@ fn apply_gain_db(pcm: &mut [i16], db: f32) {
     }
     let f = 10f32.powf(db / 20.0);
     for s in pcm {
-        *s = (*s as f32 * f).clamp(-32768.0, 32767.0) as i16;
+        *s = (f32::from(*s) * f).clamp(-32768.0, 32767.0) as i16;
     }
 }
 
@@ -78,7 +79,7 @@ impl MicProcessor {
             let mut aus = [0f32; DenoiseState::FRAME_SIZE];
             for haelfte in pcm.chunks_mut(DenoiseState::FRAME_SIZE) {
                 for (e, &x) in ein.iter_mut().zip(haelfte.iter()) {
-                    *e = x as f32;
+                    *e = f32::from(x);
                 }
                 d.process_frame(&mut aus, &ein);
                 for (x, &a) in haelfte.iter_mut().zip(aus.iter()) {
@@ -118,7 +119,7 @@ impl MicProcessor {
         self.since_active <= nachlauf
     }
 
-    pub fn reset_activation(&mut self) {
+    pub const fn reset_activation(&mut self) {
         self.since_active = u32::MAX;
     }
 }

@@ -36,6 +36,7 @@ pub struct LodStates {
 }
 
 impl LodStates {
+    #[must_use] 
     pub fn from_voxel_classes(classes: &VoxelClasses) -> Self {
         let count = world::block_registry::state_count();
         let mut category = vec![CAT_AIR; count];
@@ -104,15 +105,18 @@ impl LodStates {
 
     // Dunkelt dieser Voxel Ecken ab? Auf Stufe 0 nach seinem State; zusammengefasst nur, wenn
     // er dazu seine ganze Zelle fuellt.
+    #[must_use] 
     pub fn darkens(&self, v: Voxel) -> bool {
         self.darkens.get(state_of(v) as usize).copied().unwrap_or(false) && (shape_bits(v) == 0 || shape_bits(v) == FULL_SHAPE)
     }
 
+    #[must_use] 
     pub fn no_ao(&self, state: u32) -> bool {
         self.no_ao.get(state as usize).copied().unwrap_or(false)
     }
 
     // Fuer Tests: nur Kategorien, nichts getoent, alles Vollwuerfel.
+    #[must_use] 
     pub fn from_categories(category: Vec<u8>) -> Self {
         let tint = vec![[TINT_NONE; 6]; category.len()];
         let shape = vec![FULL_SHAPE; category.len()];
@@ -129,6 +133,7 @@ impl LodStates {
     }
 
     // Huellbox eines Voxels: seine eigene (hoehere Stufen) oder die seines States.
+    #[must_use] 
     pub fn shape_of(&self, v: Voxel) -> u32 {
         match shape_bits(v) {
             0 => self.shape.get(state_of(v) as usize).copied().unwrap_or(FULL_SHAPE),
@@ -136,10 +141,12 @@ impl LodStates {
         }
     }
 
+    #[must_use] 
     pub fn category(&self, state: u32) -> u8 {
         self.category.get(state as usize).copied().unwrap_or(CAT_AIR)
     }
 
+    #[must_use] 
     pub fn tint_of(&self, state: u32, face: usize) -> u8 {
         self.tint.get(state as usize).map_or(TINT_NONE, |t| t[face])
     }

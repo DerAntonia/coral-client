@@ -107,10 +107,10 @@ pub fn build_ao_disabled(mc: &mut MinecraftInstallation, states: &[(u32, &str, &
         let Ok(bytes) = mc.load_bytes(&format!("minecraft/blockstates/{block}.json")) else { continue };
         let Ok(bs) = serde_json::from_slice::<BlockstateJson>(&bytes) else { continue };
         for (state, props) in entries {
-            let erstes: Option<&serde_json::Value> = if !bs.variants.is_empty() {
-                bs.variants.iter().find(|(sel, _)| matches_selector(sel, props)).map(|(_, a)| a)
-            } else {
+            let erstes: Option<&serde_json::Value> = if bs.variants.is_empty() {
                 bs.multipart.iter().find(|c| c.when.as_ref().is_none_or(|w| when_matches(w, props))).map(|c| &c.apply)
+            } else {
+                bs.variants.iter().find(|(sel, _)| matches_selector(sel, props)).map(|(_, a)| a)
             };
             let Some(apply) = erstes else { continue };
             let obj = match apply {
@@ -119,13 +119,10 @@ pub fn build_ao_disabled(mc: &mut MinecraftInstallation, states: &[(u32, &str, &
             };
             let Some(model) = obj.and_then(|o| o.get("model")).and_then(|m| m.as_str()) else { continue };
             let model = strip_ns(model).to_string();
-            let nutzt = match cache.get(&model) {
-                Some(&v) => v,
-                None => {
-                    let v = model_uses_ambient_occlusion(mc, &model);
-                    cache.insert(model.clone(), v);
-                    v
-                }
+            let nutzt = if let Some(&v) = cache.get(&model) { v } else {
+                let v = model_uses_ambient_occlusion(mc, &model);
+                cache.insert(model.clone(), v);
+                v
             };
             if !nutzt {
                 result.insert(state);
@@ -220,14 +217,7 @@ fn resolve_cross_extra_boxes(
     load_elements: &mut impl FnMut(&mut MinecraftInstallation, &str) -> Option<Vec<Element>>,
 ) -> Option<Vec<ElementBox>> {
     let mut boxes = Vec::new();
-    if !bs.variants.is_empty() {
-        for (selector, apply) in &bs.variants {
-            if matches_selector(selector, props) {
-                append_cross_extra_boxes(mc, apply, load_elements, &mut boxes)?;
-                break;
-            }
-        }
-    } else {
+    if bs.variants.is_empty() {
         for case in &bs.multipart {
             let applies = match &case.when {
                 None => true,
@@ -235,6 +225,13 @@ fn resolve_cross_extra_boxes(
             };
             if applies {
                 append_cross_extra_boxes(mc, &case.apply, load_elements, &mut boxes)?;
+            }
+        }
+    } else {
+        for (selector, apply) in &bs.variants {
+            if matches_selector(selector, props) {
+                append_cross_extra_boxes(mc, apply, load_elements, &mut boxes)?;
+                break;
             }
         }
     }
@@ -259,8 +256,8 @@ fn append_cross_extra_boxes(
     let obj = obj?;
     let model = obj.get("model").and_then(|m| m.as_str())?;
     let model = strip_ns(model).to_string();
-    let x_deg = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let y_deg = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let x_deg = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+    let y_deg = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
 
     let elements = load_elements(mc, &model)?;
     if !elements.iter().any(|e| e.rotation.is_some()) {
@@ -317,16 +314,14 @@ pub fn build_model_quads(mc: &mut MinecraftInstallation, states: &[(u32, &str, &
                 continue;
             }
             let mut applies: Vec<&serde_json::Value> = Vec::new();
-            if !bs.variants.is_empty() {
-                if let Some((_, apply)) = bs.variants.iter().find(|(sel, _)| matches_selector(sel, props)) {
-                    applies.push(apply);
-                }
-            } else {
+            if bs.variants.is_empty() {
                 for case in &bs.multipart {
                     if case.when.as_ref().is_none_or(|w| when_matches(w, props)) {
                         applies.push(&case.apply);
                     }
                 }
+            } else if let Some((_, apply)) = bs.variants.iter().find(|(sel, _)| matches_selector(sel, props)) {
+                applies.push(apply);
             }
             let mut gedreht = false;
             let mut quads = Vec::new();
@@ -337,8 +332,8 @@ pub fn build_model_quads(mc: &mut MinecraftInstallation, states: &[(u32, &str, &
                 };
                 let Some(obj) = obj else { continue };
                 let Some(model) = obj.get("model").and_then(|m| m.as_str()) else { continue };
-                let x_deg = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                let y_deg = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let x_deg = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+                let y_deg = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
                 gedreht |= crate::model_quads::model_has_rotated_element(mc, model);
                 quads.extend(crate::model_quads::block_model_quads(mc, model, x_deg, y_deg).unwrap_or_default());
             }
@@ -445,8 +440,8 @@ pub fn build_rotations(mc: &mut MinecraftInstallation, states: &[(u32, &str, &[(
                     other => Some(other),
                 };
                 if let Some(obj) = obj {
-                    let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                    let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                    let x = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+                    let y = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
                     if x != 0 || y != 0 {
                         result.insert(state, (x, y));
                     }
@@ -503,8 +498,8 @@ pub fn build_random_rotations(
                             .map(|obj| {
                                 let mirrored =
                                     obj.get("model").and_then(|m| m.as_str()).is_some_and(|m| strip_ns(m).ends_with("_mirrored"));
-                                let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                                let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                                let x = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+                                let y = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
                                 (x, y, mirrored)
                             })
                             .collect();
@@ -528,14 +523,7 @@ fn state_is_cross(
     load_elements: &mut impl FnMut(&mut MinecraftInstallation, &str) -> Option<Vec<Element>>,
 ) -> bool {
     let mut applies: Vec<&serde_json::Value> = Vec::new();
-    if !bs.variants.is_empty() {
-        for (selector, apply) in &bs.variants {
-            if matches_selector(selector, props) {
-                applies.push(apply);
-                break;
-            }
-        }
-    } else {
+    if bs.variants.is_empty() {
         for case in &bs.multipart {
             let ok = match &case.when {
                 None => true,
@@ -543,6 +531,13 @@ fn state_is_cross(
             };
             if ok {
                 applies.push(&case.apply);
+            }
+        }
+    } else {
+        for (selector, apply) in &bs.variants {
+            if matches_selector(selector, props) {
+                applies.push(apply);
+                break;
             }
         }
     }
@@ -570,7 +565,7 @@ fn state_is_cross(
             e.rotation.as_ref().and_then(|r| r.get("axis")).and_then(|a| a.as_str()) == Some("y")
                 && (e.to[0] - e.from[0]).abs().max((e.to[2] - e.from[2]).abs()) >= 12.0
         };
-        let gekippt = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) != 0;
+        let gekippt = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) != 0;
         if real.is_empty() || gekippt || !real.iter().all(um_hochachse) {
             return false;
         }
@@ -589,16 +584,7 @@ fn resolve_state_shape(
 ) -> Option<Vec<ElementBox>> {
     let mut boxes = Vec::new();
 
-    if !bs.variants.is_empty() {
-        // Genau eine Variante muss passen (die Selektoren sind laut Vanilla-Format
-        // ueberschneidungsfrei fuer jede gueltige Property-Kombination).
-        for (selector, apply) in &bs.variants {
-            if matches_selector(selector, props) {
-                append_model_boxes(mc, apply, load_elements, &mut boxes)?;
-                break;
-            }
-        }
-    } else {
+    if bs.variants.is_empty() {
         // Multipart: JEDEN zutreffenden Fall anwenden (nicht nur den ersten) -- ein Zaun
         // braucht Pfosten UND alle passenden Seitenarme gleichzeitig.
         for case in &bs.multipart {
@@ -608,6 +594,15 @@ fn resolve_state_shape(
             };
             if applies {
                 append_model_boxes(mc, &case.apply, load_elements, &mut boxes)?;
+            }
+        }
+    } else {
+        // Genau eine Variante muss passen (die Selektoren sind laut Vanilla-Format
+        // ueberschneidungsfrei fuer jede gueltige Property-Kombination).
+        for (selector, apply) in &bs.variants {
+            if matches_selector(selector, props) {
+                append_model_boxes(mc, apply, load_elements, &mut boxes)?;
+                break;
             }
         }
     }
@@ -633,8 +628,8 @@ fn append_model_boxes(
     let obj = obj?;
     let model = obj.get("model").and_then(|m| m.as_str())?;
     let model = strip_ns(model).to_string();
-    let x_deg = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let y_deg = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let x_deg = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+    let y_deg = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
 
     let elements = load_elements(mc, &model)?;
 
@@ -675,6 +670,7 @@ fn append_model_boxes(
 // sich jede der sechs Formeln auf [0,0,16,16], also identisch zum bisherigen "kein Crop"-
 // Verhalten fuer die grosse Mehrheit (Vollwuerfel-Bloecke) -- reine Erweiterung, keine
 // Verhaltensaenderung fuer bereits korrekt aussehende Bloecke.
+#[must_use] 
 pub fn default_face_uv(face_index: usize, from: [f32; 3], to: [f32; 3]) -> [f32; 4] {
     let [x0, y0, z0] = from;
     let [x1, y1, z1] = to;
@@ -820,7 +816,7 @@ fn rotate_uv_rect_x([u0, v0, u1, v1]: [f32; 4]) -> [f32; 4] {
 // gleich rotieren, sonst landet die Textur auf der falschen Seite. Oeffentlich (nicht nur
 // crate-intern), weil main.rs sie fuer build_rotations() ebenfalls braucht (dieselbe
 // Permutation auf UvRect statt auf Face-Praesenz/-Referenzen).
-pub fn permute_faces_y<T: Copy>(f: [T; 6]) -> [T; 6] {
+pub const fn permute_faces_y<T: Copy>(f: [T; 6]) -> [T; 6] {
     [f[0], f[1], f[4], f[5], f[3], f[2]]
 }
 
@@ -832,7 +828,7 @@ pub fn permute_faces_y<T: Copy>(f: [T; 6]) -> [T; 6] {
 // Oben-/Unten-Seite ist template_single_face (Ebene bei z=0) mit x=270/x=90. Gegenprobe an
 // Vanilla: das Kolbenmodell traegt die Platte im Norden, facing=down ist x=90 -- die Platte
 // muss danach nach unten zeigen (facing=up, x=270: nach oben).
-pub fn permute_faces_x<T: Copy>(f: [T; 6]) -> [T; 6] {
+pub const fn permute_faces_x<T: Copy>(f: [T; 6]) -> [T; 6] {
     [f[2], f[3], f[1], f[0], f[4], f[5]]
 }
 
@@ -863,7 +859,7 @@ fn when_matches(when: &serde_json::Value, props: &[(&str, &str)]) -> bool {
     let Some(obj) = when.as_object() else { return false };
     obj.iter().all(|(k, v)| {
         let expected = v.as_str().unwrap_or("");
-        let actual = props.iter().find(|&&(pk, _)| pk == k).map(|&(_, pv)| pv).unwrap_or("");
+        let actual = props.iter().find(|&&(pk, _)| pk == k).map_or("", |&(_, pv)| pv);
         expected.split('|').any(|opt| opt == actual)
     })
 }

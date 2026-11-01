@@ -111,7 +111,7 @@ fn wrap(gpu: &GpuState, spans: &[TextSpan], max_w: f32) -> Vec<ChatLine> {
 }
 
 fn span_color(span: &TextSpan) -> [f32; 4] {
-    span.color.map(rgb_to_rgba).unwrap_or_else(theme::text)
+    span.color.map_or_else(theme::text, rgb_to_rgba)
 }
 
 // Eine Zeile farbiger Abschnitte ab `x`.
@@ -312,7 +312,7 @@ impl App {
     }
 
     // Liegt ein Dialog-Fenster (Dialog oder Warten) offen?
-    pub(crate) fn dialog_shown(&self) -> bool {
+    pub(crate) const fn dialog_shown(&self) -> bool {
         self.dialog.is_some() || self.dialog_waiting.is_some()
     }
 
@@ -579,7 +579,7 @@ impl App {
                         stapel.push(((w, zeilen.len() as f32 * lh), Part::Label(zeilen), GAP));
                     }
                     let h = match multiline {
-                        Some((zeilen, hoehe)) => hoehe.map(|h| h * 2.0).unwrap_or_else(|| (zeilen.unwrap_or(4) as f32 * lh + 16.0).min(512.0)),
+                        Some((zeilen, hoehe)) => hoehe.map_or_else(|| (zeilen.unwrap_or(4) as f32 * lh + 16.0).min(512.0), |h| h * 2.0),
                         None => CONTROL_H,
                     };
                     stapel.push(((w, h), Part::Field(i), if *label_visible { 4.0 } else { GAP }));
@@ -712,7 +712,7 @@ impl App {
         let (mut rects, mut texts, mut sprites) = (Vec::new(), Vec::new(), Vec::new());
         self.build_dialog_ui(gpu, &mut rects, &mut texts, &mut sprites);
         if !rects.is_empty() {
-            overlay.groups.push(UiOverlayGroup { rects, texts, sprites, pivot: (0.0, 0.0), angle: 0.0 });
+            overlay.groups.push(UiOverlayGroup { rects, texts, sprites, pivot: (0.0, 0.0), angle: 0.0, clip: None });
         }
     }
 
@@ -925,7 +925,7 @@ impl App {
         let mut x = r.x + (r.w - breite) / 2.0;
         for span in &z.spans {
             // Ohne eigene Farbe in der Farbe des Knopfes.
-            let c = span.color.map(rgb_to_rgba).unwrap_or(textfarbe);
+            let c = span.color.map_or(textfarbe, rgb_to_rgba);
             texts.push(UiText { text: span.text.clone(), x: x.round(), y, color: c, scale: UI_SCALE_SMALL });
             x += gpu.measure_raw(&span.text, UI_SCALE_SMALL);
         }
@@ -1062,7 +1062,7 @@ impl App {
         }
     }
 
-    pub(crate) fn dialog_release(&mut self) {
+    pub(crate) const fn dialog_release(&mut self) {
         if let Some(o) = self.dialog.as_mut() {
             o.dragging = None;
         }

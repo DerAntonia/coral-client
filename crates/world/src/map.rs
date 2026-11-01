@@ -23,6 +23,7 @@ const BRIGHTNESS: [u32; 4] = [180, 220, 255, 135];
 
 // RGBA einer Farb-ID (MapColor.getColorFromPackedId), durchsichtig fuer Grundfarbe 0 oder
 // unbekannte IDs.
+#[must_use] 
 pub fn color_rgba(id: u8) -> [u8; 4] {
     let basis = (id >> 2) as usize;
     if basis == 0 || basis >= BASE_COLORS.len() {
@@ -46,7 +47,7 @@ pub struct MapState {
 
 impl Default for MapState {
     fn default() -> Self {
-        MapState { colors: vec![0; MAP_SIZE * MAP_SIZE], scale: 0, locked: false, decorations: Vec::new(), revision: 0 }
+        Self { colors: vec![0; MAP_SIZE * MAP_SIZE], scale: 0, locked: false, decorations: Vec::new(), revision: 0 }
     }
 }
 
@@ -77,6 +78,7 @@ impl Maps {
         m.revision = m.revision.wrapping_add(1);
     }
 
+    #[must_use] 
     pub fn get(&self, id: i32) -> Option<&MapState> {
         self.maps.get(&id)
     }
@@ -89,7 +91,8 @@ impl Maps {
 
 // Datei-Name der Markierung (textures/map/decorations/<name>.png) nach Registry-Index, und ob
 // sie auch im Rahmen gezeigt wird (MapDecorationType.showOnItemFrame).
-pub fn decoration_sprite(kind: i32) -> Option<(&'static str, bool)> {
+#[must_use] 
+pub const fn decoration_sprite(kind: i32) -> Option<(&'static str, bool)> {
     const BANNER: [&str; 16] = [
         "white_banner", "orange_banner", "magenta_banner", "light_blue_banner", "yellow_banner", "lime_banner", "pink_banner", "gray_banner",
         "light_gray_banner", "cyan_banner", "purple_banner", "blue_banner", "brown_banner", "green_banner", "red_banner", "black_banner",
@@ -133,8 +136,8 @@ pub fn render(state: &MapState, im_rahmen: bool, sprite: &mut dyn FnMut(&str) ->
             continue;
         }
         let Some((n, bild)) = sprite(name) else { continue };
-        let (cx, cy) = (d.x as f32 / 2.0 + 64.0, d.y as f32 / 2.0 + 64.0);
-        let winkel = d.rot as f32 * std::f32::consts::TAU / 16.0;
+        let (cx, cy) = (f32::from(d.x) / 2.0 + 64.0, f32::from(d.y) / 2.0 + 64.0);
+        let winkel = f32::from(d.rot) * std::f32::consts::TAU / 16.0;
         let (sin, cos) = winkel.sin_cos();
         // Je Kartenpixel im Umkreis: zurueck in die Markierung drehen und naechstes Texel nehmen.
         for py in (cy - 6.0).floor() as i32..=(cy + 6.0).ceil() as i32 {

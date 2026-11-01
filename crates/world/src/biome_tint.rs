@@ -32,6 +32,7 @@ pub enum TintKind {
     Fixed(u32),
 }
 
+#[must_use] 
 pub fn tint_kind(block_name: &str) -> TintKind {
     match block_name {
         "grass_block" => TintKind::GrassTop,
@@ -51,6 +52,7 @@ pub fn tint_kind(block_name: &str) -> TintKind {
 // Wasser (kein Colormap-Fall, direkte Biom-Farbe) -- eigener Name statt einer weiteren
 // TintKind-Variante, damit der Mesher Wasser klar getrennt von der Colormap-Logik behandeln
 // kann (andere Datenquelle: BiomeColors::water statt grass/foliage).
+#[must_use] 
 pub fn is_water(block_name: &str) -> bool {
     block_name == "water" || block_name == "flowing_water"
 }

@@ -128,10 +128,10 @@ pub fn paint_hero(painter: &egui::Painter, rect: Rect, texture: Option<&egui::Te
     let (bild, flaeche) = (size.x / size.y, rect.width() / rect.height());
     let uv = if flaeche > bild {
         let h = bild / flaeche;
-        Rect::from_min_max(egui::pos2(0.0, (1.0 - h) / 2.0), egui::pos2(1.0, (1.0 + h) / 2.0))
+        Rect::from_min_max(egui::pos2(0.0, (1.0 - h) / 2.0), egui::pos2(1.0, f32::midpoint(1.0, h)))
     } else {
         let w = flaeche / bild;
-        Rect::from_min_max(egui::pos2((1.0 - w) / 2.0, 0.0), egui::pos2((1.0 + w) / 2.0, 1.0))
+        Rect::from_min_max(egui::pos2((1.0 - w) / 2.0, 0.0), egui::pos2(f32::midpoint(1.0, w), 1.0))
     };
     painter.image(texture.id(), rect, uv, Color32::from_gray(205));
 }

@@ -224,7 +224,7 @@ impl ShapeContext {
     // ShapeContext.absent(): isDescending() ist false, und isAbove(..) liefert schlicht seinen
     // Vorgabewert -- der ist an beiden Aufrufstellen im Geruest `true`. Eine unendlich hohe
     // Fusshoehe bildet genau das ab, ohne Sonderfall im Code.
-    pub const ABSENT: ShapeContext = ShapeContext { feet_y: f64::INFINITY, descending: false };
+    pub const ABSENT: Self = Self { feet_y: f64::INFINITY, descending: false };
 }
 
 // Die Kollisionsboxen eines States (Block-lokale 0..1-Einheiten, s. ShapeBox). Leer =
@@ -288,7 +288,7 @@ fn undo_origin_offset(state: u32, boxen: &[ShapeBox]) -> Vec<ShapeBox> {
     let mitte = |a: usize| {
         let lo = boxen.iter().map(|b| b.min[a]).fold(f32::MAX, f32::min);
         let hi = boxen.iter().map(|b| b.max[a]).fold(f32::MIN, f32::max);
-        (lo + hi) / 2.0
+        f32::midpoint(lo, hi)
     };
     if boxen.is_empty() || (mitte(0) - (0.5 - m)).abs() > 0.01 || (mitte(2) - (0.5 - m)).abs() > 0.01 {
         return boxen.to_vec();
@@ -397,17 +397,18 @@ pub fn camera_collision_boxes(state: u32, shapes: &BlockShapes) -> Vec<ShapeBox>
 // Andere Bloecke mit slowMovement (Pulverschnee 0.9/1.5/0.9, Suessbeerenstrauch 0.8/0.75/0.8)
 // gehoeren hier ebenfalls hin, sind aber nicht verifiziert und deshalb bewusst NICHT geraten
 // -- ein falscher Multiplikator waere schlimmer als gar keiner, weil er still danebenliegt.
+#[must_use] 
 pub fn slow_movement_multiplier(state: u32, weaving: bool) -> Option<[f64; 3]> {
     match block_name(state) {
         // 0.05 steht im Jar als float-Literal (0.05F) im ansonsten double-Konstruktor -- der
         // Wert ist also der f32-gerundete, nicht 0.05 in f64. Genau so uebernommen, weil sich
         // die Differenz ueber viele Ticks in der Position aufsummiert.
         Some("cobweb") if weaving => Some([0.5, 0.25, 0.5]),
-        Some("cobweb") => Some([0.25, 0.05f32 as f64, 0.25]),
+        Some("cobweb") => Some([0.25, f64::from(0.05f32), 0.25]),
         // SweetBerryBushBlock.entityInside: makeStuckInBlock mit (0.8, 0.75, 0.8)
         // fuer jedes Lebewesen ausser Fuchs und Biene, in JEDEM Wachstumsalter (nur der Schaden
         // haengt am Alter, und den rechnet der Server). x/z wieder als float-Literal.
-        Some("sweet_berry_bush") => Some([0.8f32 as f64, 0.75, 0.8f32 as f64]),
+        Some("sweet_berry_bush") => Some([f64::from(0.8f32), 0.75, f64::from(0.8f32)]),
         _ => None,
     }
 }
@@ -433,7 +434,7 @@ pub fn blocks_movement(state: u32, shapes: &BlockShapes) -> bool {
     // Beide Ausnahmen sind Bloecke, durch die man sich hindurchbewegt, obwohl ihre Form gross
     // ist -- deshalb stehen sie in Vanilla namentlich davor.
     match block_name(state) {
-        Some("cobweb") | Some("bamboo_sapling") | None => return false,
+        Some("cobweb" | "bamboo_sapling") | None => return false,
         _ => {}
     }
     is_solid_shape(&collision_boxes(state, shapes))
@@ -443,6 +444,7 @@ pub fn blocks_movement(state: u32, shapes: &BlockShapes) -> bool {
 // Eigene Funktion, damit die Kante bei 3/16 direkt pruefbar bleibt: seit die echten Formen
 // aus dem Jar kommen (s. vanilla_collision), laesst sich einem Block keine Wunschform mehr
 // unterschieben, um die Regel zu testen.
+#[must_use] 
 pub fn is_solid_shape(boxes: &[ShapeBox]) -> bool {
     if boxes.is_empty() {
         return false;
@@ -459,7 +461,7 @@ pub fn is_solid_shape(boxes: &[ShapeBox]) -> bool {
     // In f64 gerechnet wie Vanilla: 0.7291666666666666 (= 35/48) laesst sich in f32 gar nicht
     // darstellen, und der Vergleich ist ein >= genau auf dieser Kante -- bei voller Grundflaeche
     // entscheidet er sich bei exakt 3/16 Hoehe.
-    let laenge = [(max[0] - min[0]) as f64, (max[1] - min[1]) as f64, (max[2] - min[2]) as f64];
+    let laenge = [f64::from(max[0] - min[0]), f64::from(max[1] - min[1]), f64::from(max[2] - min[2])];
     let mittel = (laenge[0] + laenge[1] + laenge[2]) / 3.0;
     mittel >= 0.7291666666666666 || laenge[1] >= 1.0
 }
@@ -552,7 +554,7 @@ mod tests {
         assert_eq!(m[0], 0.25);
         assert_eq!(m[2], 0.25);
         // 0.05F, nicht 0.05 -- im Jar steht ein float-Literal im double-Konstruktor.
-        assert_eq!(m[1], 0.05f32 as f64);
+        assert_eq!(m[1], f64::from(0.05f32));
         assert!(slow_movement_multiplier(state_of("stone"), false).is_none());
         assert_eq!(slow_movement_multiplier(state_of("cobweb"), true), Some([0.5, 0.25, 0.5]));
     }
@@ -569,7 +571,7 @@ mod tests {
             for a in [0, 2] {
                 let lo = boxen.iter().map(|x| x.min[a]).fold(f32::MAX, f32::min);
                 let hi = boxen.iter().map(|x| x.max[a]).fold(f32::MIN, f32::max);
-                assert!(((lo + hi) / 2.0 - 0.5).abs() < 1e-3, "{b}: Achse {a} {lo}..{hi}");
+                assert!((f32::midpoint(lo, hi) - 0.5).abs() < 1e-3, "{b}: Achse {a} {lo}..{hi}");
             }
         }
     }

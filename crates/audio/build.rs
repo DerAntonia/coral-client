@@ -23,7 +23,7 @@ fn main() {
 
     let mut out = String::from("// Erzeugt von build.rs -- nicht von Hand aendern.\npub static SOUNDS: &[(&str, &[u8])] = &[\n");
     for (name, pfad) in &eintraege {
-        out.push_str(&format!("    ({:?}, include_bytes!({:?})),\n", name, pfad));
+        out.push_str(&format!("    ({name:?}, include_bytes!({pfad:?})),\n"));
     }
     out.push_str("];\n");
 

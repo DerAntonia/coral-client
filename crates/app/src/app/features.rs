@@ -1,6 +1,6 @@
 // Laufende Logik einzelner Module: Totem-Klaenge, Voicechat, Kristall- und Ess-Optimierer.
 
-use crate::*;
+use crate::{App, toteming, Arc, DVec3, sound_log, voicechat, ConnStatus, VoiceKnob, VoiceFlag, Instant, Duration, crystal_optimizer, consumable_optimizer, bow_hold_through, eat_rest_within, zufallswert, EAT_NEXT_USE_DELAY};
 
 impl App {
     pub(crate) fn publish_totem_sound_enabled(&mut self) {
@@ -142,7 +142,8 @@ impl App {
         use voice::packets as vp;
         match channel {
             vp::CH_SECRET => {
-                if !self.settings.module_voice_chat {
+                // In der Wiedergabe ist der Schluessel alt und der Server ein anderer.
+                if !self.settings.module_voice_chat || self.replay_active() {
                     return;
                 }
                 match vp::read_secret(data) {
@@ -233,19 +234,19 @@ impl App {
         let v = &mut self.settings.voice;
         let schritt = |wert: i64, um: i64, min: i64, max: i64| (wert + if hoch { um } else { -um }).clamp(min, max);
         match knob {
-            VoiceKnob::Volume => v.volume_percent = schritt(v.volume_percent as i64, 10, 0, voicechat::VOLUME_MAX as i64) as u32,
-            VoiceKnob::MicGain => v.mic_gain_db = schritt(v.mic_gain_db as i64, 1, voicechat::GAIN_DB_MIN as i64, voicechat::GAIN_DB_MAX as i64) as i32,
-            VoiceKnob::Threshold => v.threshold_db = schritt(v.threshold_db as i64, 1, voicechat::THRESHOLD_DB_MIN as i64, 0) as i32,
+            VoiceKnob::Volume => v.volume_percent = schritt(i64::from(v.volume_percent), 10, 0, i64::from(voicechat::VOLUME_MAX)) as u32,
+            VoiceKnob::MicGain => v.mic_gain_db = schritt(i64::from(v.mic_gain_db), 1, i64::from(voicechat::GAIN_DB_MIN), i64::from(voicechat::GAIN_DB_MAX)) as i32,
+            VoiceKnob::Threshold => v.threshold_db = schritt(i64::from(v.threshold_db), 1, i64::from(voicechat::THRESHOLD_DB_MIN), 0) as i32,
             VoiceKnob::Delay => {
                 let feld = if v.voice_activation { &mut v.voice_delay_frames } else { &mut v.ptt_delay_frames };
-                *feld = schritt(*feld as i64, 1, 0, voicechat::DELAY_MAX_FRAMES as i64) as u32;
+                *feld = schritt(i64::from(*feld), 1, 0, i64::from(voicechat::DELAY_MAX_FRAMES)) as u32;
             }
             VoiceKnob::OutputBuffer => {
-                v.output_buffer_frames = schritt(v.output_buffer_frames as i64, 1, 1, voicechat::BUFFER_MAX_FRAMES as i64) as u32;
+                v.output_buffer_frames = schritt(i64::from(v.output_buffer_frames), 1, 1, i64::from(voicechat::BUFFER_MAX_FRAMES)) as u32;
                 self.audio.sink().set_stream_buffer(self.settings.voice.output_buffer_frames as usize);
             }
             VoiceKnob::PacketThreshold => {
-                v.packet_threshold = schritt(v.packet_threshold as i64, 1, 0, voicechat::PACKET_THRESHOLD_MAX as i64) as u32;
+                v.packet_threshold = schritt(i64::from(v.packet_threshold), 1, 0, i64::from(voicechat::PACKET_THRESHOLD_MAX)) as u32;
                 if let Some(c) = &self.voice.client {
                     c.set_packet_threshold(self.settings.voice.packet_threshold as usize);
                 }
@@ -468,7 +469,7 @@ impl App {
         })
     }
 
-    pub(crate) fn consumable_optimizer_active(&self) -> bool {
+    pub(crate) const fn consumable_optimizer_active(&self) -> bool {
         self.settings.module_consumable_optimizer && !self.consumable.disabled_by_server
     }
 
@@ -494,12 +495,12 @@ impl App {
         self.eat_next_use_delay = 0;
     }
 
-    // Aggressive Prediction: das Server-Flag beendet die eigene Benutzung nicht mehr, also muss
-    // der Client es selbst tun, wenn das Item in der Hand wechselt -- wie Vanillas
-    // LivingEntity.updatingUsingItem (anderes Item als useItem -> stopUsingItem). Sonst bliebe
-    // nach einem Slotwechsel beim Spannen die Verlangsamung bis zum Loslassen stehen.
+    // Wie Vanillas LivingEntity.updatingUsingItem, jeden Tick: haelt die benutzte Hand nicht mehr
+    // dasselbe Item (anderer Slot, oder es ist weg -- ein zerbrochenes Schild), endet die
+    // Benutzung. Nicht nur bei Aggressive Prediction (dort beendet das Server-Flag sie gar nicht
+    // mehr): sonst blieben Blocken und Verlangsamung stehen, bis der Server das Flag schickt.
     pub(crate) fn tick_aggressive_use_cancel(&mut self) {
-        if !self.using_item || !self.settings.eat_aggressive_prediction || !self.consumable_optimizer_active() {
+        if !self.using_item || self.using_item_id.is_none() {
             return;
         }
         let hand = if self.using_offhand { protocol::packets::HAND_OFF } else { protocol::packets::HAND_MAIN };

@@ -1,6 +1,6 @@
 // Chat: Zeilen, Eingabe, Auswahl, Zwischenablage, Befehle und Chat-Sitzung.
 
-use crate::*;
+use crate::{App, GpuState, Rect, ChatLine, FontKind, wrap_chat_message, Instant, chat_fade_alpha, UiRect, UiText, ChatHit, COLOR_WHITE, rgb_to_rgba, push_span_shadow, wrap_label_lines, split_label_lines, cut_ui_under, CHAT_CARET_OFFSET_X, UI_SCALE_NORMAL, ChatGap, chat_input, CARET_WIDTH_PX, chat_scroll_layout, selection_boundary, CHAT_RECALL, ease_out, push_typed_marker, theme, UI_SCALE_SMALL, text_field, SELECTION_FLASH_ALPHA, SELECTION_GLOW_W, SELECTION_SLICE, mix_color, ui_sound, selection_text, SelectionGlide, mix_rect, CARET_GLIDE, Duration, SELECTION_FADE, HoverAnim, CaretAnim, caret_alpha, ChatRecall, ChatSlide, ego_name, chat_log, linkify_chat, ShadowArea, CHAT_MAX_MESSAGES, SelectionContext, AppMode, MenuScreen, TextRun, select_in_runs_by_unit, select_in_runs, TextSelection, MULTI_CLICK_MS, MULTI_CLICK_PX, CHAT_AUTOSCROLL_MAX_LINES, SELECTION_DRAG_MIN, notifications, ConnStatus, save_chat_history, inventory, AuthEvent, uuid_bytes_from_hex};
 
 impl App {
     // Zeilenhoehe des Chats: Oberlaenge + UNTERLAENGE + ein Pixel Luft, je Font-Pixel mal
@@ -206,7 +206,7 @@ impl App {
             let alpha = deckkraft.get(i).copied().unwrap_or(1.0);
             let mut x = rect.x + 2.0 + line.indent;
             for span in &line.spans {
-                let mut farbe = span.color.map(rgb_to_rgba).unwrap_or(COLOR_WHITE);
+                let mut farbe = span.color.map_or(COLOR_WHITE, rgb_to_rgba);
                 farbe[3] *= alpha;
                 let w = gpu.measure_text(&span.text, scale);
                 push_span_shadow(texts, span.shadow);
@@ -272,7 +272,7 @@ impl App {
             let ty = y + pad + i as f32 * line_h;
             for span in zeile {
                 push_span_shadow(texts, span.shadow);
-                texts.push(UiText { text: span.text.clone(), x: tx.round(), y: ty, color: span.color.map(rgb_to_rgba).unwrap_or(COLOR_WHITE), scale });
+                texts.push(UiText { text: span.text.clone(), x: tx.round(), y: ty, color: span.color.map_or(COLOR_WHITE, rgb_to_rgba), scale });
                 tx += messwerk(&span.text);
             }
         }
@@ -326,7 +326,7 @@ impl App {
         let (_, screen_h) = gpu.size();
         let line_h = Self::chat_input_line_h(gpu);
         let zeilen = self.chat_input.as_ref().map_or(1, |f| self.chat_input_lines(gpu, f.text()).len()) as f32;
-        let y = (screen_h / 2.0 - (line_h + 6.0) / 2.0).round();
+        let y = (screen_h / 2.0 - f32::midpoint(line_h, 6.0)).round();
         Rect { x: 0.0, y, w: self.chat_caret_x(gpu) + CARET_WIDTH_PX + 6.0, h: zeilen * line_h + 6.0 }
     }
 
@@ -676,7 +676,7 @@ impl App {
             let mut a = von_x;
             while a < bis_x {
                 let b = ((a / SELECTION_SLICE).floor() * SELECTION_SLICE + SELECTION_SLICE).min(bis_x);
-                let mitte = (a + b) / 2.0;
+                let mitte = f32::midpoint(a, b);
                 let l = (1.0 - (mitte - x0) / SELECTION_GLOW_W).max(0.0) * gl;
                 let r = (1.0 - (x1 - mitte) / SELECTION_GLOW_W).max(0.0) * gr;
                 rects.push(UiRect { rect: Rect { x: a, w: b - a, ..f }, color: mix_color(nach, von, l.max(r)), ..UiRect::FLAT });
@@ -712,12 +712,9 @@ impl App {
         let hinweis = self.selection_sound_hint.take();
         let klick = std::mem::take(&mut self.selection_sound_deselect);
         if jetzt > 0 && (jetzt != vorher || hinweis.is_some()) {
-            match hinweis {
-                Some(klang) => self.play_ui_sound(klang),
-                None => {
-                    let anteil = jetzt as f32 / gesamt.max(1) as f32;
-                    self.play_ui_sound_pitched(ui_sound::UiSound::Popup, 12.0 * (1.0 + 0.15 * anteil.min(1.0)).log2());
-                }
+            if let Some(klang) = hinweis { self.play_ui_sound(klang) } else {
+                let anteil = jetzt as f32 / gesamt.max(1) as f32;
+                self.play_ui_sound_pitched(ui_sound::UiSound::Popup, 12.0 * (1.0 + 0.15 * anteil.min(1.0)).log2());
             }
         } else if jetzt == 0 && vorher > 0 && klick {
             self.play_ui_sound(ui_sound::UiSound::Erase);
@@ -939,7 +936,9 @@ impl App {
         if self.settings.no_chat_clear && spans.iter().all(|s| s.text.trim().is_empty()) {
             return;
         }
-        chat_log::append(&spans.iter().map(|s| s.text.as_str()).collect::<String>());
+        if !self.replay_active() {
+            chat_log::append(&spans.iter().map(|s| s.text.as_str()).collect::<String>());
+        }
         let spans = linkify_chat(spans);
         // Der geschlossene Chat rueckt um die Zeilen der neuen Nachricht hoch, gleitend (s.
         // chat_rise). Gedeckelt, damit eine Flut nicht ewig nachlaeuft.
@@ -982,7 +981,7 @@ impl App {
 
     // --- Textauswahl und Zwischenablage -----------------------------------------------
 
-    pub(crate) fn selection_context(&self) -> SelectionContext {
+    pub(crate) const fn selection_context(&self) -> SelectionContext {
         (self.mode, self.screen, self.chat_input.is_some(), self.module_menu_open)
     }
 
@@ -1095,7 +1094,7 @@ impl App {
                 }
                 let (gx0, gx1) = (run.glyphs[r.start].1, run.glyphs[r.end - 1].2);
                 for (b, ch) in zeile.char_indices() {
-                    let mitte = x + (mass(&zeile[..b]) + mass(&zeile[..b + ch.len_utf8()])) / 2.0;
+                    let mitte = x + f32::midpoint(mass(&zeile[..b]), mass(&zeile[..b + ch.len_utf8()]));
                     if mitte >= gx0 && mitte <= gx1 {
                         let (a, e) = (versatz + b, versatz + b + ch.len_utf8());
                         bereich = Some(match bereich {
@@ -1388,7 +1387,7 @@ impl App {
     // Ziel.
     pub(crate) fn paste_into_focus(&mut self, text: &str) -> bool {
         if self.chat_input.is_some() {
-            if self.chat_input.as_mut().map(|c| c.push_str(text)).unwrap_or(false) {
+            if self.chat_input.as_mut().is_some_and(|c| c.push_str(text)) {
                 self.play_ui_sound(ui_sound::UiSound::Type);
                 self.request_command_suggestions();
             }
@@ -1409,6 +1408,10 @@ impl App {
             buf.extend(text.chars().filter(|c| !c.is_control()));
             return true;
         }
+        if self.screen == MenuScreen::SettingsSearch {
+            self.settings_search.extend(text.chars().filter(|c| !c.is_control()));
+            return true;
+        }
         if self.screen == MenuScreen::SettingsLightLevels {
             self.light_search.extend(text.chars().filter(|c| !c.is_control()));
             self.light_scroll = Default::default();
@@ -1420,17 +1423,16 @@ impl App {
     // Mausrad im offenen Chat: `lines` > 0 blaettert zurueck in die Vergangenheit.
     pub(crate) fn scroll_chat(&mut self, lines: f32) {
         let schritte = lines.round() as i64;
-        let gesamt = self.chat_wrap_cache.borrow().as_ref().map(|(_, l)| l.len()).unwrap_or(0);
+        let gesamt = self.chat_wrap_cache.borrow().as_ref().map_or(0, |(_, l)| l.len());
         // Das GRUNDrechteck, wie in build_chat_overlay_body: das Wachsen nach unten kostet
         // keine eigenen Raststufen, es verbraucht dieselben (s. dortigen Kommentar).
         let sichtbar = self
             .gpu
             .as_ref()
-            .map(|gpu| {
+            .map_or(1, |gpu| {
                 let _schrift = self.area_font_scope(gpu, ShadowArea::Chat);
                 (self.chat_open_rect(gpu).h / self.chat_line_height(gpu)).round() as usize
-            })
-            .unwrap_or(1);
+            });
         let max = gesamt.saturating_sub(sichtbar) as i64;
         self.chat_scroll = (self.chat_scroll as i64 + schritte).clamp(0, max) as usize;
     }
@@ -1443,8 +1445,7 @@ impl App {
         let platz = self
             .gpu
             .as_ref()
-            .map(|gpu| (self.chat_history_rect(gpu).h / (gpu.text_height(UI_SCALE_SMALL) + 4.0)).floor() as usize)
-            .unwrap_or(1);
+            .map_or(1, |gpu| (self.chat_history_rect(gpu).h / (gpu.text_height(UI_SCALE_SMALL) + 4.0)).floor() as usize);
         let max = gesamt.saturating_sub(platz) as i64;
         self.chat_history_scroll = (self.chat_history_scroll as i64 + lines.round() as i64).clamp(0, max) as usize;
     }

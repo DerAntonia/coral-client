@@ -1,6 +1,6 @@
 // Ein Durchlauf der Hauptschleife.
 
-use crate::*;
+use crate::{profiler, App, ActiveEventLoop, Instant, AppMode, MenuScreen, skins_dir, notifications, Bind, raw_input, BindMouse, Duration, ControlFlow, next_wake};
 
 impl App {
     // Ein Durchlauf der Fensterschleife (s. about_to_wait).
@@ -53,6 +53,7 @@ impl App {
         // Tasten nicht mehr die Spielfigur steuern -- sonst wuerde z.B. "w" gleichzeitig
         // ein Zeichen tippen UND vorwaerts laufen.
         self.tick_volume_keys();
+        self.poll_config_file();
         self.poll_wallpaper();
         self.poll_last_view();
         self.tick_connect_view_capture();
@@ -85,6 +86,13 @@ impl App {
         }
         if self.focused && self.mode == AppMode::World && self.chat_input.is_none() && self.sign_edit.is_none() && !self.text_field_focused() {
             for (code, pressed) in raw_keys {
+                // Wiedergabe: die Tasten steuern sie, der eigene Spieler bekommt nichts.
+                if self.replay_active() {
+                    if pressed {
+                        self.replay_key(code);
+                    }
+                    continue;
+                }
                 // input-log (aus, bis im Modul-Menue eingeschaltet): dieselbe Schranke wie
                 // apply_raw_key -- nur echte Spieltasten, kein Chat/Textfeld, nur bei Fokus.
                 self.input_log.key(code, pressed);
@@ -102,19 +110,26 @@ impl App {
         // die Kamera springt beim Zurueckwechseln. Angewendet wird nur mit Fokus; was die
         // Bewegung bewirkt (Kamera oder Zeiger), entscheidet handle_mouse_delta.
         let raw_events = self.raw_mouse.as_ref().map(|m| m.drain()).unwrap_or_default();
-        let tasten_erlaubt = self.focused && self.mode == AppMode::World && self.chat_input.is_none() && self.sign_edit.is_none();
+        let tasten_erlaubt = self.focused && self.mode == AppMode::World && self.chat_input.is_none() && self.sign_edit.is_none() && !self.replay_active();
         for event in raw_events {
             match event {
                 // Auch bei offenem Chat: dann bewegt die Maus den Zeiger statt der Kamera (die
                 // Entscheidung faellt in handle_mouse_delta). Frueher wurde die Bewegung hier
                 // verworfen -- der Zeiger im Chat stand still.
-                raw_input::RawMouseEvent::Motion(dx, dy) => self.handle_mouse_delta((dx, dy)),
+                raw_input::RawMouseEvent::Motion(dx, dy, at) => {
+                    // In der Wiedergabe kommt der Blick aus der Aufnahme.
+                    if self.replay_active() && self.mode == AppMode::World && !self.screen_overlay_open() {
+                        continue;
+                    }
+                    self.record_mouse(dx, dy, at);
+                    self.handle_mouse_delta((dx, dy));
+                }
                 // Das Rad als Steuerung -- im Spiel wie im Menue (dort stellt es die Lautstaerke).
                 // Scrollt es gerade eine Liste, ist es Oberflaeche und laeuft ueber winit (s.
                 // wheel_scrolls_list). Beim Neubelegen faengt winit die Raste als neue Belegung
                 // ab; hier darf sie dann nicht zusaetzlich die Lautstaerke verstellen.
                 raw_input::RawMouseEvent::Wheel(rasten) => {
-                    if self.focused && self.awaiting_keybind.is_none() && !self.wheel_scrolls_list() && !self.dialog_shown() && self.code_of_conduct.is_none() {
+                    if self.focused && self.awaiting_keybind.is_none() && !self.wheel_scrolls_list() && !self.dialog_shown() && self.code_of_conduct.is_none() && !(self.replay_active() && self.mode == AppMode::World) {
                         self.input_log.wheel(rasten);
                         self.wheel_rasten(rasten);
                     }
@@ -191,7 +206,7 @@ impl App {
         // Taktet der Present-Modus selbst (Fifo), lassen wir ihn: wir zeichnen einfach
         // durch und schlafen im blockierenden get_current_texture() bis zum VBlank. Poll
         // ist hier also kein Busy-Loop -- gewartet wird im Treiber, nicht in der Schleife.
-        if self.gpu.as_ref().is_some_and(|gpu| gpu.present_mode_self_paces()) {
+        if self.gpu.as_ref().is_some_and(super::super::GpuState::present_mode_self_paces) {
             if let Some(gpu) = &self.gpu {
                 gpu.window.request_redraw();
             }

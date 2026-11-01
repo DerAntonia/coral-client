@@ -36,6 +36,7 @@ pub use installation::{decode_cape_png, decode_skin_png, path_excluded, AssetsEr
 pub use locate::locate_minecraft_dir;
 
 // Die Dateien in einem Zip, ohne Ordner-Eintraege (z.B. fuer den Dateibaum eines Server-Packs).
+#[must_use] 
 pub fn zip_file_names(path: &std::path::Path) -> Vec<String> {
     javazip::JavaZip::open(path).map(|z| z.names().iter().filter(|n| !n.ends_with('/')).cloned().collect()).unwrap_or_default()
 }

@@ -30,25 +30,25 @@ pub enum AssetsError {
 impl std::fmt::Display for AssetsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AssetsError::MinecraftDirNotFound => {
+            Self::MinecraftDirNotFound => {
                 write!(f, "keine lokale .minecraft-Installation gefunden")
             }
-            AssetsError::VersionNotFound { version, path } => {
+            Self::VersionNotFound { version, path } => {
                 write!(f, "Version '{version}' nicht installiert (erwartet: {})", path.display())
             }
-            AssetsError::AssetIndexNotFound { index_id, path } => write!(
+            Self::AssetIndexNotFound { index_id, path } => write!(
                 f,
                 "Asset-Index '{index_id}' nicht lokal vorhanden (erwartet: {}) -- Version einmal ueber den offiziellen Launcher starten",
                 path.display()
             ),
-            AssetsError::AssetNotFound { virtual_path } => {
+            Self::AssetNotFound { virtual_path } => {
                 write!(f, "Asset nicht im Index: {virtual_path}")
             }
-            AssetsError::Io(e) => write!(f, "IO-Fehler: {e}"),
-            AssetsError::Json(e) => write!(f, "JSON-Fehler: {e}"),
-            AssetsError::Image(e) => write!(f, "Bild-Dekodierfehler: {e}"),
-            AssetsError::Zip(e) => write!(f, "Client-Jar-Lesefehler: {e}"),
-            AssetsError::FontFormat(msg) => write!(f, "Font-Definition unerwartet: {msg}"),
+            Self::Io(e) => write!(f, "IO-Fehler: {e}"),
+            Self::Json(e) => write!(f, "JSON-Fehler: {e}"),
+            Self::Image(e) => write!(f, "Bild-Dekodierfehler: {e}"),
+            Self::Zip(e) => write!(f, "Client-Jar-Lesefehler: {e}"),
+            Self::FontFormat(msg) => write!(f, "Font-Definition unerwartet: {msg}"),
         }
     }
 }
@@ -57,25 +57,25 @@ impl std::error::Error for AssetsError {}
 
 impl From<std::io::Error> for AssetsError {
     fn from(e: std::io::Error) -> Self {
-        AssetsError::Io(e)
+        Self::Io(e)
     }
 }
 
 impl From<serde_json::Error> for AssetsError {
     fn from(e: serde_json::Error) -> Self {
-        AssetsError::Json(e)
+        Self::Json(e)
     }
 }
 
 impl From<image::ImageError> for AssetsError {
     fn from(e: image::ImageError) -> Self {
-        AssetsError::Image(e)
+        Self::Image(e)
     }
 }
 
 impl From<zip::result::ZipError> for AssetsError {
     fn from(e: zip::result::ZipError) -> Self {
-        AssetsError::Zip(e)
+        Self::Zip(e)
     }
 }
 
@@ -154,6 +154,7 @@ pub struct PackDir {
 }
 
 // Ob `rest` (relativ zu "assets/minecraft/") eine der Angaben selbst ist oder darin liegt.
+#[must_use] 
 pub fn path_excluded(excluded: &[String], rest: &str) -> bool {
     excluded.iter().any(|e| rest == e || rest.strip_prefix(e.as_str()).is_some_and(|r| r.starts_with('/')))
 }
@@ -223,8 +224,8 @@ fn overlay_matches(entry: &serde_json::Value) -> bool {
         _ => match entry.get("formats") {
             Some(serde_json::Value::Array(a)) if a.len() == 2 => (a[0].as_u64().unwrap_or(0) as u32, a[1].as_u64().unwrap_or(0) as u32),
             Some(f @ serde_json::Value::Object(_)) => (
-                f.get("min_inclusive").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                f.get("max_inclusive").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                f.get("min_inclusive").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
+                f.get("max_inclusive").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
             ),
             Some(f) => match f.as_u64() {
                 Some(n) => (n as u32, n as u32),
@@ -394,7 +395,7 @@ impl MinecraftInstallation {
 
     fn blockstate_usable(&mut self, bytes: &[u8]) -> bool {
         let Ok(v) = serde_json::from_slice::<serde_json::Value>(strip_bom(bytes)) else { return false };
-        if v.get("multipart").is_some_and(|m| m.is_array()) {
+        if v.get("multipart").is_some_and(serde_json::Value::is_array) {
             return true;
         }
         let Some(varianten) = v.get("variants").and_then(|v| v.as_object()) else { return false };
@@ -416,7 +417,7 @@ impl MinecraftInstallation {
 
     /// Breite und Hoehe des Vanilla-Bildes unter diesem Pfad, ohne Resourcepacks. GUI-Sheets
     /// werden in Vanilla-Pixeln adressiert; ein hochaufgeloestes Pack-Bild ist nur feiner
-    /// gerastert, nicht groesser (s. ui_atlas::AtlasRect). Liest nur den PNG-Kopf.
+    /// gerastert, nicht groesser (s. `ui_atlas::AtlasRect`). Liest nur den PNG-Kopf.
     pub fn vanilla_image_size(&mut self, virtual_path: &str) -> Option<(u32, u32)> {
         let mut kopf = [0u8; 24];
         if let Some(object) = self.objects.get(virtual_path) {
@@ -439,7 +440,8 @@ impl MinecraftInstallation {
 
     /// Bringt ein Resourcepack diese Datei mit (statt nur Vanilla)? Fuer Dinge, die dieser
     /// Client selbst anders macht als Vanilla und nur dann nachbaut, wenn ein Pack sie
-    /// ausdruecklich ersetzt -- die Core-Shader (s. render::vanilla_shader).
+    /// ausdruecklich ersetzt -- die Core-Shader (s. `render::vanilla_shader`).
+    #[must_use] 
     pub fn pack_provides(&self, virtual_path: &str) -> bool {
         // Unter Vanilla ersetzt ein Pack nichts, was Vanilla selbst hat.
         let pfad = format!("assets/{virtual_path}");
@@ -531,7 +533,7 @@ impl MinecraftInstallation {
     }
 
     /// Alle Schriftdefinitionen (`assets/<ns>/font/<pfad>.json`) aller Ebenen: je Schrift-ID
-    /// ("ns:pfad") die Dateien von unten nach oben, Vanilla (Jar) zuerst -- wie load_layers.
+    /// ("ns:pfad") die Dateien von unten nach oben, Vanilla (Jar) zuerst -- wie `load_layers`.
     pub fn font_definitions(&mut self) -> Vec<(String, Vec<Vec<u8>>)> {
         self.json_ids("font")
             .into_iter()
@@ -667,6 +669,7 @@ impl MinecraftInstallation {
 // nachgeprueft), und der Atlas-Platz ist genau so gross. Ein abweichendes Bild wird
 // abgelehnt statt verzerrt -- ein falsch skalierter Umhang faellt sonst als "Textur kaputt"
 // auf, ohne dass man die Ursache sieht.
+#[must_use] 
 pub fn decode_cape_png(png: &[u8]) -> Option<Vec<u8>> {
     let img = image::load_from_memory(png).ok()?.to_rgba8();
     if img.dimensions() != (64, 32) {
@@ -675,6 +678,7 @@ pub fn decode_cape_png(png: &[u8]) -> Option<Vec<u8>> {
     Some(img.into_raw())
 }
 
+#[must_use] 
 pub fn decode_skin_png(png: &[u8]) -> Option<Vec<u8>> {
     let img = image::load_from_memory(png).ok()?.to_rgba8();
     let (width, height) = img.dimensions();

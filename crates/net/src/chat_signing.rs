@@ -40,6 +40,7 @@ pub struct ChatSigner {
 // Frische Sitzungs-UUID (Version 4). Pro Verbindung eine neue -- der Server bindet die
 // Signaturkette daran, eine wiederverwendete Sitzung mit zurueckgesetztem Index wuerde er
 // als gebrochene Kette werten.
+#[must_use] 
 pub fn random_session_id() -> [u8; 16] {
     use rand::RngCore;
     let mut bytes = [0u8; 16];
@@ -66,7 +67,8 @@ impl ChatSigner {
         Ok(Self { signing_key: SigningKey::<Sha256>::new(key), sender, session_id, index: 0 })
     }
 
-    pub fn session_id(&self) -> [u8; 16] {
+    #[must_use] 
+    pub const fn session_id(&self) -> [u8; 16] {
         self.session_id
     }
 

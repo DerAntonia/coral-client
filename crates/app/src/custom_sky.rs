@@ -36,7 +36,7 @@ pub const MAX_FACE: u32 = 2048;
 // So weit (in Ticks) schaut das Laden voraus, damit ein Bild zum Einblenden schon da ist.
 const PREFETCH_TICKS: i64 = 600;
 // Ohne Bedarf so lange behalten, dann freigeben.
-const KEEP_UNUSED: Duration = Duration::from_secs(60);
+const KEEP_UNUSED: Duration = Duration::from_mins(1);
 // Vorab hoechstens so viel (entpackt): uebliche Packs (gemessen 90 bis 260 MB) passen ganz
 // hinein, von riesigen nur die ersten Ebenen -- der Rest kommt, wenn die Uhrzeit bekannt ist.
 const PRELOAD_BYTES: u64 = 384 << 20;
@@ -44,7 +44,7 @@ const PRELOAD_BYTES: u64 = 384 << 20;
 const LOADER_THREADS: usize = 4;
 const DAY: i32 = 24_000;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fade {
     pub start_in: i32,
     pub end_in: i32,
@@ -152,15 +152,12 @@ pub fn parse_layer(text: &str, props_path: &str) -> Option<LayerDef> {
     let fade = match (p.get("startFadeIn"), p.get("endFadeIn"), p.get("endFadeOut")) {
         (Some(a), Some(b), Some(d)) => {
             let (start_in, end_in, end_out) = (tick_time(a), tick_time(b), tick_time(d));
-            let start_out = match p.get("startFadeOut") {
-                Some(c) => tick_time(c),
-                None => {
-                    let s = end_out - (end_in - start_in);
-                    if (start_in..=end_in).contains(&s) {
-                        end_out
-                    } else {
-                        s
-                    }
+            let start_out = if let Some(c) = p.get("startFadeOut") { tick_time(c) } else {
+                let s = end_out - (end_in - start_in);
+                if (start_in..=end_in).contains(&s) {
+                    end_out
+                } else {
+                    s
                 }
             };
             let n = |t: i32| t.rem_euclid(DAY);
@@ -270,7 +267,7 @@ fn in_interval(t: i32, a: i32, b: i32) -> bool {
     }
 }
 
-fn cyclic(a: i32, b: i32) -> i32 {
+const fn cyclic(a: i32, b: i32) -> i32 {
     (b - a + DAY) % DAY
 }
 
@@ -313,8 +310,8 @@ pub fn is_active(def: &LayerDef, day_time: i64, t: i32) -> bool {
         }
     }
     let Some((lang, tage)) = &def.days else { return true };
-    let start = def.fade.map_or(0, |f| f.start_in) as i64;
-    let tag = (day_time - start).div_euclid(DAY as i64).rem_euclid(*lang as i64) as i32;
+    let start = i64::from(def.fade.map_or(0, |f| f.start_in));
+    let tag = (day_time - start).div_euclid(i64::from(DAY)).rem_euclid(i64::from(*lang)) as i32;
     tage.is_empty() || in_ranges(tage, tag)
 }
 
@@ -323,7 +320,7 @@ pub fn is_active(def: &LayerDef, day_time: i64, t: i32) -> bool {
 pub fn angle(def: &LayerDef, day_time: i64, celestial: f32) -> f32 {
     let mut tag_start = 0.0;
     if def.speed != def.speed.round() {
-        let tag = (day_time + 18_000) / DAY as i64;
+        let tag = (day_time + 18_000) / i64::from(DAY);
         tag_start = (tag as f32 * (def.speed % 1.0)) % 1.0;
     }
     360.0 * (tag_start + celestial * def.speed)
@@ -408,12 +405,9 @@ impl CustomSky {
                 let layers = layers
                     .into_iter()
                     .map(|def| {
-                        let texture = match textures.iter().position(|t| t.path == def.texture) {
-                            Some(i) => i,
-                            None => {
-                                textures.push(Tex { path: def.texture.clone(), state: TexState::Idle, last_needed: Instant::now(), size: None });
-                                textures.len() - 1
-                            }
+                        let texture = if let Some(i) = textures.iter().position(|t| t.path == def.texture) { i } else {
+                            textures.push(Tex { path: def.texture.clone(), state: TexState::Idle, last_needed: Instant::now(), size: None });
+                            textures.len() - 1
                         };
                         Layer { def, texture, cond: None }
                     })
@@ -424,7 +418,7 @@ impl CustomSky {
         Self { worlds, textures, to_loader: None, from_loader: None }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.worlds.is_empty()
     }
 
@@ -470,9 +464,9 @@ impl CustomSky {
     // muessen. `load` liefert die Dateibytes eines Bildes (aus der Installation).
     pub fn frame(&mut self, f: &SkyFrame, max_dim: u32, load: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Vec<SkyLayerDraw> {
         let jetzt = Instant::now();
-        let t = f.day_time.rem_euclid(DAY as i64) as i32;
+        let t = f.day_time.rem_euclid(i64::from(DAY)) as i32;
         let spaeter = f.day_time + PREFETCH_TICKS;
-        let t_spaeter = spaeter.rem_euclid(DAY as i64) as i32;
+        let t_spaeter = spaeter.rem_euclid(i64::from(DAY)) as i32;
         let mut draws = Vec::new();
         let mut gebraucht = Vec::new();
         if let Some((_, layers)) = self.worlds.iter().find(|(w, _)| *w == f.world) {
@@ -622,7 +616,7 @@ fn start_loader() -> (Sender<(usize, Vec<u8>, u32)>, Receiver<(usize, Result<Dec
     (tx_job, rx_done)
 }
 
-fn too_big(w: u32, h: u32, max_dim: u32) -> bool {
+const fn too_big(w: u32, h: u32, max_dim: u32) -> bool {
     w / 3 > MAX_FACE || h / 2 > MAX_FACE || w > max_dim || h > max_dim
 }
 
@@ -660,7 +654,7 @@ fn halve(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
     for y in 0..nh {
         for x in 0..nw {
             for c in 0..4 {
-                let px = |xx: u32, yy: u32| rgba[((yy.min(h - 1) * w + xx.min(w - 1)) * 4 + c) as usize] as u32;
+                let px = |xx: u32, yy: u32| u32::from(rgba[((yy.min(h - 1) * w + xx.min(w - 1)) * 4 + c) as usize]);
                 let sum = px(2 * x, 2 * y) + px(2 * x + 1, 2 * y) + px(2 * x, 2 * y + 1) + px(2 * x + 1, 2 * y + 1);
                 out[((y * nw + x) * 4 + c) as usize] = (sum / 4) as u8;
             }
@@ -821,7 +815,7 @@ mod tests {
             let x = ((u * bild.width as f32) as u32).min(bild.width - 1);
             let y = ((v * bild.height as f32) as u32).min(bild.height - 1);
             let i = ((y * bild.width + x) * 4) as usize;
-            Vec3::new(bild.rgba[i] as f32, bild.rgba[i + 1] as f32, bild.rgba[i + 2] as f32)
+            Vec3::new(f32::from(bild.rgba[i]), f32::from(bild.rgba[i + 1]), f32::from(bild.rgba[i + 2]))
         };
         let mut schlimmste: f32 = 0.0;
         let achsen = [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z];

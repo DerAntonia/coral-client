@@ -59,7 +59,8 @@ pub const AO_SKIP: u8 = 4;
 pub const AO_DARKENS: u8 = 8;
 
 // Vanillas AO-Wert eines Nachbarn.
-pub fn ao_level(flags: u8) -> f32 {
+#[must_use] 
+pub const fn ao_level(flags: u8) -> f32 {
     if flags & AO_DARKENS != 0 {
         0.2
     } else {
@@ -101,6 +102,7 @@ pub fn face_corners(pos: (i32, i32, i32), face: usize, on_boundary: bool, flags_
 // Eckwerten, gewichtet nach der Lage des Punkts Richtung f0/f1 bzw. f2/f3. Fuer ein Quad ueber
 // die volle Flaeche kommen dabei genau die Eckwerte heraus; fuer ein kleineres entspricht es
 // Vanillas Gewichten aus der Quad-Ausdehnung.
+#[must_use] 
 pub fn vertex_ao(face: usize, corners: [f32; 4], local: [f32; 3]) -> f32 {
     let [n0, _, n2, _] = NEIGHBOR_FACES[face];
     let gewicht = |richtung: usize| {
@@ -143,6 +145,7 @@ pub fn vertex_ao(face: usize, corners: [f32; 4], local: [f32; 3]) -> f32 {
 //
 // Frueherer Fehler: Glas zaehlte hier als
 // Vollwuerfel und warf deshalb AO-Schatten auf alles daneben -- in Vanilla tut es das nicht.
+#[must_use] 
 pub fn ao_darkens(state: u32, full_cube: bool) -> bool {
     let Some(name) = block_name(state) else { return full_cube };
     if name == "glass" || name == "tinted_glass" || name.ends_with("_stained_glass") || name.ends_with("copper_grate") {
@@ -157,6 +160,7 @@ pub fn ao_darkens(state: u32, full_cube: bool) -> bool {
 }
 
 // Hoehe einer Schneeschicht in Achteln (1..=8), sonst None.
+#[must_use] 
 pub fn snow_layers(state: u32) -> Option<u8> {
     if block_name(state) != Some("snow") {
         return None;
@@ -173,12 +177,14 @@ pub fn snow_layers(state: u32) -> Option<u8> {
 
 // Unterkante des sichtbaren Teils einer Seitenflaeche (in Blockhoehe 0..1): die Oberseite einer
 // niedrigeren Schicht davor, sonst 0.
+#[must_use] 
 pub fn snow_riser_bottom(own_layers: u8, front: u32) -> f32 {
-    snow_layers(front).filter(|&l| l < own_layers).map_or(0.0, |l| l as f32 / 8.0)
+    snow_layers(front).filter(|&l| l < own_layers).map_or(0.0, |l| f32::from(l) / 8.0)
 }
 
 // AO-Flags eines Nachbarn fuer die Oberseite einer Schneeschicht: eine hoehere Schicht in
 // derselben Lage dunkelt ab.
+#[must_use] 
 pub fn snow_top_flags(own_layers: u8, neighbor: u32, flags: u8) -> u8 {
     if snow_layers(neighbor).is_some_and(|l| l > own_layers) {
         flags | AO_DARKENS
@@ -191,6 +197,7 @@ pub fn snow_top_flags(own_layers: u8, neighbor: u32, flags: u8) -> u8 {
 // herausgezogen: feste Werte ueber `.luminance(state -> N)`, zustandsabhaengige ueber `lit`,
 // Ladungen, Beeren usw. Gefaerbte und gewachste Varianten erben ihre Einstellungen dort per
 // Settings.copy und stehen deshalb hier ueber Praefix/Suffix.
+#[must_use] 
 pub fn emits_light(state: u32) -> bool {
     let Some(name) = block_name(state) else { return false };
     const FEST: &[&str] = &[
@@ -259,6 +266,7 @@ pub fn emits_light(state: u32) -> bool {
 // Blockiert dieser State die Sicht (shouldBlockVision)? Vanillas Vorgabe ist
 // `blocksMovement && isFullCube` -- `full_cube` uebergibt der Aufrufer. Die Ausnahmen stehen
 // in Blocks.java einzeln an den Bloecken (`.blockVision(...)`).
+#[must_use] 
 pub fn blocks_vision(state: u32, full_cube: bool) -> bool {
     let Some(name) = block_name(state) else { return full_cube };
     // Blocks::never

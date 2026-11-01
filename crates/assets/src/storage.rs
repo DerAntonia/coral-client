@@ -77,7 +77,7 @@ struct JavaVersion {
 // FNV-1a: Kennung eines Dumper-Quelltexts im Stempel.
 fn fnv(bytes: &[u8], mut h: u64) -> u64 {
     for b in bytes {
-        h ^= *b as u64;
+        h ^= u64::from(*b);
         h = h.wrapping_mul(0x100_0000_01b3);
     }
     h
@@ -181,11 +181,13 @@ fn running_java() -> Vec<PathBuf> {
 
 
 /// Ordner der extrahierten Daten fuer `version`.
+#[must_use] 
 pub fn game_data_dir(version: &str) -> Option<PathBuf> {
     Some(storage_dir()?.join(version))
 }
 
-/// Pfad einer extrahierten Sprachdatei (code wie "de_de").
+/// Pfad einer extrahierten Sprachdatei (code wie "`de_de`").
+#[must_use] 
 pub fn stored_lang_path(version: &str, code: &str) -> Option<PathBuf> {
     Some(game_data_dir(version)?.join("lang").join(format!("{code}.json")))
 }
@@ -215,6 +217,7 @@ fn dumper_stamp(datei: &str, quelle: &str) -> String {
 }
 
 /// Stimmen die extrahierten Daten noch? Fragt nur Dateien ab, startet nichts.
+#[must_use] 
 pub fn game_data_status(version: &str) -> GameDataStatus {
     let Some(dir) = game_data_dir(version) else { return GameDataStatus::Missing };
     let Ok(stempel) = std::fs::read_to_string(dir.join(STAMP)) else { return GameDataStatus::Missing };
@@ -271,18 +274,21 @@ fn stored(version: &str, name: &str) -> Option<String> {
     std::fs::read_to_string(game_data_dir(version)?.join(name)).ok()
 }
 
-/// Die extrahierten Entity-Modelle (Format von world::model_data), None = nicht extrahiert.
+/// Die extrahierten Entity-Modelle (Format von `world::model_data`), None = nicht extrahiert.
+#[must_use] 
 pub fn stored_entity_models(version: &str) -> Option<String> {
     stored(version, DUMPS[0].0)
 }
 
 /// Die extrahierten Kreativ-Tabs (Format s. CreativeTabsDump.java), None = nicht extrahiert.
+#[must_use] 
 pub fn stored_creative_tabs(version: &str) -> Option<String> {
     stored(version, DUMPS[1].0)
 }
 
 /// Die extrahierten Standard-Components aller Items (Format s. ItemComponentsDump.java), None =
 /// nicht extrahiert.
+#[must_use] 
 pub fn stored_item_components(version: &str) -> Option<String> {
     stored(version, DUMPS[2].0)
 }

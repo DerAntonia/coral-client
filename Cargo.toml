@@ -14,6 +14,8 @@ members = [
     "crates/voice",
     "crates/chunk_saver",
     "crates/addon_api",
+    "crates/tuning",
+    "crates/record",
 ]
 # Das Spiel ist das Standardziel des Arbeitsbereichs. Ohne diese Zeile ist ein schlichtes
 # `cargo run --release` mehrdeutig, seit pktproxy (das Byte-MITM-Werkzeug fuer die
@@ -55,3 +57,24 @@ rustc-hash = "2"
 tokio = { version = "1", features = ["full"] }
 wgpu = { version = "22", features = ["naga-ir"] }
 winit = "0.30"
+
+# Schnelles Bauen beim Ausprobieren: wie release, aber inkrementell -- nach kleinen Aenderungen
+# wird nur neu uebersetzt, was sich geaendert hat. Etwas weniger optimiert (mehr Codegen-Units).
+[profile.fast]
+inherits = "release"
+incremental = true
+# Die eigenen Crates nur leicht optimiert: baut viel schneller, das Spiel laeuft etwas langsamer
+# (vom Nutzer so gewollt). Fremde Crates (wgpu, winit, ...) bleiben voll optimiert, die werden
+# ohnehin nur einmal gebaut.
+opt-level = 1
+# Kein ThinLTO zwischen den Codegen-Units: das kostete allein 12 s pro App-Aenderung.
+lto = "off"
+
+[profile.fast.package."*"]
+opt-level = 3
+
+# Die App gar nicht optimiert: rustc legt alle Methoden von `impl App` (anims.rs, render.rs,
+# menu.rs, ...) in eine einzige Codegen-Unit beim Typ in main.rs, die LLVM mit opt-level 1 nach
+# jeder Aenderung ganz neu optimiert (~11 s). Mit 0 dauert eine Aenderung ~3 s.
+[profile.fast.package.app]
+opt-level = 0

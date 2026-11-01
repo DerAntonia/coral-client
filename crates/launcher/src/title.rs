@@ -31,21 +31,21 @@ impl Title {
             let _ = tx.send(render(&lines()));
             ctx.request_repaint();
         });
-        Title::Loading(rx)
+        Self::Loading(rx)
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
-        let Title::Loading(rx) = self else { return };
+        let Self::Loading(rx) = self else { return };
         let Ok(image) = rx.try_recv() else { return };
         *self = match image {
-            Some(image) => Title::Ready(ctx.load_texture("title", image, egui::TextureOptions::NEAREST)),
-            None => Title::Missing,
+            Some(image) => Self::Ready(ctx.load_texture("title", image, egui::TextureOptions::NEAREST)),
+            None => Self::Missing,
         };
     }
 
-    pub fn texture(&self) -> Option<&egui::TextureHandle> {
+    pub const fn texture(&self) -> Option<&egui::TextureHandle> {
         match self {
-            Title::Ready(texture) => Some(texture),
+            Self::Ready(texture) => Some(texture),
             _ => None,
         }
     }

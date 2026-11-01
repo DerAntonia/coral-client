@@ -85,6 +85,7 @@ pub fn properties_of(state: u32) -> impl Iterator<Item = (&'static str, &'static
 }
 
 // Wert einer einzelnen Property, oder None (Property nicht gesetzt / State unbekannt).
+#[must_use] 
 pub fn property(state: u32, key: &str) -> Option<&'static str> {
     properties_of(state).find(|(k, _)| *k == key).map(|(_, v)| v)
 }

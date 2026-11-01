@@ -50,6 +50,7 @@ pub struct OcclusionCulling {
 }
 
 impl OcclusionCulling {
+    #[must_use] 
     pub fn new() -> Self {
         let (tx, worker_rx) = channel::<Msg>();
         let (worker_tx, rx) = channel::<Result>();
@@ -106,6 +107,7 @@ impl OcclusionCulling {
     }
 
     // Sichtbare Sections der Spalte als Bitmaske; alle, solange nichts Gesichertes vorliegt.
+    #[must_use] 
     pub fn mask(&self, key: Key) -> u64 {
         let Some(r) = &self.result else { return u64::MAX };
         if !self.fresh.is_empty() {
@@ -304,7 +306,7 @@ mod tests {
             for z in -1..=3 {
                 let vis = match (x, z) {
                     (1, 1) => nord_ost,
-                    (0, 0) | (1, 0) | (0, 1) | (2, 1) => VIS_ALL,
+                    (0 | 1, 0) | (0 | 2, 1) => VIS_ALL,
                     _ => 0,
                 };
                 columns.insert((x, z), spalte(&[vis]));
@@ -342,6 +344,6 @@ mod zeit {
         for _ in 0..n {
             std::hint::black_box(reachable(&columns, (0, 8, 0), 33));
         }
-        eprintln!("BFS r=33, 24 Sections, alles offen: {:.2} ms", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        eprintln!("BFS r=33, 24 Sections, alles offen: {:.2} ms", t.elapsed().as_secs_f64() * 1000.0 / f64::from(n));
     }
 }

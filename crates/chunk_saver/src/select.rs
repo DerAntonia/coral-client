@@ -24,8 +24,8 @@ pub struct View {
 fn distance(view: &View, level: u8, x: i32, z: i32) -> f64 {
     let size = (N as f64) * f64::from(1u32 << level);
     let gap = |p: f64, lo: f64, hi: f64| (lo - p).max(0.0).max(p - hi);
-    let dx = gap(view.eye[0], x as f64 * size, (x + 1) as f64 * size);
-    let dz = gap(view.eye[2], z as f64 * size, (z + 1) as f64 * size);
+    let dx = gap(view.eye[0], f64::from(x) * size, f64::from(x + 1) * size);
+    let dz = gap(view.eye[2], f64::from(z) * size, f64::from(z + 1) * size);
     let dy = gap(view.eye[1], view.y_range.0 as f64, view.y_range.1 as f64);
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
@@ -88,7 +88,7 @@ mod tests {
                 .iter()
                 .filter(|&&(l, x, z, _)| {
                     let s = (N as i64) << l;
-                    bx.div_euclid(s) == x as i64 && bz.div_euclid(s) == z as i64
+                    bx.div_euclid(s) == i64::from(x) && bz.div_euclid(s) == i64::from(z)
                 })
                 .count();
             assert_eq!(treffer, 1, "{bx} {bz}");
@@ -101,7 +101,7 @@ mod tests {
         // Alles bis 256 Bloecke um das Auge gilt als geladen.
         let geladen = |l: u8, x: i32, z: i32| {
             let s = (N as f64) * f64::from(1u32 << l);
-            let (x0, z0) = (x as f64 * s, z as f64 * s);
+            let (x0, z0) = (f64::from(x) * s, f64::from(z) * s);
             x0 >= -156.0 && x0 + s <= 356.0 && z0 >= -306.0 && z0 + s <= 206.0
         };
         let cols = select_columns(&v, &geladen);

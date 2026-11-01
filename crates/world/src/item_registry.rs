@@ -42,8 +42,9 @@ fn registry() -> &'static ItemRegistry {
 // Itemname (ohne "minecraft:"-Praefix) zu einer Item-ID, oder None fuer unbekannte IDs
 // (z.B. neuere Items, als die Tabelle gebacken wurde -- der Aufrufer zeigt dann ein
 // Platzhalter-Icon statt zu panicken).
+#[must_use] 
 pub fn item_name(id: u32) -> Option<&'static str> {
-    registry().names.get(id as usize).map(|s| s.as_str())
+    registry().names.get(id as usize).map(std::string::String::as_str)
 }
 
 // Rueckrichtung: Itemname -> Item-ID. Gebraucht, um einen BLOCK-State auf sein Item
@@ -59,16 +60,19 @@ pub fn item_id_by_name(name: &str) -> Option<u32> {
 
 // Maximale Stapelgroesse. Unbekannte IDs bekommen Vanillas Default 64 -- das ist der Wert,
 // mit dem sich die Vorhersage im Zweifel am wenigsten verrechnet.
+#[must_use] 
 pub fn max_stack_size(id: u32) -> i32 {
-    registry().max_stack.get(id as usize).copied().unwrap_or(64) as i32
+    i32::from(registry().max_stack.get(id as usize).copied().unwrap_or(64))
 }
 
 // Alle Itemnamen in ID-Reihenfolge -- fuer den Bau des Item-Icon-Atlas (einmal jede
 // Textur aufloesen, nicht pro Stack erneut).
+#[must_use] 
 pub fn all_item_names() -> &'static [String] {
     registry().names.as_slice()
 }
 
+#[must_use] 
 pub fn item_count() -> usize {
     registry().names.len()
 }
@@ -110,6 +114,7 @@ mod tests {
 //   2. MinecraftClient.handleInputEvents wiederholt die Benutzung bei gehaltener Taste NUR
 //      solange `!player.isUsingItem()`. Wer das nicht kennt, schickt alle 4 Ticks ein neues
 //      USE_ITEM -- und GrimAC setzt bei jedem davon seinen Item-Verlangsamungs-Zustand neu.
+#[must_use] 
 pub fn is_used_continuously(name: &str) -> bool {
     // Werkzeuge/Waffen mit Benutzungsanimation.
     const HALTEN: &[&str] = &["bow", "crossbow", "trident", "shield", "spyglass", "goat_horn", "brush"];
@@ -120,6 +125,7 @@ pub fn is_used_continuously(name: &str) -> bool {
 // Die Speere aus 1.21.11 (Item.Settings.spear): Stich per Linksklick (PiercingWeaponComponent,
 // PlayerAction STAB), Ansturm per gehaltenem Rechtsklick (KineticWeaponComponent). Ihre
 // use_effects erlauben dabei volles Tempo und Sprinten (UseEffectsComponent(true, false, 1.0)).
+#[must_use] 
 pub fn is_spear(name: &str) -> bool {
     matches!(
         name,
@@ -150,12 +156,14 @@ fn ticks(sekunden: f32) -> i32 {
 
 // SwingAnimationComponent(STAB, swingSeconds * 20) der Speere; alle anderen Items schwingen
 // mit Vanillas Standard von 6 Ticks (LivingEntity.getHandSwingDuration ohne Komponente).
+#[must_use] 
 pub fn swing_duration_ticks(name: &str) -> u32 {
     spear_settings(name).map_or(6, |s| ticks(s[0]) as u32)
 }
 
 // Die Zeitmarken des Ansturms (KineticWeaponComponent: delayTicks und die maxDurationTicks
 // der drei Bedingungen), s. entity_model::first_person_spear_charge.
+#[must_use] 
 pub fn spear_kinetic(name: &str) -> Option<crate::entity_model::SpearKinetic> {
     let s = spear_settings(name)?;
     Some(crate::entity_model::SpearKinetic { delay: ticks(s[1]), dismount: ticks(s[2]), knockback: ticks(s[3]), damage: ticks(s[4]) })
@@ -164,6 +172,7 @@ pub fn spear_kinetic(name: &str) -> Option<crate::entity_model::SpearKinetic> {
 // Wie lange Essen/Trinken dauert (consumable.consume_seconds * 20), oder None fuer alles,
 // was nicht gegessen oder getrunken wird. Die Vanilla-Standarddauer ist 1,6 s; abweichend
 // sind nur getrockneter Seetang (schneller) und die Honigflasche (langsamer).
+#[must_use] 
 pub fn eat_duration_ticks(name: &str) -> Option<u32> {
     if !ESSEN.contains(&name) {
         return None;
@@ -183,6 +192,7 @@ pub fn eat_duration_ticks(name: &str) -> Option<u32> {
 // verdaechtiger Eintopf und die Honigflasche (aus dem Jar gezogen: alle Builder mit
 // alwaysEdible()). Die Honigflasche fehlte -- und damit der Golden Head von mcpvp.club, der
 // eine umgebaute Honigflasche ist.
+#[must_use] 
 pub fn needs_hunger(name: &str) -> bool {
     const IMMER: &[&str] =
         &["golden_apple", "enchanted_golden_apple", "chorus_fruit", "suspicious_stew", "honey_bottle", "milk_bucket", "potion", "ominous_bottle"];
@@ -248,6 +258,7 @@ const ESSEN: &[&str] = &[
 // Nebenhand ueberholt.
 //
 // `block_hit` unterscheidet die beiden Strahl-Faelle (s. block_hit_use_swings).
+#[must_use] 
 pub fn item_use_accepted(name: &str, block_hit: bool) -> bool {
     let schwingt = if block_hit { block_hit_use_swings(name) } else { air_use_swings(name) };
     schwingt || is_used_continuously(name)
@@ -306,6 +317,7 @@ mod benutzungs_tests {
 // EIGENEN Strahl gegen Fluessigkeiten (Wasser ist fuer den gewoehnlichen Strahl kein Treffer),
 // und den kennt dieser Client nicht. Ebenso die Raketen-Ausnahme (nur beim Gleiten) und
 // Abklingzeiten (ein Item in der Abklingzeit gibt PASS).
+#[must_use] 
 pub fn air_use_swings(name: &str) -> bool {
     throws_or_opens(name) || equips_by_name(name)
 }
@@ -313,6 +325,7 @@ pub fn air_use_swings(name: &str) -> bool {
 // Der Teil von air_use_swings, der an der Item-KLASSE haengt (werfen, auswerfen, oeffnen) --
 // das Anziehen kommt bei geladenen Standards aus der equippable-Component (s.
 // item_behavior::air_use_swings).
+#[must_use] 
 pub fn throws_or_opens(name: &str) -> bool {
     const WURF_UND_OEFFNEN: &[&str] = &[
         // Wurfgeschosse (SnowballItem, EggItem, EnderPearlItem, ExperienceBottleItem,
@@ -366,6 +379,7 @@ fn equips_by_name(name: &str) -> bool {
 // Bloecke selbst stehen hier NICHT drin -- die erkennt der Aufrufer daran, dass es einen
 // gleichnamigen Block gibt (block_registry::is_block), und prueft zusaetzlich, ob am Zielplatz
 // ueberhaupt Raum ist. Hier stehen nur die Items, die keinen Block setzen und trotzdem wirken.
+#[must_use] 
 pub fn acts_on_block(name: &str) -> bool {
     const EINZELN: &[&str] = &[
         "flint_and_steel",
@@ -420,11 +434,13 @@ pub fn acts_on_block(name: &str) -> bool {
 // Item mit CONSUMABLE-Komponente, also Essen (CONSUME, kein Schwung). Und
 // "powder_snow_bucket" nicht, weil es als einziger Eimer ein BlockItem ist: es wird schon
 // eine Stufe frueher angenommen (acts_on_block) und kommt hier gar nicht an.
+#[must_use] 
 pub fn block_hit_use_swings(name: &str) -> bool {
     empties_bucket(name) || air_use_swings(name)
 }
 
 // Ein gefuellter Fluessigkeitseimer (s. block_hit_use_swings).
+#[must_use] 
 pub fn empties_bucket(name: &str) -> bool {
     const KEIN_FLUESSIGKEITSEIMER: &[&str] = &["bucket", "milk_bucket", "powder_snow_bucket"];
     name.ends_with("_bucket") && !KEIN_FLUESSIGKEITSEIMER.contains(&name)
@@ -583,6 +599,7 @@ mod schwung_tests {
 // dort steht je Werkzeug ein ADD_VALUE-Modifikator auf den Grundwert 4.0, z.B.
 // Diamantschwert mit -2.4 -> 4.0 - 2.4 = 1.6. Alles, was
 // keinen Modifikator traegt (Bloecke, Kristalle, blosse Hand), bleibt bei 4.0.
+#[must_use] 
 pub fn attack_speed(name: &str) -> f32 {
     // Materialpraefix abschneiden -- die Modifikatoren haengen fast ueberall nur an der
     // Werkzeugart, nicht am Material. Die drei Ausnahmen (Aexte, Hacken) stehen darunter.

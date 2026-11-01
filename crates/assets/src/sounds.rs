@@ -74,11 +74,11 @@ struct RawDetail {
     r#type: String,
 }
 
-fn eins() -> f32 {
+const fn eins() -> f32 {
     1.0
 }
 
-fn ein_gewicht() -> u32 {
+const fn ein_gewicht() -> u32 {
     1
 }
 
@@ -94,7 +94,7 @@ impl SoundIndex {
     ///
     /// Eine kaputte Ebene wirft nicht alles weg: sie wird uebersprungen, die anderen zaehlen
     /// weiter. Ein Pack mit fehlerhafter sounds.json soll den Ton nicht komplett abschalten.
-    pub fn load(installation: &mut MinecraftInstallation) -> Result<SoundIndex, AssetsError> {
+    pub fn load(installation: &mut MinecraftInstallation) -> Result<Self, AssetsError> {
         let ebenen = installation.load_layers(SOUNDS_JSON);
         if ebenen.is_empty() {
             return Err(AssetsError::AssetNotFound { virtual_path: SOUNDS_JSON.to_string() });
@@ -109,23 +109,26 @@ impl SoundIndex {
         if zusammen.is_empty() {
             return Err(AssetsError::AssetNotFound { virtual_path: SOUNDS_JSON.to_string() });
         }
-        Ok(SoundIndex { events: flatten(&zusammen) })
+        Ok(Self { events: flatten(&zusammen) })
     }
 
     /// Alle Aufnahmen eines Events. `None` = Event unbekannt.
+    #[must_use] 
     pub fn variants(&self, event: &str) -> Option<&[SoundVariant]> {
-        self.events.get(strip_namespace(event)).map(|v| v.as_slice())
+        self.events.get(strip_namespace(event)).map(std::vec::Vec::as_slice)
     }
 
     /// Alle bekannten Event-Namen (ohne Namensraum). Fuer Pruefungen und Werkzeuge.
     pub fn event_names(&self) -> impl Iterator<Item = &str> {
-        self.events.keys().map(|k| k.as_str())
+        self.events.keys().map(std::string::String::as_str)
     }
 
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.events.len()
     }
 
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -138,6 +141,7 @@ impl SoundIndex {
     /// nachbauen. Der hoerbare Unterschied waere, ob `stone1` oder `stone3` erklingt --
     /// derselbe Schritt, andere Aufnahme. Deterministisch ist es trotzdem: dieselbe Saat
     /// ergibt hier immer dieselbe Variante.
+    #[must_use] 
     pub fn pick(&self, event: &str, seed: i64) -> Option<&SoundVariant> {
         let varianten = self.variants(event)?;
         let gesamt: u32 = varianten.iter().map(|v| v.weight.max(1)).sum();
@@ -154,7 +158,7 @@ impl SoundIndex {
         x ^= x >> 27;
         x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
         x ^= x >> 31;
-        let mut wahl = (x % gesamt as u64) as u32;
+        let mut wahl = (x % u64::from(gesamt)) as u32;
         for variante in varianten {
             let gewicht = variante.weight.max(1);
             if wahl < gewicht {
@@ -188,7 +192,7 @@ fn merge_layer(bisher: &mut HashMap<String, RawEvent>, ebene: HashMap<String, Ra
 /// `minecraft:block.stone.step` -> `block.stone.step`. In sounds.json stehen die Events ohne
 /// Namensraum; im Paket kommen sie mit.
 fn strip_namespace(event: &str) -> &str {
-    event.split_once(':').map(|(_, rest)| rest).unwrap_or(event)
+    event.split_once(':').map_or(event, |(_, rest)| rest)
 }
 
 /// Aus der Rohform die fertigen Variantenlisten bauen -- inklusive Aufloesen der

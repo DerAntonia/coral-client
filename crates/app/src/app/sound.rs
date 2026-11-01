@@ -1,6 +1,6 @@
 // Klaenge: UI, Welt, Server, Schritte und Bloecke.
 
-use crate::*;
+use crate::{App, ui_sound, Instant, zufallswert, sound_log, SLIDER_TICK_RISE_SEMITONES, spatial_sound, DVec3, ShieldCooldown, SHIELD_BREAK_MATCH_RADIUS, blocking_arms, SHIELD_DISABLE_TICKS, SHIELD_LOWER_GRACE_TICKS, toteming, SoundSource, Arc, TRACK_MIN_SECONDS, TrackedSound, Duration, audio_buffer_request, PIPEWIRE_PULSE_MIN, pipewire, AppMode, MenuScreen, PipewireKnopf, ORBIT_TEST_SOUND, GAME_MODE_SPECTATOR, step_climbable, KINETIC_HIT_FEEDBACK};
 
 impl App {
     // Einen Oberflaechen-Klang abspielen (s. ui_sound). Geht ueber denselben Mixer wie alles
@@ -126,13 +126,13 @@ impl App {
         });
     }
 
-    /// Ein Geraeusch vom Server abspielen (s. net::ClientEvent::Sound).
+    /// Ein Geraeusch vom Server abspielen (s. `net::ClientEvent::Sound`).
     pub(crate) fn play_server_sound(&mut self, sound: protocol::packets::SoundEffect) {
         self.play_sound_effect(sound, "server");
     }
 
-    /// Wie play_server_sound, fuer Klaenge, die der Client aus einem anderen Paket ableitet
-    /// oder selbst ausloest -- `herkunft` steht nur im Klang-Mitschnitt (s. sound_log).
+    /// Wie `play_server_sound`, fuer Klaenge, die der Client aus einem anderen Paket ableitet
+    /// oder selbst ausloest -- `herkunft` steht nur im Klang-Mitschnitt (s. `sound_log`).
     pub(crate) fn play_sound_effect(&mut self, sound: protocol::packets::SoundEffect, herkunft: &str) {
         if sound.name == "minecraft:item.shield.break" {
             self.note_shield_break(&sound);
@@ -268,7 +268,7 @@ impl App {
             }
             match self.entities.get(id) {
                 Some(e) if world::is_player(e.entity_type) => {
-                    format!("Spieler {} #{id}", self.player_names.get(&e.uuid).map(String::as_str).unwrap_or("?"))
+                    format!("Spieler {} #{id}", self.player_names.get(&e.uuid).map_or("?", String::as_str))
                 }
                 Some(e) => format!("{} #{id}", world::entity_type_name(e.entity_type).unwrap_or("?")),
                 None => format!("unbekannt #{id}"),
@@ -291,7 +291,7 @@ impl App {
         }
     }
 
-    /// Ein Weltgeraeusch nachgefuehrt abspielen (s. update_tracked_sounds). Rueckgabe: der Griff.
+    /// Ein Weltgeraeusch nachgefuehrt abspielen (s. `update_tracked_sounds`). Rueckgabe: der Griff.
     pub(crate) fn play_tracked(&mut self, sample: Arc<audio::wav::Wav>, gain: f32, pitch: f32, quelle: SoundSource, tag: audio::SoundTag) -> Option<u32> {
         let dauer = sample.duration() / pitch.max(1e-3);
         let placement = self.listener().placement(self.sound_source_position(&quelle));
@@ -311,7 +311,7 @@ impl App {
             SoundSource::Fixed(p) => *p,
             SoundSource::Own => self.physics.eye_pos(),
             SoundSource::Entity(id, zuletzt) => {
-                self.entities.get(*id).map(|e| DVec3::from(e.render_pos(self.tick_progress()))).unwrap_or(*zuletzt)
+                self.entities.get(*id).map_or(*zuletzt, |e| DVec3::from(e.render_pos(self.tick_progress())))
             }
         }
     }
@@ -326,7 +326,7 @@ impl App {
         let listener = self.listener();
         let progress = self.tick_progress();
         let mut lagen = Vec::with_capacity(self.tracked_sounds.len());
-        for t in self.tracked_sounds.iter_mut() {
+        for t in &mut self.tracked_sounds {
             if let SoundSource::Entity(id, zuletzt) = &mut t.source {
                 if let Some(e) = self.entities.get(*id) {
                     *zuletzt = DVec3::from(e.render_pos(progress));
@@ -360,7 +360,7 @@ impl App {
         if gain <= 0.0 {
             return;
         }
-        let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
+        let mitte = DVec3::new(f64::from(pos.0) + 0.5, f64::from(pos.1) + 0.5, f64::from(pos.2) + 0.5);
         self.log_client_sound("levelevent", &name, protocol::packets::SoundCategory::Records, None, Some(mitte), 4.0, 1.0, &format!("gespielt  pegel={gain:.3} (Jukebox)"));
         let tag = audio::SoundTag { category: protocol::packets::SoundCategory::Records as u8, name: audio::sound_name_hash(&name) };
         if let Some(handle) = self.play_tracked(aufnahme.sample, gain, aufnahme.pitch, SoundSource::Fixed(mitte), tag) {
@@ -423,7 +423,7 @@ impl App {
             let m = self.pipewire.messung();
             let ziel = (puffer != 0 && puffer < PIPEWIRE_PULSE_MIN).then(|| pipewire::grenze_fuer(puffer, m.and_then(|m| m.min_quantum)));
             self.pipewire.auto_optimieren(ziel, m.map_or(48_000, |m| m.rate));
-            if let Some(tid) = self.audio.buffer_info().and_then(|b| b.callback_thread()) {
+            if let Some(tid) = self.audio.buffer_info().and_then(audio::BufferInfo::callback_thread) {
                 self.pipewire.client_echtzeit(tid);
             }
         }
@@ -636,7 +636,7 @@ impl App {
     // Ein Blockklang an der Blockmitte (playSoundAtBlockCenter / PositionedSoundInstance mit
     // BlockPos).
     pub(crate) fn play_block_sound(&mut self, event: &str, pos: (i32, i32, i32), volume: f32, pitch: f32) {
-        let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
+        let mitte = DVec3::new(f64::from(pos.0) + 0.5, f64::from(pos.1) + 0.5, f64::from(pos.2) + 0.5);
         self.play_event_at_scaled(event, mitte, volume, pitch, protocol::packets::SoundCategory::Blocks);
     }
 
@@ -646,7 +646,7 @@ impl App {
             return;
         }
         let gruppe = world::block_sounds::sound_group(world::block_name(state).unwrap_or(""));
-        self.play_block_sound(gruppe.break_sound, pos, (gruppe.volume + 1.0) / 2.0, gruppe.pitch * 0.8);
+        self.play_block_sound(gruppe.break_sound, pos, f32::midpoint(gruppe.volume, 1.0), gruppe.pitch * 0.8);
     }
 
     // BlockItem.place: world.playSound(player, ...) -- der Server schickt den Klang allen
@@ -654,7 +654,7 @@ impl App {
     // Block, nicht am Zustand, deshalb reicht der Itemname (Blockitems heissen wie ihr Block).
     pub(crate) fn play_place_sound(&mut self, pos: (i32, i32, i32), block: &str) {
         let gruppe = world::block_sounds::sound_group(block);
-        self.play_block_sound(gruppe.place, pos, (gruppe.volume + 1.0) / 2.0, gruppe.pitch * 0.8);
+        self.play_block_sound(gruppe.place, pos, f32::midpoint(gruppe.volume, 1.0), gruppe.pitch * 0.8);
     }
 
     pub(crate) fn play_step_group(&mut self, state: u32, lautstaerke: f32, tonhoehe: f32) {

@@ -21,14 +21,14 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Language; 3] = [Language::German, Language::English, Language::Latin];
+    pub const ALL: [Self; 3] = [Self::German, Self::English, Self::Latin];
 
-    pub fn index(self) -> u8 {
+    pub const fn index(self) -> u8 {
         self as u8
     }
 
     pub fn from_index(i: u8) -> Self {
-        Self::ALL.get(i as usize).copied().unwrap_or(Language::German)
+        Self::ALL.get(i as usize).copied().unwrap_or(Self::German)
     }
 
     pub fn next(self) -> Self {
@@ -37,20 +37,20 @@ impl Language {
 
     // In der Sprache selbst, wie Vanillas Sprachauswahl -- wer die Oberflaeche nicht lesen
     // kann, findet so trotzdem zurueck.
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Language::German => "Deutsch",
-            Language::English => "English",
-            Language::Latin => "Latīna",
+            Self::German => "Deutsch",
+            Self::English => "English",
+            Self::Latin => "Latīna",
         }
     }
 
     // Minecrafts Sprachdatei (assets/minecraft/lang/<code>.json) und die Locale fuer den Server.
-    pub fn code(self) -> &'static str {
+    pub const fn code(self) -> &'static str {
         match self {
-            Language::German => "de_de",
-            Language::English => "en_us",
-            Language::Latin => "la_la",
+            Self::German => "de_de",
+            Self::English => "en_us",
+            Self::Latin => "la_la",
         }
     }
 }

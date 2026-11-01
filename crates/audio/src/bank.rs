@@ -25,7 +25,7 @@ include!(concat!(env!("OUT_DIR"), "/sounds_table.rs"));
 ///
 /// Zwei Gruende fuer das Zwischenspeichern: eine Aufnahme wird beim ersten Mal entpackt und
 /// danach nur noch gereicht (ein Arc-Klon), und die Bank haelt jede Aufnahme dauerhaft --
-/// deshalb kann im Audio-Callback nie eine Freigabe passieren (s. Voice::sample).
+/// deshalb kann im Audio-Callback nie eine Freigabe passieren (s. `Voice::sample`).
 ///
 /// Entpackt wird IMMER auf dem aufrufenden Thread, nie im Audio-Callback: dort darf nichts
 /// allokieren.
@@ -34,8 +34,9 @@ pub struct SoundBank {
 }
 
 impl SoundBank {
+    #[must_use] 
     pub fn new() -> Self {
-        SoundBank { geladen: Mutex::new(HashMap::new()) }
+        Self { geladen: Mutex::new(HashMap::new()) }
     }
 
     /// Alle mitgelieferten Namen, alphabetisch -- z.B. "kenney-interface/click_001".

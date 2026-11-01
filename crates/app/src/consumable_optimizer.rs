@@ -85,7 +85,7 @@ impl State {
         self.waiting_until.is_some_and(|t| now < t)
     }
 
-    pub fn stop_waiting(&mut self) {
+    pub const fn stop_waiting(&mut self) {
         self.waiting_until = None;
     }
 
@@ -119,7 +119,7 @@ impl State {
     }
 
     pub fn reset(&mut self) {
-        *self = State::default();
+        *self = Self::default();
     }
 }
 

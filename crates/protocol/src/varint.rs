@@ -1,6 +1,7 @@
 // VarInt-Encoding nach Java-Edition-Protokoll: 7 Nutzbits pro Byte, MSB = Continuation-Flag,
 // maximal 5 Bytes fuer ein i32. Siehe https://minecraft.wiki/w/Java_Edition_protocol/Data_types
 
+#[must_use] 
 pub fn encode_varint(mut value: i32) -> Vec<u8> {
     let mut out = Vec::with_capacity(5);
     loop {
@@ -27,7 +28,7 @@ pub fn decode_varint(buf: &[u8], pos: usize) -> Result<(i32, usize), VarIntTooLo
     for i in 0..5 {
         let byte = *buf.get(offset).ok_or(VarIntTooLong)?;
         offset += 1;
-        value |= ((byte & 0x7F) as i32) << (7 * i);
+        value |= i32::from(byte & 0x7F) << (7 * i);
         if byte & 0x80 == 0 {
             return Ok((value, offset));
         }
@@ -43,7 +44,7 @@ pub fn decode_varlong(buf: &[u8], pos: usize) -> Result<(i64, usize), VarIntTooL
     for i in 0..10 {
         let byte = *buf.get(offset).ok_or(VarIntTooLong)?;
         offset += 1;
-        value |= ((byte & 0x7F) as i64) << (7 * i);
+        value |= i64::from(byte & 0x7F) << (7 * i);
         if byte & 0x80 == 0 {
             return Ok((value, offset));
         }

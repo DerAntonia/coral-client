@@ -51,7 +51,7 @@ pub fn load(text: &str) -> (usize, usize, Vec<String>) {
             item_name = name.to_string();
             let name = name.strip_prefix("minecraft:").unwrap_or(name);
             aktuell = crate::item_registry::item_id_by_name(name).map(|id| ItemStack::new(id, 1));
-            items += aktuell.is_some() as usize;
+            items += usize::from(aktuell.is_some());
         } else if let (Some(rest), Some(stack)) = (zeile.strip_prefix("C "), aktuell.as_mut()) {
             gesamt += 1;
             let mut felder = rest.split('\t');
@@ -100,13 +100,11 @@ pub fn defaults(item_id: u32) -> Option<&'static ItemStack> {
 // irgendein Item als Standard traegt -- die uebrigen fragt kein Item-Modell sinnvoll ab.
 pub fn component_id(name: &str) -> Option<i32> {
     let namen = NAMES.get()?;
-    match name.contains(':') {
-        true => namen.get(name).copied(),
-        false => namen.get(&format!("minecraft:{name}")).copied(),
-    }
+    if name.contains(':') { namen.get(name).copied() } else { namen.get(&format!("minecraft:{name}")).copied() }
 }
 
 // Wie viele davon in einen Slot passen (max_stack_size, wirksam).
+#[must_use] 
 pub fn max_stack(stack: &ItemStack) -> i32 {
     Components::of(stack).max_stack_size().max(1)
 }
@@ -119,6 +117,7 @@ pub struct Components<'a> {
 }
 
 impl<'a> Components<'a> {
+    #[must_use] 
     pub fn of(stack: &'a ItemStack) -> Self {
         Components { stack, default: defaults(stack.item_id) }
     }
@@ -134,34 +133,41 @@ impl<'a> Components<'a> {
         self.default.and_then(feld)
     }
 
+    #[must_use] 
     pub fn equippable(&self) -> Option<&'a Equippable> {
         self.pick(protocol::item::COMPONENT_EQUIPPABLE, |s| s.equippable.as_ref())
     }
 
     // Traegt der Stapel die Component (gesetzt, oder Standard und nicht entfernt)?
+    #[must_use] 
     pub fn has(&self, id: i32) -> bool {
         self.stack.added_ids.contains(&id) || (!self.stack.removed_components.contains(&id) && self.default.is_some_and(|d| d.added_ids.contains(&id)))
     }
 
     // Vom Standard abweichend gesetzt (ItemStack.hasNonDefault)?
+    #[must_use] 
     pub fn has_set(&self, id: i32) -> bool {
         self.stack.added_ids.contains(&id)
     }
 
+    #[must_use] 
     pub fn damage(&self) -> i32 {
         self.pick(COMPONENT_DAMAGE, |s| s.damage.as_ref()).copied().unwrap_or(0)
     }
 
     // 0 = keine Haltbarkeit.
+    #[must_use] 
     pub fn max_damage(&self) -> i32 {
         self.pick(COMPONENT_MAX_DAMAGE, |s| s.max_damage.as_ref()).copied().unwrap_or(0)
     }
 
+    #[must_use] 
     pub fn unbreakable(&self) -> bool {
         self.has(COMPONENT_UNBREAKABLE)
     }
 
     // Ohne geladene Standards die Tabelle des Clients.
+    #[must_use] 
     pub fn max_stack_size(&self) -> i32 {
         match self.pick(COMPONENT_MAX_STACK_SIZE, |s| s.max_stack_size.as_ref()) {
             Some(n) => *n,
@@ -171,21 +177,25 @@ impl<'a> Components<'a> {
     }
 
     // attack_range (Speere, Server-Waffen): eigene Angriffsreichweite statt der des Spielers.
+    #[must_use] 
     pub fn attack_range(&self) -> Option<&'a protocol::item::AttackRange> {
         self.pick(protocol::item::COMPONENT_ATTACK_RANGE, |s| s.attack_range.as_ref())
     }
 
     // Die wirksamen Attribut-Modifier (gesetzt oder Standard); leer ohne.
+    #[must_use] 
     pub fn attribute_modifiers(&self) -> &'a [protocol::item::ItemAttributeModifier] {
         self.pick(protocol::item::COMPONENT_ATTRIBUTE_MODIFIERS, |s| s.attribute_modifiers.as_deref()).unwrap_or(&[])
     }
 
+    #[must_use] 
     pub fn custom_model_data(&self) -> Option<&'a protocol::item::CustomModelData> {
         self.pick(COMPONENT_CUSTOM_MODEL_DATA, |s| s.custom_model_data.as_ref())
     }
 
     // Die enchantments- bzw. stored_enchantments-Component; None, wenn der Stapel sie nicht
     // traegt. Gesetzt kommt sie im Stapel an, der Standard ist bei allen Items leer.
+    #[must_use] 
     pub fn enchantments(&self, stored: bool) -> Option<&'a [protocol::item::Enchantment]> {
         let id = if stored { COMPONENT_STORED_ENCHANTMENTS } else { COMPONENT_ENCHANTMENTS };
         if !self.has(id) && self.default.is_some() {
@@ -204,7 +214,7 @@ impl<'a> Components<'a> {
 pub struct StackRef(u32);
 
 impl StackRef {
-    pub const NONE: StackRef = StackRef(u32::MAX);
+    pub const NONE: Self = Self(u32::MAX);
 }
 
 const RING: usize = 4096;
@@ -233,7 +243,7 @@ fn inhalt(s: &ItemStack) -> Vec<u8> {
 }
 
 pub fn intern(stack: &ItemStack) -> StackRef {
-    let mut g = RING_STAPEL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = RING_STAPEL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let ring = g.get_or_insert_with(|| Ring { plaetze: vec![None; RING], nach_inhalt: std::collections::HashMap::new(), naechste: 0 });
     let key = inhalt(stack);
     if let Some(&nr) = ring.nach_inhalt.get(&key) {
@@ -258,7 +268,7 @@ pub fn resolve(r: StackRef) -> Option<std::sync::Arc<ItemStack>> {
     if r == StackRef::NONE {
         return None;
     }
-    let g = RING_STAPEL.lock().unwrap_or_else(|e| e.into_inner());
+    let g = RING_STAPEL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match g.as_ref()?.plaetze[r.0 as usize % RING].as_ref()? {
         (nr, s) if *nr == r.0 => Some(s.clone()),
         _ => None,
@@ -275,7 +285,7 @@ mod tests {
         a.custom_model_data = Some(Default::default());
         a.added_component_bytes = vec![1, 2, 3];
         let r = intern(&a);
-        assert_eq!(intern(&a.clone()), r, "gleicher Inhalt, gleicher Verweis");
+        assert_eq!(intern(&a), r, "gleicher Inhalt, gleicher Verweis");
         assert_eq!(resolve(r).as_deref(), Some(&a));
         let b = ItemStack::new(5, 2);
         assert_ne!(intern(&b), r);

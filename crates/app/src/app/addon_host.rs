@@ -1,6 +1,6 @@
 // Anbindung der Addons (s. addons.rs): Laden, Hooks, Abfragen, Aktionen, Einstellungen und HUD.
 
-use crate::*;
+use crate::{App, addons, addon_module_info, intern, AddonModuleInfo, ADDON_CATEGORIES, ADDON_MODULES, notifications, Instant, Duration, zufallswert, MAX_PITCH, KeyBindAction, PendingInputAction, AppMode, CrosshairTarget, ModuleRow, ButtonAction, addon_number_text, Choice, theme, ColorTarget, ModuleId, GpuState, UiRect, UiText, UiSprite, UI_SCALE_SMALL, Rect};
 use coral_addon as api;
 
 impl App {
@@ -108,7 +108,7 @@ impl App {
                 }
             }
         }
-        let neu = self.addons.as_mut().map(|x| x.poll()).unwrap_or_default();
+        let neu = self.addons.as_mut().map(super::super::addons::Addons::poll).unwrap_or_default();
         for r in neu {
             match r {
                 Ok(a) => self.init_addon(a),
@@ -273,7 +273,7 @@ impl App {
     // Ausgehendes Paket durch Hook::PacketOut. Nur aktiv, waehrend ein Addon ihn hoert: dann
     // sammelt PacketTx die Pakete, und sie gehen hier gefiltert raus (s. main_loop).
     pub(crate) fn flush_addon_packets(&mut self) {
-        let Some(gehalten) = self.outgoing_tx.as_ref().map(|tx| tx.take_held()) else { return };
+        let Some(gehalten) = self.outgoing_tx.as_ref().map(super::super::addons::PacketTx::take_held) else { return };
         for paket in gehalten {
             let id = protocol::packets::peek_packet_id(&paket).unwrap_or(-1);
             let raus = match self.addon_hook(api::Event::PacketOut { id, data: paket.clone() }) {
@@ -474,7 +474,7 @@ impl addons::Host for App {
                 self.tab_entries.iter().filter(|(_, e)| e.listed).map(|(uuid, e)| api::PlayerEntry { name: e.name.clone(), uuid: *uuid, ping: e.latency, game_mode: e.game_mode }).collect(),
             ),
             api::Call::Screen => {
-                let (width, height) = self.gpu.as_ref().map(|g| g.size()).unwrap_or((0.0, 0.0));
+                let (width, height) = self.gpu.as_ref().map_or((0.0, 0.0), super::super::GpuState::size);
                 api::Answer::Screen(api::ScreenState { width, height, hud_scale: self.hud_scale((width, height)), screen_open: self.screen_overlay_open() || self.mode != AppMode::World, chat_open: self.chat_input.is_some() })
             }
             api::Call::GetSetting { module, key } => {

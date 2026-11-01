@@ -4,7 +4,7 @@
 // was der Server ihnen schickt, sammelt sich in `backlog` und wird beim Wechsel in einem
 // Rutsch verarbeitet.
 
-use crate::*;
+use crate::{theme, ConnStatus, Sender, Receiver, addons, Instant, transactions, session_info, MenuScreen, dialog_screen, teams, TeamInfo, TabEntry, BossBarState, TrimRegistries, creative, pistons, BlockLid, PendingBlock, ShieldCooldown, item_cooldowns, Inventory, recipe_book, physics, ShownEffect, vehicle, DVec3, PendingInputAction, SlotQueue, consumable_optimizer, modules, MAX_AIR_TICKS, BLOCK_INTERACTION_REACH, ENTITY_INTERACTION_REACH, App, server_packs, Rect, AppMode, TopbarLayout, TOPBAR_H, GpuState, UiRect, UiText, ellipsize, UI_SCALE_SMALL, push_bar};
 
 // Felder von App, die zu einer Verbindung gehoeren: Typ und Startwert wie in App::new.
 macro_rules! tab_state {
@@ -19,7 +19,7 @@ macro_rules! tab_state {
             }
 
             // Tauscht jedes Feld mit dem gleichnamigen in App.
-            fn tauschen(&mut self, app: &mut App) {
+            const fn tauschen(&mut self, app: &mut App) {
                 $(std::mem::swap(&mut self.$feld, &mut app.$feld);)*
             }
         }
@@ -84,6 +84,8 @@ tab_state! {
     dimension_type_name: String = String::new(),
     biome_names: Vec<String> = Vec::new(),
     biome_climate: Vec<world::weather::BiomeClimate> = Vec::new(),
+    snapshot_config: Vec<(bool, Vec<u8>)> = Vec::new(),
+    textures_props: std::collections::HashMap<[u8; 16], String> = std::collections::HashMap::new(),
     biome_palette: std::sync::Arc<world::BiomePalette> = std::sync::Arc::new(world::BiomePalette::fallback()),
     damage_type_effects: Vec<protocol::packets::DamageEffect> = Vec::new(),
     enchantments: world::enchantment::Enchantments = world::enchantment::Enchantments::default(),
@@ -182,6 +184,17 @@ tab_state! {
     own_ticks_since_hurt: u32 = u32::MAX,
     own_hurt_by_crit: bool = false,
     own_on_fire: bool = false,
+    // Handtausch der eigenen Figur fuer Mehr Animationen (s. world::more_anims).
+    own_swap: world::more_anims::SwapWatch = world::more_anims::SwapWatch::default(),
+    // Glaettung der Spielerfiguren je Entity (eigene unter i32::MIN), s. App::smooth_anims.
+    anim_smoothing: std::cell::RefCell<std::collections::HashMap<i32, (std::time::Instant, world::more_anims::Smoothing)>> = Default::default(),
+    // Wer gerade ein Haustier streichelt bzw. umarmt (Entity-Ids, die eigene Figur unter ihrer),
+    // je Tick neu bestimmt (s. App::tick_anims).
+    anim_petting: std::collections::HashSet<i32> = Default::default(),
+    own_last_sword: Option<world::HeldItem> = None,
+    // Pendelnde Laternen je Spielerfigur (eigene unter i32::MIN), s. App::emit_hand_extras.
+    lantern_swing: std::cell::RefCell<std::collections::HashMap<(i32, bool), world::more_anims::LanternSwing>> = Default::default(),
+    anim_hugging: std::collections::HashSet<i32> = Default::default(),
     own_frozen_ticks: i32 = 0,
     hardcore: bool = false,
     own_potion_swirls: Vec<u32> = Vec::new(),
@@ -224,6 +237,8 @@ pub(crate) struct ServerTab {
     pub(crate) mention: bool,
     // Geht an die Verbindung (s. net::Events::with_background).
     pub(crate) background: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // Sitzungsnummer der Aufnahme dieser Verbindung, 0 = keine (s. net::Events::with_record).
+    pub(crate) record_slot: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Die Fernsicht-Welt (s. lod) und die Server-Packs dieses Tabs, solange er hinten liegt.
     lod_identity: Option<(String, i64)>,
     pub(crate) server_packs: server_packs::ServerPacks,
@@ -236,6 +251,7 @@ impl ServerTab {
             backlog: std::collections::VecDeque::new(),
             mention: false,
             background: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            record_slot: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             lod_identity: None,
             server_packs: server_packs::ServerPacks::default(),
         }

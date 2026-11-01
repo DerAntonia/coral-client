@@ -198,12 +198,12 @@ fn mauer_und_zaunpfosten_haben_einen_schmalen_uv_ausschnitt() {
     let wall = shapes.get(&0).expect("Mauerpfosten muss eine Form haben");
     assert_eq!(wall.len(), 1);
     let wall_uv = wall[0].uv[2].expect("Nordseite des Mauerpfostens muss einen UV-Ausschnitt haben");
-    assert!((wall_uv[2] - wall_uv[0] - 0.5).abs() < 0.01, "Mauerpfosten-UV-Breite muss ~0.5 (8/16) sein, war {:?}", wall_uv);
+    assert!((wall_uv[2] - wall_uv[0] - 0.5).abs() < 0.01, "Mauerpfosten-UV-Breite muss ~0.5 (8/16) sein, war {wall_uv:?}");
 
     let fence = shapes.get(&1).expect("Zaunpfosten muss eine Form haben");
     let fence_post = &fence[0];
     let fence_uv = fence_post.uv[2].expect("Nordseite des Zaunpfostens muss einen UV-Ausschnitt haben");
-    assert!((fence_uv[2] - fence_uv[0] - 0.25).abs() < 0.01, "Zaunpfosten-UV-Breite muss ~0.25 (4/16) sein, war {:?}", fence_uv);
+    assert!((fence_uv[2] - fence_uv[0] - 0.25).abs() < 0.01, "Zaunpfosten-UV-Breite muss ~0.25 (4/16) sein, war {fence_uv:?}");
 }
 
 // Konsistenzpruefung: fuer Elemente OHNE explizites "uv" (also ueber default_face_uv erzeugt,
@@ -243,9 +243,7 @@ fn rotierte_standard_uv_stimmt_mit_direkter_neuberechnung_ueberein() {
         for k in 0..4 {
             assert!(
                 (expected[k] - actual[k]).abs() < 0.01,
-                "Flaeche {face}: erwartet {:?} (aus gedrehter Geometrie neu berechnet), tatsaechlich {:?}",
-                expected,
-                actual
+                "Flaeche {face}: erwartet {expected:?} (aus gedrehter Geometrie neu berechnet), tatsaechlich {actual:?}"
             );
         }
     }

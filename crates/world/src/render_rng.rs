@@ -27,11 +27,11 @@ const MASK: u64 = (1u64 << 48) - 1;
 struct JavaRandom(u64);
 
 impl JavaRandom {
-    fn new(seed: i64) -> Self {
+    const fn new(seed: i64) -> Self {
         Self((seed as u64 ^ MULTIPLIER) & MASK)
     }
 
-    fn next(&mut self, bits: u32) -> i32 {
+    const fn next(&mut self, bits: u32) -> i32 {
         self.0 = self.0.wrapping_mul(MULTIPLIER).wrapping_add(INCREMENT) & MASK;
         (self.0 >> (48 - bits)) as i32
     }
@@ -41,7 +41,7 @@ impl JavaRandom {
     // im Yarn-Quellcode.
     fn next_int(&mut self, bound: i32) -> i32 {
         if bound & (bound - 1) == 0 {
-            return ((bound as i64).wrapping_mul(self.next(31) as i64) >> 31) as i32;
+            return (i64::from(bound).wrapping_mul(i64::from(self.next(31))) >> 31) as i32;
         }
         loop {
             let i = self.next(31);
@@ -55,6 +55,7 @@ impl JavaRandom {
 
 // Waehlt EINEN von `count` gleich gewichteten Kandidaten (Vanillas betroffene Bloecke
 // haben nie ein `weight` ungleich 1 im Modell-JSON) -- deterministisch aus der Position.
+#[must_use] 
 pub fn pick_variant(x: i32, y: i32, z: i32, count: usize) -> usize {
     debug_assert!(count > 0);
     let seed = crate::block_offset::mc_seed(x, z, y);

@@ -26,6 +26,7 @@
 pub const DAY_TICKS: i64 = 24_000;
 
 /// Sonnenstand als Bruchteil eines Umlaufs (0 = Mittag, 0.5 = Mitternacht).
+#[must_use] 
 pub fn sky_angle(time_of_day: i64) -> f32 {
     let d = (time_of_day.rem_euclid(DAY_TICKS) as f64 / DAY_TICKS as f64 - 0.25).rem_euclid(1.0);
     let e = 0.5 - (d * std::f64::consts::PI).cos() / 2.0;
@@ -37,6 +38,7 @@ pub fn sky_angle(time_of_day: i64) -> f32 {
 /// Der Faktor 2 vor dem Kosinus ist der Grund, warum der Himmel den groessten Teil des Tages
 /// VOLL hell ist und nur um die Daemmerung herum kippt: der Wert laeuft von -1.5 bis 2.5 und
 /// wird an beiden Enden abgeschnitten.
+#[must_use] 
 pub fn daylight_factor(time_of_day: i64) -> f32 {
     let winkel = sky_angle(time_of_day);
     (winkel * std::f32::consts::TAU).cos().mul_add(2.0, 0.5).clamp(0.0, 1.0)
@@ -46,8 +48,9 @@ pub fn daylight_factor(time_of_day: i64) -> f32 {
 ///
 /// Die Grundfarbe ist die Tagfarbe des Overworld-Himmels. Biomabhaengig ist sie hier bewusst
 /// NICHT: Vanilla mischt dafuer die Himmelsfarben der umliegenden Biome ueber ein weiches
-/// 3D-Raster (CubicSampler). Ohne diese Mischung sprangen die Farben an jeder Biomgrenze --
+/// 3D-Raster (`CubicSampler`). Ohne diese Mischung sprangen die Farben an jeder Biomgrenze --
 /// ein gleichmaessiger Himmel ist der ehrlichere Kompromiss.
+#[must_use] 
 pub fn time_of_day_sky(base_srgb: [f32; 3], time_of_day: i64) -> [f32; 3] {
     let f = daylight_factor(time_of_day);
     [base_srgb[0] * f, base_srgb[1] * f, base_srgb[2] * f]
@@ -60,6 +63,7 @@ pub fn time_of_day_sky(base_srgb: [f32; 3], time_of_day: i64) -> [f32; 3] {
 /// Gewitterstaerke -- im vollen Gewitter gilt also nur noch dessen dunkleres Grau.
 ///
 /// `thunder` ist wie Vanillas getThunderLevel schon mit der Regenstaerke multipliziert.
+#[must_use] 
 pub fn weather_sky(srgb: [f32; 3], rain: f32, thunder: f32) -> [f32; 3] {
     let grau = |hell: f32, anteil: f32| {
         let g = (srgb[0] * 0.3 + srgb[1] * 0.59 + srgb[2] * 0.11) * hell;
@@ -77,6 +81,7 @@ pub fn weather_sky(srgb: [f32; 3], rain: f32, thunder: f32) -> [f32; 3] {
 /// Gebraucht, weil wgpu die Clear-Farbe LINEAR erwartet und die sRGB-Oberflaeche sie beim
 /// Schreiben wieder aufhellt. Eine direkt hingeschriebene Anzeige-Farbe kaeme deutlich zu hell
 /// heraus -- genau diese Falle steht schon am alten festen Himmelsblau angeschrieben.
+#[must_use] 
 pub fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
@@ -85,7 +90,8 @@ pub fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-/// linear -> sRGB, die Umkehrung von srgb_to_linear.
+/// linear -> sRGB, die Umkehrung von `srgb_to_linear`.
+#[must_use] 
 pub fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.0031308 {
         c * 12.92

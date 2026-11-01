@@ -200,23 +200,26 @@ fn storage_buffer(device: &wgpu::Device, label: &str, data: &[u8]) -> wgpu::Buff
 impl VoxelVolume {
     // So gross muss ein Speicher-Puffer an einem Stueck gebunden werden koennen (der groesste
     // der Lichtkarten); beim Anfordern des Device mit angeben.
+    #[must_use] 
     pub fn required_storage_binding() -> u64 {
         (LM_LAGEN_LEN.max(LM_LEN) * 4) as u64
     }
 
     // Die Grenzen, die der Shader-Pfad braucht: wgpus Standard, Speicher-Puffer so gross wie
     // required_storage_binding (soweit der Adapter kann).
+    #[must_use] 
     pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         let kann = adapter.limits();
         let noetig = Self::required_storage_binding();
         let standard = wgpu::Limits::default();
         wgpu::Limits {
-            max_storage_buffer_binding_size: (standard.max_storage_buffer_binding_size as u64).max(noetig).min(kann.max_storage_buffer_binding_size as u64) as u32,
+            max_storage_buffer_binding_size: u64::from(standard.max_storage_buffer_binding_size).max(noetig).min(u64::from(kann.max_storage_buffer_binding_size)) as u32,
             max_buffer_size: standard.max_buffer_size.max(noetig).min(kann.max_buffer_size),
             ..standard
         }
     }
 
+    #[must_use] 
     pub fn new(device: &wgpu::Device, classes: VoxelClasses) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("voxel volume"),
@@ -342,15 +345,15 @@ impl VoxelVolume {
         }
     }
 
-    pub fn texture_view(&self) -> &wgpu::TextureView {
+    pub const fn texture_view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
-    pub fn state_view(&self) -> &wgpu::TextureView {
+    pub const fn state_view(&self) -> &wgpu::TextureView {
         &self.state_view
     }
 
-    pub fn state_info_view(&self) -> &wgpu::TextureView {
+    pub const fn state_info_view(&self) -> &wgpu::TextureView {
         &self.state_info_view
     }
 
@@ -375,39 +378,39 @@ impl VoxelVolume {
         );
     }
 
-    pub fn slots_buffer(&self) -> &wgpu::Buffer {
+    pub const fn slots_buffer(&self) -> &wgpu::Buffer {
         &self.slots_buffer
     }
 
-    pub fn headers_buffer(&self) -> &wgpu::Buffer {
+    pub const fn headers_buffer(&self) -> &wgpu::Buffer {
         &self.headers_buffer
     }
 
-    pub fn boxes_buffer(&self) -> &wgpu::Buffer {
+    pub const fn boxes_buffer(&self) -> &wgpu::Buffer {
         &self.boxes_buffer
     }
 
-    pub fn cross_uvs_buffer(&self) -> &wgpu::Buffer {
+    pub const fn cross_uvs_buffer(&self) -> &wgpu::Buffer {
         &self.cross_uvs_buffer
     }
 
-    pub fn light_grid_buffer(&self) -> &wgpu::Buffer {
+    pub const fn light_grid_buffer(&self) -> &wgpu::Buffer {
         &self.light_grid_buffer
     }
 
-    pub fn far_lights_buffer(&self) -> &wgpu::Buffer {
+    pub const fn far_lights_buffer(&self) -> &wgpu::Buffer {
         &self.far_lights_buffer
     }
 
-    pub fn lightmap_buffer(&self) -> &wgpu::Buffer {
+    pub const fn lightmap_buffer(&self) -> &wgpu::Buffer {
         &self.lm_buffer
     }
 
-    pub fn lightmap_layer_buffer(&self) -> &wgpu::Buffer {
+    pub const fn lightmap_layer_buffer(&self) -> &wgpu::Buffer {
         &self.lm_layer_buffer
     }
 
-    pub fn bake_jobs_buffer(&self) -> &wgpu::Buffer {
+    pub const fn bake_jobs_buffer(&self) -> &wgpu::Buffer {
         &self.bake_jobs_buffer
     }
 
@@ -467,7 +470,7 @@ impl VoxelVolume {
         }
     }
 
-    pub fn set_world_bottom(&mut self, y: i32) {
+    pub const fn set_world_bottom(&mut self, y: i32) {
         self.world_bottom = y;
     }
 
@@ -483,37 +486,41 @@ impl VoxelVolume {
 
     // Byte-Bereiche in lightmap_buffer, die vor dem Backen einer Seite geleert werden: ihre
     // Flaechen-Indizes, ihr Flaechen-Zaehler und der Zaehler ihrer Sicht-Raster.
+    #[must_use] 
     pub fn page_clear_ranges(seite: u32) -> [(u64, u64); 3] {
-        let s = seite as u64;
+        let s = u64::from(seite);
         [(((LM_INDEX_BASE as u64) + s * 4096 * 6) * 4, 4096 * 6 * 4), (((LM_BAKE_BASE as u64) + s) * 4, 4), (((LM_FEIN_ZAEHLER_BASE as u64) + s) * 4, 4)]
     }
 
     // Wie viele Gruppen der Flaechen-Schritt (je 64 Flaechen) und der Ebenen-Schritt (je eine
     // Flaeche eines Back-Schritts) brauchen.
-    pub fn bake_groups() -> (u32, u32) {
+    #[must_use] 
+    pub const fn bake_groups() -> (u32, u32) {
         ((4096 * 6 / 64) as u32, LM_FACES as u32 / LM_SCHRITTE)
     }
 
     // Gruppen des Schritts fuer die Sicht-Raster: je vier Zeilen und Platz (s. cs_lm_fein).
-    pub fn bake_fine_groups() -> (u32, u32) {
+    #[must_use] 
+    pub const fn bake_fine_groups() -> (u32, u32) {
         (4, LM_FEIN_PLAETZE as u32)
     }
 
-    pub fn changed_this_frame(&self) -> bool {
+    pub const fn changed_this_frame(&self) -> bool {
         self.changed_this_frame
     }
 
     // Gibt es gerade Fernlichter? Sonst kann der Shader-Pfad ihre Passes auslassen.
-    pub fn has_far_lights(&self) -> bool {
+    pub const fn has_far_lights(&self) -> bool {
         self.far_light_count > 0
     }
 
     // Ursprung des Licht-Rasters (Weltblock), None vor dem ersten update_lights.
-    pub fn light_origin(&self) -> Option<[i32; 3]> {
+    pub const fn light_origin(&self) -> Option<[i32; 3]> {
         self.light_origin
     }
 
     // Kleinste Section-Koordinate des Wuerfels um die Kamera-Section `center`.
+    #[must_use] 
     pub fn window_min(center: [i32; 3]) -> [i32; 3] {
         center.map(|c| c - SECTIONS / 2)
     }
@@ -598,7 +605,7 @@ impl VoxelVolume {
                         .enumerate()
                         .filter_map(|(j, &st)| {
                             let e = world::light::emission(st);
-                            (e != 0).then(|| (j as u16, e as u32 | (world::light::emission_level(st) as u32) << 12))
+                            (e != 0).then(|| (j as u16, u32::from(e) | u32::from(world::light::emission_level(st)) << 12))
                         })
                         .collect()
                 })
@@ -700,7 +707,7 @@ impl VoxelVolume {
     // Bloecke) oder einer neuen Quelle braucht es mit vielen Quellen (Lavaseen, Fernlichter)
     // zig Millisekunden -- ein Ruckler. Bis es fertig ist, gilt das alte. Aus, wird es sofort
     // gebaut (Tests: dort soll ein Frame alles fertig haben).
-    pub fn set_async_lights(&mut self, an: bool) {
+    pub const fn set_async_lights(&mut self, an: bool) {
         self.async_lights = an;
     }
 
@@ -934,9 +941,9 @@ fn far_lights(slots: &[[i32; 4]], emitters: &[Vec<(u16, u32)>], eye: [i32; 3]) -
             continue;
         }
         for &(j, e) in liste.iter().filter(|(_, e)| is_far_light(*e)) {
-            let j = j as i32;
+            let j = i32::from(j);
             let p = [slot[0] * 16 + j % 16, slot[1] * 16 + j / 256, slot[2] * 16 + (j / 16) % 16];
-            let d: i64 = (0..3).map(|k| ((p[k] - eye[k]) as i64).pow(2)).sum();
+            let d: i64 = (0..3).map(|k| i64::from(p[k] - eye[k]).pow(2)).sum();
             alle.push((d, [p[0], p[1], p[2], e as i32]));
         }
     }
@@ -954,7 +961,7 @@ const RAND_RICHTUNGEN: [[i32; 3]; 6] = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1
 
 // Bit eines Blocks (x, y, z) in der Maske der Aussenseite `r`: die beiden anderen Achsen, in
 // derselben Reihenfolge fuer beide Seiten einer Grenze.
-fn rand_bit(r: usize, x: i32, y: i32, z: i32) -> usize {
+const fn rand_bit(r: usize, x: i32, y: i32, z: i32) -> usize {
     let (a, b) = match r / 2 {
         0 => (y, z),
         1 => (x, z),
@@ -1125,7 +1132,7 @@ fn build_light_grid(slots: &[[i32; 4]], emitters: &[Vec<(u16, u32)>], origin: [i
                     continue;
                 }
                 for &(j, e) in &emitters[i] {
-                    let j = j as i32;
+                    let j = i32::from(j);
                     let rel = [sx * 16 + j % 16 - origin[0], sy * 16 + j / 256 - origin[1], sz * 16 + (j / 16) % 16 - origin[2]];
                     // Echte Stufe: Fernlichter reichen so weit wie sie, nicht nur 15.
                     let level = (e & 15).max(e >> 4 & 15).max(e >> 8 & 15).max(e >> 12) as f32;
@@ -1261,7 +1268,7 @@ mod tests {
         let grid = build_light_grid(&slots, &emitters, [0, 0, 0], None).grid;
         let basis = ((8 * LIGHT_CELLS + 8) * LIGHT_CELLS + 8) as usize * LIGHTS_PER_CELL;
         let mut xs: Vec<i32> = grid[basis..basis + LIGHTS_PER_CELL].iter().map(|e| (e[0] & 1023) as i32 - LIGHT_POS_BIAS).collect();
-        xs.sort();
+        xs.sort_unstable();
         // Zelle 8 hat ihre Mitte bei x = 68: die 16 naechsten sind 60..=75.
         assert_eq!(xs, (60..76).collect::<Vec<_>>());
     }
@@ -1304,7 +1311,7 @@ mod tests {
             for z in 0..(LIGHT_CELLS * LIGHT_CELLS * LIGHT_CELLS) as usize {
                 let zelle = |g: &LightGrid| {
                     let mut v = g.grid[z * LIGHTS_PER_CELL..z * LIGHTS_PER_CELL + g.counts[z]].to_vec();
-                    v.sort();
+                    v.sort_unstable();
                     v
                 };
                 assert_eq!(zelle(&verschoben), zelle(&neu), "Zelle {z} nach {ziel:?}");

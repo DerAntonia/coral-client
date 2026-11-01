@@ -125,7 +125,7 @@ pub struct LodRenderer {
     quads: u64,
 }
 
-fn storage_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+const fn storage_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
@@ -154,6 +154,7 @@ fn create_buffer(device: &wgpu::Device, label: &str, size: u64, usage: wgpu::Buf
 }
 
 impl LodRenderer {
+    #[must_use] 
     pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("lod.wgsl"), source: wgpu::ShaderSource::Wgsl(include_str!("lod.wgsl").into()) });
         let vf = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
@@ -297,23 +298,20 @@ impl LodRenderer {
             return None;
         }
         let found = self.pages.iter_mut().enumerate().find_map(|(i, p)| p.free.take(len).map(|start| (i, start)));
-        let (page, start) = match found {
-            Some(f) => f,
-            None => {
-                let buffer = create_buffer(device, "lod quad page", PAGE_BYTES, wgpu::BufferUsages::STORAGE);
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("lod quad page"),
-                    layout: &self.page_layout,
-                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
-                });
-                let mut free = FreeList::new(page_quads);
-                let start = free.take(len)?;
-                self.pages.push(Page { buffer, bind_group, free });
-                (self.pages.len() - 1, start)
-            }
+        let (page, start) = if let Some(f) = found { f } else {
+            let buffer = create_buffer(device, "lod quad page", PAGE_BYTES, wgpu::BufferUsages::STORAGE);
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lod quad page"),
+                layout: &self.page_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            });
+            let mut free = FreeList::new(page_quads);
+            let start = free.take(len)?;
+            self.pages.push(Page { buffer, bind_group, free });
+            (self.pages.len() - 1, start)
         };
-        queue.write_buffer(&self.pages[page].buffer, start as u64 * QUAD_BYTES, bytemuck::cast_slice(quads));
-        self.quads += len as u64;
+        queue.write_buffer(&self.pages[page].buffer, u64::from(start) * QUAD_BYTES, bytemuck::cast_slice(quads));
+        self.quads += u64::from(len);
         Some(Slot { page: page as u32, start, len })
     }
 
@@ -323,7 +321,7 @@ impl LodRenderer {
             if let Some(p) = self.pages.get_mut(slot.page as usize) {
                 p.free.give(slot.start, slot.len);
             }
-            self.quads -= slot.len as u64;
+            self.quads -= u64::from(slot.len);
         }
     }
 
@@ -339,7 +337,7 @@ impl LodRenderer {
     }
 
     // Flaechen auf der GPU (je 16 Byte, s. chunk_saver::mesh::Quad).
-    pub fn quad_count(&self) -> u64 {
+    pub const fn quad_count(&self) -> u64 {
         self.quads
     }
 
@@ -347,7 +345,7 @@ impl LodRenderer {
     pub fn set_column_covered(&mut self, cx: i32, cz: i32, covered: bool) {
         let i = ((cz & 255) as u32 * MASK_SIZE + (cx & 255) as u32) as usize;
         if (self.mask[i] != 0) != covered {
-            self.mask[i] = covered as u8;
+            self.mask[i] = u8::from(covered);
             self.mask_dirty = true;
         }
     }
@@ -357,7 +355,7 @@ impl LodRenderer {
         self.mask_dirty = true;
     }
 
-    pub fn depth_attachment(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+    pub const fn depth_attachment(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
         wgpu::RenderPassDepthStencilAttachment {
             view: &self.depth_view,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Discard }),
@@ -365,7 +363,7 @@ impl LodRenderer {
         }
     }
 
-    pub fn has_draws(&self) -> bool {
+    pub const fn has_draws(&self) -> bool {
         !self.opaque_draws.args.is_empty() || !self.translucent_draws.args.is_empty()
     }
 
@@ -413,14 +411,14 @@ impl LodRenderer {
         }
         if nodes.len() as u32 > self.nodes_capacity {
             self.nodes_capacity = (nodes.len() as u32).next_power_of_two();
-            self.nodes = create_buffer(device, "lod nodes", self.nodes_capacity as u64 * 16, wgpu::BufferUsages::STORAGE);
+            self.nodes = create_buffer(device, "lod nodes", u64::from(self.nodes_capacity) * 16, wgpu::BufferUsages::STORAGE);
             self.bind_group = None;
         }
         queue.write_buffer(&self.nodes, 0, bytemuck::cast_slice(&nodes));
         let total = (self.opaque_draws.args.len() + self.translucent_draws.args.len()) as u32;
         if total > self.indirect_capacity {
             self.indirect_capacity = total.next_power_of_two();
-            self.indirect = create_buffer(device, "lod indirect", self.indirect_capacity as u64 * 16, wgpu::BufferUsages::INDIRECT);
+            self.indirect = create_buffer(device, "lod indirect", u64::from(self.indirect_capacity) * 16, wgpu::BufferUsages::INDIRECT);
         }
         let mut args = self.opaque_draws.args.clone();
         args.extend_from_slice(&self.translucent_draws.args);
@@ -443,9 +441,9 @@ impl LodRenderer {
         let globals = Globals {
             view: cam.view_matrix().to_cols_array_2d(),
             proj: proj.to_cols_array_2d(),
-            params: [cam.projection as f32, (cam.fov_degrees.to_radians() * 0.5).tan(), frame.aspect, frame.ao_strength.clamp(0.0, 1.0)],
+            params: [f32::from(cam.projection), (cam.fov_degrees.to_radians() * 0.5).tan(), frame.aspect, frame.ao_strength.clamp(0.0, 1.0)],
             eye: [(eye.x - ecx * 16.0) as f32, (eye.z - ecz * 16.0) as f32, mips.saturating_sub(1).min(4) as f32, 16.0],
-            eye_chunk: [ecx as i32, ecz as i32, frame.mask as i32, 0],
+            eye_chunk: [ecx as i32, ecz as i32, i32::from(frame.mask), 0],
             clip: {
                 let ((mx, mz), r) = frame.clip;
                 let r = r.min(i32::MAX as u32 / 4) as i32;
@@ -489,7 +487,7 @@ impl LodRenderer {
             let Some(p) = self.pages.get(page as usize) else { continue };
             pass.set_bind_group(1, &p.bind_group, &[]);
             if self.multi_draw {
-                let offset = (base + first) as u64 * std::mem::size_of::<DrawArgs>() as u64;
+                let offset = u64::from(base + first) * std::mem::size_of::<DrawArgs>() as u64;
                 pass.multi_draw_indirect(&self.indirect, offset, count);
             } else {
                 for a in &draws.args[first as usize..(first + count) as usize] {

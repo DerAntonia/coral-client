@@ -47,62 +47,62 @@ pub enum IndicatorColor {
 }
 
 impl IndicatorColor {
-    pub const ALL: [IndicatorColor; 10] = [
-        IndicatorColor::White,
-        IndicatorColor::Red,
-        IndicatorColor::Orange,
-        IndicatorColor::Yellow,
-        IndicatorColor::Green,
-        IndicatorColor::Cyan,
-        IndicatorColor::LightBlue,
-        IndicatorColor::Purple,
-        IndicatorColor::Pink,
-        IndicatorColor::Black,
+    pub const ALL: [Self; 10] = [
+        Self::White,
+        Self::Red,
+        Self::Orange,
+        Self::Yellow,
+        Self::Green,
+        Self::Cyan,
+        Self::LightBlue,
+        Self::Purple,
+        Self::Pink,
+        Self::Black,
     ];
 
     // ARGB als sRGB, genau die Werte der Mod.
-    pub fn argb(self) -> u32 {
+    pub const fn argb(self) -> u32 {
         match self {
-            IndicatorColor::White => 0xFFFF_FFFF,
-            IndicatorColor::Red => 0xFFFF_0000,
-            IndicatorColor::Orange => 0xFFFF_8000,
-            IndicatorColor::Yellow => 0xFFFF_FF00,
-            IndicatorColor::Green => 0xFF00_FF40,
-            IndicatorColor::Cyan => 0xFF00_FFFF,
-            IndicatorColor::LightBlue => 0xFF00_80FF,
-            IndicatorColor::Purple => 0xFFB0_40FF,
-            IndicatorColor::Pink => 0xFFFF_40C0,
-            IndicatorColor::Black => 0xFF00_0000,
+            Self::White => 0xFFFF_FFFF,
+            Self::Red => 0xFFFF_0000,
+            Self::Orange => 0xFFFF_8000,
+            Self::Yellow => 0xFFFF_FF00,
+            Self::Green => 0xFF00_FF40,
+            Self::Cyan => 0xFF00_FFFF,
+            Self::LightBlue => 0xFF00_80FF,
+            Self::Purple => 0xFFB0_40FF,
+            Self::Pink => 0xFFFF_40C0,
+            Self::Black => 0xFF00_0000,
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            IndicatorColor::White => "Weiß",
-            IndicatorColor::Red => "Rot",
-            IndicatorColor::Orange => "Orange",
-            IndicatorColor::Yellow => "Gelb",
-            IndicatorColor::Green => "Grün",
-            IndicatorColor::Cyan => "Cyan",
-            IndicatorColor::LightBlue => "Hellblau",
-            IndicatorColor::Purple => "Lila",
-            IndicatorColor::Pink => "Pink",
-            IndicatorColor::Black => "Schwarz",
+            Self::White => "Weiß",
+            Self::Red => "Rot",
+            Self::Orange => "Orange",
+            Self::Yellow => "Gelb",
+            Self::Green => "Grün",
+            Self::Cyan => "Cyan",
+            Self::LightBlue => "Hellblau",
+            Self::Purple => "Lila",
+            Self::Pink => "Pink",
+            Self::Black => "Schwarz",
         }
     }
 
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
-            IndicatorColor::White => "white",
-            IndicatorColor::Red => "red",
-            IndicatorColor::Orange => "orange",
-            IndicatorColor::Yellow => "yellow",
-            IndicatorColor::Green => "green",
-            IndicatorColor::Cyan => "cyan",
-            IndicatorColor::LightBlue => "light_blue",
-            IndicatorColor::Purple => "purple",
-            IndicatorColor::Pink => "pink",
-            IndicatorColor::Black => "black",
+            Self::White => "white",
+            Self::Red => "red",
+            Self::Orange => "orange",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Cyan => "cyan",
+            Self::LightBlue => "light_blue",
+            Self::Purple => "purple",
+            Self::Pink => "pink",
+            Self::Black => "black",
         }
     }
 
@@ -113,7 +113,7 @@ impl IndicatorColor {
     // Laeuft um: nach Schwarz kommt wieder Weiss.
     fn step(self, dir: i8) -> Self {
         let i = Self::ALL.iter().position(|c| *c == self).unwrap_or(0) as i32;
-        Self::ALL[(i + dir as i32).rem_euclid(Self::ALL.len() as i32) as usize]
+        Self::ALL[(i + i32::from(dir)).rem_euclid(Self::ALL.len() as i32) as usize]
     }
 }
 
@@ -129,27 +129,27 @@ pub enum Backdrop {
 }
 
 impl Backdrop {
-    const ALL: [Backdrop; 3] = [Backdrop::Shadow, Backdrop::Box, Backdrop::None];
+    const ALL: [Self; 3] = [Self::Shadow, Self::Box, Self::None];
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Backdrop::Shadow => "Schatten",
-            Backdrop::Box => "Kasten",
-            Backdrop::None => "Keiner",
+            Self::Shadow => "Schatten",
+            Self::Box => "Kasten",
+            Self::None => "Keiner",
         }
     }
 
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
-            Backdrop::Shadow => "shadow",
-            Backdrop::Box => "box",
-            Backdrop::None => "none",
+            Self::Shadow => "shadow",
+            Self::Box => "box",
+            Self::None => "none",
         }
     }
 
     fn step(self, dir: i8) -> Self {
         let i = Self::ALL.iter().position(|b| *b == self).unwrap_or(0) as i32;
-        Self::ALL[(i + dir as i32).rem_euclid(Self::ALL.len() as i32) as usize]
+        Self::ALL[(i + i32::from(dir)).rem_euclid(Self::ALL.len() as i32) as usize]
     }
 }
 
@@ -193,58 +193,58 @@ pub enum SoundSlot {
 }
 
 impl SoundSlot {
-    pub const ALL: [SoundSlot; 5] = [SoundSlot::OwnMain, SoundSlot::OwnOff, SoundSlot::Other, SoundSlot::Explosion, SoundSlot::AnchorCharge];
+    pub const ALL: [Self; 5] = [Self::OwnMain, Self::OwnOff, Self::Other, Self::Explosion, Self::AnchorCharge];
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            SoundSlot::OwnMain => "Eigener Pop Hotbar",
-            SoundSlot::OwnOff => "Eigener Pop Zweithand",
-            SoundSlot::Other => "Fremder Pop",
-            SoundSlot::Explosion => "Explosion",
-            SoundSlot::AnchorCharge => "Anker laden",
+            Self::OwnMain => "Eigener Pop Hotbar",
+            Self::OwnOff => "Eigener Pop Zweithand",
+            Self::Other => "Fremder Pop",
+            Self::Explosion => "Explosion",
+            Self::AnchorCharge => "Anker laden",
         }
     }
 
     // Die Lautstaerke-Kategorie des Klangs, den der Platz ersetzt: Pops kommen von Spielern,
     // Explosion und Anker von Bloecken.
-    pub fn category(self) -> protocol::packets::SoundCategory {
+    pub const fn category(self) -> protocol::packets::SoundCategory {
         match self {
-            SoundSlot::OwnMain | SoundSlot::OwnOff | SoundSlot::Other => protocol::packets::SoundCategory::Players,
-            SoundSlot::Explosion | SoundSlot::AnchorCharge => protocol::packets::SoundCategory::Blocks,
+            Self::OwnMain | Self::OwnOff | Self::Other => protocol::packets::SoundCategory::Players,
+            Self::Explosion | Self::AnchorCharge => protocol::packets::SoundCategory::Blocks,
         }
     }
 
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
-            SoundSlot::OwnMain => "own_main",
-            SoundSlot::OwnOff => "own_off",
-            SoundSlot::Other => "other",
-            SoundSlot::Explosion => "explosion",
-            SoundSlot::AnchorCharge => "anchor_charge",
+            Self::OwnMain => "own_main",
+            Self::OwnOff => "own_off",
+            Self::Other => "other",
+            Self::Explosion => "explosion",
+            Self::AnchorCharge => "anchor_charge",
         }
     }
 
-    pub(crate) fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         self as usize
     }
 
     // Das Ereignis, das Vanilla an dieser Stelle spielt -- fuer "Vanilla" und zum Erkennen
     // der auszutauschenden Pakete.
-    pub fn vanilla_event(self) -> &'static str {
+    pub const fn vanilla_event(self) -> &'static str {
         match self {
-            SoundSlot::OwnMain | SoundSlot::OwnOff | SoundSlot::Other => "minecraft:item.totem.use",
-            SoundSlot::Explosion => "minecraft:entity.generic.explode",
-            SoundSlot::AnchorCharge => "minecraft:block.respawn_anchor.charge",
+            Self::OwnMain | Self::OwnOff | Self::Other => "minecraft:item.totem.use",
+            Self::Explosion => "minecraft:entity.generic.explode",
+            Self::AnchorCharge => "minecraft:block.respawn_anchor.charge",
         }
     }
 
     // Welcher Platz fuer ein Ton-Paket vom Server zustaendig ist (SoundReplacements.forId).
     // Die Pops kommen nicht als Paket, sondern als Entity-Status -- die stehen hier nicht.
-    pub fn replacing(event: &str) -> Option<SoundSlot> {
+    pub fn replacing(event: &str) -> Option<Self> {
         let event = event.strip_prefix("minecraft:").unwrap_or(event);
         match event {
-            "entity.generic.explode" => Some(SoundSlot::Explosion),
-            "block.respawn_anchor.charge" => Some(SoundSlot::AnchorCharge),
+            "entity.generic.explode" => Some(Self::Explosion),
+            "block.respawn_anchor.charge" => Some(Self::AnchorCharge),
             _ => None,
         }
     }
@@ -261,7 +261,7 @@ pub struct SoundSetting {
 
 impl SoundSetting {
     fn new(sound: &str, volume: u32, pitch: u32) -> Self {
-        SoundSetting { sound: sound.to_string(), volume, pitch }
+        Self { sound: sound.to_string(), volume, pitch }
     }
 
     pub fn is_vanilla(&self) -> bool {
@@ -304,7 +304,7 @@ pub fn sound_label(sound: &str) -> String {
             if let Some(name) = sound.strip_prefix(CUSTOM_PREFIX) {
                 return name.to_string();
             }
-            BUNDLED.iter().find(|(id, _)| *id == sound).map(|(_, label)| label.to_string()).unwrap_or_else(|| sound.to_string())
+            BUNDLED.iter().find(|(id, _)| *id == sound).map_or_else(|| sound.to_string(), |(_, label)| label.to_string())
         }
     }
 }
@@ -322,7 +322,7 @@ pub fn sound_choices(custom: &[String]) -> Vec<String> {
 pub fn next_sound(current: &str, dir: i8, custom: &[String]) -> String {
     let choices = sound_choices(custom);
     match choices.iter().position(|c| c == current) {
-        Some(i) => choices[(i as i32 + dir as i32).rem_euclid(choices.len() as i32) as usize].clone(),
+        Some(i) => choices[(i as i32 + i32::from(dir)).rem_euclid(choices.len() as i32) as usize].clone(),
         None => choices[0].clone(),
     }
 }
@@ -334,7 +334,7 @@ pub const MAX_OFFSET: u32 = 40;
 pub const MIN_SIZE: u32 = 1;
 pub const MAX_SIZE: u32 = 8;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TotemingSettings {
     // Totem-Warnung (Fadenkreuz-X).
     pub warning: bool,
@@ -364,7 +364,7 @@ impl Default for TotemingSettings {
     // Die Standardwerte der Mod -- sie geben das wieder, was Totem Pop Plus und das
     // Resourcepack "Click Explosion" vorher zusammen ergeben haben.
     fn default() -> Self {
-        TotemingSettings {
+        Self {
             warning: true,
             offhand_color: IndicatorColor::Red,
             hotbar_color: IndicatorColor::LightBlue,
@@ -415,9 +415,9 @@ pub enum Action {
 
 impl Action {
     // Der Klangplatz, den diese Aktion veraendert -- danach wird er zum Vorhoeren gespielt.
-    pub fn sound_slot(self) -> Option<SoundSlot> {
+    pub const fn sound_slot(self) -> Option<SoundSlot> {
         match self {
-            Action::Sound(slot, _) | Action::Volume(slot, _) | Action::Pitch(slot, _) => Some(slot),
+            Self::Sound(slot, _) | Self::Volume(slot, _) | Self::Pitch(slot, _) => Some(slot),
             _ => None,
         }
     }
@@ -432,7 +432,7 @@ fn step_u32(value: u32, dir: i8, step: u32, min: u32, max: u32) -> u32 {
 }
 
 impl TotemingSettings {
-    pub fn slot(&self, slot: SoundSlot) -> &SoundSetting {
+    pub const fn slot(&self, slot: SoundSlot) -> &SoundSetting {
         &self.sound[slot.index()]
     }
 
@@ -760,8 +760,8 @@ mod tests {
     fn x_ist_symmetrisch_um_die_mitte() {
         let [a, b] = cross_segments((100.0, 50.0), 3, 2.0, 0.0);
         for (p0, p1) in [a, b] {
-            assert!(((p0.0 + p1.0) / 2.0 - 100.0).abs() < 1e-4);
-            assert!(((p0.1 + p1.1) / 2.0 - 50.0).abs() < 1e-4);
+            assert!((f32::midpoint(p0.0, p1.0) - 100.0).abs() < 1e-4);
+            assert!((f32::midpoint(p0.1, p1.1) - 50.0).abs() < 1e-4);
         }
         // Mit halber Strichdicke passt es in den Kasten des Pixel-X: (2*3+1) GUI-Pixel zu je 2.
         let rand = a.1 .0 + cross_thickness(2.0) * std::f32::consts::FRAC_1_SQRT_2 / 2.0;

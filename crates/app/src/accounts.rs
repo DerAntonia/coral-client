@@ -14,24 +14,24 @@ pub enum Source {
 }
 
 impl Source {
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
-            Source::Microsoft => "microsoft",
-            Source::Token => "token",
+            Self::Microsoft => "microsoft",
+            Self::Token => "token",
         }
     }
 
-    fn from_key(key: &str) -> Option<Source> {
+    fn from_key(key: &str) -> Option<Self> {
         match key {
-            "microsoft" => Some(Source::Microsoft),
-            "token" => Some(Source::Token),
+            "microsoft" => Some(Self::Microsoft),
+            "token" => Some(Self::Token),
             // Frueher gab es Konten aus Prism ("prism") -- die fallen beim Laden weg.
             _ => None,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     pub name: String,
     // UUID als 32 Hex-Zeichen ohne Bindestriche (wie auth::Credentials::profile_id).
@@ -52,7 +52,7 @@ impl Account {
 }
 
 // Ergebnis der letzten Pruefung (nicht gespeichert, beim Start ist alles Unknown).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Check {
     Unknown,
     Checking,
@@ -77,8 +77,8 @@ fn same_uuid(a: &str, b: &str) -> bool {
 impl Store {
     // Format: eine Zeile je Konto "konto<TAB>quelle<TAB>name<TAB>uuid<TAB>token<TAB>refresh<TAB>
     // client-id". Tokens und Namen enthalten keine Tabs.
-    pub fn parse(text: &str) -> Store {
-        let mut store = Store::default();
+    pub fn parse(text: &str) -> Self {
+        let mut store = Self::default();
         for line in text.lines() {
             let f: Vec<&str> = line.split('\t').collect();
             if let ["konto", quelle, name, uuid, token, refresh, client_id] = f.as_slice() {
@@ -124,19 +124,16 @@ impl Store {
     // Mit Refresh-Token wird es ein Microsoft-Konto; ohne behaelt ein vorhandenes seine Quelle
     // und sein Refresh-Token.
     pub fn upsert(&mut self, creds: &auth::Credentials, msa: Option<(String, String)>, source_without_msa: Source) {
-        let neu = match self.find(&creds.profile_id) {
-            Some(i) => &mut self.list[i],
-            None => {
-                self.list.push(Account {
-                    name: String::new(),
-                    uuid: creds.profile_id.clone(),
-                    source: source_without_msa,
-                    access_token: String::new(),
-                    refresh_token: String::new(),
-                    client_id: String::new(),
-                });
-                self.list.last_mut().unwrap()
-            }
+        let neu = if let Some(i) = self.find(&creds.profile_id) { &mut self.list[i] } else {
+            self.list.push(Account {
+                name: String::new(),
+                uuid: creds.profile_id.clone(),
+                source: source_without_msa,
+                access_token: String::new(),
+                refresh_token: String::new(),
+                client_id: String::new(),
+            });
+            self.list.last_mut().unwrap()
         };
         neu.name = creds.username.clone();
         neu.access_token = creds.access_token.clone();

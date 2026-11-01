@@ -38,12 +38,12 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Status::Off => "aus",
-            Status::NoClientId => "keine Application-ID",
-            Status::NotFound => "Discord nicht gefunden",
-            Status::Connected => "verbunden",
+            Self::Off => "aus",
+            Self::NoClientId => "keine Application-ID",
+            Self::NotFound => "Discord nicht gefunden",
+            Self::Connected => "verbunden",
         }
     }
 }
@@ -79,12 +79,12 @@ impl DiscordPresence {
     }
 
     pub fn status(&self) -> Status {
-        self.status.lock().map(|s| *s).unwrap_or(Status::Off)
+        self.status.lock().map_or(Status::Off, |s| *s)
     }
 }
 
 pub fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 // Die Discord-Anwendung "coral-client" (Entwicklerportal, Konto derantonia). Nicht geheim: die
@@ -186,7 +186,7 @@ impl Connection {
         let stream = std::os::unix::net::UnixStream::connect(pfad).ok()?;
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-        let mut c = Connection { stream, nonce: 0 };
+        let mut c = Self { stream, nonce: 0 };
         let hallo = format!("{{\"v\":1,\"client_id\":\"{}\"}}", json_escape(client_id));
         c.send(OP_HANDSHAKE, &hallo).ok()?;
         // Antwort ist READY -- oder ein Fehler (unbekannte ID), dann schliesst Discord.

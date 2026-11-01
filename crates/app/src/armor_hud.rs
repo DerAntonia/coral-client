@@ -27,7 +27,7 @@ pub const NUMBER_SCALE_MIN: u32 = 50;
 pub const NUMBER_SCALE_MAX: u32 = 300;
 pub const NUMBER_SCALE_STEP: u32 = 10;
 
-pub fn is_vertical(layout: u8) -> bool {
+pub const fn is_vertical(layout: u8) -> bool {
     layout == LAYOUT_VERTICAL
 }
 

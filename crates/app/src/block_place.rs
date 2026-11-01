@@ -318,8 +318,8 @@ pub fn collides_with_player(pos: (i32, i32, i32), state: u32, shapes: &BlockShap
     // und Statuen haben ein leeres Blockmodell (gezeichnet wird das Entity-Modell) und
     // steckten sonst nie im Spieler -- Ton und Armschwung kamen trotzdem.
     world::collision_boxes(state, shapes).iter().any(|shape| {
-        let min = [pos.0 as f64 + shape.min[0] as f64, pos.1 as f64 + shape.min[1] as f64, pos.2 as f64 + shape.min[2] as f64];
-        let max = [pos.0 as f64 + shape.max[0] as f64, pos.1 as f64 + shape.max[1] as f64, pos.2 as f64 + shape.max[2] as f64];
+        let min = [f64::from(pos.0) + f64::from(shape.min[0]), f64::from(pos.1) + f64::from(shape.min[1]), f64::from(pos.2) + f64::from(shape.min[2])];
+        let max = [f64::from(pos.0) + f64::from(shape.max[0]), f64::from(pos.1) + f64::from(shape.max[1]), f64::from(pos.2) + f64::from(shape.max[2])];
         (0..3).all(|i| min[i] < spieler_max[i] && max[i] > spieler_min[i])
     })
 }

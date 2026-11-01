@@ -36,37 +36,37 @@ fn weg_zu_tiefe(y: f64) -> f64 {
 }
 
 impl SmoothScroll {
-    pub fn at(v: f32) -> Self {
-        SmoothScroll { ziel: v, stand: v }
+    pub const fn at(v: f32) -> Self {
+        Self { ziel: v, stand: v }
     }
 
     /// Erste (ganz oder teilweise) sichtbare Einheit beim gezeichneten Stand.
-    pub fn first(&self) -> usize {
+    pub const fn first(&self) -> usize {
         self.stand.max(0.0).floor() as usize
     }
 
     /// Das Ziel, in die Liste geklemmt -- was gespeichert wird und wovon Tastatur-Schritte ausgehen.
-    pub fn target(&self, max: f32) -> f32 {
+    pub const fn target(&self, max: f32) -> f32 {
         self.ziel.clamp(0.0, max.max(0.0))
     }
 
     /// Sofort dorthin, ohne Gleiten.
-    pub fn jump(&mut self, v: f32) {
-        *self = SmoothScroll::at(v);
+    pub const fn jump(&mut self, v: f32) {
+        *self = Self::at(v);
     }
 
     /// Gleitend dorthin (in die Liste geklemmt).
-    pub fn glide_to(&mut self, v: f32, max: f32) {
+    pub const fn glide_to(&mut self, v: f32, max: f32) {
         self.ziel = v.clamp(0.0, max.max(0.0));
     }
 
     /// Um `weg` Einheiten Richtung Ende (negativ: Richtung Anfang). Jenseits des Rands gegen den
     /// Widerstand, `raste` Einheiten je Raste.
     pub fn push(&mut self, weg: f32, raste: f32, max: f32) {
-        let max = max.max(0.0) as f64;
-        let raste = raste.max(1e-3) as f64;
-        let mut z = self.ziel as f64;
-        let mut rest = weg as f64;
+        let max = f64::from(max.max(0.0));
+        let raste = f64::from(raste.max(1e-3));
+        let mut z = f64::from(self.ziel);
+        let mut rest = f64::from(weg);
         // Hoechstens: zurueck in die Liste, durch sie hindurch, am anderen Ende hinaus.
         for _ in 0..3 {
             if rest == 0.0 {
@@ -132,7 +132,7 @@ const SCHWUNG_FENSTER: f32 = 0.05;
 pub struct DragGrip {
     /// Wo gedrueckt wurde (Bildschirm).
     pub press: (f32, f32),
-    /// Schon ueber ZIEH_SCHWELLE hinaus: ab dann kein Klick mehr.
+    /// Schon ueber `ZIEH_SCHWELLE` hinaus: ab dann kein Klick mehr.
     pub moved: bool,
     /// Gezogener Stand, ungeklemmt.
     pos: f32,
@@ -142,12 +142,12 @@ pub struct DragGrip {
 }
 
 impl DragGrip {
-    pub fn new(press: (f32, f32)) -> Self {
-        DragGrip { press, moved: false, pos: 0.0, last_y: press.1, spur: Vec::new() }
+    pub const fn new(press: (f32, f32)) -> Self {
+        Self { press, moved: false, pos: 0.0, last_y: press.1, spur: Vec::new() }
     }
 
     /// Zeiger bewegt: erst die Schwelle, danach folgt die Liste dem Zeiger (`px` Pixel je
-    /// Einheit, Widerstand jenseits des Rands wie SmoothScroll::push mit `raste`).
+    /// Einheit, Widerstand jenseits des Rands wie `SmoothScroll::push` mit `raste`).
     pub fn motion(&mut self, cursor: (f32, f32), jetzt: std::time::Instant, s: &mut SmoothScroll, px: f32, raste: f32, max: f32) {
         if !self.moved {
             if (cursor.0 - self.press.0).hypot(cursor.1 - self.press.1) <= ZIEH_SCHWELLE {
@@ -170,15 +170,15 @@ impl DragGrip {
         *s = SmoothScroll::at(self.pos);
     }
 
-    /// Je Bild nach SmoothScroll::tick: solange gezogen wird, federt und gleitet nichts.
-    pub fn hold(&self, s: &mut SmoothScroll) {
+    /// Je Bild nach `SmoothScroll::tick`: solange gezogen wird, federt und gleitet nichts.
+    pub const fn hold(&self, s: &mut SmoothScroll) {
         if self.moved {
             *s = SmoothScroll::at(self.pos);
         }
     }
 
-    /// Losgelassen: mit dem Tempo der letzten SCHWUNG_FENSTER Sekunden weiter, so weit, dass
-    /// das Gleiten mit `rate` (s. SmoothScroll::tick) genau dieses Tempo anfaengt -- in die
+    /// Losgelassen: mit dem Tempo der letzten `SCHWUNG_FENSTER` Sekunden weiter, so weit, dass
+    /// das Gleiten mit `rate` (s. `SmoothScroll::tick`) genau dieses Tempo anfaengt -- in die
     /// Liste geklemmt. Ohne Traegheit (rate unendlich) oder jenseits des Rands kein Schwung.
     pub fn release(&self, jetzt: std::time::Instant, s: &mut SmoothScroll, rate: f32, max: f32) {
         if !self.moved {
@@ -273,7 +273,7 @@ mod tests {
         }
         let mut s = SmoothScroll::at(10.0);
         s.push(3.0, 1.0, 10.0);
-        assert!((s.ziel as f64 - 10.0 - naeherung).abs() < 1e-3, "{} gegen {}", s.ziel, 10.0 + naeherung);
+        assert!((f64::from(s.ziel) - 10.0 - naeherung).abs() < 1e-3, "{} gegen {}", s.ziel, 10.0 + naeherung);
         // Die erste Raste draussen bringt knapp eine halbe.
         let mut s = SmoothScroll::at(0.0);
         s.push(-1.0, 1.0, 10.0);

@@ -22,6 +22,10 @@ pub mod entity;
 pub mod entity_model;
 pub mod model_data;
 pub mod mob_catalog;
+pub mod item_inspect;
+pub use tuning::hold;
+pub use tuning::juggle;
+pub mod more_anims;
 pub mod entity_types;
 pub mod fluid;
 pub mod item_model;
@@ -61,7 +65,7 @@ pub use entity::{
     Entity, HeldItem, ItemRenderKind, OrbPlayer, TextDisplay, MAX_HURT_TIME, item_render_kind,
 };
 pub use entity_model::{
-    biped_model, cape_angles, cape_model, cape_pose, cow_model, creeper_model, default_skin, elytra_model, elytra_pose, emit as emit_entity_model,
+    biped_model, cape_angles, cape_model, cape_pose, cow_model, creeper_model, default_skin, elytra_model, elytra_pose, emit as emit_entity_model, emit_two_sided as emit_entity_model_two_sided,
     enderman_model, entity_transform, entity_transform_gliding, entity_transform_leaning, first_person_arm_pose, first_person_arm_transform, lerp_angle_degrees, pig_model,
     player_arm_model, player_model, rotation_x_deg, sheep_model, slime_model, spider_model, wrap_degrees, Affine, BodyYaw, CapeState,
     Cuboid, Glide, Lean, LimbAnimator, Model, Part, PartPose, Pose, DEFAULT_SKINS, ELYTRA_TEXTURE,

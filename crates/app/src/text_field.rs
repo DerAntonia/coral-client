@@ -32,7 +32,7 @@ impl TextField {
 
     // Gezeichnet wird caret(); der Cursor selbst nur in den Tests.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn cursor(&self) -> usize {
+    pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
@@ -77,15 +77,15 @@ impl TextField {
     // springt ein Pfeil bei bestehender Markierung an deren Rand, wie in jedem Textfeld.
     pub fn move_cursor(&mut self, m: Move, extend: bool) {
         self.hold_caret();
-        if !extend {
+        if extend {
+            self.anchor.get_or_insert(self.cursor);
+        } else {
             if let Some(r) = self.selection().filter(|_| matches!(m, Move::Left | Move::Right)) {
                 self.cursor = if m == Move::Left { r.start } else { r.end };
                 self.anchor = None;
                 return;
             }
             self.anchor = None;
-        } else {
-            self.anchor.get_or_insert(self.cursor);
         }
         self.cursor = self.target(m);
     }

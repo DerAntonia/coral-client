@@ -57,7 +57,7 @@ fn berichtet_die_echte_puffergroesse() {
 
     match gewaehlt {
         Some(frames) => {
-            let ms = frames as f64 * 1000.0 / rate as f64;
+            let ms = f64::from(frames) * 1000.0 / f64::from(rate);
             println!("  angefordert: {TARGET} Frames -> gewaehlt {frames} Frames = {ms:.2} ms pro Puffer");
             if frames != TARGET {
                 println!("  ACHTUNG: {TARGET} war nicht moeglich, das Geraet klemmt auf {frames}");

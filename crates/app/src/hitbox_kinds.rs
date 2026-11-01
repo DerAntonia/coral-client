@@ -26,103 +26,103 @@ pub enum HitboxKind {
 
 impl HitboxKind {
     pub const COUNT: usize = 14;
-    pub const ALL: [HitboxKind; Self::COUNT] = [
-        HitboxKind::Player,
-        HitboxKind::EnderPearl,
-        HitboxKind::Arrow,
-        HitboxKind::Trident,
-        HitboxKind::WindCharge,
-        HitboxKind::Item,
-        HitboxKind::Potion,
-        HitboxKind::Snowball,
-        HitboxKind::FishingBobber,
-        HitboxKind::Firework,
-        HitboxKind::EndCrystal,
-        HitboxKind::Tnt,
-        HitboxKind::Cobweb,
-        HitboxKind::Water,
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Player,
+        Self::EnderPearl,
+        Self::Arrow,
+        Self::Trident,
+        Self::WindCharge,
+        Self::Item,
+        Self::Potion,
+        Self::Snowball,
+        Self::FishingBobber,
+        Self::Firework,
+        Self::EndCrystal,
+        Self::Tnt,
+        Self::Cobweb,
+        Self::Water,
     ];
 
     // Die Entity-Arten, in der Reihenfolge der Liste "Individuelle Farben".
-    pub fn entities() -> impl Iterator<Item = HitboxKind> {
+    pub fn entities() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter().filter(|k| !k.is_block())
     }
 
-    pub fn is_block(self) -> bool {
-        matches!(self, HitboxKind::Cobweb | HitboxKind::Water)
+    pub const fn is_block(self) -> bool {
+        matches!(self, Self::Cobweb | Self::Water)
     }
 
-    pub fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self as usize
     }
 
     // Art eines Entities aus seinem Registry-Namen; None = keine eigene Art.
-    pub fn of_entity(name: &str) -> Option<HitboxKind> {
+    pub fn of_entity(name: &str) -> Option<Self> {
         Some(match name {
-            "player" => HitboxKind::Player,
-            "ender_pearl" => HitboxKind::EnderPearl,
-            "arrow" | "spectral_arrow" => HitboxKind::Arrow,
-            "trident" => HitboxKind::Trident,
-            "wind_charge" | "breeze_wind_charge" => HitboxKind::WindCharge,
-            "item" => HitboxKind::Item,
-            "splash_potion" | "lingering_potion" => HitboxKind::Potion,
-            "snowball" | "egg" => HitboxKind::Snowball,
-            "fishing_bobber" => HitboxKind::FishingBobber,
-            "firework_rocket" => HitboxKind::Firework,
-            "end_crystal" => HitboxKind::EndCrystal,
-            "tnt" | "tnt_minecart" => HitboxKind::Tnt,
+            "player" => Self::Player,
+            "ender_pearl" => Self::EnderPearl,
+            "arrow" | "spectral_arrow" => Self::Arrow,
+            "trident" => Self::Trident,
+            "wind_charge" | "breeze_wind_charge" => Self::WindCharge,
+            "item" => Self::Item,
+            "splash_potion" | "lingering_potion" => Self::Potion,
+            "snowball" | "egg" => Self::Snowball,
+            "fishing_bobber" => Self::FishingBobber,
+            "firework_rocket" => Self::Firework,
+            "end_crystal" => Self::EndCrystal,
+            "tnt" | "tnt_minecart" => Self::Tnt,
             _ => return None,
         })
     }
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            HitboxKind::Player => "Spieler",
-            HitboxKind::EnderPearl => "Enderperle",
-            HitboxKind::Arrow => "Pfeil",
-            HitboxKind::Trident => "Dreizack",
-            HitboxKind::WindCharge => "Windkugel",
-            HitboxKind::Item => "Item am Boden",
-            HitboxKind::Potion => "Wurftrank",
-            HitboxKind::Snowball => "Schneeball, Ei",
-            HitboxKind::FishingBobber => "Angelhaken",
-            HitboxKind::Firework => "Feuerwerksrakete",
-            HitboxKind::EndCrystal => "Endkristall",
-            HitboxKind::Tnt => "TNT",
-            HitboxKind::Cobweb => "Spinnennetz",
-            HitboxKind::Water => "Wasserquelle",
+            Self::Player => "Spieler",
+            Self::EnderPearl => "Enderperle",
+            Self::Arrow => "Pfeil",
+            Self::Trident => "Dreizack",
+            Self::WindCharge => "Windkugel",
+            Self::Item => "Item am Boden",
+            Self::Potion => "Wurftrank",
+            Self::Snowball => "Schneeball, Ei",
+            Self::FishingBobber => "Angelhaken",
+            Self::Firework => "Feuerwerksrakete",
+            Self::EndCrystal => "Endkristall",
+            Self::Tnt => "TNT",
+            Self::Cobweb => "Spinnennetz",
+            Self::Water => "Wasserquelle",
         }
     }
 
     // Schluessel in der Einstellungsdatei (hitbox_<key>=...).
-    pub fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
-            HitboxKind::Player => "player",
-            HitboxKind::EnderPearl => "ender_pearl",
-            HitboxKind::Arrow => "arrow",
-            HitboxKind::Trident => "trident",
-            HitboxKind::WindCharge => "wind_charge",
-            HitboxKind::Item => "item",
-            HitboxKind::Potion => "potion",
-            HitboxKind::Snowball => "snowball",
-            HitboxKind::FishingBobber => "fishing_bobber",
-            HitboxKind::Firework => "firework",
-            HitboxKind::EndCrystal => "end_crystal",
-            HitboxKind::Tnt => "tnt",
-            HitboxKind::Cobweb => "cobweb",
-            HitboxKind::Water => "water",
+            Self::Player => "player",
+            Self::EnderPearl => "ender_pearl",
+            Self::Arrow => "arrow",
+            Self::Trident => "trident",
+            Self::WindCharge => "wind_charge",
+            Self::Item => "item",
+            Self::Potion => "potion",
+            Self::Snowball => "snowball",
+            Self::FishingBobber => "fishing_bobber",
+            Self::Firework => "firework",
+            Self::EndCrystal => "end_crystal",
+            Self::Tnt => "tnt",
+            Self::Cobweb => "cobweb",
+            Self::Water => "water",
         }
     }
 
-    pub fn from_key(key: &str) -> Option<HitboxKind> {
+    pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.key() == key)
     }
 
     // Bekommt diese Art ohne Ueberschreiben eine Box? Items nach dem Schalter oben im Modul,
     // alles andere wie vor den eigenen Arten (s. default_style).
-    pub fn shown_by_default(self, items: bool) -> bool {
+    pub const fn shown_by_default(self, items: bool) -> bool {
         match self {
-            HitboxKind::Item => items,
+            Self::Item => items,
             _ => self.default_style().on,
         }
     }
@@ -130,22 +130,22 @@ impl HitboxKind {
     // Vorgabe: an ist, was die Anzeige schon vor den eigenen Arten gezeigt hat (alles
     // Angreifbare). Pfeile, Dreizacke und Items waren aus und bleiben es, ebenso die Bloecke.
     // Spieler in der Farbe der geglaetteten Box, damit sich beim Umstieg nichts aendert.
-    pub fn default_style(self) -> HitboxStyle {
+    pub const fn default_style(self) -> HitboxStyle {
         let (on, hue, saturation, value) = match self {
-            HitboxKind::Player => (true, 100, 70, 90),
-            HitboxKind::EnderPearl => (true, 280, 70, 95),
-            HitboxKind::Arrow => (false, 0, 0, 100),
-            HitboxKind::Trident => (false, 180, 60, 90),
-            HitboxKind::WindCharge => (true, 200, 45, 100),
-            HitboxKind::Item => (false, 50, 85, 100),
-            HitboxKind::Potion => (true, 320, 60, 100),
-            HitboxKind::Snowball => (true, 0, 0, 90),
-            HitboxKind::FishingBobber => (true, 0, 0, 70),
-            HitboxKind::Firework => (true, 30, 90, 100),
-            HitboxKind::EndCrystal => (true, 300, 80, 100),
-            HitboxKind::Tnt => (true, 0, 90, 100),
-            HitboxKind::Cobweb => (false, 0, 0, 100),
-            HitboxKind::Water => (false, 210, 80, 100),
+            Self::Player => (true, 100, 70, 90),
+            Self::EnderPearl => (true, 280, 70, 95),
+            Self::Arrow => (false, 0, 0, 100),
+            Self::Trident => (false, 180, 60, 90),
+            Self::WindCharge => (true, 200, 45, 100),
+            Self::Item => (false, 50, 85, 100),
+            Self::Potion => (true, 320, 60, 100),
+            Self::Snowball => (true, 0, 0, 90),
+            Self::FishingBobber => (true, 0, 0, 70),
+            Self::Firework => (true, 30, 90, 100),
+            Self::EndCrystal => (true, 300, 80, 100),
+            Self::Tnt => (true, 0, 90, 100),
+            Self::Cobweb => (false, 0, 0, 100),
+            Self::Water => (false, 210, 80, 100),
         };
         HitboxStyle { on, custom: false, hue, saturation, value, alpha: 100 }
     }
@@ -173,7 +173,7 @@ impl HitboxStyle {
 
     // Unlesbares laesst die Vorgabe stehen. Ohne sechstes Feld (aeltere Dateien) ist
     // Ueberschreiben aus.
-    pub fn decode(text: &str, default: HitboxStyle) -> HitboxStyle {
+    pub fn decode(text: &str, default: Self) -> Self {
         let teile: Vec<&str> = text.split(',').collect();
         let (on, h, s, v, a, custom) = match teile[..] {
             [on, h, s, v, a] => (on, h, s, v, a, "false"),
@@ -183,7 +183,7 @@ impl HitboxStyle {
         let zahl = |t: &str, max: u32| t.trim().parse::<u32>().ok().map(|n| n.min(max));
         match (zahl(h, 359), zahl(s, 100), zahl(v, 100), zahl(a, 100)) {
             (Some(hue), Some(saturation), Some(value), Some(alpha)) => {
-                HitboxStyle { on: on.trim() == "true", custom: custom.trim() == "true", hue, saturation, value, alpha }
+                Self { on: on.trim() == "true", custom: custom.trim() == "true", hue, saturation, value, alpha }
             }
             _ => default,
         }

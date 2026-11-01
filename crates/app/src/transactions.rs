@@ -1,4 +1,4 @@
-//! Transaktionen: die Ping-Pakete des Servers (ClientboundPing), die der Client sofort mit
+//! Transaktionen: die Ping-Pakete des Servers (`ClientboundPing`), die der Client sofort mit
 //! derselben ID beantwortet. Vanilla schickt sie nie von selbst -- wer sie im Spiel schickt,
 //! ist fast immer ein Anticheat, das daran misst, welchen Stand der Client gerade kennt. Wie
 //! sich die IDs veraendern (Startwert, Schrittweite, Takt), ist je Anticheat verschieden.
@@ -49,7 +49,7 @@ impl Transactions {
     }
 
     fn steps(&self) -> impl Iterator<Item = i64> + '_ {
-        self.ids.iter().zip(self.ids.iter().skip(1)).map(|(a, b)| b.1 as i64 - a.1 as i64)
+        self.ids.iter().zip(self.ids.iter().skip(1)).map(|(a, b)| i64::from(b.1) - i64::from(a.1))
     }
 
     /// Die Art des Musters ohne die Zaehler, die sich laufend aendern: "zählt meist um -1, 12

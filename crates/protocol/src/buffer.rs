@@ -10,7 +10,8 @@ pub struct PacketWriter {
 }
 
 impl PacketWriter {
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self { buf: Vec::new() }
     }
 
@@ -66,7 +67,7 @@ impl PacketWriter {
     }
 
     pub fn write_bool(&mut self, value: bool) -> &mut Self {
-        self.buf.push(value as u8);
+        self.buf.push(u8::from(value));
         self
     }
 
@@ -80,6 +81,7 @@ impl PacketWriter {
         self
     }
 
+    #[must_use] 
     pub fn into_bytes(self) -> Vec<u8> {
         self.buf
     }
@@ -94,7 +96,8 @@ pub struct PacketReader<'a> {
 }
 
 impl<'a> PacketReader<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
+    #[must_use] 
+    pub const fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
     }
 
@@ -197,21 +200,25 @@ impl<'a> PacketReader<'a> {
         self.read_bytes(len as usize)
     }
 
-    pub fn is_exhausted(&self) -> bool {
+    #[must_use] 
+    pub const fn is_exhausted(&self) -> bool {
         self.pos >= self.buf.len()
     }
 
+    #[must_use] 
     pub fn remaining(&self) -> &[u8] {
         &self.buf[self.pos..]
     }
 
     // Aktuelle Leseposition -- zusammen mit read_since, um ein gerade gelesenes Stueck
     // unveraendert aufzuheben.
-    pub fn position(&self) -> usize {
+    #[must_use] 
+    pub const fn position(&self) -> usize {
         self.pos
     }
 
     // Die Bytes zwischen `start` (eine fruehere position()) und der aktuellen Position.
+    #[must_use] 
     pub fn read_since(&self, start: usize) -> &'a [u8] {
         &self.buf[start.min(self.pos)..self.pos]
     }

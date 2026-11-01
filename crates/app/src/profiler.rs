@@ -53,59 +53,59 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub const ALL: [Phase; 24] = [
-        Phase::DrainEvents,
-        Phase::DrainAuth,
-        Phase::LoopMisc,
-        Phase::RenderLimits,
-        Phase::Mesh,
-        Phase::Input,
-        Phase::Movement,
-        Phase::Acquire,
-        Phase::MovementFrame,
-        Phase::Animations,
-        Phase::AnimUpload,
-        Phase::Hud,
-        Phase::Textures,
-        Phase::Entities,
-        Phase::Hitboxes,
-        Phase::Hand,
-        Phase::WorldExtras,
-        Phase::Doll,
-        Phase::Upload,
-        Phase::Menu,
-        Phase::Sort,
-        Phase::Encode,
-        Phase::Submit,
-        Phase::Present,
+    pub const ALL: [Self; 24] = [
+        Self::DrainEvents,
+        Self::DrainAuth,
+        Self::LoopMisc,
+        Self::RenderLimits,
+        Self::Mesh,
+        Self::Input,
+        Self::Movement,
+        Self::Acquire,
+        Self::MovementFrame,
+        Self::Animations,
+        Self::AnimUpload,
+        Self::Hud,
+        Self::Textures,
+        Self::Entities,
+        Self::Hitboxes,
+        Self::Hand,
+        Self::WorldExtras,
+        Self::Doll,
+        Self::Upload,
+        Self::Menu,
+        Self::Sort,
+        Self::Encode,
+        Self::Submit,
+        Self::Present,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Phase::DrainEvents => "Pakete",
-            Phase::DrainAuth => "Login",
-            Phase::LoopMisc => "Schleife sonst",
-            Phase::RenderLimits => "Renderdistanz",
-            Phase::Mesh => "Mesh-Upload",
-            Phase::Input => "Eingabe",
-            Phase::Movement => "Ticks (Schleife)",
-            Phase::Acquire => "Acquire/Warten",
-            Phase::MovementFrame => "Ticks (Frame)",
-            Phase::Animations => "Animationen",
-            Phase::AnimUpload => "Textur-Upload",
-            Phase::Hud => "HUD",
-            Phase::Textures => "Texturen/Skins",
-            Phase::Entities => "Entities",
-            Phase::Hitboxes => "Hitboxen",
-            Phase::Hand => "Hand",
-            Phase::WorldExtras => "Geister/Partikel",
-            Phase::Doll => "Inventarfigur",
-            Phase::Upload => "GPU-Upload",
-            Phase::Menu => "Menü-UI",
-            Phase::Sort => "Sortieren/Offsets",
-            Phase::Encode => "Encode",
-            Phase::Submit => "Submit",
-            Phase::Present => "Present",
+            Self::DrainEvents => "Pakete",
+            Self::DrainAuth => "Login",
+            Self::LoopMisc => "Schleife sonst",
+            Self::RenderLimits => "Renderdistanz",
+            Self::Mesh => "Mesh-Upload",
+            Self::Input => "Eingabe",
+            Self::Movement => "Ticks (Schleife)",
+            Self::Acquire => "Acquire/Warten",
+            Self::MovementFrame => "Ticks (Frame)",
+            Self::Animations => "Animationen",
+            Self::AnimUpload => "Textur-Upload",
+            Self::Hud => "HUD",
+            Self::Textures => "Texturen/Skins",
+            Self::Entities => "Entities",
+            Self::Hitboxes => "Hitboxen",
+            Self::Hand => "Hand",
+            Self::WorldExtras => "Geister/Partikel",
+            Self::Doll => "Inventarfigur",
+            Self::Upload => "GPU-Upload",
+            Self::Menu => "Menü-UI",
+            Self::Sort => "Sortieren/Offsets",
+            Self::Encode => "Encode",
+            Self::Submit => "Submit",
+            Self::Present => "Present",
         }
     }
 
@@ -147,7 +147,7 @@ impl DisplayTiming {
         Self { period_ms: f32::NAN, present_phase_ms: f32::NAN, gpu_phase_ms: f32::NAN, gpu_ms: f32::NAN, target_ms: f32::NAN };
 
     // Die Phase, die ueber den Riss entscheidet: GPU fertig, falls gemessen.
-    fn tear_phase(&self) -> f32 {
+    const fn tear_phase(&self) -> f32 {
         if self.gpu_phase_ms.is_nan() { self.present_phase_ms } else { self.gpu_phase_ms }
     }
 }
@@ -240,7 +240,7 @@ impl FrameProfiler {
         }
     }
 
-    pub fn active(&self) -> bool {
+    pub const fn active(&self) -> bool {
         self.active
     }
 
@@ -292,11 +292,11 @@ impl FrameProfiler {
         }
     }
 
-    pub fn loop_call(&mut self) {
+    pub const fn loop_call(&mut self) {
         self.loop_calls += 1;
     }
 
-    pub fn tick(&mut self) {
+    pub const fn tick(&mut self) {
         self.ticks += 1;
     }
 
@@ -354,7 +354,7 @@ impl FrameProfiler {
             return;
         }
         let now = Instant::now();
-        let interval_ms = self.last_frame_end.map(|t| (now - t).as_secs_f32() * 1000.0).unwrap_or(0.0);
+        let interval_ms = self.last_frame_end.map_or(0.0, |t| (now - t).as_secs_f32() * 1000.0);
         self.last_frame_end = Some(now);
         let record = FrameRecord {
             at: now,
@@ -371,7 +371,7 @@ impl FrameProfiler {
         self.ticks = 0;
         self.wake_late_ms = 0.0;
 
-        let target_ms = target.map(|t| t.as_secs_f32() * 1000.0).unwrap_or(0.0);
+        let target_ms = target.map_or(0.0, |t| t.as_secs_f32() * 1000.0);
         if let Some(csv) = self.csv.as_mut() {
             let mut line = format!(
                 "{:.3},{:.3},{:.3},{},{},{:.3}",

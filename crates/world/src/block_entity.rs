@@ -28,6 +28,7 @@ pub fn bed_states() -> &'static HashSet<u32> {
     STATES.get_or_init(|| (0..state_count() as u32).filter(|&s| block_name(s).is_some_and(|n| n.ends_with("_bed"))).collect())
 }
 
+#[must_use] 
 pub fn is_bed(state: u32) -> bool {
     bed_states().contains(&state)
 }
@@ -40,6 +41,7 @@ pub fn shulker_states() -> &'static HashSet<u32> {
     STATES.get_or_init(|| (0..state_count() as u32).filter(|&s| block_name(s).is_some_and(|n| n.ends_with("shulker_box"))).collect())
 }
 
+#[must_use] 
 pub fn is_shulker_box(state: u32) -> bool {
     shulker_states().contains(&state)
 }
@@ -55,11 +57,13 @@ pub fn chest_states() -> &'static HashSet<u32> {
     STATES.get_or_init(|| (0..state_count() as u32).filter(|&s| block_name(s).is_some_and(is_chest_name)).collect())
 }
 
+#[must_use] 
 pub fn is_chest(state: u32) -> bool {
     chest_states().contains(&state)
 }
 
 // Bloecke mit Deckel, den ein Block-Event (Typ 1, Zahl der Betrachter) oeffnet.
+#[must_use] 
 pub fn has_lid(state: u32) -> bool {
     is_shulker_box(state) || is_chest(state)
 }
@@ -85,6 +89,7 @@ pub fn skull_states() -> &'static HashSet<u32> {
     STATES.get_or_init(|| (0..state_count() as u32).filter(|&s| block_name(s).is_some_and(|n| SKULL_BLOCKS.iter().any(|(b, _)| *b == n))).collect())
 }
 
+#[must_use] 
 pub fn is_skull(state: u32) -> bool {
     skull_states().contains(&state)
 }
@@ -100,6 +105,7 @@ pub struct SkullInstance {
     pub yaw_deg: f32,
 }
 
+#[must_use] 
 pub fn skull_instance(pos: (i32, i32, i32), state: u32) -> Option<SkullInstance> {
     let name = block_name(state)?;
     let item = SKULL_BLOCKS.iter().find(|(b, _)| *b == name)?.1;
@@ -120,6 +126,7 @@ pub fn skull_instance(pos: (i32, i32, i32), state: u32) -> Option<SkullInstance>
 
 // Kupfergolem-Statuen (CopperGolemStatueBlockRenderer): je Oxidationsstufe die Textur des
 // Golems (CopperGolemOxidationLevels), gewachst dieselbe. Gilt fuer Block- und Itemnamen.
+#[must_use] 
 pub fn copper_golem_statue_texture(name: &str) -> Option<&'static str> {
     let stufe = name.strip_prefix("waxed_").unwrap_or(name).strip_suffix("copper_golem_statue")?;
     Some(match stufe {
@@ -151,6 +158,7 @@ pub struct StatueInstance {
     pub yaw_deg: f32,
 }
 
+#[must_use] 
 pub fn statue_instance(pos: (i32, i32, i32), state: u32) -> Option<StatueInstance> {
     let texture = copper_golem_statue_texture(block_name(state)?)?;
     let layer = match property(state, "copper_golem_pose") {
@@ -174,6 +182,7 @@ fn is_statue(state: u32) -> bool {
 }
 
 // Alles, was World in ihrem Index fuer BlockEntity-Modelle fuehrt (s. World::model_blocks).
+#[must_use] 
 pub fn is_model_block(state: u32) -> bool {
     model_block_table().get(state as usize).copied().unwrap_or(false)
 }
@@ -233,6 +242,7 @@ pub const CHEST_TEXTURES: &[&str] = &[
 // `weihnachten`: Vanillas Weihnachtstruhen vom 24. bis 26. Dezember (ChestBlockEntityRenderer.
 // getVariant). Das gilt fuer alle Truhen ausser der Endertruhe -- auch Redstone- und
 // Kupfertruhen, weil CHRISTMAS dort vor TRAPPED und COPPER geprueft wird.
+#[must_use] 
 pub fn chest_instance(pos: (i32, i32, i32), state: u32, weihnachten: bool) -> Option<ChestInstance> {
     let name = block_name(state)?;
     if !is_chest_name(name) {
@@ -319,7 +329,7 @@ pub const SHULKER_TEXTURES: &[&str] = &[
     "entity/shulker/shulker_black",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShulkerInstance {
     pub pos: (i32, i32, i32),
     pub texture: &'static str,
@@ -327,6 +337,7 @@ pub struct ShulkerInstance {
     pub facing: &'static str,
 }
 
+#[must_use] 
 pub fn shulker_instance(pos: (i32, i32, i32), state: u32) -> Option<ShulkerInstance> {
     let name = block_name(state)?;
     let farbe = name.strip_suffix("shulker_box")?;
@@ -380,6 +391,7 @@ pub const BED_TEXTURES: &[&str] = &[
     "entity/bed/black",
 ];
 
+#[must_use] 
 pub fn bed_instance(pos: (i32, i32, i32), state: u32) -> Option<BedInstance> {
     let name = block_name(state)?;
     let farbe = name.strip_suffix("_bed")?;

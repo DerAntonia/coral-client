@@ -15,6 +15,7 @@ pub const SECTION_VOLUME: usize = 16 * 16 * 16;
 // Block-State-ID 0 ist in modernen Versionen immer minecraft:air.
 pub const STATE_ID_AIR: u32 = 0;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ChunkData {
     pub x: i32,
     pub z: i32,
@@ -34,7 +35,7 @@ pub struct ChunkData {
 // Himmelslicht aus "Chunk Data and Update Light" bzw. "Update Light". Ebene i ist die Section
 // (unterste - 1 + i): eine unter und eine ueber der Welt kommen dazu. Das Blocklicht des
 // Servers wird nur ueberlesen -- das rechnet der Client selbst, farbig (s. world::light).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct LightData {
     // Ebenen mit Daten (je 2048 Byte, zwei Werte je Byte, niedriges Halbbyte zuerst).
     pub sky: Vec<(usize, Vec<u8>)>,
@@ -105,14 +106,89 @@ pub struct ChunkSectionData {
     pub biomes: Vec<u32>,
 }
 
+// Fuer den Snapshot von coral-record: 4096 States als Palette und bitweise gepackte Indizes
+// (so viele Bits wie die Palette braucht) statt als einzelne Zahlen. Eine Section aus nur Luft
+// oder Stein ist dann ein Wert.
+#[derive(serde::Serialize, serde::Deserialize)]
+enum Packed {
+    One(u32),
+    Bits(Vec<u32>, u8, Vec<u8>),
+}
+
+impl Packed {
+    fn pack(values: &[u32]) -> Self {
+        let mut palette: Vec<u32> = Vec::new();
+        let mut index = std::collections::HashMap::new();
+        let idx: Vec<usize> = values
+            .iter()
+            .map(|v| {
+                *index.entry(*v).or_insert_with(|| {
+                    palette.push(*v);
+                    palette.len() - 1
+                })
+            })
+            .collect();
+        if palette.len() == 1 {
+            return Self::One(palette[0]);
+        }
+        let bits = (usize::BITS - (palette.len().max(2) - 1).leading_zeros()) as usize;
+        let mut data = vec![0u8; (idx.len() * bits).div_ceil(8)];
+        for (n, &i) in idx.iter().enumerate() {
+            for b in 0..bits {
+                if i >> b & 1 == 1 {
+                    let pos = n * bits + b;
+                    data[pos / 8] |= 1 << (pos % 8);
+                }
+            }
+        }
+        Self::Bits(palette, bits as u8, data)
+    }
+
+    fn unpack(self, len: usize) -> Vec<u32> {
+        match self {
+            Self::One(v) => vec![v; len],
+            Self::Bits(palette, bits, data) => {
+                let bits = bits as usize;
+                (0..len)
+                    .map(|n| {
+                        let mut i = 0;
+                        for b in 0..bits {
+                            let pos = n * bits + b;
+                            if data.get(pos / 8).is_some_and(|byte| byte >> (pos % 8) & 1 == 1) {
+                                i |= 1 << b;
+                            }
+                        }
+                        palette.get(i).copied().unwrap_or(0)
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
+impl serde::Serialize for ChunkSectionData {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&(self.block_count, Packed::pack(&self.block_states), self.block_states.len(), Packed::pack(&self.biomes), self.biomes.len()), s)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChunkSectionData {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let (block_count, states, n, biomes, m): (i16, Packed, usize, Packed, usize) = serde::Deserialize::deserialize(d)?;
+        Ok(Self { block_count, block_states: states.unpack(n), biomes: biomes.unpack(m) })
+    }
+}
+
 impl ChunkSectionData {
-    pub fn is_empty(&self) -> bool {
+    #[must_use] 
+    pub const fn is_empty(&self) -> bool {
         self.block_count == 0
     }
 }
 
 // Diagnose-Hilfe: laeuft den Header ab und berichtet, was gefunden wurde, statt nur
 // Err zu liefern. Damit laesst sich das Layout gegen den echten Server verifizieren.
+#[must_use] 
 pub fn debug_chunk_layout(payload: &[u8]) -> String {
     let mut out = String::new();
     let mut r = PacketReader::new(payload);
@@ -213,10 +289,10 @@ pub fn parse_chunk_data(payload: &[u8]) -> Result<ChunkData, ReadError> {
         let n = r.read_varint()?;
         for _ in 0..n.clamp(0, 65536) {
             let xz = r.read_u8()?;
-            let y = r.read_i16()? as i32;
+            let y = i32::from(r.read_i16()?);
             let _typ = r.read_varint()?;
             let data = crate::nbt::read_root(&mut r)?;
-            let pos = (x * 16 + (xz >> 4) as i32, y, z * 16 + (xz & 15) as i32);
+            let pos = (x * 16 + i32::from(xz >> 4), y, z * 16 + i32::from(xz & 15));
             if let Some(text) = data.as_ref().and_then(crate::sign::sign_from_nbt) {
                 signs.push((pos, text));
             } else if let Some(profil) = data.as_ref().and_then(crate::item::head_profile_from_nbt) {
@@ -263,10 +339,10 @@ enum PaletteKind {
 impl PaletteKind {
     // Ab wie vielen Bits pro Eintrag auf "Direct" (rohe Registry-IDs ohne Palette)
     // umgeschaltet wird. Darunter (und ueber 0) gilt "Indirect".
-    fn direct_threshold(self) -> u8 {
+    const fn direct_threshold(self) -> u8 {
         match self {
-            PaletteKind::BlockStates => 9,
-            PaletteKind::Biomes => 4,
+            Self::BlockStates => 9,
+            Self::Biomes => 4,
         }
     }
 }
@@ -365,5 +441,21 @@ mod light_tests {
         assert_eq!((x, z), (-3, 7));
         assert_eq!(l.sky.iter().map(|(e, d)| (*e, d[0])).collect::<Vec<_>>(), vec![(1, 0xFF), (65, 0x21)]);
         assert_eq!(l.sky_empty, vec![0]);
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    // Palette und Bit-Packung des Snapshots geben genau die States zurueck.
+    #[test]
+    fn section_packung_hin_und_zurueck() {
+        for vielfalt in [1u32, 2, 3, 17, 300, 4096] {
+            let states: Vec<u32> = (0..4096u32).map(|i| (i * 7919) % vielfalt + 5).collect();
+            let text = serde_json::to_vec(&Packed::pack(&states)).unwrap();
+            let p: Packed = serde_json::from_slice(&text).unwrap();
+            assert_eq!(p.unpack(4096), states, "vielfalt {vielfalt}");
+        }
     }
 }

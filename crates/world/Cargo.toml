@@ -5,6 +5,7 @@ version.workspace = true
 
 [dependencies]
 protocol = { path = "../protocol" }
+tuning = { path = "../tuning" }
 bytemuck = { version = "1", features = ["derive"] }
 rustc-hash.workspace = true
 

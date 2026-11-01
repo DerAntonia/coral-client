@@ -38,7 +38,7 @@ pub const DISTANCE_STEP: u32 = 32;
 // Was eine alte settings.conf mit eingeschalteter Fernsicht ohne eigene Weite bekommt.
 pub const DISTANCE_LEGACY_DEFAULT: u32 = 128;
 // Geaenderte Chunks werden spaetestens so oft gespeichert, auch wenn sie geladen bleiben.
-const SAVE_DIRTY_EVERY: Duration = Duration::from_secs(60);
+const SAVE_DIRTY_EVERY: Duration = Duration::from_mins(1);
 // Datei im Server-Ordner (s. chunk_saver::server_dir) mit dem letzten Standort.
 const LAST_POSE_FILE: &str = "last_position.txt";
 
@@ -83,7 +83,7 @@ impl LastPose {
 pub(crate) struct LodState {
     saver: Option<chunk_saver::ChunkSaver>,
     // Dimension und Seed der aktuellen Welt (s. net::ClientEvent::WorldIdentity).
-    identity: Option<(String, i64)>,
+    pub(crate) identity: Option<(String, i64)>,
     // Chunks mit Block-Updates seit ihrer letzten Aufnahme.
     pub dirty_columns: HashSet<(i32, i32)>,
     // Die Chunks, die in der Maske der GPU als "echtes Gelaende" stehen, und ihr Rechteck.
@@ -116,10 +116,10 @@ pub fn apply_action(settings: &mut Settings, action: ButtonAction) {
         ButtonAction::ChunkSaverThreadsPrev => settings.chunk_saver_threads = settings.chunk_saver_threads.saturating_sub(1).max(1),
         ButtonAction::ChunkSaverThreadsNext => settings.chunk_saver_threads = (settings.chunk_saver_threads + 1).min(THREADS_MAX),
         ButtonAction::ChunkSaverThresholdPrev => {
-            settings.chunk_saver_threshold = THRESHOLDS.iter().rev().copied().find(|&t| t < settings.chunk_saver_threshold).unwrap_or(THRESHOLD_MIN)
+            settings.chunk_saver_threshold = THRESHOLDS.iter().rev().copied().find(|&t| t < settings.chunk_saver_threshold).unwrap_or(THRESHOLD_MIN);
         }
         ButtonAction::ChunkSaverThresholdNext => {
-            settings.chunk_saver_threshold = THRESHOLDS.iter().copied().find(|&t| t > settings.chunk_saver_threshold).unwrap_or(THRESHOLD_MAX)
+            settings.chunk_saver_threshold = THRESHOLDS.iter().copied().find(|&t| t > settings.chunk_saver_threshold).unwrap_or(THRESHOLD_MAX);
         }
         ButtonAction::ChunkSaverDistancePrev => settings.lod_render_distance = distance_step(settings.lod_render_distance, false),
         ButtonAction::ChunkSaverDistanceNext => settings.lod_render_distance = distance_step(settings.lod_render_distance, true),
@@ -156,7 +156,7 @@ impl App {
                 text: set.chunk_saver_threads.to_string(),
                 can_prev: set.chunk_saver_threads > 1,
                 can_next: set.chunk_saver_threads < THREADS_MAX,
-                slider: Some((set.chunk_saver_threads as f64, 1.0, THREADS_MAX as f64)),
+                slider: Some((f64::from(set.chunk_saver_threads), 1.0, f64::from(THREADS_MAX))),
             },
             ModuleRow::Stepper {
                 label: "LOD-Weite".to_string(),
@@ -165,7 +165,7 @@ impl App {
                 text: distance_label(set.lod_render_distance),
                 can_prev: set.lod_render_distance > DISTANCE_OFF,
                 can_next: set.lod_render_distance < DISTANCE_MAX,
-                slider: Some((set.lod_render_distance as f64, DISTANCE_OFF as f64, DISTANCE_MAX as f64)),
+                slider: Some((f64::from(set.lod_render_distance), f64::from(DISTANCE_OFF), f64::from(DISTANCE_MAX))),
             },
             ModuleRow::Toggle {
                 label: "Gespeicherte Chunks zeichnen".to_string(),
@@ -175,7 +175,7 @@ impl App {
         ]
     }
 
-    fn render_saved(&self) -> bool {
+    const fn render_saved(&self) -> bool {
         self.settings.module_chunk_saver && self.settings.chunk_saver_render_saved
     }
 
@@ -230,7 +230,7 @@ impl App {
 
     // Jeden Frame, sobald der Server uns platziert hat: Standort fuer lod_remember_pose.
     fn lod_track_pose(&mut self) {
-        if !self.settings.module_chunk_saver || !self.camera_placed {
+        if !self.settings.module_chunk_saver || !self.camera_placed || self.replay_active() {
             return;
         }
         let Some((dimension, seed)) = self.lod.identity.as_ref() else { return };
@@ -239,7 +239,7 @@ impl App {
             Some(p) if p.server == self.server_address && p.dimension == *dimension && p.seed == *seed => (p.pos, p.yaw, p.pitch) = (pos, yaw, pitch),
             _ => {
                 self.lod.pose =
-                    Some(LastPose { server: self.server_address.clone(), dimension: dimension.clone(), seed: *seed, pos, yaw, pitch })
+                    Some(LastPose { server: self.server_address.clone(), dimension: dimension.clone(), seed: *seed, pos, yaw, pitch });
             }
         }
     }
@@ -250,13 +250,18 @@ impl App {
     }
 
     fn lod_ingesting(&self) -> bool {
-        self.settings.module_chunk_saver && self.lod.saver.as_ref().is_some_and(|s| s.has_world())
+        self.settings.module_chunk_saver && self.lod.saver.as_ref().is_some_and(chunk_saver::ChunkSaver::has_world)
     }
 
     // Login oder Respawn: welche Welt. Erst noch Geaendertes der alten speichern -- deren
     // Chunks sind beim Respawn noch geladen (Respawned kommt danach).
     pub(crate) fn lod_world_identity(&mut self, dimension: String, seed: i64) {
         self.lod_save_dirty();
+        // Die Welt einer Wiedergabe gehoert nicht in die Fernsicht des gewaehlten Servers.
+        if self.replay_active() {
+            self.lod.identity = None;
+            return;
+        }
         self.lod.identity = Some((dimension, seed));
         if let Some(dir) = self.lod_dir() {
             if let Some(saver) = self.lod.saver.as_mut() {
@@ -316,7 +321,7 @@ impl App {
     pub(crate) fn lod_debug_line(&self) -> String {
         let Some(saver) = self.lod.saver.as_ref() else { return String::new() };
         let (wartend, knoten, laufend) = saver.stats();
-        let flaechen = self.gpu.as_ref().and_then(|g| g.lod.as_ref()).map_or(0, |l| l.quad_count());
+        let flaechen = self.gpu.as_ref().and_then(|g| g.lod.as_ref()).map_or(0, render::lod_renderer::LodRenderer::quad_count);
         format!(
             "Fernsicht: {knoten} Knoten, {:.2} Mio. Flaechen ({} MB)  |  Aufnahme wartet: {wartend}  |  Mesh-Auftraege: {laufend}",
             flaechen as f64 / 1e6,
@@ -407,15 +412,15 @@ impl App {
             });
         }
         saver.set_palette(self.biome_palette.clone());
-        let height = gpu.config.height.max(1) as f64;
-        let fov = self.camera.fov_degrees as f64;
-        let min_y = self.world.min_y() as i64;
+        let height = f64::from(gpu.config.height.max(1));
+        let fov = f64::from(self.camera.fov_degrees);
+        let min_y = i64::from(self.world.min_y());
         let view = chunk_saver::View {
             eye: [self.camera.position.x, self.camera.position.y, self.camera.position.z],
-            radius: radius_chunks as f64 * 16.0,
-            threshold_px2: self.settings.chunk_saver_threshold as f64,
+            radius: f64::from(radius_chunks) * 16.0,
+            threshold_px2: f64::from(self.settings.chunk_saver_threshold),
             focal_px: height / (2.0 * (fov.to_radians() * 0.5).tan()),
-            y_range: (min_y, min_y + self.world_height.max(16) as i64),
+            y_range: (min_y, min_y + i64::from(self.world_height.max(16))),
         };
         let (covered, bbox) = (&self.lod.covered, self.lod.covered_box);
         let ganz_geladen = |level: u8, x: i32, z: i32| -> bool {

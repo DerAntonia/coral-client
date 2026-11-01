@@ -22,6 +22,7 @@ impl Colormap {
         Ok(Self { rgba: tex.rgba, size: tex.width.min(tex.height) })
     }
 
+    #[must_use] 
     pub fn sample(&self, temperature: f32, downfall: f32) -> [f32; 3] {
         let temperature = temperature.clamp(0.0, 1.0);
         let downfall = downfall.clamp(0.0, 1.0) * temperature;
@@ -31,7 +32,7 @@ impl Colormap {
         let Some(px) = self.rgba.get(idx..idx + 3) else {
             return [1.0, 1.0, 1.0];
         };
-        [px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0]
+        [f32::from(px[0]) / 255.0, f32::from(px[1]) / 255.0, f32::from(px[2]) / 255.0]
     }
 }
 

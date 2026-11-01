@@ -23,66 +23,72 @@ fn ggt(mut a: u64, mut b: u64) -> u64 {
 }
 
 impl Fraction {
-    pub const ZERO: Fraction = Fraction { num: 0, den: 1 };
-    pub const ONE: Fraction = Fraction { num: 1, den: 1 };
+    pub const ZERO: Self = Self { num: 0, den: 1 };
+    pub const ONE: Self = Self { num: 1, den: 1 };
 
+    #[must_use] 
     pub fn new(num: u64, den: u64) -> Self {
         let g = ggt(num, den.max(1));
-        Fraction { num: num / g, den: den.max(1) / g }
+        Self { num: num / g, den: den.max(1) / g }
     }
 
-    pub fn le(self, o: Fraction) -> bool {
-        (self.num as u128) * (o.den as u128) <= (o.num as u128) * (self.den as u128)
+    #[must_use] 
+    pub fn le(self, o: Self) -> bool {
+        u128::from(self.num) * u128::from(o.den) <= u128::from(o.num) * u128::from(self.den)
     }
 
     // Fraction.mulAndTruncate: (bruch * n) abgeschnitten.
-    pub fn mul_trunc(self, n: u64) -> u64 {
+    #[must_use] 
+    pub const fn mul_trunc(self, n: u64) -> u64 {
         self.num * n / self.den
     }
 
     // Wie oft passt `teil` ganz hinein (abgerundet)?
-    pub fn div_floor(self, teil: Fraction) -> u64 {
+    #[must_use] 
+    pub fn div_floor(self, teil: Self) -> u64 {
         if teil.num == 0 {
             return u64::MAX;
         }
-        ((self.num as u128 * teil.den as u128) / (self.den as u128 * teil.num as u128)) as u64
+        ((u128::from(self.num) * u128::from(teil.den)) / (u128::from(self.den) * u128::from(teil.num))) as u64
     }
 }
 
 impl std::ops::Add for Fraction {
-    type Output = Fraction;
-    fn add(self, o: Fraction) -> Fraction {
+    type Output = Self;
+    fn add(self, o: Self) -> Self {
         let g = ggt(self.den, o.den);
         let den = self.den / g * o.den;
-        Fraction::new(self.num * (den / self.den) + o.num * (den / o.den), den)
+        Self::new(self.num * (den / self.den) + o.num * (den / o.den), den)
     }
 }
 
 // Nie unter null (ein ueberladenes Buendel gilt als voll).
 impl std::ops::Sub for Fraction {
-    type Output = Fraction;
-    fn sub(self, o: Fraction) -> Fraction {
+    type Output = Self;
+    fn sub(self, o: Self) -> Self {
         let g = ggt(self.den, o.den);
         let den = self.den / g * o.den;
-        Fraction::new((self.num * (den / self.den)).saturating_sub(o.num * (den / o.den)), den)
+        Self::new((self.num * (den / self.den)).saturating_sub(o.num * (den / o.den)), den)
     }
 }
 
 impl std::ops::Mul<u64> for Fraction {
-    type Output = Fraction;
-    fn mul(self, n: u64) -> Fraction {
-        Fraction::new(self.num * n, self.den)
+    type Output = Self;
+    fn mul(self, n: u64) -> Self {
+        Self::new(self.num * n, self.den)
     }
 }
 
 const BUNDLE_IN_BUNDLE: Fraction = Fraction { num: 1, den: 16 };
 
 // Ist das ein Buendel (BundleItem, auch die gefaerbten)?
+#[must_use] 
 pub fn is_bundle(stack: &ItemStack) -> bool {
     crate::item_registry::item_name(stack.item_id).is_some_and(|n| n == "bundle" || n.ends_with("_bundle"))
 }
 
 // Der Inhalt eines Buendels (gesetzt, sonst der leere Standard).
+#[must_use] 
 pub fn contents(stack: &ItemStack) -> &[ItemStack] {
     stack.bundle_contents.as_deref().unwrap_or(&[])
 }
@@ -98,11 +104,13 @@ fn item_weight(stack: &ItemStack) -> Fraction {
     Fraction::new(1, crate::item_components::max_stack(stack) as u64)
 }
 
+#[must_use] 
 pub fn weight_of(inhalt: &[ItemStack]) -> Fraction {
     inhalt.iter().fold(Fraction::ZERO, |acc, s| acc + item_weight(s) * s.count.max(0) as u64)
 }
 
 // Wie voll das Buendel ist (0..1).
+#[must_use] 
 pub fn weight(stack: &ItemStack) -> Fraction {
     weight_of(contents(stack))
 }
@@ -113,6 +121,7 @@ fn fits_inside(stack: &ItemStack) -> bool {
 }
 
 // Wie viele von `stack` noch hineinpassen (BundleContents.Mutable.getMaxAmountToAdd).
+#[must_use] 
 pub fn max_to_add(bundle: &ItemStack, stack: &ItemStack) -> i32 {
     if stack.count <= 0 || !fits_inside(stack) {
         return 0;
@@ -157,6 +166,7 @@ pub fn remove_one(bundle: &mut ItemStack) -> Option<ItemStack> {
 
 // BundleContents.getNumberOfItemsToShow: hoechstens 12 Plaetze (11, wenn ein Platz fuer "+N"
 // gebraucht wird), auf ganze Viererreihen von unten aufgefuellt.
+#[must_use] 
 pub fn items_to_show(n: usize) -> usize {
     let max = if n > 12 { 11 } else { 12 };
     let luecke = if n.is_multiple_of(4) { 0 } else { 4 - n % 4 };

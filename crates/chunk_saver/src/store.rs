@@ -32,7 +32,7 @@ struct Region {
 }
 
 impl Region {
-    fn open(path: PathBuf) -> std::io::Result<Region> {
+    fn open(path: PathBuf) -> std::io::Result<Self> {
         let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
         let len = file.metadata()?.len();
         let mut bytes = Vec::with_capacity(len as usize);
@@ -60,8 +60,8 @@ impl Region {
         if at as u64 != len {
             file.set_len(at as u64)?;
         }
-        let live = index.values().map(|&(_, s)| s as u64 + HEADER as u64).sum();
-        Ok(Region { file, path, index, end: at as u64, live })
+        let live = index.values().map(|&(_, s)| u64::from(s) + HEADER as u64).sum();
+        Ok(Self { file, path, index, end: at as u64, live })
     }
 
     fn read(&mut self, key: (u8, u8, i32)) -> Option<Vec<u8>> {
@@ -86,7 +86,7 @@ impl Region {
         self.file.seek(SeekFrom::Start(self.end))?;
         self.file.write_all(&rec)?;
         if let Some((_, alt)) = self.index.remove(&key) {
-            self.live -= alt as u64 + HEADER as u64;
+            self.live -= u64::from(alt) + HEADER as u64;
         }
         if !data.is_empty() {
             self.index.insert(key, (self.end + HEADER as u64, data.len() as u32));
@@ -145,16 +145,16 @@ struct OpenRegions {
     clock: u64,
 }
 
-fn split(key: NodeKey) -> (RegionKey, (u8, u8, i32)) {
+const fn split(key: NodeKey) -> (RegionKey, (u8, u8, i32)) {
     let region = (key.level, key.x >> REGION_SHIFT, key.z >> REGION_SHIFT);
     let mask = (1 << REGION_SHIFT) - 1;
     (region, ((key.x & mask) as u8, (key.z & mask) as u8, key.y))
 }
 
 impl Store {
-    pub fn open(dir: &Path) -> std::io::Result<Store> {
+    pub fn open(dir: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
-        Ok(Store { dir: dir.to_path_buf(), open: Mutex::new(OpenRegions::default()) })
+        Ok(Self { dir: dir.to_path_buf(), open: Mutex::new(OpenRegions::default()) })
     }
 
     pub fn dir(&self) -> &Path {
@@ -225,7 +225,7 @@ impl Store {
             let (Ok(rx), Ok(rz)) = (rx.parse::<i32>(), rz.parse::<i32>()) else { continue };
             let Some(r) = self.region((level, rx, rz), false) else { continue };
             let r = r.lock().unwrap();
-            out.extend(r.index.keys().map(|&(lx, lz, y)| NodeKey::new(level, (rx << REGION_SHIFT) | lx as i32, y, (rz << REGION_SHIFT) | lz as i32)));
+            out.extend(r.index.keys().map(|&(lx, lz, y)| NodeKey::new(level, (rx << REGION_SHIFT) | i32::from(lx), y, (rz << REGION_SHIFT) | i32::from(lz))));
         }
         out
     }

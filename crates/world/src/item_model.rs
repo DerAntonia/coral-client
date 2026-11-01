@@ -40,6 +40,7 @@ pub struct SpriteMask {
 
 impl SpriteMask {
     // Aus RGBA-Pixeln (zeilenweise von oben, wie ueberall im Projekt).
+    #[must_use] 
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Self {
         let mut opaque = vec![false; (width * height) as usize];
         for (index, flag) in opaque.iter_mut().enumerate() {
@@ -48,6 +49,7 @@ impl SpriteMask {
         Self { width, height, opaque }
     }
 
+    #[must_use] 
     pub fn is_opaque(&self, x: i32, y: i32) -> bool {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return false;
@@ -55,8 +57,27 @@ impl SpriteMask {
         self.opaque[(y as u32 * self.width + x as u32) as usize]
     }
 
+    #[must_use] 
     pub fn any_opaque(&self) -> bool {
         self.opaque.iter().any(|o| *o)
+    }
+
+    // Wo man das flache Item anfasst: das deckende Pixel, das am weitesten links unten liegt
+    // (Knauf eines Schwerts, Fuss eines Totems), um 2/16 der Breite zur Mitte aller deckenden
+    // Pixel hin -- die Faust liegt um den Griff, nicht auf seiner Spitze. In Modellkoordinaten
+    // 0..1 (Y nach oben). None ohne deckendes Pixel.
+    #[must_use] 
+    pub fn grip(&self) -> Option<[f32; 2]> {
+        let (w, h) = (self.width as i32, self.height as i32);
+        let deckend: Vec<(i32, i32)> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| self.is_opaque(x, y)).collect();
+        let &(x, y) = deckend.iter().min_by_key(|&&(x, y)| (x + (h - 1 - y), x))?;
+        let n = deckend.len() as f32;
+        let mitte = [deckend.iter().map(|p| p.0 as f32).sum::<f32>() / n, deckend.iter().map(|p| p.1 as f32).sum::<f32>() / n];
+        let (dx, dy) = (mitte[0] - x as f32, mitte[1] - y as f32);
+        let laenge = (dx * dx + dy * dy).sqrt();
+        let schritt = if laenge > 0.0 { (2.0 * w as f32 / 16.0).min(laenge) / laenge } else { 0.0 };
+        let (px, py) = (x as f32 + 0.5 + dx * schritt, y as f32 + 0.5 + dy * schritt);
+        Some([px / w as f32, 1.0 - py / h as f32])
     }
 }
 
@@ -500,5 +521,24 @@ mod groessen_tests {
         let erwartet = 0.375 * PLAYER_MODEL_SCALE;
         println!("Blockitem-Kante: {kante:.4} Bloecke (erwartet {erwartet:.4})");
         assert!((kante - erwartet).abs() < 1e-4, "Kantenlaenge {kante} statt {erwartet}");
+    }
+}
+
+#[cfg(test)]
+mod grip_tests {
+    use super::SpriteMask;
+
+    // Diagonale wie ein Schwert (16x16): gegriffen wird am Knauf links unten, nicht in der
+    // leeren Ecke, und 2 Pixel die Diagonale hinauf.
+    #[test]
+    fn griff_am_knauf_etwas_nach_innen() {
+        let mut rgba = vec![0u8; 16 * 16 * 4];
+        for i in 0..16 {
+            rgba[((15 - i) * 16 + i) * 4 + 3] = 255;
+        }
+        let g = SpriteMask::from_rgba(16, 16, &rgba).grip().unwrap();
+        let soll = (0.5 + 2.0f32.sqrt()) / 16.0;
+        assert!((g[0] - soll).abs() < 1e-4 && (g[1] - soll).abs() < 1e-4, "{g:?}");
+        assert_eq!(SpriteMask::from_rgba(4, 4, &[0u8; 64]).grip(), None);
     }
 }

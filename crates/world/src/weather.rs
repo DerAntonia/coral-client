@@ -52,6 +52,7 @@ pub enum Precipitation {
     Snow,
 }
 
+#[must_use] 
 pub fn precipitation(climate: BiomeClimate, y: i32) -> Precipitation {
     if !climate.has_precipitation {
         Precipitation::None

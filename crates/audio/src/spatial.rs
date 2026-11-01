@@ -115,6 +115,7 @@ const FADE_DISTANCE: f32 = 16.0;
 const ABSORPTION_LENGTH: f32 = 40.0;
 
 /// Richtung + Entfernung in die Ohrgroessen umrechnen.
+#[must_use] 
 pub fn spatial_for(placement: &Placement) -> Spatial {
     let lateral = placement.lateral.clamp(-1.0, 1.0);
     let distance = placement.distance.max(0.0);
@@ -162,6 +163,7 @@ pub fn spatial_for(placement: &Placement) -> Spatial {
 /// Kein konstanter Leistungsausgleich wie beim Panorama (s. `pan_gains`): dort wandert
 /// dieselbe Energie zwischen den Seiten und die Summe soll gleich bleiben, hier wird sie
 /// tatsaechlich weniger.
+#[must_use] 
 pub fn distance_gain(distance: f32) -> f32 {
     if distance >= MAX_DISTANCE {
         return 0.0;

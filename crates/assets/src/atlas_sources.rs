@@ -109,8 +109,8 @@ impl AtlasSources {
 
 // Den Ausschnitt in Bildpixeln (Vanillas Unstitcher: Teiler -> Bildgroesse, abgerundet).
 pub(crate) fn region_pixels(image: (u32, u32), divisor: (f64, f64), rect: (f64, f64, f64, f64)) -> (u32, u32, u32, u32) {
-    let sx = image.0 as f64 / divisor.0;
-    let sy = image.1 as f64 / divisor.1;
+    let sx = f64::from(image.0) / divisor.0;
+    let sy = f64::from(image.1) / divisor.1;
     let x = (rect.0 * sx).floor().max(0.0) as u32;
     let y = (rect.1 * sy).floor().max(0.0) as u32;
     let w = ((rect.2 * sx).floor() as u32).min(image.0.saturating_sub(x));

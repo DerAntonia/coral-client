@@ -162,7 +162,7 @@ impl ElementRotation {
             Some(a) if a.len() == 3 => [0, 1, 2].map(|i| a[i].as_f64().unwrap_or(8.0) as f32 / 16.0),
             _ => [0.5; 3],
         };
-        let rescale = v.get("rescale").and_then(|r| r.as_bool()).unwrap_or(false);
+        let rescale = v.get("rescale").and_then(serde_json::Value::as_bool).unwrap_or(false);
         Some(Self { axis, angle, origin, rescale })
     }
 

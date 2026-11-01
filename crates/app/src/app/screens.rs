@@ -1,13 +1,13 @@
 // Eigene Bildschirme: Buch, Schild, Inventar, Haendler, Amboss, Verzauberung, Tooltips.
 
-use crate::*;
+use crate::{App, book, AppMode, inventory, GpuState, Rect, UiRect, UiSprite, UiText, dialog_dim, SpriteAtlas, push_span_shadow, wrap_spans, rgb_to_rgba, vanilla_text, theme, COLOR_WHITE, ui_sound, Instant, Key, PhysicalKey, KeyCode, NamedKey, push_typed_marker, SignEdit, ShadowArea, sign_text_color, UI_SCALE_SMALL, BUNDLE_PANEL_W, recipe_book, wrap_measured, enchant_phrase, GAME_MODE_CREATIVE, INVENTORY_GUI_W, item_needs_tooltip, item_shows_held_name, item_attribute_value, decimal_de, max_damage_of, effect_display_name, EffectEntry, format_effect_duration, item_rarity, discord_rpc, ConnStatus, BookAnim, enchant_book_vertices, book_camera};
 
 impl App {
     // Liegt ein Bildschirm-Overlay ueber der Welt? Inventar und Modul-Menue verhalten sich
     // gleich: Maus bewegt den Zeiger statt den Kopf, Bewegungseingabe ist gesperrt, kein
     // Fadenkreuz. Eine Quelle dafuer, damit ein neues Overlay nicht die Haelfte der Stellen
     // vergisst -- ein Overlay, das die Eingabe nur halb sperrt, laeuft Grim sofort auf.
-    pub(crate) fn screen_overlay_open(&self) -> bool {
+    pub(crate) const fn screen_overlay_open(&self) -> bool {
         self.inventory.screen_open
             || self.module_menu_open
             || self.sign_edit.is_some()
@@ -48,7 +48,7 @@ impl App {
             return None;
         }
         let c = self.inventory.open.as_ref()?;
-        let seiten = c.slots.first().and_then(|s| s.as_ref()).map(book::pages_of).unwrap_or_else(|| vec![Vec::new()]);
+        let seiten = c.slots.first().and_then(|s| s.as_ref()).map_or_else(|| vec![Vec::new()], book::pages_of);
         let seite = c.data.first().copied().unwrap_or(0).max(0) as usize;
         let seite = seite.min(seiten.len() - 1);
         Some((seiten, seite))
@@ -97,7 +97,7 @@ impl App {
             for span in zeile.spans {
                 let w = gpu.measure_text(&span.text, s);
                 push_span_shadow(texts, Some(0));
-                texts.push(UiText { text: span.text, x: x.round(), y, color: span.color.map(rgb_to_rgba).unwrap_or(schwarz), scale: s });
+                texts.push(UiText { text: span.text, x: x.round(), y, color: span.color.map_or(schwarz, rgb_to_rgba), scale: s });
                 x += w;
             }
         }
@@ -535,7 +535,7 @@ impl App {
         let messen = |t: &str| self.gpu.as_ref().map_or(t.chars().count() as f32 * 6.0, |g| g.measure_text(t, 1.0));
         let Some(edit) = self.sign_edit.as_mut() else { return };
         match key {
-            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) | Key::Named(NamedKey::ArrowDown) => edit.row = (edit.row + 1) % 4,
+            Key::Named(NamedKey::Enter | NamedKey::Tab | NamedKey::ArrowDown) => edit.row = (edit.row + 1) % 4,
             Key::Named(NamedKey::ArrowUp) => edit.row = (edit.row + 3) % 4,
             Key::Named(NamedKey::Backspace) => {
                 edit.lines[edit.row].pop();
@@ -663,7 +663,7 @@ impl App {
                         text: span.text,
                         x: x.round(),
                         y: (layout.bg_y + gy * layout.scale).round(),
-                        color: span.color.map(rgb_to_rgba).unwrap_or(grau),
+                        color: span.color.map_or(grau, rgb_to_rgba),
                         scale: layout.scale,
                     });
                     x += w;
@@ -763,7 +763,7 @@ impl App {
                 let mut sx = x0;
                 for span in zeile {
                     let w = gpu.measure_text(&span.text, UI_SCALE_SMALL);
-                    let color = span.color.map(rgb_to_rgba).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    let color = span.color.map_or([1.0, 1.0, 1.0, 1.0], rgb_to_rgba);
                     push_span_shadow(texts, span.shadow);
                     texts.push(UiText { text: span.text, x: sx.round(), y: y.round(), color, scale: UI_SCALE_SMALL });
                     sx += w;
@@ -780,7 +780,7 @@ impl App {
                 let mut sx = x - breite;
                 for span in zeile {
                     let w = gpu.measure_text(&span.text, UI_SCALE_SMALL);
-                    let color = span.color.map(rgb_to_rgba).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    let color = span.color.map_or([1.0, 1.0, 1.0, 1.0], rgb_to_rgba);
                     push_span_shadow(texts, span.shadow);
                     texts.push(UiText { text: span.text, x: sx.round(), y: y.round(), color, scale: UI_SCALE_SMALL });
                     sx += w;
@@ -810,7 +810,7 @@ impl App {
                 let mut sx = if right_aligned { x - breite } else { x };
                 for span in zeile {
                     let w = gpu.measure_text(&span.text, UI_SCALE_SMALL);
-                    let color = span.color.map(rgb_to_rgba).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    let color = span.color.map_or([1.0, 1.0, 1.0, 1.0], rgb_to_rgba);
                     push_span_shadow(texts, span.shadow);
                     texts.push(UiText { text: span.text, x: sx.round(), y: y.round(), color, scale: UI_SCALE_SMALL });
                     sx += w;
@@ -968,7 +968,7 @@ impl App {
                 if let Some(name) = self.item_tooltip_lines(g).into_iter().next() {
                     let text: String = name.iter().map(|sp| sp.text.as_str()).collect();
                     let w = gpu.measure_text(&text, UI_SCALE_SMALL);
-                    let farbe = name.first().and_then(|sp| sp.color).map(rgb_to_rgba).unwrap_or([1.0; 4]);
+                    let farbe = name.first().and_then(|sp| sp.color).map_or([1.0; 4], rgb_to_rgba);
                     texts.push(UiText { text, x: (px + BUNDLE_PANEL_W * s / 2.0 - w / 2.0).round(), y: (py - gpu.text_height(UI_SCALE_SMALL) - 2.0 * s).round(), color: farbe, scale: UI_SCALE_SMALL });
                 }
             }
@@ -1019,7 +1019,7 @@ impl App {
         match typ {
             inventory::MENU_ENCHANTMENT => {
                 let data = self.inventory.open.as_ref().map(|c| c.data.clone()).unwrap_or_default();
-                let wert = |i: usize| data.get(i).copied().unwrap_or(if i >= 4 { -1 } else { 0 }) as i32;
+                let wert = |i: usize| i32::from(data.get(i).copied().unwrap_or(if i >= 4 { -1 } else { 0 }));
                 let mut tooltip = None;
                 for i in 0..3 {
                     let gy = 14.0 + 19.0 * i as f32;
@@ -1107,7 +1107,7 @@ impl App {
                     push_typed_marker(texts);
                     texts.push(UiText { text, x: (bx + 62.0 * s).round(), y: (by + 24.0 * s).round(), color: [1.0; 4], scale: s });
                 }
-                let kosten = self.inventory.open.as_ref().and_then(|c| c.data.first().copied()).unwrap_or(0) as i32;
+                let kosten = i32::from(self.inventory.open.as_ref().and_then(|c| c.data.first().copied()).unwrap_or(0));
                 if kosten > 0 {
                     let kreativ = self.game_mode == GAME_MODE_CREATIVE;
                     let text = if kosten >= 40 && !kreativ {
@@ -1148,7 +1148,7 @@ impl App {
                     _ => "furnace",
                 };
                 let data = self.inventory.open.as_ref().map(|c| c.data.clone()).unwrap_or_default();
-                let wert = |i: usize| data.get(i).copied().unwrap_or(0) as f32;
+                let wert = |i: usize| f32::from(data.get(i).copied().unwrap_or(0));
                 // Ausschnitt eines Sprites: Anteil (u0, v0, u1, v1) des ganzen Rechtecks.
                 let teil = |sprites: &mut Vec<UiSprite>, name: &str, gx: f32, gy: f32, w: f32, h: f32, a: [f32; 4]| {
                     if let Some(r) = self.ui_atlas.rect(name) {
@@ -1195,7 +1195,7 @@ impl App {
 
         // Ausverkauft: rotes Kreuz ueber dem Pfeil zwischen Bezahlung und Ergebnis.
         let gewaehlt = st.offers.get(st.selected);
-        if gewaehlt.is_some_and(|o| o.disabled()) {
+        if gewaehlt.is_some_and(protocol::packets::TradeOffer::disabled) {
             sprite(sprites, "container/villager/out_of_stock", 182.0, 35.0, 28.0, 21.0);
             if st.can_restock && in_gui(186.0, 35.0, 22.0, 21.0) {
                 let text = protocol::nbt::translate("merchant.deprecated").unwrap_or_else(|| "Dorfbewohner füllen ihre Vorräte bis zu zweimal am Tag auf.".into());
@@ -1384,7 +1384,7 @@ impl App {
         let zeile = |text: String, farbe: u32| vec![protocol::nbt::TextSpan { text, color: Some(farbe), ..Default::default() }];
         let mut zeilen = Vec::new();
         if let Some(schaden) = wert(pi::ATTRIBUTE_ATTACK_DAMAGE, 1.0, &hand) {
-            let bonus = self.enchantments.damage_bonus(stack, schaden as f32) as f64;
+            let bonus = f64::from(self.enchantments.damage_bonus(stack, schaden as f32));
             let krit = schaden * 1.5 + bonus;
             zeilen.push(zeile(format!("Schaden: {} (Krit {})", decimal_de(schaden + bonus), decimal_de(krit)), 0x00_AA00));
             if let Some(tempo) = wert(pi::ATTRIBUTE_ATTACK_SPEED, 4.0, &hand) {
@@ -1394,13 +1394,13 @@ impl App {
         // Eigene Reichweite (Speere): von bis, in Bloecken ab dem Auge.
         if let Some(r) = world::item_components::Components::of(stack).attack_range() {
             let (min, max) = if self.game_mode == GAME_MODE_CREATIVE { (r.min_creative_reach, r.max_creative_reach) } else { (r.min_reach, r.max_reach) };
-            let von = if min > 0.0 { format!("{}–", decimal_de(min as f64)) } else { String::new() };
-            zeilen.push(zeile(format!("Reichweite: {von}{} Blöcke", decimal_de(max as f64)), 0x00_AA00));
+            let von = if min > 0.0 { format!("{}–", decimal_de(f64::from(min))) } else { String::new() };
+            zeilen.push(zeile(format!("Reichweite: {von}{} Blöcke", decimal_de(f64::from(max))), 0x00_AA00));
         }
         let ruestung = wert(pi::ATTRIBUTE_ARMOR, 0.0, &koerper).unwrap_or(0.0);
         let haerte = wert(pi::ATTRIBUTE_ARMOR_TOUGHNESS, 0.0, &koerper).unwrap_or(0.0);
         use world::enchantment::ProtectionKind as Art;
-        let allgemein = self.enchantments.protection(stack, Art::General) as f64;
+        let allgemein = f64::from(self.enchantments.protection(stack, Art::General));
         if ruestung > 0.0 || allgemein > 0.0 {
             let von_ruestung = ruestung.clamp(0.0, 20.0) / 25.0;
             let schutz = |punkte: f64| 1.0 - (1.0 - von_ruestung) * (1.0 - punkte.clamp(0.0, 20.0) / 25.0);
@@ -1414,7 +1414,7 @@ impl App {
             }
             zeilen.push(zeile(teile.join(" · "), 0xAA_AAAA));
             for (art, name) in [(Art::Projectile, "Geschosse"), (Art::Explosion, "Explosionen"), (Art::Fire, "Feuer"), (Art::Fall, "Fallschaden")] {
-                let extra = self.enchantments.protection(stack, art) as f64;
+                let extra = f64::from(self.enchantments.protection(stack, art));
                 if extra > 0.0 {
                     zeilen.push(zeile(format!("gegen {name}: {} %", decimal_de((schutz(allgemein + extra) * 100.0 * 10.0).round() / 10.0)), 0x00_AA00));
                 }
@@ -1466,7 +1466,7 @@ impl App {
             .map(|(effect, amplifier, dauer)| {
                 let effect = effect as i32;
                 let dauer = if dauer == protocol::packets::MOB_EFFECT_INFINITE { dauer } else { (dauer as f32 * faktor).floor() as i32 };
-                let mut text = effect_display_name(&EffectEntry { effect, ambient: false, amplifier, remaining: dauer, exact: dauer as f64, received: dauer });
+                let mut text = effect_display_name(&EffectEntry { effect, ambient: false, amplifier, remaining: dauer, exact: f64::from(dauer), received: dauer });
                 if dauer == protocol::packets::MOB_EFFECT_INFINITE || dauer > 20 {
                     text = format!("{text} ({})", format_effect_duration(dauer));
                 }
@@ -1631,7 +1631,7 @@ impl App {
     // genug Lapis und Stufen -- im Kreativmodus reicht die Kosten-Bedingung.)
     pub(crate) fn enchant_option_available(&self, i: usize) -> bool {
         let Some(c) = self.inventory.open.as_ref() else { return false };
-        let kosten = c.data.get(i).copied().unwrap_or(0) as i32;
+        let kosten = i32::from(c.data.get(i).copied().unwrap_or(0));
         if kosten <= 0 {
             return false;
         }

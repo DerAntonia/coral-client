@@ -76,12 +76,14 @@ fn shapes() -> &'static VanillaShapes {
 
 // Kennen wir diese State-ID ueberhaupt? States jenseits der Tabelle (ein Server mit anderer
 // Version, ein Sentinel) haben keine gedumpte Form -- dort bleibt es beim bisherigen Weg.
+#[must_use] 
 pub fn is_known(state: u32) -> bool {
     (state as usize) < shapes().collision.len()
 }
 
 // Vanillas getCollisionShape(EmptyBlockGetter, ZERO) fuer diesen State. Leerer Schnipsel =
 // begehbar.
+#[must_use] 
 pub fn collision_boxes(state: u32) -> Option<&'static [ShapeBox]> {
     let s = shapes();
     let idx = *s.collision.get(state as usize)?;
@@ -90,6 +92,7 @@ pub fn collision_boxes(state: u32) -> Option<&'static [ShapeBox]> {
 
 // Vanillas getShape (Umriss) -- fuers Zielen. Bei vielen Bloecken dieselbe Form wie oben, bei
 // Seelensand/Kaktus/Lesepult ausdruecklich nicht.
+#[must_use] 
 pub fn outline_boxes(state: u32) -> Option<&'static [ShapeBox]> {
     let s = shapes();
     let idx = *s.outline.get(state as usize)?;

@@ -16,23 +16,23 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Language; 3] = [Language::German, Language::English, Language::Latin];
+    pub const ALL: [Self; 3] = [Self::German, Self::English, Self::Latin];
 
     // In der Sprache selbst -- wer die Oberflaeche nicht lesen kann, findet so zurueck.
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Language::German => "Deutsch",
-            Language::English => "English",
-            Language::Latin => "Latīna",
+            Self::German => "Deutsch",
+            Self::English => "English",
+            Self::Latin => "Latīna",
         }
     }
 
     // Wert in launcher.conf.
-    pub fn code(self) -> &'static str {
+    pub const fn code(self) -> &'static str {
         match self {
-            Language::German => "de",
-            Language::English => "en",
-            Language::Latin => "la",
+            Self::German => "de",
+            Self::English => "en",
+            Self::Latin => "la",
         }
     }
 

@@ -25,7 +25,7 @@ const ABSTAND: Duration = Duration::from_secs(3);
 // So oft prueft "Audio automatisch optimieren" die Prioritaet von pipewire-pulse nach.
 const AUTO_ABSTAND: Duration = Duration::from_secs(10);
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Messung {
     // Blockgroesse, in der PipeWire den Graphen dieses Clients gerade fuehrt (s. aus_top).
     pub quantum: u32,
@@ -39,7 +39,7 @@ pub struct Messung {
     pub pulse: Option<Prioritaet>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Prioritaet {
     // Echtzeit-Prioritaet der Ton-Faeden (pw-data-loop), None = mindestens einer ohne Echtzeit.
     pub echtzeit: Option<u32>,
@@ -283,9 +283,9 @@ fn faden_echtzeit(tid: u32) -> Result<(), String> {
     // SAFETY: getrlimit/setrlimit mit gueltigem Zeiger auf eine lokale Struktur.
     unsafe {
         let mut grenze: libc::rlimit = std::mem::zeroed();
-        if libc::getrlimit(libc::RLIMIT_RTTIME, &mut grenze) == 0 && grenze.rlim_max > RTTIME_US {
+        if libc::getrlimit(libc::RLIMIT_RTTIME, &raw mut grenze) == 0 && grenze.rlim_max > RTTIME_US {
             let neu = libc::rlimit { rlim_cur: RTTIME_US, rlim_max: RTTIME_US };
-            libc::setrlimit(libc::RLIMIT_RTTIME, &neu);
+            libc::setrlimit(libc::RLIMIT_RTTIME, &raw const neu);
         }
     }
     rtkit(&["MakeThreadRealtimeWithPID", "ttu", &std::process::id().to_string(), &tid.to_string(), &CLIENT_RT_PRIO.to_string()])
@@ -346,11 +346,17 @@ fn messen(pid: u32) -> Option<Messung> {
 // Der Ausgabe-Knoten dieses Prozesses und clock.min-quantum aus den Einstellungen.
 fn aus_dump(dump: &serde_json::Value, pid: u32) -> Option<(u64, Option<u32>)> {
     let objekte = dump.as_array()?;
+    // Ueber pipewire-pulse steht die Prozess-ID am Knoten; ueber das ALSA-Plugin von PipeWire
+    // nur an seinem Client (client.id).
+    let pid_von = |props: &serde_json::Value| props.get("application.process.id").or_else(|| props.get("pipewire.sec.pid")).and_then(serde_json::Value::as_u64);
+    let client_pid = |id: u64| objekte.iter().find(|o| o.get("id").and_then(serde_json::Value::as_u64) == Some(id)).and_then(|o| o.pointer("/info/props")).and_then(pid_von);
     let knoten = objekte.iter().find_map(|o| {
         let props = o.pointer("/info/props")?;
-        let eigener = props.get("application.process.id")?.as_u64()? == pid as u64;
-        let ausgabe = props.get("media.class")?.as_str()? == "Stream/Output/Audio";
-        (eigener && ausgabe).then(|| o.get("id")?.as_u64()).flatten()
+        if props.get("media.class")?.as_str()? != "Stream/Output/Audio" {
+            return None;
+        }
+        let eigener = pid_von(props).or_else(|| client_pid(props.get("client.id")?.as_u64()?))? == u64::from(pid);
+        eigener.then(|| o.get("id")?.as_u64()).flatten()
     })?;
     let min_quantum = objekte
         .iter()
@@ -462,5 +468,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(aus_dump(&dump, 7), Some((89, Some(32))));
+    }
+
+    // Ueber das ALSA-Plugin: der Knoten hat keine Prozess-ID, sein Client schon.
+    #[test]
+    fn eigener_knoten_ueber_alsa_plugin() {
+        let dump: serde_json::Value = serde_json::from_str(
+            r#"[
+            {"id": 56, "type": "PipeWire:Interface:Client", "info": {"props": {"application.process.id": 7, "pipewire.sec.pid": 7}}},
+            {"id": 71, "info": {"props": {"application.process.id": 5, "media.class": "Stream/Output/Audio"}}},
+            {"id": 79, "info": {"props": {"client.id": 56, "media.class": "Stream/Output/Audio"}}}
+        ]"#,
+        )
+        .unwrap();
+        assert_eq!(aus_dump(&dump, 7), Some((79, None)));
     }
 }

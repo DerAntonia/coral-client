@@ -36,8 +36,8 @@ pub(crate) struct StreamSlot {
 }
 
 impl StreamSlot {
-    pub fn new() -> StreamSlot {
-        StreamSlot {
+    pub fn new() -> Self {
+        Self {
             id: 0,
             active: false,
             ring: vec![0.0; RING].into_boxed_slice(),
@@ -53,7 +53,7 @@ impl StreamSlot {
         }
     }
 
-    fn reset(&mut self, id: u64) {
+    const fn reset(&mut self, id: u64) {
         self.id = id;
         self.active = true;
         self.write = 0;
@@ -76,7 +76,7 @@ impl StreamSlot {
 
     fn push(&mut self, pcm: &[i16], start_fill: usize) {
         for &s in pcm {
-            self.ring[self.write] = s as f32 / 32768.0;
+            self.ring[self.write] = f32::from(s) / 32768.0;
             self.write = (self.write + 1) % RING;
             if self.avail == RING {
                 // Voll: das Aelteste faellt heraus.

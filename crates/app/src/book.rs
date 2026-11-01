@@ -33,10 +33,10 @@ pub struct BookView {
 
 impl BookView {
     pub fn new(stack: &ItemStack) -> Self {
-        BookView { pages: pages_of(stack), page: 0 }
+        Self { pages: pages_of(stack), page: 0 }
     }
 
-    pub fn back(&mut self) {
+    pub const fn back(&mut self) {
         self.page = self.page.saturating_sub(1);
     }
 
@@ -123,7 +123,7 @@ fn truncate16(s: &str, max: usize) -> &str {
 }
 
 // StringUtil.isAllowedChatCharacter: kein Paragraphzeichen, keine Steuerzeichen, kein DEL.
-pub fn allowed_char(c: char) -> bool {
+pub const fn allowed_char(c: char) -> bool {
     c != '\u{a7}' && c >= ' ' && c != '\u{7f}'
 }
 
@@ -231,7 +231,7 @@ impl BookEdit {
         if pages.is_empty() {
             pages.push(String::new());
         }
-        let mut b = BookEdit { slot, pages, page: 0, cursor: 0, anchor: 0, selecting: false, signing: false, title: String::new() };
+        let mut b = Self { slot, pages, page: 0, cursor: 0, anchor: 0, selecting: false, signing: false, title: String::new() };
         b.load_page();
         b
     }
@@ -240,7 +240,7 @@ impl BookEdit {
         &self.pages[self.page]
     }
 
-    pub fn cursor(&self) -> usize {
+    pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
@@ -284,7 +284,7 @@ impl BookEdit {
 
     // Die Seiten fuer edit_book: leere am Ende fallen weg (eraseEmptyTrailingPages).
     pub fn finished_pages(&mut self) -> Vec<String> {
-        while self.pages.last().is_some_and(|p| p.is_empty()) {
+        while self.pages.last().is_some_and(std::string::String::is_empty) {
             self.pages.pop();
         }
         self.pages.clone()

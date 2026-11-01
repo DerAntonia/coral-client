@@ -30,10 +30,12 @@ fn entry(state: u32) -> [u8; 3] {
     }
 }
 
+#[must_use] 
 pub fn luminance(state: u32) -> u8 {
     entry(state)[0]
 }
 
+#[must_use] 
 pub fn opacity(state: u32) -> u8 {
     entry(state)[1]
 }
@@ -41,7 +43,7 @@ pub fn opacity(state: u32) -> u8 {
 // Richtungen wie in light_data.bin: unten, oben, Norden (-z), Sueden (+z), Westen (-x), Osten (+x).
 const DIRS: [(i32, i32, i32); 6] = [(0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1), (-1, 0, 0), (1, 0, 0)];
 
-fn opposite(d: usize) -> usize {
+const fn opposite(d: usize) -> usize {
     d ^ 1
 }
 
@@ -97,12 +99,12 @@ pub const SUNLIGHT: &str = "*sonne";
 
 /// Faktoren je Blockname setzen (fehlende = 1). Danach muss neu gemesht werden.
 pub fn set_light_factors(factors: Vec<(String, f32)>) {
-    *LIGHT_FACTORS.write().unwrap_or_else(|e| e.into_inner()) = factors;
+    *LIGHT_FACTORS.write().unwrap_or_else(std::sync::PoisonError::into_inner) = factors;
 }
 
-/// Gespeicherter Faktor eines Schluessels (Blockname, ALL_LIGHTS, SUNLIGHT), sonst 1.
+/// Gespeicherter Faktor eines Schluessels (Blockname, `ALL_LIGHTS`, SUNLIGHT), sonst 1.
 pub fn stored_light_factor(key: &str) -> f32 {
-    let f = LIGHT_FACTORS.read().unwrap_or_else(|e| e.into_inner());
+    let f = LIGHT_FACTORS.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     f.iter().find(|(n, _)| n == key).map_or(1.0, |&(_, v)| v)
 }
 
@@ -112,6 +114,7 @@ fn light_factor(name: &str) -> f32 {
 }
 
 /// Unter welchem Namen eine Quelle in den Lichtstaerken steht: Wandfackeln sind Fackeln.
+#[must_use] 
 pub fn light_source_name(name: &str) -> &str {
     match name {
         "wall_torch" => "torch",
@@ -123,7 +126,7 @@ pub fn light_source_name(name: &str) -> &str {
 }
 
 /// Alle Bloecke, von denen mindestens ein Zustand leuchtet, alphabetisch (Wandvarianten
-/// unter ihrem Grundblock, s. light_source_name).
+/// unter ihrem Grundblock, s. `light_source_name`).
 pub fn light_source_blocks() -> Vec<&'static str> {
     let mut namen: Vec<&'static str> = (0..crate::block_registry::state_count() as u32)
         .filter(|&s| luminance(s) > 0)
@@ -142,7 +145,7 @@ fn scaled_luminance(state: u32) -> Option<(f32, Option<&'static str>)> {
         return None;
     }
     let name = crate::block_registry::block_name(state);
-    Some((l as f32 * name.map_or(1.0, light_factor), name))
+    Some((f32::from(l) * name.map_or(1.0, light_factor), name))
 }
 
 // Eigenes Licht eines Blocks als gepackte Kanaele (je 4 Bit: R | G << 4 | B << 8), hoechstens
@@ -156,15 +159,17 @@ pub fn emission(state: u32) -> u16 {
 }
 
 /// Echte Leuchtstaerke mit Faktor, auch ueber 15 (Reichweite des Fernlichts in Bloecken).
+#[must_use] 
 pub fn emission_level(state: u32) -> u8 {
     scaled_luminance(state).map_or(0, |(l, _)| l.round().clamp(0.0, 255.0) as u8)
 }
 
-fn channel(v: u16, c: u32) -> u16 {
+const fn channel(v: u16, c: u32) -> u16 {
     v >> (c * 4) & 15
 }
 
 // Hellster Kanal eines gepackten Blocklichts (0..15).
+#[must_use] 
 pub fn brightest(v: u16) -> u8 {
     channel(v, 0).max(channel(v, 1)).max(channel(v, 2)) as u8
 }
@@ -187,7 +192,7 @@ fn any_brighter(a: u16, b: u16) -> bool {
 
 // --- Himmelslicht vom Server ------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkyLayer {
     Uniform(u8),
     // Zwei Werte je Byte, Index = (y * 16 + z) * 16 + x, niedriges Halbbyte zuerst.
@@ -195,10 +200,11 @@ pub enum SkyLayer {
 }
 
 impl SkyLayer {
+    #[must_use] 
     pub fn get(&self, x: i32, y: i32, z: i32) -> u8 {
         match self {
-            SkyLayer::Uniform(v) => *v,
-            SkyLayer::Data(d) => {
+            Self::Uniform(v) => *v,
+            Self::Data(d) => {
                 let i = ((y * 16 + z) * 16 + x) as usize;
                 (d[i / 2] >> ((i & 1) * 4)) & 15
             }
@@ -208,6 +214,7 @@ impl SkyLayer {
 
 // Die Ebenen einer neuen Spalte, bevor der Server etwas geschickt hat: hell (Ebene 0 liegt
 // unter der Welt, die letzte darueber).
+#[must_use] 
 pub fn default_sky(sections: usize) -> Vec<SkyLayer> {
     vec![SkyLayer::Uniform(15); sections + 2]
 }
@@ -231,6 +238,7 @@ pub fn apply_sky(layers: &mut [SkyLayer], light: &protocol::chunk::LightData) {
 
 impl ChunkColumn {
     // Himmelslicht an spaltenlokalem x/z (0..16) und absoluter Hoehe y.
+    #[must_use] 
     pub fn sky_at(&self, x: i32, y: i32, z: i32) -> u8 {
         let ebene = (y - self.min_y).div_euclid(SECTION_SIZE) + 1;
         match self.sky.get(ebene.max(0) as usize) {
@@ -260,6 +268,7 @@ impl LightField {
     }
 
     // (Blocklicht gepackt, Himmelslicht) an spaltenlokaler Position; ausserhalb: dunkel/hell.
+    #[must_use] 
     pub fn at(&self, x: i32, y: i32, z: i32) -> (u16, u8) {
         match self.index(x, y, z) {
             Some(i) => (self.block.as_ref().map_or(0, |b| b[i]), self.sky[i]),
@@ -279,6 +288,7 @@ pub struct ColumnBlockLight {
 
 impl ColumnBlockLight {
     // Blocklicht je Kanal (0..15) an spaltenlokalem x/z (0..16) und absoluter Hoehe y.
+    #[must_use] 
     pub fn at(&self, x: i32, y: i32, z: i32) -> [u8; 3] {
         let i = (y - self.min_y).div_euclid(SECTION_SIZE);
         let Some(Some(s)) = (i >= 0).then(|| self.sections.get(i as usize)).flatten() else { return [0; 3] };
@@ -335,6 +345,7 @@ fn state_at(n: &ColumnNeighbors, x: i32, y: i32, z: i32) -> u32 {
     column_of(n, cx, cz).map_or(crate::chunk::STATE_AIR, |c| c.get(x.rem_euclid(16), y, z.rem_euclid(16)))
 }
 
+#[must_use] 
 pub fn light_field(n: &ColumnNeighbors) -> LightField {
     let min_y = n.target.min_y;
     let height = n.target.sections.len() as i32 * SECTION_SIZE;
@@ -404,7 +415,7 @@ fn block_light(n: &ColumnNeighbors, min_y: i32, height: i32) -> Option<Vec<u16>>
             if face_blocks(hier, d) || face_blocks(dort, opposite(d)) {
                 continue;
             }
-            let neu = dim(v, opacity(dort).max(1) as u16);
+            let neu = dim(v, u16::from(opacity(dort).max(1)));
             let j = idx(nx, ny, nz);
             if any_brighter(neu, licht[j]) {
                 licht[j] = max_channels(licht[j], neu);
@@ -434,9 +445,10 @@ fn block_light(n: &ColumnNeighbors, min_y: i32, height: i32) -> Option<Vec<u16>>
 // Kante zweier Waende. `p` ist spaltenlokal (y absolut), `normal` zeigt aus der Flaeche heraus
 // (Laenge egal). Rueckgabe: Blocklicht je Kanal und Himmelslicht, in Stufen (0..15, mit
 // Bruchteil).
+#[must_use] 
 pub fn vertex_light(f: &LightField, n: &ColumnNeighbors, p: [f32; 3], normal: [f32; 3], mitte: [f32; 3]) -> ([f32; 3], f32) {
     let achse = (0..3).max_by(|&a, &b| normal[a].abs().total_cmp(&normal[b].abs())).unwrap_or(1);
-    let s = [p[0] + normal[0].signum() * 0.5 * (achse == 0) as i32 as f32, p[1] + normal[1].signum() * 0.5 * (achse == 1) as i32 as f32, p[2] + normal[2].signum() * 0.5 * (achse == 2) as i32 as f32];
+    let s = [p[0] + normal[0].signum() * 0.5 * i32::from(achse == 0) as f32, p[1] + normal[1].signum() * 0.5 * i32::from(achse == 1) as f32, p[2] + normal[2].signum() * 0.5 * i32::from(achse == 2) as f32];
     let (t1, t2) = match achse {
         0 => (1, 2),
         1 => (0, 2),
@@ -460,9 +472,9 @@ pub fn vertex_light(f: &LightField, n: &ColumnNeighbors, p: [f32; 3], normal: [f
     let mut mit = |c: [i32; 3]| {
         let (b, h) = f.at(c[0], c[1], c[2]);
         for k in 0..3 {
-            summe.0[k] += channel(b, k as u32) as f32;
+            summe.0[k] += f32::from(channel(b, k as u32));
         }
-        summe.1 += h as f32;
+        summe.1 += f32::from(h);
         zahl += 1.0;
     };
     for c in [eigen, seiten[0], seiten[1]] {
@@ -476,13 +488,14 @@ pub fn vertex_light(f: &LightField, n: &ColumnNeighbors, p: [f32; 3], normal: [f
     if zahl == 0.0 {
         // Ecke ganz von festen Bloecken umgeben: der Block direkt vor der Flaeche.
         let (b, h) = f.at(eigen[0], eigen[1], eigen[2]);
-        return ([channel(b, 0) as f32, channel(b, 1) as f32, channel(b, 2) as f32], h as f32);
+        return ([f32::from(channel(b, 0)), f32::from(channel(b, 1)), f32::from(channel(b, 2))], f32::from(h));
     }
     (summe.0.map(|v| v / zahl), summe.1 / zahl)
 }
 
 // Licht je Ecke fuer terrain_vertex::pack_terrain_lit. Beidseitige (schraege) Flaechen nehmen
 // je Kanal das hellere ihrer beiden Seiten.
+#[must_use] 
 pub fn packed_vertex_light(f: &LightField, n: &ColumnNeighbors, p: [f32; 3], normal: [f32; 3], mitte: [f32; 3], beidseitig: bool) -> u32 {
     let (mut b, mut h) = vertex_light(f, n, p, normal, mitte);
     if beidseitig {
@@ -497,6 +510,7 @@ pub fn packed_vertex_light(f: &LightField, n: &ColumnNeighbors, p: [f32; 3], nor
 
 // Gepackt fuer den Vertex (s. TerrainVertex::LIGHT_*): Himmel 4 Bit, Block je Kanal 5 Bit in
 // halben Stufen.
+#[must_use] 
 pub fn pack_vertex_light(block: [f32; 3], sky: f32) -> u32 {
     let b = |v: f32| ((v * 2.0).round() as u32).min(31);
     (sky.round() as u32).min(15) | b(block[0]) << 4 | b(block[1]) << 9 | b(block[2]) << 14
@@ -634,7 +648,7 @@ mod tests {
         let n = nachbarn(c, None);
         let f = light_field(&n);
         let (b, _) = vertex_light(&f, &n, [9.0, 8.0, 9.0], [0.0, 1.0, 0.0], [8.5, 8.0, 8.5]);
-        assert_eq!(b[0], channel(f.at(8, 8, 8).0, 0) as f32, "{b:?}");
+        assert_eq!(b[0], f32::from(channel(f.at(8, 8, 8).0, 0)), "{b:?}");
     }
 
     #[test]

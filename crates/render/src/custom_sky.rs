@@ -28,47 +28,48 @@ pub enum Blend {
 }
 
 impl Blend {
-    pub const ALL: [Blend; 9] =
-        [Blend::Add, Blend::Subtract, Blend::Multiply, Blend::Dodge, Blend::Burn, Blend::Screen, Blend::Replace, Blend::Overlay, Blend::Alpha];
+    pub const ALL: [Self; 9] =
+        [Self::Add, Self::Subtract, Self::Multiply, Self::Dodge, Self::Burn, Self::Screen, Self::Replace, Self::Overlay, Self::Alpha];
 
-    pub fn from_name(name: &str) -> Option<Blend> {
+    #[must_use] 
+    pub fn from_name(name: &str) -> Option<Self> {
         Some(match name.trim().to_ascii_lowercase().as_str() {
-            "add" => Blend::Add,
-            "subtract" => Blend::Subtract,
-            "multiply" => Blend::Multiply,
-            "dodge" => Blend::Dodge,
-            "burn" => Blend::Burn,
-            "screen" => Blend::Screen,
-            "replace" => Blend::Replace,
-            "overlay" => Blend::Overlay,
-            "alpha" => Blend::Alpha,
+            "add" => Self::Add,
+            "subtract" => Self::Subtract,
+            "multiply" => Self::Multiply,
+            "dodge" => Self::Dodge,
+            "burn" => Self::Burn,
+            "screen" => Self::Screen,
+            "replace" => Self::Replace,
+            "overlay" => Self::Overlay,
+            "alpha" => Self::Alpha,
             _ => return None,
         })
     }
 
     // Womit die Bildfarbe multipliziert wird: die Helligkeit wirkt je nach Mischart ueber
     // Alpha (wo der Faktor SRC_ALPHA mitmischt) oder direkt auf die Farbe.
-    fn color(self, brightness: f32) -> [f32; 4] {
+    const fn color(self, brightness: f32) -> [f32; 4] {
         let b = brightness;
         match self {
-            Blend::Add | Blend::Replace | Blend::Alpha => [1.0, 1.0, 1.0, b],
-            Blend::Multiply => [b, b, b, b],
-            Blend::Subtract | Blend::Dodge | Blend::Burn | Blend::Screen | Blend::Overlay => [b, b, b, 1.0],
+            Self::Add | Self::Replace | Self::Alpha => [1.0, 1.0, 1.0, b],
+            Self::Multiply => [b, b, b, b],
+            Self::Subtract | Self::Dodge | Self::Burn | Self::Screen | Self::Overlay => [b, b, b, 1.0],
         }
     }
 
-    fn state(self) -> Option<wgpu::BlendState> {
+    const fn state(self) -> Option<wgpu::BlendState> {
         use wgpu::BlendFactor as F;
         let (src, dst) = match self {
-            Blend::Add => (F::SrcAlpha, F::One),
-            Blend::Subtract => (F::OneMinusDst, F::Zero),
-            Blend::Multiply => (F::Dst, F::OneMinusSrcAlpha),
-            Blend::Dodge => (F::One, F::One),
-            Blend::Burn => (F::Zero, F::OneMinusSrc),
-            Blend::Screen => (F::One, F::OneMinusSrc),
-            Blend::Replace => return None,
-            Blend::Overlay => (F::Dst, F::Src),
-            Blend::Alpha => (F::SrcAlpha, F::OneMinusSrcAlpha),
+            Self::Add => (F::SrcAlpha, F::One),
+            Self::Subtract => (F::OneMinusDst, F::Zero),
+            Self::Multiply => (F::Dst, F::OneMinusSrcAlpha),
+            Self::Dodge => (F::One, F::One),
+            Self::Burn => (F::Zero, F::OneMinusSrc),
+            Self::Screen => (F::One, F::OneMinusSrc),
+            Self::Replace => return None,
+            Self::Overlay => (F::Dst, F::Src),
+            Self::Alpha => (F::SrcAlpha, F::OneMinusSrcAlpha),
         };
         let color = wgpu::BlendComponent { src_factor: src, dst_factor: dst, operation: wgpu::BlendOperation::Add };
         Some(wgpu::BlendState { color, alpha: wgpu::BlendComponent::REPLACE })
@@ -122,6 +123,7 @@ pub struct SkyRenderer {
 
 impl SkyRenderer {
     // `format`: das Format der Ansicht, in die gezeichnet wird (ohne sRGB, s. Kopfkommentar).
+    #[must_use] 
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("custom sky"),

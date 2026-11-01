@@ -86,22 +86,19 @@ impl TerrainArena {
         if len == 0 || len > self.page_vertices {
             return None;
         }
-        let slot = match self.find(len) {
-            Some(slot) => slot,
-            None => {
-                self.pages.push(ArenaPage {
-                    buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("terrain arena page"),
-                        size: self.page_vertices as u64 * VERTEX_BYTES,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                    free: FreeList::new(self.page_vertices),
-                });
-                self.find(len)?
-            }
+        let slot = if let Some(slot) = self.find(len) { slot } else {
+            self.pages.push(ArenaPage {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("terrain arena page"),
+                    size: u64::from(self.page_vertices) * VERTEX_BYTES,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                free: FreeList::new(self.page_vertices),
+            });
+            self.find(len)?
         };
-        queue.write_buffer(&self.pages[slot.page as usize].buffer, slot.start as u64 * VERTEX_BYTES, bytemuck::cast_slice(vertices));
+        queue.write_buffer(&self.pages[slot.page as usize].buffer, u64::from(slot.start) * VERTEX_BYTES, bytemuck::cast_slice(vertices));
         Some(slot)
     }
 
@@ -125,7 +122,7 @@ impl TerrainArena {
             return;
         }
         let Some(page) = self.pages.get(slot.page as usize) else { return };
-        queue.write_buffer(&page.buffer, (slot.start + offset) as u64 * VERTEX_BYTES, bytemuck::cast_slice(vertices));
+        queue.write_buffer(&page.buffer, u64::from(slot.start + offset) * VERTEX_BYTES, bytemuck::cast_slice(vertices));
     }
 
     pub fn clear(&mut self) {

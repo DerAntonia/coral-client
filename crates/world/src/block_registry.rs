@@ -53,24 +53,28 @@ fn registry() -> &'static BlockRegistry {
 // Blockname (ohne "minecraft:"-Praefix) zu einer State-ID, oder None fuer unbekannte IDs
 // (z.B. neuere States, als die Tabelle gebacken wurde -- dann faellt der Aufrufer sinnvoll
 // zurueck statt zu panicken).
+#[must_use] 
 pub fn block_name(state: u32) -> Option<&'static str> {
     let reg = registry();
     reg.state_to_name.get(state as usize).map(|&i| reg.names[i as usize].as_str())
 }
 
 // Anzahl bekannter State-IDs (0..state_count sind belegt) -- zum Aufbau der UV-Tabelle.
+#[must_use] 
 pub fn state_count() -> usize {
     registry().state_to_name.len()
 }
 
 // Alle eindeutigen Blocknamen (fuer den Atlas-Bau: einmal jede Textur aufloesen, nicht pro
 // State erneut).
+#[must_use] 
 pub fn all_block_names() -> Vec<&'static str> {
-    registry().names.iter().map(|s| s.as_str()).collect()
+    registry().names.iter().map(std::string::String::as_str).collect()
 }
 
 // Gibt es einen Block dieses Namens? Damit laesst sich ein Item als BLOCK-Item erkennen:
 // Vanilla vergibt fuer jeden platzierbaren Block ein gleichnamiges Item.
+#[must_use] 
 pub fn is_block(name: &str) -> bool {
     registry().names.iter().any(|n| n == name)
 }
@@ -97,7 +101,8 @@ pub fn air_variants() -> [u32; 2] {
 }
 
 #[inline]
-pub fn normalize_air(state: u32, variants: [u32; 2]) -> u32 {
+#[must_use] 
+pub const fn normalize_air(state: u32, variants: [u32; 2]) -> u32 {
     if state == variants[0] || state == variants[1] {
         0
     } else {

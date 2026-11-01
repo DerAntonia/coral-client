@@ -16,12 +16,14 @@ use crate::source::{config_dir, user_dir};
 
 pub const DEFAULT_CONFIG: &str = "Standard";
 
+#[must_use] 
 pub fn configs_dir() -> Option<PathBuf> {
     Some(user_dir()?.join("configs"))
 }
 
 /// Datei einer Config (muss nicht existieren -- eine fehlende Config startet mit Standardwerten
 /// und wird beim ersten Speichern angelegt).
+#[must_use] 
 pub fn config_path(name: &str) -> Option<PathBuf> {
     Some(configs_dir()?.join(format!("{name}.conf")))
 }
@@ -29,6 +31,7 @@ pub fn config_path(name: &str) -> Option<PathBuf> {
 /// Der private Teil, gleich fuer alle Configs. v26.10.3 hatte ihn noch je Config im Ordner
 /// "private configs" (<Name>.conf): dann wird der von `active` zu dieser Datei, der Ordner
 /// verschwindet, sobald er leer ist.
+#[must_use] 
 pub fn private_config_path(active: &str) -> Option<PathBuf> {
     let user = user_dir()?;
     let pfad = user.join("private-config.conf");
@@ -42,7 +45,7 @@ pub fn private_config_path(active: &str) -> Option<PathBuf> {
 }
 
 /// Alte Ablagen umziehen, solange es im neuen Ordner noch keine Config gibt: erst die frueher
-/// einzige settings.conf (wird "Standard"), dann <config_dir>/configs/ von vor dem Umzug in den
+/// einzige settings.conf (wird "Standard"), dann <`config_dir>/configs`/ von vor dem Umzug in den
 /// Benutzerordner. Verschieben statt kopieren: zwei Dateien mit denselben Einstellungen liefen
 /// sonst auseinander, ohne dass klar waere, welche gilt. Den privaten Teil trennt der Client
 /// beim naechsten Speichern ab.
@@ -84,6 +87,7 @@ fn list_raw(dir: &Path) -> Vec<String> {
 }
 
 /// Alle Configs, alphabetisch. Nie leer: ohne eine einzige Datei gibt es trotzdem "Standard".
+#[must_use] 
 pub fn list_configs() -> Vec<String> {
     migrate_legacy();
     let names = configs_dir().map(|dir| list_raw(&dir)).unwrap_or_default();
@@ -175,6 +179,7 @@ fn last_used_path() -> Option<PathBuf> {
 
 /// Zuletzt im Launcher gewaehlte Config -- damit auch ein Start ohne Launcher (Skript,
 /// cargo run) dieselbe benutzt.
+#[must_use] 
 pub fn last_used() -> Option<String> {
     let name = std::fs::read_to_string(last_used_path()?).ok()?.trim().to_string();
     (!name.is_empty()).then_some(name)
@@ -191,6 +196,7 @@ pub fn set_last_used(name: &str) {
 
 /// Welche Config der Client beim Start benutzt: `--config` vor der zuletzt gewaehlten vor
 /// "Standard". Eine zuletzt gewaehlte, inzwischen geloeschte Config zaehlt nicht.
+#[must_use] 
 pub fn startup_config(arg: Option<&str>) -> String {
     migrate_legacy();
     if let Some(name) = arg.and_then(|a| validate_name(a).ok()) {

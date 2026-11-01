@@ -74,6 +74,7 @@ static EFFECT_COLORS: [u32; 40] = [
 ];
 
 // MobEffect.getColor() eines Effekts; unbekannte (neuere) Effekte bekommen Schwarz.
+#[must_use] 
 pub fn effect_color(effect: i32) -> u32 {
     usize::try_from(effect).ok().and_then(|i| EFFECT_COLORS.get(i)).copied().unwrap_or(0)
 }
@@ -90,12 +91,14 @@ static EFFECT_BENEFICIAL: [bool; 40] = [
     false, false, false, false, true,
 ];
 
+#[must_use] 
 pub fn effect_beneficial(effect: i32) -> bool {
     usize::try_from(effect).ok().and_then(|i| EFFECT_BENEFICIAL.get(i)).copied().unwrap_or(false)
 }
 
 // PotionContents.getAllEffects: die des Basistranks, dann die zusaetzlichen, je (Effekt,
 // Verstaerkung, Dauer in Ticks; -1 = unendlich).
+#[must_use] 
 pub fn all_effects(contents: &PotionContents) -> Vec<(u32, i32, i32)> {
     let basis = contents.potion.and_then(|id| POTIONS.get(id as usize)).map(|p| p.2).unwrap_or(&[]);
     basis.iter().copied().chain(contents.custom_effects.iter().map(|e| (e.effect, e.amplifier, e.duration))).collect()
@@ -103,6 +106,7 @@ pub fn all_effects(contents: &PotionContents) -> Vec<(u32, i32, i32)> {
 
 // potion_duration_scale: was der Stack mitbringt, sonst die Vorgabe des Items (Verweiltrank
 // ein Viertel, getippter Pfeil ein Achtel der Trankdauer).
+#[must_use] 
 pub fn duration_scale(item: &str, stack: &ItemStack) -> f32 {
     stack.potion_duration_scale.unwrap_or(match item {
         "lingering_potion" => 0.25,
@@ -116,6 +120,7 @@ pub fn duration_scale(item: &str, stack: &ItemStack) -> f32 {
 //
 // Heil- und Schadenstraenke umgekehrt: im PvP ist Stufe II der Normalfall, eine Reihe "S"
 // saehe nur unruhig aus. Deshalb markiert dort W die SCHWACHE Stufe I, Stufe II bleibt frei.
+#[must_use] 
 pub fn variant_mark(stack: &ItemStack) -> Option<char> {
     let c = stack.potion.as_ref()?;
     if !c.custom_effects.is_empty() || c.custom_name.is_some() {
@@ -138,6 +143,7 @@ pub fn variant_mark(stack: &ItemStack) -> Option<char> {
 // PotionContents.BASE_POTION_COLOR (-13083194): ein Trank ohne sichtbare Effekte.
 pub const BASE_POTION_COLOR: u32 = 0x385DC6;
 
+#[must_use] 
 pub fn potion_registry_name(id: u32) -> Option<&'static str> {
     POTIONS.get(id as usize).map(|p| p.0)
 }
@@ -145,6 +151,7 @@ pub fn potion_registry_name(id: u32) -> Option<&'static str> {
 // PotionContents.getColorOr: feste Farbe, sonst das mit (Verstaerkung + 1) gewichtete Mittel
 // aller sichtbaren Effekte (getColorOptional, ganzzahlig geteilt wie in Vanilla), sonst None
 // -- dann gilt der "default" der Toenungsquelle.
+#[must_use] 
 pub fn color(contents: &PotionContents) -> Option<u32> {
     if let Some(c) = contents.custom_color {
         return Some(c as u32 & 0xFFFFFF);
@@ -159,22 +166,24 @@ pub fn color(contents: &PotionContents) -> Option<u32> {
         // Unbekannter Effekt (neuer als die Tabelle): Vanilla haette eine Farbe, wir nicht --
         // weglassen verfaelscht das Mittel weniger als eine erfundene Farbe.
         let Some(&c) = EFFECT_COLORS.get(effect as usize) else { continue };
-        let w = amplifier as i64 + 1;
-        r += w * ((c >> 16) & 0xff) as i64;
-        g += w * ((c >> 8) & 0xff) as i64;
-        b += w * (c & 0xff) as i64;
+        let w = i64::from(amplifier) + 1;
+        r += w * i64::from((c >> 16) & 0xff);
+        g += w * i64::from((c >> 8) & 0xff);
+        b += w * i64::from(c & 0xff);
         n += w;
     }
     (n != 0).then(|| (((r / n) as u32) << 16) | (((g / n) as u32) << 8) | (b / n) as u32)
 }
 
 // Die Trankfarbe des Stacks als 0xRRGGBB, oder None ohne potion_contents.
+#[must_use] 
 pub fn stack_color(stack: &ItemStack) -> Option<u32> {
     Some(color(stack.potion.as_ref()?).unwrap_or(BASE_POTION_COLOR))
 }
 
 // Dieselbe Farbe als Toenungsfaktor fuer den Stack, oder None, wenn er keine potion_contents hat
 // (dann bleibt die Vorgabe des Item-Modells).
+#[must_use] 
 pub fn stack_tint(stack: &ItemStack) -> Option<[f32; 3]> {
     let c = stack_color(stack)?;
     Some([((c >> 16) & 0xff) as f32 / 255.0, ((c >> 8) & 0xff) as f32 / 255.0, (c & 0xff) as f32 / 255.0])
@@ -183,6 +192,7 @@ pub fn stack_tint(stack: &ItemStack) -> Option<[f32; 3]> {
 // PotionItem/TippedArrowItem.getName: Schluessel descriptionId + ".effect." + (custom_name
 // oder Potion.name() oder "empty"), uebersetzt mit en_us.json. None fuer alles, was kein
 // Trank-Item ist.
+#[must_use] 
 pub fn display_name(item: &str, contents: Option<&PotionContents>) -> Option<String> {
     if !matches!(item, "potion" | "splash_potion" | "lingering_potion" | "tipped_arrow") {
         return None;

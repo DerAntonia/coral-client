@@ -41,17 +41,17 @@ pub enum SpriteAtlas {
 }
 
 impl SpriteAtlas {
-    pub fn is_glint(self) -> bool {
-        matches!(self, SpriteAtlas::GlintUi | SpriteAtlas::GlintBlock | SpriteAtlas::GlintEntity)
+    pub const fn is_glint(self) -> bool {
+        matches!(self, Self::GlintUi | Self::GlintBlock | Self::GlintEntity)
     }
 
     // Der Glint-Zwilling eines Icon-Quads aus diesem Atlas. Bestellt wird er nur fuer
     // verzauberte Items (s. App::push_item) -- Koepfe in der Tab-Liste glitzern also nie.
-    pub fn glint(self) -> Option<SpriteAtlas> {
+    pub const fn glint(self) -> Option<Self> {
         match self {
-            SpriteAtlas::Ui => Some(SpriteAtlas::GlintUi),
-            SpriteAtlas::Block => Some(SpriteAtlas::GlintBlock),
-            SpriteAtlas::Entity => Some(SpriteAtlas::GlintEntity),
+            Self::Ui => Some(Self::GlintUi),
+            Self::Block => Some(Self::GlintBlock),
+            Self::Entity => Some(Self::GlintEntity),
             _ => None,
         }
     }

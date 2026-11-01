@@ -68,7 +68,7 @@ pub fn line(text: impl FnOnce() -> String) {
 pub fn sound(herkunft: &str, name: &str, kategorie: impl std::fmt::Debug, wer: &str, abstand: Option<f64>, volume: f32, pitch: f32, ergebnis: &str) {
     line(|| {
         let name = name.strip_prefix("minecraft:").unwrap_or(name);
-        let abstand = abstand.map(|a| format!("{a:5.1} Bl")).unwrap_or_else(|| "    -   ".to_string());
+        let abstand = abstand.map_or_else(|| "    -   ".to_string(), |a| format!("{a:5.1} Bl"));
         format!("{herkunft:<10} {name:<44} {:<9} {wer:<30} {abstand}  vol={volume:.2} pitch={pitch:.2}  {ergebnis}", format!("{kategorie:?}"))
     });
 }

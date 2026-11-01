@@ -43,8 +43,9 @@ const fn ageable(layer: &'static str, baby: &'static str, texture: &'static str,
     MobLook { layer, baby_layer: Some(baby), texture, baby_texture: None, anim }
 }
 
+#[must_use] 
 pub fn mob_look(name: &str) -> Option<MobLook> {
-    use Anim::*;
+    use Anim::{HeadOnly, Walker, Static, Illager, Villager};
     Some(match name {
         "allay" => look("allay#main", "entity/allay/allay", HeadOnly),
         "armadillo" => ageable("armadillo#main", "armadillo_baby#main", "entity/armadillo", Walker),
@@ -199,10 +200,12 @@ fn boat_look(name: &str) -> Option<MobLook> {
     Some(if kiste { look(LAYER_KISTE[i], TEX_KISTE[i], Anim::Static) } else { look(LAYER[i], TEX[i], Anim::Static) })
 }
 
+#[must_use] 
 pub fn is_boat(name: &str) -> bool {
     boat_look(name).is_some()
 }
 
+#[must_use] 
 pub fn is_minecart(name: &str) -> bool {
     name == "minecart" || name.ends_with("_minecart")
 }
@@ -232,6 +235,7 @@ const VILLAGER_LEVELS: [&str; 5] = ["stone", "iron", "gold", "emerald", "diamond
 // Die Schichten eines Dorfbewohners bzw. Zombie-Dorfbewohners ueber der Grundtextur, von
 // unten nach oben (VillagerClothingFeatureRenderer): Biom-Kleidung, Beruf, Stufen-Abzeichen.
 // Babys tragen keinen Beruf; Nitwits kein Abzeichen.
+#[must_use] 
 pub fn villager_layers(zombie: bool, data: Option<(i32, i32, i32)>, baby: bool) -> Vec<String> {
     let ordner = if zombie { "entity/zombie_villager" } else { "entity/villager" };
     let (typ, beruf, stufe) = data.unwrap_or((2, 0, 1));
@@ -266,7 +270,7 @@ pub fn all_textures() -> Vec<String> {
         let raft = if *w == "bamboo" { "raft" } else { "boat" };
         [format!("{w}_{raft}"), format!("{w}_chest_{raft}")]
     });
-    for n in namen.iter().map(|s| s.to_string()).chain(boote) {
+    for n in namen.iter().map(std::string::ToString::to_string).chain(boote) {
         if let Some(l) = mob_look(&n) {
             out.push(l.texture.to_string());
             out.extend(l.baby_texture.map(str::to_string));
@@ -287,9 +291,37 @@ fn has_part(part: &Part, name: &str) -> bool {
     part.name == name || part.children.iter().any(|c| has_part(c, name))
 }
 
+fn part_named<'a>(part: &'a Part, name: &str) -> Option<&'a Part> {
+    if part.name == name {
+        return Some(part);
+    }
+    part.children.iter().find_map(|c| part_named(c, name))
+}
+
+// AbstractBoatModel.setupAnim: beide Ruder nach ihrer Ruderzeit (Entity::rowing_time, links,
+// rechts). Vanilla SETZT Neigung und Gierung, die Pose hier addiert auf die Grunddrehung aus
+// den Modelldaten -- deshalb wird die abgezogen. Auch ruhend (Zeit 0) stehen die Ruder so,
+// nicht in ihrer Grundhaltung.
+pub fn boat_paddle_pose(model: &Model, pose: &mut Pose, rowing: [f32; 2]) {
+    use std::f32::consts::PI;
+    let Some(root) = model.parts.first() else { return };
+    let mix = |t: f32, a: f32, b: f32| a + (b - a) * t.clamp(0.0, 1.0);
+    for (seite, name) in ["left_paddle", "right_paddle"].into_iter().enumerate() {
+        let Some(teil) = part_named(root, name) else { continue };
+        let f = rowing[seite];
+        let neigung = mix(f32::midpoint((-f).sin(), 1.0), -PI / 3.0, -PI / 12.0);
+        let mut gierung = mix(f32::midpoint((-f + 1.0).sin(), 1.0), -PI / 4.0, PI / 4.0);
+        if seite == 1 {
+            gierung = PI - gierung;
+        }
+        pose.rotate(name, [neigung - teil.rotation[0], gierung - teil.rotation[1], 0.0]);
+    }
+}
+
 // Die gemeinsame Laufanimation (QuadrupedModel, BipedModel, VillagerModel, IllagerModel:
 // ueberall dieselben Formeln an denselben Teilnamen). Winkel in Grad (Kopf relativ zum
 // Rumpf), Laufphase und -staerke wie bei quadruped_pose.
+#[must_use] 
 pub fn walk_pose(model: &Model, anim: Anim, head_yaw_rel: f32, head_pitch: f32, swing: f32, amount: f32, holds_item: bool) -> Pose {
     use std::f32::consts::PI;
     const DEG: f32 = PI / 180.0;
@@ -319,11 +351,11 @@ pub fn walk_pose(model: &Model, anim: Anim, head_yaw_rel: f32, head_pitch: f32, 
             // Verschraenkt ODER ausgestreckt -- nie beides (IllagerEntityModel.setAngles).
             let versteckt = if holds_item { "arms" } else { "right_arm" };
             pose.set(versteckt, PartPose { hidden: true, ..Default::default() });
-            if !holds_item {
-                pose.set("left_arm", PartPose { hidden: true, ..Default::default() });
-            } else {
+            if holds_item {
                 pose.rotate("right_arm", [(swing * 0.6662 + PI).cos() * amount, 0.0, 0.0]);
                 pose.rotate("left_arm", [(swing * 0.6662).cos() * amount, 0.0, 0.0]);
+            } else {
+                pose.set("left_arm", PartPose { hidden: true, ..Default::default() });
             }
         }
         Anim::Walker if !has_part(root, "arms") => {

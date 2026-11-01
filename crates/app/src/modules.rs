@@ -29,10 +29,10 @@ pub enum TotemHand {
 }
 
 impl TotemHand {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            TotemHand::MainHand => "HOTBAR",
-            TotemHand::OffHand => "ZWEITHAND",
+            Self::MainHand => "HOTBAR",
+            Self::OffHand => "ZWEITHAND",
         }
     }
 
@@ -40,54 +40,54 @@ impl TotemHand {
     // bei Rot-Gruen-Schwaeche unterscheidbar (deutlich verschiedene Helligkeit und Blauanteil)
     // -- eine Unterscheidung, die man im Kampf in einem Viertelsekunden-Blick treffen muss,
     // darf nicht an zwei aehnlichen Farbtoenen haengen.
-    pub fn tint(self) -> [f32; 3] {
+    pub const fn tint(self) -> [f32; 3] {
         match self {
-            TotemHand::MainHand => [1.0, 0.85, 0.25],
-            TotemHand::OffHand => [0.25, 0.75, 1.0],
+            Self::MainHand => [1.0, 0.85, 0.25],
+            Self::OffHand => [0.25, 0.75, 1.0],
         }
     }
 
     // Auf welche Seite das Flug-Item wandert: Haupthand rechts, Zweithand links. Dieselbe
     // Zuordnung wie beim Ton (s. sound_pan) und wie die Haende auf dem Bildschirm liegen.
-    pub fn side(self) -> f32 {
+    pub const fn side(self) -> f32 {
         match self {
-            TotemHand::MainHand => 1.0,
-            TotemHand::OffHand => -1.0,
+            Self::MainHand => 1.0,
+            Self::OffHand => -1.0,
         }
     }
 
     // Stereo-Position des Signaltons, -1 = links, +1 = rechts.
-    pub fn sound_pan(self) -> f32 {
+    pub const fn sound_pan(self) -> f32 {
         self.side()
     }
 
     // Als Byte fuer die threaduebergreifende Veroeffentlichung (s. App::totem_hand_published).
     // Ein AtomicU8 statt eines Mutex: der Sofort-Ton-Haken laeuft im Netzwerk-Task und soll
     // dort nichts sperren muessen.
-    pub fn to_published(self) -> u8 {
+    pub const fn to_published(self) -> u8 {
         match self {
-            TotemHand::MainHand => 0,
-            TotemHand::OffHand => 1,
+            Self::MainHand => 0,
+            Self::OffHand => 1,
         }
     }
 
     // Umkehrung von to_published. Unbekannte Werte koennen nicht auftreten (nur diese
     // Funktion und to_published schreiben/lesen das Byte); die Zweithand ist trotzdem die
     // sichere Vorgabe, weil sie im CPvP der haeufigere Fall ist.
-    pub fn from_published(value: u8) -> Self {
+    pub const fn from_published(value: u8) -> Self {
         if value == 0 {
-            TotemHand::MainHand
+            Self::MainHand
         } else {
-            TotemHand::OffHand
+            Self::OffHand
         }
     }
 
     // Tonhoehe des Signaltons. Zwei klar getrennte Toene (eine Quinte auseinander), damit
     // sie auch ohne Kopfhoerer -- also ohne die Seiteninformation -- unterscheidbar sind.
-    pub fn sound_hz(self) -> f32 {
+    pub const fn sound_hz(self) -> f32 {
         match self {
-            TotemHand::MainHand => 1320.0,
-            TotemHand::OffHand => 880.0,
+            Self::MainHand => 1320.0,
+            Self::OffHand => 880.0,
         }
     }
 }
@@ -117,13 +117,13 @@ impl TotemTracker {
     }
 
     // Einmal pro Tick mit dem aktuellen Stand aufrufen, BEVOR resolve() gebraucht wird.
-    pub fn tick(&mut self, main_hand_has_totem: bool, off_hand_has_totem: bool) {
+    pub const fn tick(&mut self, main_hand_has_totem: bool, off_hand_has_totem: bool) {
         self.main_hand_had_totem = main_hand_has_totem;
         self.off_hand_had_totem = off_hand_has_totem;
     }
 
     // Welche Hand hat gepoppt? `*_now` ist der Stand in genau diesem Augenblick.
-    pub fn resolve(&self, main_hand_has_totem: bool, off_hand_has_totem: bool) -> TotemHand {
+    pub const fn resolve(&self, main_hand_has_totem: bool, off_hand_has_totem: bool) -> TotemHand {
         if main_hand_has_totem || self.main_hand_had_totem {
             return TotemHand::MainHand;
         }
@@ -149,12 +149,12 @@ pub struct TotemPopAnimation {
 }
 
 impl TotemPopAnimation {
-    pub fn start(hand: TotemHand) -> Self {
+    pub const fn start(hand: TotemHand) -> Self {
         Self { hand, ticks_left: TOTEM_ANIMATION_TICKS }
     }
 
     // Einmal pro Tick (InGameOverlayRenderer.tickFloatingItemTimer).
-    pub fn tick(&mut self) -> bool {
+    pub const fn tick(&mut self) -> bool {
         self.ticks_left = self.ticks_left.saturating_sub(1);
         self.ticks_left > 0
     }

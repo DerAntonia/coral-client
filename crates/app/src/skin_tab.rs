@@ -149,7 +149,7 @@ impl Catalog {
     }
 
     // Beim naechsten refresh sofort neu lesen (z.B. beim Oeffnen des Tabs).
-    pub fn invalidate(&mut self) {
+    pub const fn invalidate(&mut self) {
         self.last_scan = None;
     }
 
@@ -237,7 +237,7 @@ fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<FileEntry>) {
 pub fn tree_from_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<FileEntry> {
     #[derive(Default)]
     struct Knoten {
-        ordner: std::collections::BTreeMap<String, Knoten>,
+        ordner: std::collections::BTreeMap<String, Self>,
         dateien: std::collections::BTreeSet<String>,
     }
     fn aus(k: &Knoten, rel: &str, depth: usize, out: &mut Vec<FileEntry>) {
@@ -382,7 +382,7 @@ mod tests {
     use super::*;
 
     fn s(v: &[&str]) -> Vec<String> {
-        v.iter().map(|x| x.to_string()).collect()
+        v.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]

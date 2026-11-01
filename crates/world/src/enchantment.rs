@@ -86,6 +86,7 @@ const CROSSBOW_BASE_PULL_SECONDS: f32 = 1.25;
 // ItemStack.hasGlint(): ein GESETZTER Override gewinnt; sonst der Default-Override des
 // Items (sofern der Server ihn nicht entfernt hat); sonst "hat Verzauberungen". Gespeicherte
 // Verzauberungen (Buch) zaehlen dabei NICHT -- das Buch glitzert ueber seinen Default.
+#[must_use] 
 pub fn has_glint(stack: &ItemStack) -> bool {
     if let Some(glint) = stack.glint_override {
         return glint;
@@ -100,26 +101,26 @@ pub fn has_glint(stack: &ItemStack) -> bool {
 enum LevelValue {
     Constant(f32),
     Linear { base: f32, per_level_above_first: f32 },
-    Clamped { value: Box<LevelValue>, min: f32, max: f32 },
-    Fraction { numerator: Box<LevelValue>, denominator: Box<LevelValue> },
+    Clamped { value: Box<Self>, min: f32, max: f32 },
+    Fraction { numerator: Box<Self>, denominator: Box<Self> },
     LevelsSquared { added: f32 },
-    Lookup { values: Vec<f32>, fallback: Box<LevelValue> },
+    Lookup { values: Vec<f32>, fallback: Box<Self> },
 }
 
 impl LevelValue {
     fn parse(v: &NbtValue) -> Option<Self> {
         if let Some(n) = v.as_f32() {
-            return Some(LevelValue::Constant(n));
+            return Some(Self::Constant(n));
         }
         let f = |key: &str| v.get(key).and_then(NbtValue::as_f32);
-        let sub = |key: &str| v.get(key).and_then(LevelValue::parse).map(Box::new);
+        let sub = |key: &str| v.get(key).and_then(Self::parse).map(Box::new);
         Some(match v.get("type")?.as_str()?.trim_start_matches("minecraft:") {
-            "constant" => LevelValue::Constant(f("value")?),
-            "linear" => LevelValue::Linear { base: f("base")?, per_level_above_first: f("per_level_above_first")? },
-            "clamped" => LevelValue::Clamped { value: sub("value")?, min: f("min")?, max: f("max")? },
-            "fraction" => LevelValue::Fraction { numerator: sub("numerator")?, denominator: sub("denominator")? },
-            "levels_squared" => LevelValue::LevelsSquared { added: f("added")? },
-            "lookup" => LevelValue::Lookup {
+            "constant" => Self::Constant(f("value")?),
+            "linear" => Self::Linear { base: f("base")?, per_level_above_first: f("per_level_above_first")? },
+            "clamped" => Self::Clamped { value: sub("value")?, min: f("min")?, max: f("max")? },
+            "fraction" => Self::Fraction { numerator: sub("numerator")?, denominator: sub("denominator")? },
+            "levels_squared" => Self::LevelsSquared { added: f("added")? },
+            "lookup" => Self::Lookup {
                 values: match v.get("values")? {
                     NbtValue::List(l) => l.iter().filter_map(NbtValue::as_f32).collect(),
                     NbtValue::IntArray(l) => l.iter().map(|&i| i as f32).collect(),
@@ -133,10 +134,10 @@ impl LevelValue {
 
     fn get(&self, level: i32) -> f32 {
         match self {
-            LevelValue::Constant(v) => *v,
-            LevelValue::Linear { base, per_level_above_first } => base + per_level_above_first * (level - 1) as f32,
-            LevelValue::Clamped { value, min, max } => value.get(level).clamp(*min, *max),
-            LevelValue::Fraction { numerator, denominator } => {
+            Self::Constant(v) => *v,
+            Self::Linear { base, per_level_above_first } => base + per_level_above_first * (level - 1) as f32,
+            Self::Clamped { value, min, max } => value.get(level).clamp(*min, *max),
+            Self::Fraction { numerator, denominator } => {
                 let d = denominator.get(level);
                 if d == 0.0 {
                     0.0
@@ -144,8 +145,8 @@ impl LevelValue {
                     numerator.get(level) / d
                 }
             }
-            LevelValue::LevelsSquared { added } => (level * level) as f32 + added,
-            LevelValue::Lookup { values, fallback } => {
+            Self::LevelsSquared { added } => (level * level) as f32 + added,
+            Self::Lookup { values, fallback } => {
                 usize::try_from(level - 1).ok().and_then(|i| values.get(i).copied()).unwrap_or_else(|| fallback.get(level))
             }
         }
@@ -159,18 +160,18 @@ enum ValueEffect {
     Add(LevelValue),
     Multiply(LevelValue),
     Set(LevelValue),
-    AllOf(Vec<ValueEffect>),
+    AllOf(Vec<Self>),
 }
 
 impl ValueEffect {
     fn parse(v: &NbtValue) -> Option<Self> {
         let lv = |key: &str| v.get(key).and_then(LevelValue::parse);
         Some(match v.get("type")?.as_str()?.trim_start_matches("minecraft:") {
-            "add" => ValueEffect::Add(lv("value")?),
-            "multiply" => ValueEffect::Multiply(lv("factor")?),
-            "set" => ValueEffect::Set(lv("value")?),
+            "add" => Self::Add(lv("value")?),
+            "multiply" => Self::Multiply(lv("factor")?),
+            "set" => Self::Set(lv("value")?),
             "all_of" => match v.get("effects")? {
-                NbtValue::List(l) => ValueEffect::AllOf(l.iter().filter_map(ValueEffect::parse).collect()),
+                NbtValue::List(l) => Self::AllOf(l.iter().filter_map(Self::parse).collect()),
                 _ => return None,
             },
             _ => return None,
@@ -179,10 +180,10 @@ impl ValueEffect {
 
     fn apply(&self, level: i32, input: f32) -> f32 {
         match self {
-            ValueEffect::Add(v) => input + v.get(level),
-            ValueEffect::Multiply(v) => input * v.get(level),
-            ValueEffect::Set(v) => v.get(level),
-            ValueEffect::AllOf(effects) => effects.iter().fold(input, |acc, e| e.apply(level, acc)),
+            Self::Add(v) => input + v.get(level),
+            Self::Multiply(v) => input * v.get(level),
+            Self::Set(v) => v.get(level),
+            Self::AllOf(effects) => effects.iter().fold(input, |acc, e| e.apply(level, acc)),
         }
     }
 }
@@ -225,15 +226,15 @@ impl ProtectionKind {
             collect_required_tags(r, &mut verlangt);
         }
         match verlangt.as_slice() {
-            [] => ProtectionKind::General,
+            [] => Self::General,
             [t] => match t.trim_start_matches('#').trim_start_matches("minecraft:") {
-                "is_explosion" => ProtectionKind::Explosion,
-                "is_fire" => ProtectionKind::Fire,
-                "is_projectile" => ProtectionKind::Projectile,
-                "is_fall" => ProtectionKind::Fall,
-                _ => ProtectionKind::Other,
+                "is_explosion" => Self::Explosion,
+                "is_fire" => Self::Fire,
+                "is_projectile" => Self::Projectile,
+                "is_fall" => Self::Fall,
+                _ => Self::Other,
             },
-            _ => ProtectionKind::Other,
+            _ => Self::Other,
         }
     }
 }
@@ -275,7 +276,7 @@ impl EnchantmentDef {
     pub fn parse(name: String, data: Option<&NbtValue>) -> Self {
         let effects = data.and_then(|d| d.get("effects"));
         let effect = |key: &str| effects.and_then(|e| e.get(key));
-        EnchantmentDef {
+        Self {
             description: data.and_then(|d| d.get("description")).cloned(),
             max_level: data.and_then(|d| d.get("max_level")).and_then(NbtValue::as_i32).unwrap_or(1),
             crossbow_charge_time: effect("minecraft:crossbow_charge_time").and_then(ValueEffect::parse),
@@ -296,10 +297,12 @@ pub struct Enchantments {
 }
 
 impl Enchantments {
-    pub fn new(defs: Vec<EnchantmentDef>) -> Self {
+    #[must_use] 
+    pub const fn new(defs: Vec<EnchantmentDef>) -> Self {
         Self { defs }
     }
 
+    #[must_use] 
     pub fn from_registry(entries: Vec<(String, Option<NbtValue>)>) -> Self {
         Self::new(entries.into_iter().map(|(name, data)| EnchantmentDef::parse(name, data.as_ref())).collect())
     }
@@ -316,6 +319,7 @@ impl Enchantments {
 
     // CrossbowItem.getPullTime: Grundzeit 1,25 s durch Schnellladen verkuerzt, nie negativ,
     // auf ganze Ticks ABGERUNDET.
+    #[must_use] 
     pub fn crossbow_pull_ticks(&self, stack: &ItemStack) -> u32 {
         let seconds = self
             .active(stack)
@@ -326,6 +330,7 @@ impl Enchantments {
     }
 
     // EnchantmentHelper.getTridentSpinAttackStrength: Grundwert 0 -- groesser 0 heisst Sog.
+    #[must_use] 
     pub fn trident_spin_strength(&self, stack: &ItemStack) -> f32 {
         self.active(stack)
             .filter_map(|(d, level)| d.trident_spin_attack_strength.as_ref().map(|eff| (eff, level)))
@@ -333,12 +338,14 @@ impl Enchantments {
     }
 
     // Traegt der Stack diese Verzauberung (voller Name, z.B. "minecraft:mending") wirksam?
+    #[must_use] 
     pub fn has(&self, stack: &ItemStack, name: &str) -> bool {
         self.active(stack).any(|(d, _)| d.name == name)
     }
 
     // Schadensbonus der Verzauberungen auf jeden Treffer (Schaerfe), ausgehend vom
     // Grundschaden `base` wie EnchantmentHelper.modifyDamage -- zurueck kommt nur der Zuschlag.
+    #[must_use] 
     pub fn damage_bonus(&self, stack: &ItemStack, base: f32) -> f32 {
         let mit = self.active(stack).flat_map(|(d, level)| d.damage.iter().map(move |e| (e, level))).fold(base, |acc, (e, level)| e.apply(level, acc));
         mit - base
@@ -346,6 +353,7 @@ impl Enchantments {
 
     // Schutzpunkte dieses Stapels gegen eine Schadensart (EnchantmentHelper.
     // getDamageProtection fuer ein einzelnes Teil). General zaehlt bei jeder Art mit.
+    #[must_use] 
     pub fn protection(&self, stack: &ItemStack, kind: ProtectionKind) -> f32 {
         self.active(stack)
             .flat_map(|(d, level)| d.protection.iter().map(move |(k, e)| (*k, e, level)))
@@ -354,16 +362,19 @@ impl Enchantments {
     }
 
     // EnchantmentHelper.hasAnyEnchantmentsWith(stack, PREVENT_ARMOR_CHANGE).
+    #[must_use] 
     pub fn prevents_armor_change(&self, stack: &ItemStack) -> bool {
         self.active(stack).any(|(d, _)| d.prevent_armor_change)
     }
 
     // Registry-Name nach ID ("minecraft:breach").
+    #[must_use] 
     pub fn name(&self, id: u32) -> Option<&str> {
         self.defs.get(id as usize).map(|d| d.name.as_str())
     }
 
     // Name und Stufe einer Verzauberung nach Registry-ID (Hinweis am Zaubertisch).
+    #[must_use] 
     pub fn name_by_id(&self, id: i32, level: i32) -> Option<Vec<TextSpan>> {
         let d = self.defs.get(usize::try_from(id).ok()?)?;
         Some(name_line(d, level))
@@ -373,6 +384,7 @@ impl Enchantments {
     // erst in Tooltip-Reihenfolge, dann der Rest; Flueche rot, sonst grau (nur wo die
     // Beschreibung keine eigene Farbe hat); die Stufe als roemische Zahl, ausser bei einer
     // Verzauberung, die ohnehin nur Stufe I kennt. Ein Buch zeigt seine gespeicherten.
+    #[must_use] 
     pub fn tooltip_lines(&self, stack: &ItemStack) -> Vec<Vec<TextSpan>> {
         let liste = if stack.enchantments.is_empty() { &stack.stored_enchantments } else { &stack.enchantments };
         let bekannt: Vec<(&EnchantmentDef, i32)> =
@@ -536,7 +548,7 @@ mod tests {
             compound(vec![("type", s("minecraft:linear")), ("base", NbtValue::Float(base)), ("per_level_above_first", NbtValue::Float(per))])
         };
         let add = |value: NbtValue| compound(vec![("type", s("minecraft:add")), ("value", value)]);
-        let tag = |id: &str, expected: bool| compound(vec![("id", s(id)), ("expected", NbtValue::Byte(expected as i8))]);
+        let tag = |id: &str, expected: bool| compound(vec![("id", s(id)), ("expected", NbtValue::Byte(i8::from(expected)))]);
         let quelle = |tags: Vec<NbtValue>| compound(vec![("condition", s("minecraft:damage_source_properties")), ("predicate", compound(vec![("tags", NbtValue::List(tags))]))]);
         let eintrag = |effect: NbtValue, req: Option<NbtValue>| {
             let mut v = vec![("effect", effect)];

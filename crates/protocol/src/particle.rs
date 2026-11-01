@@ -85,6 +85,7 @@ pub const PARTICLE_SHRIEK: i32 = 103;
 pub const PARTICLE_DUST_PILLAR: i32 = 109;
 pub const PARTICLE_BLOCK_CRUMBLE: i32 = 113;
 
+#[must_use] 
 pub fn particle_name(type_id: i32) -> Option<&'static str> {
     usize::try_from(type_id).ok().and_then(|i| PARTICLE_NAMES.get(i)).copied()
 }
@@ -92,6 +93,7 @@ pub fn particle_name(type_id: i32) -> Option<&'static str> {
 // ParticleType.shouldAlwaysSpawn() -- das zweite Argument von ParticleTypes.register, alle 28
 // `true`-Faelle maschinell aus demselben <clinit> gezogen (auch die mehrzeiligen). Solche
 // Typen ignorieren Entfernungsgrenze und Partikel-Stufe (s. app::particles::spawn_allowed).
+#[must_use] 
 pub fn particle_always_spawns(type_id: i32) -> bool {
     matches!(
         particle_name(type_id),
@@ -130,7 +132,7 @@ pub fn particle_always_spawns(type_id: i32) -> bool {
 
 // Die Parameter eines Partikels. Nur was der Client tatsaechlich auswertet, bekommt Felder;
 // der Rest ist gelesen, aber verworfen.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub enum ParticleOptions {
     None,
     // BlockStateParticleEffect (block, block_marker, falling_dust, dust_pillar, block_crumble).
@@ -148,7 +150,7 @@ pub enum ParticleOptions {
     Other,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct ParticleEffect {
     pub type_id: i32,
     pub options: ParticleOptions,
@@ -229,7 +231,7 @@ pub fn read_particle(r: &mut PacketReader) -> Result<ParticleEffect, ReadError> 
 // und KEEP_ALIVE 0x2B (43) gegengezaehlt -- alle drei sind im Client verifiziert.
 pub const CB_PLAY_LEVEL_PARTICLES: i32 = 0x2E;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct LevelParticles {
     pub force_spawn: bool,
     pub important: bool,
@@ -263,7 +265,7 @@ pub const CB_PLAY_LEVEL_EVENT: i32 = 0x2D;
 // AUSSER dem Abbauenden -- der spielt denselben Effekt lokal ab (s. app::particles).
 pub const LEVEL_EVENT_BLOCK_BROKEN: i32 = 2001;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LevelEvent {
     pub event: i32,
     pub pos: (i32, i32, i32),
@@ -287,7 +289,7 @@ pub fn read_level_event(payload: &[u8]) -> Result<LevelEvent, ReadError> {
 // (SoundEvent.ENTRY_PACKET_CODEC) und eine gewichtete Liste von Blockpartikeln, die Vanilla im
 // Explosionsradius verteilt (s. app::particles::schedule_block_particles).
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct BlockParticle {
     pub particle: ParticleEffect,
     pub scaling: f32,
@@ -295,7 +297,7 @@ pub struct BlockParticle {
     pub weight: i32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct Explosion {
     pub center: (f64, f64, f64),
     pub radius: f32,

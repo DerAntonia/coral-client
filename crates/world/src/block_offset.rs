@@ -16,6 +16,7 @@
 // stattdessen den 32-Bit-Wrap-Pfad (fuer x gedacht) und lieferte bei typischen
 // Welt-Distanzen einen anderen Wert als der echte Server -- Ursache des andauernden
 // Server-Flags beim Bambus-Durchlaufen trotz des vorherigen 32-Bit-Wrap-Fixes.
+#[must_use] 
 pub fn xz_offset(x: i32, z: i32) -> (f32, f32) {
     let seed = mc_seed(x, z, 0);
     let dx = ((seed & 15) as f32 / 15.0 - 0.5) * 0.5;
@@ -37,9 +38,9 @@ pub fn xz_offset(x: i32, z: i32) -> (f32, f32) {
 // duplizierte Fassung waere nur eine Fehlerquelle mehr fuer dieselbe, schon einmal
 // muehsam verifizierte Formel.
 pub(crate) fn mc_seed(x: i32, y: i32, z: i32) -> i64 {
-    let x_term = x.wrapping_mul(3129871) as i64; // 32-Bit-Wrap wie Java int*int, dann vorzeichenrichtig erweitert
-    let y_term = (y as i64).wrapping_mul(116129781); // y zuerst auf long erweitert -> 64-Bit-Multiplikation
-    let mut l = x_term ^ y_term ^ (z as i64);
+    let x_term = i64::from(x.wrapping_mul(3129871)); // 32-Bit-Wrap wie Java int*int, dann vorzeichenrichtig erweitert
+    let y_term = i64::from(y).wrapping_mul(116129781); // y zuerst auf long erweitert -> 64-Bit-Multiplikation
+    let mut l = x_term ^ y_term ^ i64::from(z);
     l = l.wrapping_mul(l).wrapping_mul(42317861).wrapping_add(l.wrapping_mul(11));
     l >> 16
 }
@@ -48,6 +49,7 @@ pub(crate) fn mc_seed(x: i32, y: i32, z: i32) -> i64 {
 // OffsetType.XZ -- bewusst NICHT vollstaendig (z.B. bei kleineren/unsicheren Kandidaten wie
 // Suesse-Beeren-Strauch oder kleinem Tropfblatt lieber weggelassen als geraten). Waechst bei
 // Bedarf, wenn weitere Bloecke falsch mittig stehen.
+#[must_use] 
 pub fn has_xz_offset(block_name: &str) -> bool {
     // Setzlinge, Pilze, Pilzgewaechse (Fungus) und Azaleen standen hier frueher auch -- sie
     // haben in Vanilla KEINEN Versatz (der Formen-Dump zeigt sie mittig), standen im Client
@@ -84,6 +86,7 @@ pub fn has_xz_offset(block_name: &str) -> bool {
 
 // Block.getMaxHorizontalModelOffset: 0.25 als Vorgabe, der Tropfstein ueberschreibt es mit
 // 0.125 (PointedDripstoneBlock) -- der Versatz wird darauf geklemmt.
+#[must_use] 
 pub fn max_xz_offset(block_name: &str) -> f32 {
     if block_name == "pointed_dripstone" {
         0.125
@@ -94,6 +97,7 @@ pub fn max_xz_offset(block_name: &str) -> f32 {
 
 // Der Versatz eines Blocks an (x, z) wie AbstractBlockState.getModelOffset: 0 ohne
 // OffsetType.XZ, sonst xz_offset auf max_xz_offset geklemmt.
+#[must_use] 
 pub fn block_xz_offset(block_name: &str, x: i32, z: i32) -> (f32, f32) {
     if !has_xz_offset(block_name) {
         return (0.0, 0.0);
@@ -109,6 +113,7 @@ pub fn block_xz_offset(block_name: &str, x: i32, z: i32) -> (f32, f32) {
 // aber mittig in der Zelle. Mit verschobenem Umriss lag der Trefferpunkt bis zu 1/8 Block
 // AUSSERHALB der Zelle, und genau das prueft Grims FabricatedPlace (Trefferpunkt je Achse
 // 0..1): beim Platzieren auf Gras flaggte jeder solche Klick.
+#[must_use] 
 pub fn outline_xz_offset(block_name: &str, x: i32, z: i32) -> (f32, f32) {
     if matches!(block_name, "short_grass" | "fern" | "dead_bush" | "crimson_roots" | "warped_roots") {
         return (0.0, 0.0);
@@ -155,8 +160,8 @@ mod tests {
     #[test]
     fn x_term_nutzt_echten_32_bit_ueberlauf() {
         let x = 1000i32;
-        let korrekt = x.wrapping_mul(3129871) as i64;
-        let naiv_64bit = (x as i64).wrapping_mul(3129871);
+        let korrekt = i64::from(x.wrapping_mul(3129871));
+        let naiv_64bit = i64::from(x).wrapping_mul(3129871);
         assert_ne!(korrekt, naiv_64bit, "bei x=1000 muss der 32-Bit-Wrap bereits gegriffen haben");
     }
 

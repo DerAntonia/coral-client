@@ -60,7 +60,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(now: Instant) -> Self {
-        Session { start: now, kills: 0, deaths: 0, wins: 0, engaged: HashMap::new(), last_death: None, last_hurt: None, last_win: None, recent_kills: Vec::new() }
+        Self { start: now, kills: 0, deaths: 0, wins: 0, engaged: HashMap::new(), last_death: None, last_hurt: None, last_win: None, recent_kills: Vec::new() }
     }
 
     pub fn engage(&mut self, entity_id: i32, now: Instant) {
@@ -104,7 +104,7 @@ impl Session {
     }
 
     // Man selbst hat Schaden genommen.
-    pub fn hurt(&mut self, now: Instant) {
+    pub const fn hurt(&mut self, now: Instant) {
         self.last_hurt = Some(now);
     }
 
@@ -137,7 +137,7 @@ impl Session {
     }
 
     pub fn reset(&mut self, now: Instant) {
-        *self = Session::new(now);
+        *self = Self::new(now);
     }
 
     pub fn kd_text(&self) -> String {
@@ -207,7 +207,7 @@ fn win_in_sentence(text: &str, own_name: Option<&str>, addressed: bool) -> bool 
     if addressed && SELF_WIN.iter().any(|p| has_phrase(&w, p).is_some()) {
         return true;
     }
-    let Some(name) = own_name.map(|n| n.to_uppercase()).filter(|n| !n.is_empty()) else { return false };
+    let Some(name) = own_name.map(str::to_uppercase).filter(|n| !n.is_empty()) else { return false };
     let Some(name_at) = w.iter().position(|x| *x == name) else { return false };
     WINNER_NOUNS.iter().any(|p| has_phrase(&w, p).is_some()) || WINNER_VERBS.iter().any(|p| has_phrase(&w, p).is_some_and(|i| i > name_at))
 }

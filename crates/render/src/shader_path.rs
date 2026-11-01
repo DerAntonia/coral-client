@@ -53,6 +53,7 @@ pub struct CelestialLight {
 }
 
 // Senkrechte auf der Ebene der Sonnenbahn (Osten x Mittagssonne).
+#[must_use] 
 pub fn sun_path_axis() -> Vec3 {
     let tilt = SUN_PATH_TILT_DEGREES.to_radians();
     Vec3::X.cross(Vec3::new(0.0, tilt.cos(), tilt.sin()))
@@ -61,6 +62,7 @@ pub fn sun_path_axis() -> Vec3 {
 // Sonne oder Mond nach dem Sonnenstand (world::sky::sky_angle, 0 = Mittag). Die Sonne
 // laeuft von Osten (+x) ueber Sueden nach Westen; unter dem Horizont uebernimmt der Mond,
 // schwach und blaeulich. Am Horizont blenden beide aus, statt umzuspringen.
+#[must_use] 
 pub fn celestial_light(sky_angle: f32) -> CelestialLight {
     let a = sky_angle * std::f32::consts::TAU;
     let tilt = SUN_PATH_TILT_DEGREES.to_radians();
@@ -304,7 +306,7 @@ pub struct ShaderPath {
     atlas: wgpu::TextureView,
 }
 
-fn uint_texture_entry(binding: u32, view_dimension: wgpu::TextureViewDimension, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+const fn uint_texture_entry(binding: u32, view_dimension: wgpu::TextureViewDimension, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
@@ -313,7 +315,7 @@ fn uint_texture_entry(binding: u32, view_dimension: wgpu::TextureViewDimension, 
     }
 }
 
-fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+const fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -326,7 +328,7 @@ fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+const fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -372,7 +374,7 @@ fn fullscreen_pipeline(
     })
 }
 
-fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+const fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -381,7 +383,7 @@ fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn storage_ro_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+const fn storage_ro_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
@@ -390,7 +392,7 @@ fn storage_ro_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindG
     }
 }
 
-fn storage_rw_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+const fn storage_rw_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
@@ -428,6 +430,7 @@ impl ShaderPath {
     // `classes`: die Voxel-Klassen der Block-States (world::voxel), einmal je Formtabelle.
     // `atlas`: der Block-Atlas des BlockRenderers (wird er neu gebaut, muss auch der
     // Shader-Pfad neu entstehen).
+    #[must_use] 
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, classes: world::voxel::VoxelClasses, atlas: wgpu::TextureView) -> Self {
         let light_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shader path light layout"),
@@ -715,14 +718,14 @@ impl ShaderPath {
         self.bake_timer.as_ref().map(|t| t.ms_per_section).filter(|&ms| ms > 0.0)
     }
 
-    pub fn voxels_mut(&mut self) -> &mut VoxelVolume {
+    pub const fn voxels_mut(&mut self) -> &mut VoxelVolume {
         &mut self.voxels
     }
 
     // Tiefe fuer den G-Buffer-Pass: geleert und behalten -- der Licht-Pass liest sie, der
     // Forward-Rest testet gegen sie (depth_attachment_load). Ein eigener Puffer statt dem des
     // PvP-Pfads, damit der dort nicht abtastbar sein muss.
-    pub fn depth_attachment_keep(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+    pub const fn depth_attachment_keep(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
         let t = self.targets.as_ref().expect("ShaderPath::ensure_size vor dem Zeichnen");
         wgpu::RenderPassDepthStencilAttachment {
             view: &t.depth,
@@ -731,7 +734,7 @@ impl ShaderPath {
         }
     }
 
-    pub fn depth_attachment_load(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+    pub const fn depth_attachment_load(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
         let t = self.targets.as_ref().expect("ShaderPath::ensure_size vor dem Zeichnen");
         wgpu::RenderPassDepthStencilAttachment {
             view: &t.depth,
@@ -790,7 +793,7 @@ impl ShaderPath {
                 Some(o) if frame.block_shadows => [o[0], o[1], o[2], 1],
                 _ => [0; 4],
             },
-            block_soft: [block_tan, frame.sun_factor, if self.voxels.has_far_lights() { 1.0 } else { 0.0 }, frame.lightmap_debug as f32],
+            block_soft: [block_tan, frame.sun_factor, if self.voxels.has_far_lights() { 1.0 } else { 0.0 }, f32::from(frame.lightmap_debug)],
         };
         queue.write_buffer(&self.light_params, 0, bytemuck::bytes_of(&params));
         // Projektion (glam perspective_rh, Tiefe 0..1): near/far daraus.

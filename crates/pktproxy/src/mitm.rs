@@ -279,7 +279,7 @@ async fn read_varint_stream(r: &mut OwnedReadHalf) -> io::Result<i32> {
     let (mut n, mut shift) = (0i32, 0u32);
     for _ in 0..5 {
         let b = r.read_u8().await?;
-        n |= ((b & 0x7f) as i32) << shift;
+        n |= i32::from(b & 0x7f) << shift;
         if b & 0x80 == 0 {
             return Ok(n);
         }

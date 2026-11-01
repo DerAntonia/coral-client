@@ -52,7 +52,7 @@ fn err(msg: impl Into<String>) -> AuthError {
 }
 impl From<reqwest::Error> for AuthError {
     fn from(e: reqwest::Error) -> Self {
-        AuthError(e.to_string())
+        Self(e.to_string())
     }
 }
 
@@ -64,10 +64,12 @@ const JOIN_RETRIES: u32 = 2;
 const LOGIN_LIMIT: &str = "Mojang-Anmeldelimit erreicht";
 
 impl AuthError {
+    #[must_use] 
     pub fn join_forbidden(&self) -> bool {
         self.0.starts_with(JOIN_FORBIDDEN)
     }
 
+    #[must_use] 
     pub fn rate_limited(&self) -> bool {
         self.0.starts_with(LOGIN_LIMIT)
     }
@@ -77,7 +79,7 @@ impl AuthError {
 // weitere Versuch vor Ablauf verlaengert bei Mojang nur die Sperre.
 static LOGIN_BLOCKED_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 // Ohne Retry-Header so lange warten.
-const LOGIN_LIMIT_FALLBACK: Duration = Duration::from_secs(120);
+const LOGIN_LIMIT_FALLBACK: Duration = Duration::from_mins(2);
 
 fn login_limit_error(rest: Duration) -> AuthError {
     let s = rest.as_secs().max(1);
@@ -87,7 +89,7 @@ fn login_limit_error(rest: Duration) -> AuthError {
 
 // Noch gesperrt? Dann der Fehler mit der Restzeit.
 fn check_login_limit() -> Result<(), AuthError> {
-    let mut sperre = LOGIN_BLOCKED_UNTIL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut sperre = LOGIN_BLOCKED_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match *sperre {
         Some(bis) if bis > std::time::Instant::now() => Err(login_limit_error(bis - std::time::Instant::now())),
         Some(_) => {
@@ -245,7 +247,7 @@ pub struct PageTheme {
 
 impl Default for PageTheme {
     fn default() -> Self {
-        PageTheme { background: 0x16181d, panel: 0x1e2128, border: 0x2c3039, text: 0xe8e8ea, text_2: 0xa9adb6, success: 0x4cc38a, danger: 0xe5484d }
+        Self { background: 0x16181d, panel: 0x1e2128, border: 0x2c3039, text: 0xe8e8ea, text_2: 0xa9adb6, success: 0x4cc38a, danger: 0xe5484d }
     }
 }
 
@@ -292,11 +294,11 @@ enum RedirectError {
 impl RedirectError {
     fn text(&self, deutsch: bool) -> String {
         match (self, deutsch) {
-            (RedirectError::Cancelled, true) => "Anmeldung im Browser abgebrochen".into(),
-            (RedirectError::Cancelled, false) => "Sign-in was cancelled in the browser".into(),
-            (RedirectError::ForeignState, true) => "Antwort gehoert nicht zu dieser Anmeldung".into(),
-            (RedirectError::ForeignState, false) => "This response does not belong to this sign-in".into(),
-            (RedirectError::Microsoft(m), _) => m.clone(),
+            (Self::Cancelled, true) => "Anmeldung im Browser abgebrochen".into(),
+            (Self::Cancelled, false) => "Sign-in was cancelled in the browser".into(),
+            (Self::ForeignState, true) => "Antwort gehoert nicht zu dieser Anmeldung".into(),
+            (Self::ForeignState, false) => "This response does not belong to this sign-in".into(),
+            (Self::Microsoft(m), _) => m.clone(),
         }
     }
 }
@@ -375,7 +377,7 @@ pub async fn finish_browser_login(login: BrowserLogin, theme: PageTheme) -> Resu
             }
         }
     };
-    let code = match tokio::time::timeout(Duration::from_secs(600), warten).await {
+    let code = match tokio::time::timeout(Duration::from_mins(10), warten).await {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => return Err(err(e)),
         Err(_) => return Err(err("Anmeldung abgelaufen -- bitte neu starten")),
@@ -588,7 +590,7 @@ async fn minecraft_login(http: &reqwest::Client, uhs: &str, xsts_token: &str) ->
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.trim().parse::<u64>().ok())
             .map_or(LOGIN_LIMIT_FALLBACK, Duration::from_secs);
-        *LOGIN_BLOCKED_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + warten);
+        *LOGIN_BLOCKED_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now() + warten);
         return Err(login_limit_error(warten));
     }
     if !resp.status().is_success() {
@@ -718,7 +720,7 @@ fn parse_iso8601_millis(text: &str) -> Result<i64, AuthError> {
 }
 
 // Tage seit 1970-01-01 (Howard Hinnants days_from_civil) -- schaltjahrfest ohne Tabelle.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
     let year_of_era = year - era * 400;
@@ -830,7 +832,7 @@ pub async fn mojang_join(access_token: &str, profile_id: &str, server_hash: &str
             break resp;
         }
         versuch += 1;
-        tokio::time::sleep(Duration::from_millis(500 * versuch as u64)).await;
+        tokio::time::sleep(Duration::from_millis(500 * u64::from(versuch))).await;
     };
     if resp.status() == reqwest::StatusCode::NO_CONTENT || resp.status().is_success() {
         Ok(())
@@ -943,7 +945,7 @@ mod profile_key_tests {
 // eine gefaelschte Property kann hier nur ein falsches Bild anzeigen, und die URL zeigt
 // ohnehin fest auf Mojangs Textur-Host (s. is_mojang_texture_url).
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkinRef {
     pub url: String,
     // true = Alex-Proportionen (3 Pixel breite Arme), false = Steve.
@@ -955,6 +957,7 @@ pub struct SkinRef {
 
 // Die Skin-Referenz aus der Base64-Property herausziehen. None, wenn die Property kein
 // gueltiges Base64/JSON ist oder gar keinen SKIN-Eintrag hat (z.B. ein Spieler ohne Skin).
+#[must_use] 
 pub fn parse_textures_property(property: &str) -> Option<SkinRef> {
     use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
     use base64::Engine;
@@ -979,7 +982,7 @@ pub fn parse_textures_property(property: &str) -> Option<SkinRef> {
         .and_then(|c| c.get("url"))
         .and_then(|u| u.as_str())
         .filter(|u| is_mojang_texture_url(u))
-        .map(|u| u.to_string());
+        .map(std::string::ToString::to_string);
     Some(SkinRef { url, slim, cape_url })
 }
 
@@ -1021,7 +1024,7 @@ pub const MAX_RESOURCE_PACK_BYTES: usize = 250 * 1024 * 1024;
 pub async fn fetch_resource_pack(url: &str, username: &str, uuid_hex: &str, version: &str, protocol: i32, pack_format: u32) -> Result<(Vec<u8>, String), String> {
     use sha1::{Digest, Sha1};
     let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_mins(5))
         .user_agent(format!("Minecraft Java/{version}"))
         .build()
         .map_err(|e| format!("HTTP: {e}"))?;

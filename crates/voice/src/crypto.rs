@@ -10,10 +10,12 @@ const IV_LEN: usize = 12;
 pub struct Cipher(Aes128Gcm);
 
 impl Cipher {
+    #[must_use] 
     pub fn new(secret: &[u8; 16]) -> Self {
-        Cipher(Aes128Gcm::new(secret.into()))
+        Self(Aes128Gcm::new(secret.into()))
     }
 
+    #[must_use] 
     pub fn encrypt(&self, plain: &[u8]) -> Vec<u8> {
         let mut iv = [0u8; IV_LEN];
         rand::thread_rng().fill_bytes(&mut iv);
@@ -25,6 +27,7 @@ impl Cipher {
     }
 
     // None = zu kurz oder Tag stimmt nicht (falsches Secret, verfaelscht).
+    #[must_use] 
     pub fn decrypt(&self, block: &[u8]) -> Option<Vec<u8>> {
         if block.len() < IV_LEN + 16 {
             return None;

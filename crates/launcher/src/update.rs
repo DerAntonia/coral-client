@@ -150,7 +150,7 @@ pub fn visible(releases: &[Release], beta: bool) -> impl Iterator<Item = &Releas
     releases.iter().filter(move |r| beta || !r.prerelease)
 }
 
-/// Neueste Version im Kanal (die Liste ist schon absteigend sortiert, s. fetch_releases).
+/// Neueste Version im Kanal (die Liste ist schon absteigend sortiert, s. `fetch_releases`).
 pub fn newest(releases: &[Release], beta: bool) -> Option<&Release> {
     visible(releases, beta).next()
 }
@@ -170,7 +170,7 @@ pub fn download(asset: &ReleaseAsset, target: &Path, progress: Arc<Mutex<Progres
     let mut response = client()?
         .get(&asset.browser_download_url)
         .send()
-        .and_then(|r| r.error_for_status())
+        .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
     {
         let mut p = progress.lock().unwrap();
@@ -238,7 +238,7 @@ fn replace_file(new: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(new, target)
 }
 
-/// Reste eines frueheren Selbst-Updates entfernen (s. replace_file).
+/// Reste eines frueheren Selbst-Updates entfernen (s. `replace_file`).
 pub fn cleanup_old_files(exe: &Path) {
     let _ = std::fs::remove_file(sibling(exe, ".old"));
 }
@@ -260,7 +260,7 @@ fn partial_path(target: &Path) -> PathBuf {
 }
 
 /// Versionsnummern aus Tags wie "v0.2.10" -- Zahlen statt Text vergleichen, sonst waere
-/// "0.10" kleiner als "0.9". Ein Vorabteil ("-beta.2") gehoert NICHT dazu, s. compare_versions.
+/// "0.10" kleiner als "0.9". Ein Vorabteil ("-beta.2") gehoert NICHT dazu, s. `compare_versions`.
 pub fn parse_version(tag: &str) -> Vec<u64> {
     let kern = tag.trim().trim_start_matches(['v', 'V']);
     let kern = kern.split(['-', '+']).next().unwrap_or("");
@@ -273,7 +273,7 @@ fn prerelease_part(tag: &str) -> Option<&str> {
     ohne_build.split_once('-').map(|(_, pre)| pre)
 }
 
-/// Vergleich wie bei SemVer: erst die Zahlen; bei gleichen Zahlen ist die Vorabversion aelter
+/// Vergleich wie bei `SemVer`: erst die Zahlen; bei gleichen Zahlen ist die Vorabversion aelter
 /// als die fertige (0.3.0-beta.1 < 0.3.0), und Vorabversionen untereinander werden Teil fuer
 /// Teil verglichen -- Zahlen als Zahlen (beta.10 > beta.9), Woerter als Text (alpha < beta).
 pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {

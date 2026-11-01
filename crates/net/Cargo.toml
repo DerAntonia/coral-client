@@ -5,6 +5,7 @@ version.workspace = true
 
 [dependencies]
 protocol = { path = "../protocol" }
+record = { path = "../record" }
 auth = { path = "../auth" }
 tokio.workspace = true
 flate2 = "1"
@@ -17,6 +18,9 @@ sha1 = "0.10"
 num-bigint = "0.4"
 rand = "0.8"
 hickory-resolver = "0.26.1"
+# Snapshot von coral-record (s. snapshot.rs): ClientEvent als kompaktes Binaerformat.
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 # Nur fuer den Loopback-Integrationstest: der misst am echten Server, wie viel
 # Geometrie die empfangenen Chunks ergeben -- auf der CPU, ohne GPU-Speicher zu belegen.

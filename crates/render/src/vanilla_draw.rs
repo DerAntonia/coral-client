@@ -80,6 +80,7 @@ pub struct VanillaFrame {
 
 // Vanillas Lightmap (core/lightmap.fsh), auf der CPU fuer die Oberwelt: Umgebungslicht 0,
 // Blockfaktor 1.5, Himmelsfarbe weiss, ohne Dunkelheit und Nachtsicht.
+#[must_use] 
 pub fn lightmap_rgba(sky_factor: f32, brightness: f32) -> Vec<u8> {
     let hell = |level: f32| level / (4.0 - 3.0 * level);
     let mut out = Vec::with_capacity(16 * 16 * 4);
@@ -202,6 +203,7 @@ pub struct BorderDraw {
 // viermal die Sichtweite). Die Positionen relativ zur Ecke (Wandanfang x, 0, Wandanfang z),
 // den Rest bis zur Kamera traegt `model_offset`. Textur: zwei Bloecke je Wiederholung.
 // None = nichts zu sehen.
+#[must_use] 
 pub fn world_border_draw(border: &world::world_border::WorldBorder, partial: f32, camera: glam::DVec3, render_distance: f64) -> Option<BorderDraw> {
     let [min_x, max_x, min_z, max_z] = border.bounds(partial);
     let d = render_distance;
@@ -276,6 +278,7 @@ pub fn world_border_draw(border: &world::world_border::WorldBorder, partial: f32
 }
 
 impl VanillaDraw {
+    #[must_use] 
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat, entity_atlas: &wgpu::Texture) -> Self {
         let mut entries = Vec::new();
         for (_, binding) in vanilla_shader::UNIFORM_BLOCKS {
@@ -408,7 +411,7 @@ impl VanillaDraw {
         }
     }
 
-    pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+    pub const fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.layout
     }
 
@@ -478,7 +481,7 @@ impl VanillaDraw {
         Ok(())
     }
 
-    pub fn has_border_program(&self) -> bool {
+    pub const fn has_border_program(&self) -> bool {
         self.border_pipeline.is_some()
     }
 
@@ -508,13 +511,13 @@ impl VanillaDraw {
         }
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
-        pass.set_vertex_buffer(0, self.border_buffer.slice(..self.border_count as u64 * std::mem::size_of::<VanillaVertex>() as u64));
+        pass.set_vertex_buffer(0, self.border_buffer.slice(..u64::from(self.border_count) * std::mem::size_of::<VanillaVertex>() as u64));
         pass.set_index_buffer(self.quad_indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..self.border_count / 4 * 6, 0, 0..1);
         true
     }
 
-    pub fn has_item_program(&self) -> bool {
+    pub const fn has_item_program(&self) -> bool {
         self.item_pipeline.is_some()
     }
 
@@ -665,7 +668,7 @@ impl VanillaDraw {
         }
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.item_buffer.slice(..self.item_count as u64 * std::mem::size_of::<VanillaVertex>() as u64));
+        pass.set_vertex_buffer(0, self.item_buffer.slice(..u64::from(self.item_count) * std::mem::size_of::<VanillaVertex>() as u64));
         pass.set_index_buffer(self.quad_indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..self.item_count / 4 * 6, 0, 0..1);
         true

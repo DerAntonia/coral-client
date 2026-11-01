@@ -4,7 +4,7 @@
 
 // Belegt/gesamt in Bytes, aus /proc/meminfo: belegt = gesamt - verfuegbar (MemAvailable rechnet
 // den Cache, den der Kernel jederzeit freigeben kann, schon heraus).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Memory {
     pub ram_used: u64,
     pub ram_total: u64,
@@ -78,7 +78,7 @@ fn parse_meminfo(text: &str) -> Option<Memory> {
 
 // "AMD Ryzen 7 7800X3D 8-Core Processor (16 Threads)".
 pub fn cpu_name() -> Option<String> {
-    let threads = std::thread::available_parallelism().map_or(0, |n| n.get());
+    let threads = std::thread::available_parallelism().map_or(0, std::num::NonZero::get);
     #[cfg(target_os = "linux")]
     let name = {
         let text = std::fs::read_to_string("/proc/cpuinfo").ok()?;
@@ -93,7 +93,7 @@ pub fn cpu_name() -> Option<String> {
 
 // Ob auf dem Bildschirm ein Compositor laeuft (und wie er heisst). Ob er unser Fenster auch
 // wirklich zusammensetzt, sagt erst watch_window -- Vollbildfenster lassen viele aus.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Compositing {
     Off,
     // Name des Compositors (vom Fenstermanager, falls er beides ist).
@@ -144,7 +144,7 @@ fn x11_compositing() -> Option<Compositing> {
 }
 
 // Wie der X-Server unser Fenster gerade auf den Schirm bringt (s. watch_window).
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct WindowPath {
     // Leitet ein Compositor das Fenster um, setzt er es also selbst zusammen? None = noch nicht
     // geprueft oder nicht pruefbar.
@@ -159,7 +159,7 @@ pub struct WindowPath {
 
 pub const DONE_RING: usize = 32;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentPath {
     // Hardware-Flip: das Bild wird direkt angezeigt, ohne Kopie.
     Flip,
@@ -224,7 +224,7 @@ fn watch_presents(window: u32, ziel: &std::sync::Arc<std::sync::Mutex<WindowPath
     while std::sync::Arc::strong_count(ziel) > 2 {
         let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
         // SAFETY: ein gueltiger pollfd, das fd gehoert der Verbindung und lebt so lange wie sie.
-        unsafe { libc::poll(&mut pfd, 1, 250) };
+        unsafe { libc::poll(&raw mut pfd, 1, 250) };
         let jetzt = crate::vblank::monotonic_ns();
         while let Some(ereignis) = conn.poll_for_event().ok()? {
             if let Event::PresentCompleteNotify(e) = ereignis {

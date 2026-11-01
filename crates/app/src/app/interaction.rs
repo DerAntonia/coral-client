@@ -1,6 +1,6 @@
 // Abbauen, Benutzen und Platzieren von Bloecken und Items, Vorhersage auf dem Client.
 
-use crate::*;
+use crate::{App, PendingInputAction, AppMode, KeyBindAction, GAME_MODE_SPECTATOR, DVec3, CrosshairTarget, GAME_MODE_CREATIVE, physics, ConnStatus, Instant, NO_TOOL_BREAK_NOTIFY_EVERY, notifications, protected_tool_durability, max_damage_of, tool_display_name, GAME_MODE_ADVENTURE, interaktions_log, EFFECT_HASTE, EFFECT_CONDUIT_POWER, EFFECT_MINING_FATIGUE, block_place, TRIDENT_MIN_USE_TICKS, will_break_next_use, interaktions_log_pos, HoldUseRepeat, item_uses_this_tick, inventory, session_info, BlockUse, bucket_fluid, bucket_empty_sound, item_cooldowns, THROWN_ITEMS, AnkerBenutzung, restart_swing, PendingBlock, AO_FADE_SOURCE_TTL, AO_FADE, GhostAwaitingMesh, GHOST_MESH_GRACE, angriff_ist_aufgeladen, Duration};
 
 impl App {
     // Eine Eingabe-Aktion fuer den naechsten Tick vormerken. Der Deckel ist reine Vorsicht:
@@ -127,9 +127,9 @@ impl App {
         let r = self.active_attack_range()?;
         let kreativ = self.game_mode == GAME_MODE_CREATIVE;
         let (min, max) = if kreativ { (r.min_creative_reach, r.max_creative_reach) } else { (r.min_reach, r.max_reach) };
-        let (min, max) = (min as f64, max as f64 + self.physics.vel.dot(dir).max(0.0));
+        let (min, max) = (f64::from(min), f64::from(max) + self.physics.vel.dot(dir).max(0.0));
         let block = physics::raycast_block(eye, dir, max, &self.world, &self.block_shapes);
-        let block_dist = block.map(|hit| (DVec3::new(hit.block.0 as f64, hit.block.1 as f64, hit.block.2 as f64) + DVec3::new(hit.cursor.0 as f64, hit.cursor.1 as f64, hit.cursor.2 as f64)).distance(eye));
+        let block_dist = block.map(|hit| (DVec3::new(f64::from(hit.block.0), f64::from(hit.block.1), f64::from(hit.block.2)) + DVec3::new(f64::from(hit.cursor.0), f64::from(hit.cursor.1), f64::from(hit.cursor.2))).distance(eye));
         let als_block = || match (block, block_dist) {
             (Some(hit), Some(d)) if d <= self.attr_block_range => Some((CrosshairTarget::Block(hit.block, hit.face), d)),
             _ => None,
@@ -147,11 +147,11 @@ impl App {
             }
             let richtung = (b - a) / laenge;
             match physics::raycast_block(a, richtung, laenge, &self.world, &self.block_shapes) {
-                Some(hit) => (DVec3::new(hit.block.0 as f64, hit.block.1 as f64, hit.block.2 as f64) + DVec3::new(hit.cursor.0 as f64, hit.cursor.1 as f64, hit.cursor.2 as f64)).distance(a) / laenge,
+                Some(hit) => (DVec3::new(f64::from(hit.block.0), f64::from(hit.block.1), f64::from(hit.block.2)) + DVec3::new(f64::from(hit.cursor.0), f64::from(hit.cursor.1), f64::from(hit.cursor.2))).distance(a) / laenge,
                 None => 1.0,
             }
         };
-        let margin = r.hitbox_margin as f64;
+        let margin = f64::from(r.hitbox_margin);
         if let Some((id, d)) = self.entities.pick_segment((eye.x, eye.y, eye.z), (dir.x, dir.y, dir.z), min, ende, margin, &frei) {
             // Minecraft.startAttack prueft den Trefferpunkt noch einmal gegen die Reichweite.
             if d >= min - margin && d <= max + margin {
@@ -169,16 +169,16 @@ impl App {
         let attack_reach = self.attr_entity_range;
         let eye = self.physics.eye_pos();
         let dir = self.camera.forward();
-        let dir = DVec3::new(dir.x as f64, dir.y as f64, dir.z as f64);
+        let dir = DVec3::new(f64::from(dir.x), f64::from(dir.y), f64::from(dir.z));
         if let Some((ziel, _)) = self.attack_range_target(eye, dir) {
             return ziel;
         }
         let block = physics::raycast_block(eye, dir, self.attr_block_range, &self.world, &self.block_shapes);
         let block_dist = block.map(|hit| {
             let punkt = DVec3::new(
-                hit.block.0 as f64 + hit.cursor.0 as f64,
-                hit.block.1 as f64 + hit.cursor.1 as f64,
-                hit.block.2 as f64 + hit.cursor.2 as f64,
+                f64::from(hit.block.0) + f64::from(hit.cursor.0),
+                f64::from(hit.block.1) + f64::from(hit.cursor.1),
+                f64::from(hit.block.2) + f64::from(hit.cursor.2),
             );
             punkt.distance(eye)
         });
@@ -413,7 +413,7 @@ impl App {
         }
     }
 
-    pub(crate) fn next_block_sequence(&mut self) -> i32 {
+    pub(crate) const fn next_block_sequence(&mut self) -> i32 {
         self.block_sequence = self.block_sequence.wrapping_add(1);
         self.block_sequence
     }
@@ -471,7 +471,7 @@ impl App {
         let (ex, ez) = (self.physics.eye_pos().x.floor() as i32, self.physics.eye_pos().z.floor() as i32);
         let ey = auge.floor() as i32;
         let unter_wasser = world::fluid_kind(self.world.block_at(ex, ey, ez)) == Some(world::FluidKind::Water)
-            && world::fluid_height_at(&self.world, ex, ey, ez).is_some_and(|h| auge < ey as f64 + h);
+            && world::fluid_height_at(&self.world, ex, ey, ez).is_some_and(|h| auge < f64::from(ey) + h);
         let input = world::mining::BreakSpeedInput {
             mining_efficiency: self.attr_mining_efficiency,
             block_break_speed: self.attr_block_break_speed,
@@ -865,7 +865,7 @@ impl App {
         // aus demselben Grund wie beim Angriff (s. send_attack).
         let eye = self.physics.eye_pos();
         let dir = self.camera.forward();
-        let dir = DVec3::new(dir.x as f64, dir.y as f64, dir.z as f64);
+        let dir = DVec3::new(f64::from(dir.x), f64::from(dir.y), f64::from(dir.z));
         physics::raycast_block(eye, dir, self.attr_block_range, &self.world, &self.block_shapes)
     }
 
@@ -877,7 +877,7 @@ impl App {
         let entity_reach = self.attr_entity_range;
         let eye = self.physics.eye_pos();
         let dir = self.camera.forward();
-        let dir = DVec3::new(dir.x as f64, dir.y as f64, dir.z as f64);
+        let dir = DVec3::new(f64::from(dir.x), f64::from(dir.y), f64::from(dir.z));
         // Mit attack_range teilen sich Angriff und Rechtsklick dasselbe Ziel (Vanilla hat nur
         // ein hitResult). Die Trefferstelle liegt dann auf dem Blickstrahl im Trefferabstand.
         match self.attack_range_target(eye, dir) {
@@ -892,9 +892,9 @@ impl App {
         }
         let block_dist = block.map(|hit| {
             DVec3::new(
-                hit.block.0 as f64 + hit.cursor.0 as f64,
-                hit.block.1 as f64 + hit.cursor.1 as f64,
-                hit.block.2 as f64 + hit.cursor.2 as f64,
+                f64::from(hit.block.0) + f64::from(hit.cursor.0),
+                f64::from(hit.block.1) + f64::from(hit.cursor.1),
+                f64::from(hit.block.2) + f64::from(hit.cursor.2),
             )
             .distance(eye)
         });
@@ -1107,7 +1107,7 @@ impl App {
                 // dabei stirbt, zaehlt als eigener Kill (s. send_attack).
                 let (bx, by, bz) = hit.block;
                 if world::block_name(self.world.block_at(bx, by, bz)).is_some_and(|n| n == "respawn_anchor" || n.ends_with("_bed")) {
-                    self.session_engage_near((bx as f64 + 0.5, by as f64 + 0.5, bz as f64 + 0.5), session_info::BLOCK_EXPLOSION_RADIUS);
+                    self.session_engage_near((f64::from(bx) + 0.5, f64::from(by) + 0.5, f64::from(bz) + 0.5), session_info::BLOCK_EXPLOSION_RADIUS);
                 }
                 if let Some(tx) = &self.outgoing_tx {
                     let _ = tx.send(protocol::packets::use_item_on_payload(
@@ -1197,7 +1197,7 @@ impl App {
             // BowItem.use / CrossbowItem.use: ohne Munition (und nicht im Kreativmodus) FAIL --
             // keine Benutzung, also auch keine Spannanimation. Sonst liesse sich der Bogen
             // ohne Pfeile spannen. Eine GELADENE Armbrust schiesst, da zaehlt nichts.
-            let spannt = item == "bow" || (item == "crossbow" && !stack.as_ref().is_some_and(|st| st.is_charged()));
+            let spannt = item == "bow" || (item == "crossbow" && !stack.as_ref().is_some_and(protocol::item::ItemStack::is_charged));
             if spannt && self.game_mode != GAME_MODE_CREATIVE && self.projectile_for(item).is_none() {
                 self.arrow_empty_at = Some(Instant::now());
                 continue;
@@ -1233,7 +1233,7 @@ impl App {
                     // BucketItem.playEmptyingSound: world.playSound(user, pos, ...) -- der
                     // Server schickt den Klang allen AUSSER dem Spieler, der ihn selbst spielt.
                     // Ohne das war Ausleeren stumm.
-                    let mitte = DVec3::new(pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5);
+                    let mitte = DVec3::new(f64::from(pos.0) + 0.5, f64::from(pos.1) + 0.5, f64::from(pos.2) + 0.5);
                     self.play_event_at(bucket_empty_sound(item), mitte, protocol::packets::SoundCategory::Blocks);
                 }
             }
@@ -1242,7 +1242,7 @@ impl App {
             // Durchdruecken nicht nach: mit using_item=true blieb die Wiederholung bis zum
             // Loslassen gesperrt; Vanilla schickt 4 Ticks spaeter das naechste USE_ITEM, und
             // das beginnt das Nachladen.
-            let schiesst_nur = item == "crossbow" && stack.as_ref().is_some_and(|st| st.is_charged());
+            let schiesst_nur = item == "crossbow" && stack.as_ref().is_some_and(protocol::item::ItemStack::is_charged);
             let dauerhaft = stack.as_ref().map_or_else(|| world::item_registry::is_used_continuously(item), world::item_behavior::used_continuously);
             if dauerhaft && !schiesst_nur {
                 self.using_item = true;
@@ -1465,7 +1465,7 @@ impl App {
         // schleichend MIT etwas in der Hand wird der Block uebersprungen und stattdessen
         // platziert. Mit leeren Haenden oeffnet auch ein schleichender Klick.
         let haende_voll =
-            self.main_hand_item_name().is_some() || self.inventory.player.get(inventory::PLAYER_OFFHAND).is_some_and(|s| s.is_some());
+            self.main_hand_item_name().is_some() || self.inventory.player.get(inventory::PLAYER_OFFHAND).is_some_and(std::option::Option::is_some);
         if self.sneak_held && haende_voll {
             return false;
         }
@@ -1783,7 +1783,7 @@ impl App {
             for q in &f.quads {
                 puffer.clear();
                 puffer.extend(q.before.iter().zip(&q.after).map(|(v, n)| world::TerrainVertex {
-                    color: std::array::from_fn(|i| (v.color[i] as f32 + (n.color[i] as f32 - v.color[i] as f32) * a).round() as u8),
+                    color: std::array::from_fn(|i| (f32::from(v.color[i]) + (f32::from(n.color[i]) - f32::from(v.color[i])) * a).round() as u8),
                     ..*n
                 }));
                 gpu.block_renderer.write_column_vertices(&gpu.queue, f.column, q.start, &puffer);
@@ -1884,9 +1884,9 @@ impl App {
         let mut durchsichtig = Vec::new();
         let eye = self.camera.position;
         let jetzt = std::time::Instant::now();
-        let toleranz = Duration::from_millis(self.settings.ghost_tolerance_ms as u64);
+        let toleranz = Duration::from_millis(u64::from(self.settings.ghost_tolerance_ms));
         for (pos, state) in self.world.pending_blocks() {
-            let base = (DVec3::new(pos.0 as f64, pos.1 as f64, pos.2 as f64) - eye).as_vec3();
+            let base = (DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)) - eye).as_vec3();
             // Wasser und Glas brauchen ihre echte Transparenz -- in der deckenden Pipeline war
             // frisch platziertes Wasser undurchsichtig, bis der Chunk-Mesh kam.
             let name = world::block_name(state).unwrap_or("");
@@ -1902,8 +1902,7 @@ impl App {
             let biom = self
                 .world
                 .column(pos.0.div_euclid(16), pos.2.div_euclid(16))
-                .map(|c| c.biome_at(pos.0.rem_euclid(16), pos.1, pos.2.rem_euclid(16)))
-                .unwrap_or(0);
+                .map_or(0, |c| c.biome_at(pos.0.rem_euclid(16), pos.1, pos.2.rem_euclid(16)));
             let wasser = self.biome_palette.colors_of(biom).water;
             let block_at = |x: i32, y: i32, z: i32| self.world.block_at(x, y, z);
             ziel.extend(world::mesher::block_ghost_vertices_at(
@@ -1929,7 +1928,7 @@ impl App {
                 {
                     continue;
                 }
-                let base = (DVec3::new(x as f64, y as f64, z as f64) - eye).as_vec3();
+                let base = (DVec3::new(f64::from(x), f64::from(y), f64::from(z)) - eye).as_vec3();
                 let block_at = |x: i32, y: i32, z: i32| self.world.block_at(x, y, z);
                 durchsichtig.extend(world::mesher::block_ghost_vertices_at(
                     base.into(),

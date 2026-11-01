@@ -27,6 +27,7 @@ pub struct WaterBlend<'a> {
 }
 
 impl<'a> WaterBlend<'a> {
+    #[must_use] 
     pub fn new(neighbors: &'a ColumnNeighbors, biomes: &'a BiomePalette) -> Self {
         Self { neighbors, biomes, stufen: RefCell::new(HashMap::new()) }
     }

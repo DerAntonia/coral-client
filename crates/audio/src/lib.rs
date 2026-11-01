@@ -27,11 +27,11 @@ pub enum AudioError {
 impl std::fmt::Display for AudioError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AudioError::NoOutputDevice => write!(f, "kein Ausgabegeraet gefunden"),
-            AudioError::DeviceNotFound(name) => write!(f, "Ausgabegeraet \"{name}\" nicht gefunden"),
-            AudioError::NoSupportedConfig => write!(f, "Geraet unterstuetzt kein nutzbares Ausgabeformat"),
-            AudioError::BuildStream(e) => write!(f, "Stream konnte nicht gebaut werden: {e}"),
-            AudioError::PlayStream(e) => write!(f, "Stream konnte nicht gestartet werden: {e}"),
+            Self::NoOutputDevice => write!(f, "kein Ausgabegeraet gefunden"),
+            Self::DeviceNotFound(name) => write!(f, "Ausgabegeraet \"{name}\" nicht gefunden"),
+            Self::NoSupportedConfig => write!(f, "Geraet unterstuetzt kein nutzbares Ausgabeformat"),
+            Self::BuildStream(e) => write!(f, "Stream konnte nicht gebaut werden: {e}"),
+            Self::PlayStream(e) => write!(f, "Stream konnte nicht gestartet werden: {e}"),
         }
     }
 }
@@ -99,6 +99,7 @@ pub struct Cue {
 }
 
 impl Cue {
+    #[must_use] 
     pub fn duration(&self) -> f32 {
         self.attack + self.decay
     }
@@ -106,6 +107,7 @@ impl Cue {
     /// Tonhoehe und Lautstaerke leicht streuen. Bei einem Klang, der hundertmal pro Minute
     /// kommt (Hover), hoert man sonst die Wiederholung; mit Streuung wird aus einer Folge
     /// gleicher Toene ein Rascheln.
+    #[must_use] 
     pub fn varied(mut self, amount: f32, seed: u32) -> Self {
         // Deterministisch aus dem Seed statt aus einem Zufallsgenerator: der Mixer bleibt
         // damit testbar, und der Aufrufer kann einfach hochzaehlen.
@@ -180,11 +182,12 @@ pub struct SoundTag {
 /// Klangnamen fuer `SoundTag` verdichten. Ohne Namensraum gilt "minecraft:", wie bei jedem
 /// Vanilla-Identifier -- "entity.cow.ambient" und "minecraft:entity.cow.ambient" sind derselbe
 /// Klang.
+#[must_use] 
 pub fn sound_name_hash(name: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut schreibe = |bytes: &[u8]| {
         for b in bytes {
-            h ^= *b as u64;
+            h ^= u64::from(*b);
             h = h.wrapping_mul(0x0100_0000_01b3);
         }
     };
@@ -235,19 +238,19 @@ struct Ears {
 const DELAY_CAPACITY: usize = 192;
 
 impl Ears {
-    fn new(spatial: spatial::Spatial) -> Ears {
-        Ears { spatial, target: spatial, delay_line: [0.0; DELAY_CAPACITY], write: 0, lp_left: 0.0, lp_right: 0.0 }
+    const fn new(spatial: spatial::Spatial) -> Self {
+        Self { spatial, target: spatial, delay_line: [0.0; DELAY_CAPACITY], write: 0, lp_left: 0.0, lp_right: 0.0 }
     }
 
     // Wie lange die Stimme ueber ihr eigenes Ende hinaus weiterlaufen muss, damit das ferne
     // Ohr sein Signal noch vollstaendig bekommt. Ohne diesen Nachlauf waere eine seitliche
     // Quelle auf einem Ohr abgeschnitten -- bei kurzen Klaengen (ein 12-ms-Klick) ist 0,66 ms
     // ein merklicher Teil des Klangs.
-    fn tail(&self) -> f32 {
+    const fn tail(&self) -> f32 {
         self.spatial.left.delay.max(self.spatial.right.delay)
     }
 
-    fn push(&mut self, wert: f32) {
+    const fn push(&mut self, wert: f32) {
         self.delay_line[self.write] = wert;
         self.write = (self.write + 1) % DELAY_CAPACITY;
     }
@@ -364,7 +367,7 @@ pub const DEFAULT_BUFFER_FRAMES: u32 = 256;
 
 /// Puffer des laufenden Ausgabe-Streams, fuer die Anzeige in den Audio-Einstellungen.
 ///
-/// `requested_frames` ist, was low_latency_config beim Backend angefragt hat (None = Vorgabe
+/// `requested_frames` ist, was `low_latency_config` beim Backend angefragt hat (None = Vorgabe
 /// des Backends). Was das Backend daraus macht, sagt cpal nicht -- daher zusaetzlich die
 /// gemessene Callback-Groesse: so viele Frames hat der letzte Callback tatsaechlich gefuellt.
 #[derive(Clone)]
@@ -377,16 +380,19 @@ pub struct BufferInfo {
 
 impl BufferInfo {
     /// 0, solange noch kein Callback gelaufen ist.
+    #[must_use] 
     pub fn callback_frames(&self) -> u32 {
         self.callback_frames.load(Ordering::Relaxed)
     }
 
     /// Thread-ID (Linux-TID) des Callback-Fadens, sobald der erste Callback lief -- fuer eine
-    /// Echtzeit-Prioritaet von aussen (s. app::pipewire). Sonst None.
+    /// Echtzeit-Prioritaet von aussen (s. `app::pipewire`). Sonst None.
+    #[must_use] 
     pub fn callback_thread(&self) -> Option<u32> {
         Some(self.callback_thread.load(Ordering::Relaxed)).filter(|&t| t != 0)
     }
 
+    #[must_use] 
     pub fn frames_to_ms(&self, frames: u32) -> f32 {
         frames as f32 * 1000.0 / self.sample_rate.max(1) as f32
     }
@@ -399,12 +405,14 @@ unsafe impl Send for AudioEngine {}
 impl AudioEngine {
     /// Startet sofort auf dem Standard-Ausgabegeraet, falls eines existiert. Wenn nicht
     /// (z.B. headless CI), bleibt die Engine stumm nutzbar statt zu paniken.
+    #[must_use] 
     pub fn new() -> Self {
         Self::with_buffer_frames(Some(DEFAULT_BUFFER_FRAMES))
     }
 
-    /// Wie new(), aber gleich mit dieser Puffergroesse -- spart den zweiten Stream-Aufbau,
+    /// Wie `new()`, aber gleich mit dieser Puffergroesse -- spart den zweiten Stream-Aufbau,
     /// wenn die Einstellung schon beim Start feststeht.
+    #[must_use] 
     pub fn with_buffer_frames(buffer_frames: Option<u32>) -> Self {
         let state = Arc::new(Mutex::new(MixerState {
             test_tone_phase: 0.0,
@@ -415,7 +423,7 @@ impl AudioEngine {
             streams: (0..stream::MAX_STREAMS).map(|_| stream::StreamSlot::new()).collect(),
             stream_start_fill: stream::DEFAULT_START_FILL,
         }));
-        let mut engine = AudioEngine { stream: None, state, current_device_name: None, buffer: None, requested_device: None, buffer_frames };
+        let mut engine = Self { stream: None, state, current_device_name: None, buffer: None, requested_device: None, buffer_frames };
         if let Some(name) = default_output_device_name() {
             if let Err(e) = engine.set_output_device(Some(&name)) {
                 // Ein gespeicherter Puffer, den das Geraet nicht kann, soll den Client nicht
@@ -433,11 +441,13 @@ impl AudioEngine {
         engine
     }
 
+    #[must_use] 
     pub fn current_device_name(&self) -> Option<&str> {
         self.current_device_name.as_deref()
     }
 
-    pub fn buffer_info(&self) -> Option<&BufferInfo> {
+    #[must_use] 
+    pub const fn buffer_info(&self) -> Option<&BufferInfo> {
         self.buffer.as_ref()
     }
 
@@ -463,7 +473,7 @@ impl AudioEngine {
             Some(name) => host
                 .output_devices()
                 .map_err(|_| AudioError::NoOutputDevice)?
-                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                .find(|d| d.name().is_ok_and(|n| n == name))
                 .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?,
             None => host.default_output_device().ok_or(AudioError::NoOutputDevice)?,
         };
@@ -491,7 +501,7 @@ impl AudioEngine {
                 &config,
                 move |data: &mut [f32], _| {
                     melde(data.len());
-                    fill_buffer(data, channels, sample_rate, &state)
+                    fill_buffer(data, channels, sample_rate, &state);
                 },
                 err_fn,
                 None,
@@ -503,7 +513,7 @@ impl AudioEngine {
                     let mut tmp = vec![0.0f32; data.len()];
                     fill_buffer(&mut tmp, channels, sample_rate, &state);
                     for (o, i) in data.iter_mut().zip(tmp.iter()) {
-                        *o = (*i * i16::MAX as f32) as i16;
+                        *o = (*i * f32::from(i16::MAX)) as i16;
                     }
                 },
                 err_fn,
@@ -516,7 +526,7 @@ impl AudioEngine {
                     let mut tmp = vec![0.0f32; data.len()];
                     fill_buffer(&mut tmp, channels, sample_rate, &state);
                     for (o, i) in data.iter_mut().zip(tmp.iter()) {
-                        *o = (((i + 1.0) * 0.5) * u16::MAX as f32) as u16;
+                        *o = (((i + 1.0) * 0.5) * f32::from(u16::MAX)) as u16;
                     }
                 },
                 err_fn,
@@ -558,24 +568,25 @@ impl AudioEngine {
     ///
     /// Das ist der Kern der Entkopplung: Toene muessen ausgeloest werden koennen, wo das
     /// Ereignis entsteht -- im Netzwerk-Task, in dem Augenblick, in dem das Paket gelesen
-    /// wird. Ginge es nur ueber die AudioEngine (die am Hauptthread haengt, weil cpal::Stream
+    /// wird. Ginge es nur ueber die `AudioEngine` (die am Hauptthread haengt, weil `cpal::Stream`
     /// dort leben muss), muesste jeder Ton auf den naechsten Durchlauf der Fensterschleife
     /// warten und haenge damit an der Bildrate.
+    #[must_use] 
     pub fn sink(&self) -> CueSink {
         CueSink { state: Arc::clone(&self.state) }
     }
 
     /// Kurzes Signal, direkt an dieser Engine. Fuer Aufrufer, die den Hauptthread ohnehin
-    /// schon haben; alle anderen nehmen sink().
+    /// schon haben; alle anderen nehmen `sink()`.
     pub fn play_cue(&self, hz: f32, pan: f32) {
         self.sink().play(hz, pan);
     }
 }
 
-/// Ausloeser fuer Signaltoene, unabhaengig von der Fensterschleife (s. AudioEngine::sink).
+/// Ausloeser fuer Signaltoene, unabhaengig von der Fensterschleife (s. `AudioEngine::sink`).
 ///
 /// Haelt bewusst NICHT den Stream, sondern nur den Mixer-Zustand: der ist ein
-/// Arc<Mutex<..>> und damit echt threadsicher, waehrend cpal::Stream auf manchen Backends
+/// Arc<Mutex<..>> und damit echt threadsicher, waehrend `cpal::Stream` auf manchen Backends
 /// Handles hat, die den Hauptthread brauchen.
 #[derive(Clone)]
 pub struct CueSink {
@@ -585,7 +596,7 @@ pub struct CueSink {
 impl CueSink {
     /// Kurzes Signal mit Tonhoehe und Stereo-Position (-1 links .. +1 rechts). Gedacht fuer
     /// Ereignisse, bei denen die Seite selbst die Information ist -- der erste Anwendungsfall
-    /// ist der Totem-Pop (Haupthand rechts, Zweithand links, s. app::modules).
+    /// ist der Totem-Pop (Haupthand rechts, Zweithand links, s. `app::modules`).
     ///
     /// Bewusst ein synthetischer Ton und keine Vanilla-Audiodatei: dieser Client hat noch
     /// keinen Sample-Abspieler (s. Modulkommentar), und ein Sinus mit harter Panorama-Lage
@@ -631,7 +642,7 @@ impl CueSink {
         self.einsetzen(&mut s, neu);
     }
 
-    /// Eine AUFNAHME abspielen (s. SoundBank). `gain` und `pan` gelten wie beim synthetischen
+    /// Eine AUFNAHME abspielen (s. `SoundBank`). `gain` und `pan` gelten wie beim synthetischen
     /// Klang; Laenge und Klangfarbe bringt die Aufnahme selbst mit.
     ///
     /// `pitch`: Wiedergabegeschwindigkeit, 1.0 = unveraendert (s. `semitone_factor`). Wie beim
@@ -676,7 +687,7 @@ impl CueSink {
     ///
     /// Unterschied zu `play_sample`: dort legt `pan` den Klang nur lauter auf eine Seite,
     /// hier bekommt jedes Ohr eine eigene Laufzeit, einen eigenen Pegel und eine eigene
-    /// Klangfarbe (s. spatial::spatial_for). Das ist der Unterschied zwischen "mehr von
+    /// Klangfarbe (s. `spatial::spatial_for`). Das ist der Unterschied zwischen "mehr von
     /// links" und "da links, ungefaehr zwanzig Bloecke weg".
     ///
     /// `gain` ist die Lautstaerke des Ereignisses selbst; die Entfernungsdaempfung kommt aus
@@ -721,7 +732,7 @@ impl CueSink {
 
     /// Ein Weltgeraeusch abspielen, das sich spaeter verschieben und anhalten laesst.
     ///
-    /// `placement = None` spielt es kopffest (Musik, s. app::play_server_sound), sonst im Raum
+    /// `placement = None` spielt es kopffest (Musik, s. `app::play_server_sound`), sonst im Raum
     /// wie `play_sample_at` -- mit dem Unterschied, dass eine Quelle ausser Reichweite TROTZDEM
     /// eine Stimme bekommt: wer auf eine laufende Jukebox zugeht, soll sie ab der
     /// Reichweitengrenze hoeren und nicht erst beim naechsten Lied. Stumm bleibt sie bis dahin
@@ -729,6 +740,7 @@ impl CueSink {
     ///
     /// Rueckgabe: der Griff fuer `move_voices`/`stop_handle`, oder None, wenn der Mixer nicht
     /// erreichbar war.
+    #[must_use] 
     pub fn play_sample_tracked(
         &self,
         sample: Arc<wav::Wav>,
@@ -765,7 +777,7 @@ impl CueSink {
     }
 
     /// Nachgefuehrte Stimmen an ihre neue Lage setzen (einmal pro Bild). Der Uebergang
-    /// gleitet (s. GLIDE_SECONDS). Unbekannte Griffe -- die Stimme ist schon zu Ende --
+    /// gleitet (s. `GLIDE_SECONDS`). Unbekannte Griffe -- die Stimme ist schon zu Ende --
     /// werden still uebergangen.
     pub fn move_voices(&self, lagen: &[(u32, spatial::Placement)]) {
         if lagen.is_empty() {
@@ -872,12 +884,9 @@ const TEST_TONE_GAIN: f32 = 0.2;
 // Panorama. UI-Klaenge gehoeren bewusst zur zweiten Sorte -- ein Menue-Klick steht nicht in
 // der Welt, und eine Laufzeitdifferenz waere dort nur eine Verschmierung ohne Aussage.
 fn seiten(voice: &mut Voice, wert: f32, sample_rate: f32) -> (f32, f32) {
-    match voice.ears.as_mut() {
-        Some(ears) => ears.hoere(wert, sample_rate),
-        None => {
-            let (gl, gr) = pan_gains(voice.cue.pan);
-            (wert * gl, wert * gr)
-        }
+    if let Some(ears) = voice.ears.as_mut() { ears.hoere(wert, sample_rate) } else {
+        let (gl, gr) = pan_gains(voice.cue.pan);
+        (wert * gl, wert * gr)
     }
 }
 
@@ -915,7 +924,7 @@ fn fill_buffer(data: &mut [f32], channels: usize, sample_rate: f32, state: &Arc<
         // einfaches Ausblenden -- ohne sie knackt es am Ende hoerbar (harter Sprung auf 0
         // mitten in der Welle).
         let (mut left, mut right) = (0.0, 0.0);
-        for slot in s.voices.iter_mut() {
+        for slot in &mut s.voices {
             let Some(voice) = slot.as_mut() else { continue };
             let dt = 1.0 / sample_rate;
             // Erst LESEN, dann die Uhr weiterstellen. Andersherum (voice.elapsed += dt vor
@@ -1121,10 +1130,10 @@ mod cue_tests {
 
 /// Die Abtastrate, die wir anstreben.
 ///
-/// 48 kHz ist die Rate, mit der der Audio-Server hier tatsaechlich laeuft (PipeWire:
+/// 48 kHz ist die Rate, mit der der Audio-Server hier tatsaechlich laeuft (`PipeWire`:
 /// `clock.allowed-rates = [48000]`, nachgesehen mit `pw-metadata -n settings`). Die
 /// ALSA-Kompatibilitaetsschicht bietet als Standard trotzdem 44100 an -- nimmt man die,
-/// resampelt PipeWire jeden Puffer von 44100 auf 48000. Das kostet Rechenzeit, etwas
+/// resampelt `PipeWire` jeden Puffer von 44100 auf 48000. Das kostet Rechenzeit, etwas
 /// zusaetzliche Verzoegerung und Klangqualitaet, und zwar fuer nichts: unsere Toene sind
 /// synthetisch und werden zur Laufzeit erzeugt, es gibt also keine 44,1-kHz-Quelle, der man
 /// entgegenkommen muesste.
@@ -1135,7 +1144,7 @@ const PREFERRED_SAMPLE_RATE: u32 = 48_000;
 
 /// Waehlt, wo moeglich, eine kleine feste Puffergroesse statt der (meist grosszuegigen)
 /// Backend-Vorgabe -- kleinerer Puffer = weniger Latenz zwischen Trigger und hoerbarem Ton --
-/// und 48 kHz statt der Backend-Vorgabe (s. PREFERRED_SAMPLE_RATE).
+/// und 48 kHz statt der Backend-Vorgabe (s. `PREFERRED_SAMPLE_RATE`).
 ///
 /// Beides nur, WENN das Geraet es hergibt: die Vorgaben des Backends bleiben der Rueckfall.
 /// Ein Geraet, das 48 kHz nicht kann, soll stumm bleiben duerfen war nie die Absicht.
@@ -1163,14 +1172,15 @@ fn low_latency_config(device: &cpal::Device, buffer_frames: Option<u32>) -> Resu
 
 /// Einen Klang ohne Geraet ausrechnen -- Mono, ein Wert je Frame.
 ///
-/// Nimmt bewusst den ECHTEN Mixerweg (play_cue + fill_buffer) statt die Formel nachzubilden:
+/// Nimmt bewusst den ECHTEN Mixerweg (`play_cue` + `fill_buffer`) statt die Formel nachzubilden:
 /// eine Nachbildung war frueher der Grund, warum das Analyse-Werkzeug etwas anderes gemessen
 /// hat als der Client spielt. Alles, was am Klangerzeuger geaendert wird (zuletzt die
-/// Rausch-Faerbung, s. NOISE_COLOR), landet damit automatisch auch in der Messung.
+/// Rausch-Faerbung, s. `NOISE_COLOR`), landet damit automatisch auch in der Messung.
 /// Die Panorama-Lage wird dabei herausgerechnet: gemessen wird der KLANG, nicht seine Position.
 /// Ohne das Herausrechnen hinge die gemessene Lautheit an `pan` -- ein mittig gelegter Klang
-/// stuende mit Faktor sqrt(2) da (0,707 auf jedem der beiden Kanaele, s. pan_gains), ein hart
+/// stuende mit Faktor sqrt(2) da (0,707 auf jedem der beiden Kanaele, s. `pan_gains`), ein hart
 /// seitlicher mit Faktor 1, und ein Vergleich zweier Klaenge waere wertlos.
+#[must_use] 
 pub fn render_cue(cue: Cue, sample_rate: f32) -> Vec<f32> {
     let state = Arc::new(Mutex::new(MixerState {
         test_tone_phase: 0.0,
@@ -1190,14 +1200,17 @@ pub fn render_cue(cue: Cue, sample_rate: f32) -> Vec<f32> {
 }
 
 /// Wiedergabegeschwindigkeit fuer eine Verschiebung um `halbtoene` Halbtoene, positiv = hoeher.
+///
 /// Dieselbe Formel wie in `scripts/klaenge-anhoeren.sh` (dort mit awk berechnet) -- beide
 /// muessen fuer denselben Halbtonwert denselben Klang ergeben.
+#[must_use] 
 pub fn semitone_factor(halbtoene: f32) -> f32 {
     2f32.powf(halbtoene / 12.0)
 }
 
 /// Eine Aufnahme durch den echten Mixerweg rendern -- fuer Tests und Analyse-Werkzeuge, s.
 /// `render_cue`. Pan wird herausgerechnet, gemessen wird nur Klang und Zeitverlauf.
+#[must_use] 
 pub fn render_sample(sample: Arc<wav::Wav>, gain: f32, pitch: f32, sample_rate: f32) -> Vec<f32> {
     let state = Arc::new(Mutex::new(MixerState {
         test_tone_phase: 0.0,
@@ -1216,11 +1229,13 @@ pub fn render_sample(sample: Arc<wav::Wav>, gain: f32, pitch: f32, sample_rate: 
     daten.chunks(2).map(|f| (f[0] + f[1]) / (gl + gr)).collect()
 }
 
+#[must_use] 
 pub fn list_output_devices() -> Vec<String> {
     let host = cpal::default_host();
     host.output_devices().map(|it| it.filter_map(|d| d.name().ok()).collect()).unwrap_or_default()
 }
 
+#[must_use] 
 pub fn default_output_device_name() -> Option<String> {
     cpal::default_host().default_output_device().and_then(|d| d.name().ok())
 }
@@ -1558,7 +1573,7 @@ mod ortungs_tests {
         let state = mixer();
         let sink = CueSink { state: Arc::clone(&state) };
         sink.play_sample_at(impuls(), 1.0, 1.0, &spatial::Placement { lateral: 0.0, distance: 10_000.0 });
-        assert!(state.lock().unwrap().voices.iter().all(|v| v.is_none()));
+        assert!(state.lock().unwrap().voices.iter().all(std::option::Option::is_none));
     }
 
     // UI-Klaenge bleiben unberuehrt: ohne Ort kein Filter, keine Verzoegerung, kein

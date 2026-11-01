@@ -25,7 +25,7 @@ enum Extent {
 }
 
 impl Extent {
-    fn moving(from: f64, to: f64, ticks: i64) -> Self {
+    const fn moving(from: f64, to: f64, ticks: i64) -> Self {
         let size = from;
         Self::Moving { from, to, duration: ticks as f64, remaining: ticks, size, previous: size }
     }
@@ -33,7 +33,7 @@ impl Extent {
     fn size_at(&self, partial: f32) -> f64 {
         match *self {
             Self::Static(s) => s,
-            Self::Moving { size, previous, .. } => previous + (size - previous) * partial as f64,
+            Self::Moving { size, previous, .. } => previous + (size - previous) * f64::from(partial),
         }
     }
 }
@@ -48,7 +48,8 @@ pub enum BorderStatus {
 
 impl BorderStatus {
     // Farben der Wand: gruen beim Wachsen, rot beim Schrumpfen, blau im Stillstand.
-    pub fn color(self) -> u32 {
+    #[must_use] 
+    pub const fn color(self) -> u32 {
         match self {
             Self::Growing => 0x40_FF_80,
             Self::Shrinking => 0xFF_30_30,
@@ -112,6 +113,18 @@ impl WorldBorder {
         }
     }
 
+    // Der ganze Stand als ein Paket (coral-record, Snapshot). Eine wandernde Grenze wandert
+    // von der jetzigen Groesse in der Restzeit weiter -- dieselbe Strecke.
+    #[must_use] 
+    pub const fn snapshot(&self) -> BorderUpdate {
+        let (old_size, new_size, lerp_ticks) = match self.extent {
+            Extent::Static(s) => (s, s, 0),
+            Extent::Moving { to, remaining, size, .. } => (size, to, remaining),
+        };
+        BorderUpdate::Initialize { center: self.center, old_size, new_size, lerp_ticks, absolute_max_size: self.absolute_max_size, warning_blocks: self.warning_blocks, warning_time: self.warning_time }
+    }
+
+    #[must_use] 
     pub fn status(&self) -> BorderStatus {
         match self.extent {
             Extent::Static(_) => BorderStatus::Stationary,
@@ -120,29 +133,34 @@ impl WorldBorder {
         }
     }
 
+    #[must_use] 
     pub fn size(&self) -> f64 {
         self.extent.size_at(1.0)
     }
 
-    pub fn center(&self) -> (f64, f64) {
+    #[must_use] 
+    pub const fn center(&self) -> (f64, f64) {
         self.center
     }
 
     // Die vier Kanten (min_x, max_x, min_z, max_z), `partial` zwischen dem letzten und dem
     // aktuellen Tick. Nie weiter draussen als die absolute Hoechstgroesse.
+    #[must_use] 
     pub fn bounds(&self, partial: f32) -> [f64; 4] {
         let half = self.extent.size_at(partial) / 2.0;
-        let max = self.absolute_max_size as f64;
+        let max = f64::from(self.absolute_max_size);
         let c = |v: f64| v.clamp(-max, max);
         [c(self.center.0 - half), c(self.center.0 + half), c(self.center.1 - half), c(self.center.1 + half)]
     }
 
     // Abstand zur naechsten Kante; drinnen positiv, draussen negativ.
+    #[must_use] 
     pub fn distance_to_border(&self, x: f64, z: f64) -> f64 {
         let [min_x, max_x, min_z, max_z] = self.bounds(0.0);
         (x - min_x).min(max_x - x).min(z - min_z).min(max_z - z)
     }
 
+    #[must_use] 
     pub fn is_within_bounds(&self, x: f64, z: f64, margin: f64) -> bool {
         let [min_x, max_x, min_z, max_z] = self.bounds(0.0);
         x >= min_x - margin && x < max_x + margin && z >= min_z - margin && z < max_z + margin
@@ -152,6 +170,7 @@ impl WorldBorder {
     // (Ausdehnung in x und z der in Bewegungsrichtung aufgezogenen Box) bewegt -- leer, wenn
     // die Box weit genug weg ist oder schon draussen steht (dann haelt die Wand nicht fest).
     // Vier Boxen fuer alles ausserhalb, die Kanten auf ganze Bloecke nach aussen gerundet.
+    #[must_use] 
     pub fn collision_boxes(&self, x: f64, z: f64, swept: (f64, f64)) -> Vec<([f64; 3], [f64; 3])> {
         let d = swept.0.abs().max(swept.1.abs()).max(1.0);
         if !(self.distance_to_border(x, z) < d * 2.0 && self.is_within_bounds(x, z, d)) {

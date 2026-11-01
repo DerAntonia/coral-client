@@ -23,7 +23,7 @@ pub fn set_delay(ms: u32) {
 }
 
 fn delay() -> Duration {
-    Duration::from_millis(LAG_MS.load(Ordering::Relaxed) as u64)
+    Duration::from_millis(u64::from(LAG_MS.load(Ordering::Relaxed)))
 }
 
 pub(crate) fn allowed(host: &str) -> bool {

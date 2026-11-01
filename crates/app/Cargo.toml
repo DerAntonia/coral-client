@@ -14,6 +14,7 @@ auth = { path = "../auth" }
 render = { path = "../render" }
 world = { path = "../world" }
 chunk_saver = { path = "../chunk_saver" }
+record = { path = "../record" }
 assets = { path = "../assets" }
 audio = { path = "../audio" }
 voice = { path = "../voice" }

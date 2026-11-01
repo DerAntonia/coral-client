@@ -46,6 +46,10 @@ pub struct Camera {
     // die Frontansicht yaw/pitch selbst drehen, wuerde sich der Spieler mitdrehen.
     pub view_offset: Vec3,
     pub view_inverted: bool,
+    // Eigene Blickrichtung der Kamera (Gier, Neigung in Grad wie yaw/pitch), unabhaengig vom
+    // Spieler: Freelook und die vom Koerper geloeste Schulterkamera. Gesetzt gilt sie statt
+    // yaw/pitch (und statt der Umkehr der Frontansicht) fuer alles, was die Kamera sieht.
+    pub view_look: Option<(f32, f32)>,
     // Rollen um die Blickachse in Grad (Hurt-Cam). Reines Rollen um die Achse durch die
     // Bildmitte: das Fadenkreuz zeigt weiter genau dorthin, wohin man schaut.
     pub roll_degrees: f32,
@@ -57,12 +61,14 @@ pub struct Camera {
 pub const CULL_FOV_MAX_DEGREES: f32 = 175.0;
 
 impl Camera {
-    pub fn new(position: DVec3) -> Self {
-        Self { position, yaw: 0.0, pitch: 0.0, fov_degrees: 70.0, projection: 0, view_offset: Vec3::ZERO, view_inverted: false, roll_degrees: 0.0 }
+    #[must_use] 
+    pub const fn new(position: DVec3) -> Self {
+        Self { position, yaw: 0.0, pitch: 0.0, fov_degrees: 70.0, projection: 0, view_offset: Vec3::ZERO, view_inverted: false, view_look: None, roll_degrees: 0.0 }
     }
 
     // Das Minus bei x ist der Kern der Konvention: ohne es dreht steigender Yaw nach +X,
     // waehrend right() nach -X zeigt -- die Kamera liefe der Maus dann entgegen.
+    #[must_use] 
     pub fn forward(&self) -> Vec3 {
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()).normalize()
@@ -71,23 +77,46 @@ impl Camera {
     // Rechts aus Sicht der Kamera. In einem rechtshaendigen System ist das
     // forward x up: bei Blick nach +Z (Sueden) ergibt das -X (Westen) -- und nach
     // Westen zeigt die rechte Hand, wenn man nach Sueden schaut.
+    #[must_use] 
     pub fn right(&self) -> Vec3 {
         self.forward().cross(Vec3::Y).normalize()
     }
 
     // Blickrichtung der KAMERA (nicht des Spielers): in der Frontansicht um 180 Grad gedreht
     // und im Nick gespiegelt, wie Vanillas Camera.setRotation(yaw + 180, -pitch).
+    #[must_use] 
     pub fn view_forward(&self) -> Vec3 {
-        if !self.view_inverted {
+        if !self.view_inverted && self.view_look.is_none() {
             return self.forward();
         }
-        let (yaw, pitch) = ((self.yaw + 180.0).to_radians(), (-self.pitch).to_radians());
+        let (yaw, pitch) = self.view_angles();
+        let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
         Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()).normalize()
+    }
+
+    // Gier und Neigung der KAMERA in Grad (Konvention wie yaw/pitch): die eigene Blickrichtung,
+    // sonst die des Spielers, in der Frontansicht umgedreht.
+    #[must_use] 
+    pub fn view_angles(&self) -> (f32, f32) {
+        match self.view_look {
+            Some(blick) => blick,
+            None if self.view_inverted => (self.yaw + 180.0, -self.pitch),
+            None => (self.yaw, self.pitch),
+        }
+    }
+
+    // Rechts aus Sicht der Kamera, waagerecht (aus der Gier, damit es auch beim Blick
+    // senkrecht nach oben oder unten bestimmt ist).
+    #[must_use] 
+    pub fn view_right(&self) -> Vec3 {
+        let yaw = self.view_angles().0.to_radians();
+        Vec3::new(-yaw.cos(), 0.0, -yaw.sin())
     }
 
     // Tatsaechliche Kameraposition in der WELT -- Auge plus Perspektiv-Versatz (in der
     // 3. Person nach hinten weg, s. view_offset). Fuer Spiel-Logik; zum Zeichnen dient
     // render_view_position(), das im kamerarelativen Raum bleibt.
+    #[must_use] 
     pub fn view_position(&self) -> DVec3 {
         self.position + self.view_offset.as_dvec3()
     }
@@ -97,7 +126,8 @@ impl Camera {
     // Geometrie relativ zum Auge hochgeladen wird (s. BlockRenderer::column_offset), sind
     // hier nur noch kleine Zahlen im Spiel -- unabhaengig davon, wie weit man vom
     // Weltnullpunkt entfernt steht.
-    pub fn render_view_position(&self) -> Vec3 {
+    #[must_use] 
+    pub const fn render_view_position(&self) -> Vec3 {
         self.view_offset
     }
 
@@ -124,11 +154,13 @@ impl Camera {
     // leichtes Zittern der Geometrie, nicht als Richtungsraster -- dagegen hilft nur
     // kamerarelatives Rendern (Geometrie vor der f32-Wandlung um die Kameraposition
     // versetzen), was ein deutlich groesserer Umbau waere.
+    #[must_use] 
     pub fn view_matrix(&self) -> Mat4 {
         self.roll() * Mat4::look_to_rh(self.render_view_position(), self.view_forward(), Vec3::Y)
     }
 
     // Nur die Drehung der Ansicht, ohne Versatz -- fuer den Himmel, der um das Auge liegt.
+    #[must_use] 
     pub fn view_rotation(&self) -> Mat4 {
         self.roll() * Mat4::look_to_rh(Vec3::ZERO, self.view_forward(), Vec3::Y)
     }
@@ -142,10 +174,12 @@ impl Camera {
         }
     }
 
+    #[must_use] 
     pub fn proj_matrix(&self, aspect: f32) -> Mat4 {
         Mat4::perspective_rh(self.fov_degrees.to_radians(), aspect, 0.05, 1000.0)
     }
 
+    #[must_use] 
     pub fn view_proj_matrix(&self, aspect: f32) -> Mat4 {
         self.proj_matrix(aspect) * self.view_matrix()
     }
@@ -156,6 +190,7 @@ impl Camera {
     // Sicht-Kegel cullen, damit am Rand nichts wegpoppt. Ueber-Zeichnen (ein paar zusaetzliche
     // Chunk-Spalten) ist harmlos, fehlende Chunks am Rand waeren sichtbar. Normal = exakt das
     // echte FOV, keine Aenderung gegenueber frueher.
+    #[must_use] 
     pub fn cull_view_proj_matrix(&self, aspect: f32) -> Mat4 {
         // Der Cull-Kegel darf NIE enger sein als das eingestellte Sichtfeld -- sonst
         // verwirft er genau die Spalten, die der Warp gerade an den Rand holen soll. Frueher

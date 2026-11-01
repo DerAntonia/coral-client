@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use protocol::nbt::{self, NbtValue, TextSpan};
 
 // Was nach einem Knopfdruck mit dem Fenster passiert (DialogAction).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AfterAction {
     Close,
     None,
@@ -236,13 +236,10 @@ fn body(v: &NbtValue) -> Option<Body> {
 
 // Ein Eintrag von single_option: voll ({id, display, initial}) oder nur die ID als String.
 fn option_entry(v: &NbtValue) -> Option<(OptionEntry, bool)> {
-    match v {
-        NbtValue::String(id) => Some((OptionEntry { id: id.clone(), display: plain_spans(id) }, false)),
-        _ => {
-            let id = string(v, "id")?;
-            let display = text(v, "display").unwrap_or_else(|| plain_spans(&id));
-            Some((OptionEntry { id, display }, flag(v, "initial", false)))
-        }
+    if let NbtValue::String(id) = v { Some((OptionEntry { id: id.clone(), display: plain_spans(id) }, false)) } else {
+        let id = string(v, "id")?;
+        let display = text(v, "display").unwrap_or_else(|| plain_spans(&id));
+        Some((OptionEntry { id, display }, flag(v, "initial", false)))
     }
 }
 
@@ -367,10 +364,10 @@ pub enum Value {
 impl Control {
     pub fn initial_value(&self) -> Value {
         match self {
-            Control::Text { initial, .. } => Value::Text(initial.clone()),
-            Control::Bool { initial, .. } => Value::Bool(*initial),
-            Control::Choice { initial, .. } => Value::Choice(*initial),
-            Control::Range { start, end, initial, .. } => Value::Range(slider_of(*start, *end, initial.unwrap_or((start + end) / 2.0))),
+            Self::Text { initial, .. } => Value::Text(initial.clone()),
+            Self::Bool { initial, .. } => Value::Bool(*initial),
+            Self::Choice { initial, .. } => Value::Choice(*initial),
+            Self::Range { start, end, initial, .. } => Value::Range(slider_of(*start, *end, initial.unwrap_or((start + end) / 2.0))),
         }
     }
 }
@@ -389,7 +386,7 @@ fn slider_of(start: f32, end: f32, wert: f32) -> f32 {
 pub fn range_value(start: f32, end: f32, initial: Option<f32>, step: Option<f32>, slider: f32) -> f32 {
     let wert = start + (end - start) * slider;
     let Some(step) = step else { return wert };
-    let basis = initial.unwrap_or((start + end) / 2.0);
+    let basis = initial.unwrap_or(f32::midpoint(start, end));
     let n = ((wert - basis) / step).round();
     let gerastert = basis + n * step;
     let s = slider_of(start, end, gerastert);
@@ -449,7 +446,7 @@ impl Input {
     pub fn tag(&self, wert: &Value) -> NbtValue {
         match (&self.control, wert) {
             (Control::Text { .. }, Value::Text(t)) => NbtValue::String(t.clone()),
-            (Control::Bool { .. }, Value::Bool(b)) => NbtValue::Byte(*b as i8),
+            (Control::Bool { .. }, Value::Bool(b)) => NbtValue::Byte(i8::from(*b)),
             (Control::Range { start, end, initial, step, .. }, Value::Range(s)) => NbtValue::Float(range_value(*start, *end, *initial, *step, *s)),
             _ => NbtValue::String(self.substitution(wert)),
         }
@@ -477,18 +474,18 @@ impl Action {
     // einem Dialog nichts.
     pub fn event(&self, inputs: &[Input], werte: &[Value]) -> Option<Event> {
         Some(match self {
-            Action::OpenUrl(u) => Event::OpenUrl(u.clone()),
-            Action::RunCommand(c) => Event::RunCommand(c.clone()),
-            Action::SuggestCommand(c) => Event::SuggestCommand(c.clone()),
-            Action::CopyToClipboard(v) => Event::CopyToClipboard(v.clone()),
-            Action::ChangePage => return None,
-            Action::ShowDialog(s) => Event::ShowDialog(s.clone()),
-            Action::Custom { id, payload } => Event::Custom { id: id.clone(), payload: payload.clone() },
-            Action::CommandTemplate(t) => {
+            Self::OpenUrl(u) => Event::OpenUrl(u.clone()),
+            Self::RunCommand(c) => Event::RunCommand(c.clone()),
+            Self::SuggestCommand(c) => Event::SuggestCommand(c.clone()),
+            Self::CopyToClipboard(v) => Event::CopyToClipboard(v.clone()),
+            Self::ChangePage => return None,
+            Self::ShowDialog(s) => Event::ShowDialog(s.clone()),
+            Self::Custom { id, payload } => Event::Custom { id: id.clone(), payload: payload.clone() },
+            Self::CommandTemplate(t) => {
                 let ersatz: HashMap<String, String> = inputs.iter().zip(werte).map(|(i, w)| (i.key.clone(), i.substitution(w))).collect();
                 Event::RunCommand(fill_template(t, &ersatz))
             }
-            Action::CustomAll { id, additions } => {
+            Self::CustomAll { id, additions } => {
                 let mut map = additions.clone().unwrap_or_default();
                 for (i, w) in inputs.iter().zip(werte) {
                     map.insert(i.key.clone(), i.tag(w));
@@ -502,7 +499,7 @@ impl Action {
 // Javas String.hashCode -- Vanilla merkt sich einen angenommenen Verhaltenskodex nur als
 // diesen Hash (ServerData.acceptCodeOfConduct).
 pub fn java_hash(text: &str) -> i32 {
-    text.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
+    text.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c)))
 }
 
 #[cfg(test)]
@@ -587,6 +584,6 @@ mod tests {
     fn hash_wie_java() {
         assert_eq!(java_hash(""), 0);
         assert_eq!(java_hash("abc"), 96354);
-        assert_eq!(java_hash("Hallo Welt"), "Hallo Welt".encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)));
+        assert_eq!(java_hash("Hallo Welt"), "Hallo Welt".encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c))));
     }
 }

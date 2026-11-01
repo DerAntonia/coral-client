@@ -29,13 +29,13 @@ impl Listener {
     /// Ohrachse bewegt die Ohrachse nicht. Genau deshalb reicht `right`, und genau deshalb
     /// aendert sich die Ortung nicht, wenn man beim Zuhoeren nach oben schaut -- so wie beim
     /// echten Kopf auch.
-    pub fn at_eye(eye: DVec3, yaw_degrees: f32) -> Listener {
+    pub fn at_eye(eye: DVec3, yaw_degrees: f32) -> Self {
         let yaw = yaw_degrees.to_radians();
         // Blickrichtung waagerecht (Camera::forward bei pitch 0), dann forward x Y wie in
         // render::Camera::right -- hier direkt ausgeschrieben, damit die Ohrachse nicht
         // versehentlich an der VIEW-Richtung haengt (s. view_forward/Frontansicht).
         let forward = Vec3::new(-yaw.sin(), 0.0, yaw.cos());
-        Listener { position: eye, right: forward.cross(Vec3::Y).normalize() }
+        Self { position: eye, right: forward.cross(Vec3::Y).normalize() }
     }
 
     /// Wo steht diese Quelle fuer meine Ohren?
@@ -83,8 +83,8 @@ const RADIUS: f64 = 4.0;
 
 impl OrbitTest {
     /// Startet die Runde. Der erste Klick kommt sofort beim naechsten `advance`.
-    pub fn start() -> OrbitTest {
-        OrbitTest { played: 0, elapsed: STEP_SECONDS }
+    pub const fn start() -> Self {
+        Self { played: 0, elapsed: STEP_SECONDS }
     }
 
     /// Zeit weiterdrehen. Gibt die Position des faelligen Klicks zurueck -- ein Klick je
@@ -105,7 +105,7 @@ impl OrbitTest {
         Some(position)
     }
 
-    pub fn finished(&self) -> bool {
+    pub const fn finished(&self) -> bool {
         self.played >= STEPS
     }
 

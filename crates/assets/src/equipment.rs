@@ -13,7 +13,7 @@
 
 use crate::MinecraftInstallation;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EquipmentLayer {
     // Texturpfad ohne "textures/" und ".png", mit Namespace: "minecraft:entity/equipment/
     // humanoid/diamond".
@@ -26,7 +26,7 @@ pub struct EquipmentLayer {
     pub use_player_texture: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EquipmentModel {
     pub humanoid: Vec<EquipmentLayer>,
     pub humanoid_leggings: Vec<EquipmentLayer>,
@@ -36,6 +36,7 @@ pub struct EquipmentModel {
 
 impl EquipmentModel {
     // Die Ebenen fuer die innere (Hose) bzw. aeussere Modellebene.
+    #[must_use] 
     pub fn layers(&self, inner: bool) -> &[EquipmentLayer] {
         if inner {
             &self.humanoid_leggings
@@ -45,6 +46,7 @@ impl EquipmentModel {
     }
 }
 
+#[must_use] 
 pub fn parse_equipment_model(json: &[u8]) -> Option<EquipmentModel> {
     let wurzel: serde_json::Value = serde_json::from_slice(json).ok()?;
     let ebenen = wurzel.get("layers")?;
@@ -55,8 +57,8 @@ pub fn parse_equipment_model(json: &[u8]) -> Option<EquipmentModel> {
             .filter_map(|e| {
                 let id = e.get("texture")?.as_str()?;
                 let (ns, pfad) = id.split_once(':').unwrap_or(("minecraft", id));
-                let dyeable = e.get("dyeable").map(|d| d.get("color_when_undyed").and_then(|c| c.as_i64()).map_or(0, |c| c as u32 & 0xff_ffff));
-                let use_player_texture = e.get("use_player_texture").and_then(|v| v.as_bool()).unwrap_or(false);
+                let dyeable = e.get("dyeable").map(|d| d.get("color_when_undyed").and_then(serde_json::Value::as_i64).map_or(0, |c| c as u32 & 0xff_ffff));
+                let use_player_texture = e.get("use_player_texture").and_then(serde_json::Value::as_bool).unwrap_or(false);
                 Some(EquipmentLayer { texture: format!("{ns}:entity/equipment/{typ}/{pfad}"), dyeable, use_player_texture })
             })
             .collect()

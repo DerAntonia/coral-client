@@ -30,16 +30,19 @@ pub struct BiomePalette {
 }
 
 impl BiomePalette {
-    pub fn new(per_biome: Vec<BiomeColors>) -> Self {
+    #[must_use] 
+    pub const fn new(per_biome: Vec<BiomeColors>) -> Self {
         Self { per_biome }
     }
 
     // Fallback-Palette (ein Eintrag, immer Vanilla-Standardfarben) -- fuer Tests und die
     // Zeit vor der ersten empfangenen Biom-Registry.
-    pub fn fallback() -> Self {
+    #[must_use] 
+    pub const fn fallback() -> Self {
         Self { per_biome: Vec::new() }
     }
 
+    #[must_use] 
     pub fn colors_of(&self, biome_id: u32) -> &BiomeColors {
         self.per_biome.get(biome_id as usize).unwrap_or(&FALLBACK)
     }

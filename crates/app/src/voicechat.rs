@@ -28,27 +28,27 @@ pub enum AudioType {
 }
 
 impl AudioType {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            AudioType::Normal => "Normal",
-            AudioType::Reduced => "Reduziert",
-            AudioType::Off => "Aus",
+            Self::Normal => "Normal",
+            Self::Reduced => "Reduziert",
+            Self::Off => "Aus",
         }
     }
 
-    pub fn next(self) -> AudioType {
+    pub const fn next(self) -> Self {
         match self {
-            AudioType::Normal => AudioType::Reduced,
-            AudioType::Reduced => AudioType::Off,
-            AudioType::Off => AudioType::Normal,
+            Self::Normal => Self::Reduced,
+            Self::Reduced => Self::Off,
+            Self::Off => Self::Normal,
         }
     }
 
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
-            AudioType::Normal => "normal",
-            AudioType::Reduced => "reduced",
-            AudioType::Off => "off",
+            Self::Normal => "normal",
+            Self::Reduced => "reduced",
+            Self::Off => "off",
         }
     }
 }
@@ -61,7 +61,7 @@ pub const DELAY_MAX_FRAMES: u32 = 100;
 pub const BUFFER_MAX_FRAMES: u32 = 16;
 pub const PACKET_THRESHOLD_MAX: u32 = 16;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VoiceSettings {
     // Lautstaerke der anderen, Prozent (0..300).
     pub volume_percent: u32,
@@ -87,7 +87,7 @@ pub struct VoiceSettings {
 
 impl Default for VoiceSettings {
     fn default() -> Self {
-        VoiceSettings {
+        Self {
             volume_percent: 100,
             mic_gain_db: 0,
             voice_activation: false,
@@ -110,7 +110,7 @@ impl Default for VoiceSettings {
 }
 
 impl VoiceSettings {
-    pub fn mic(&self) -> MicSettings {
+    pub const fn mic(&self) -> MicSettings {
         MicSettings {
             gain_db: self.mic_gain_db as f32,
             agc: self.agc,
@@ -153,12 +153,12 @@ impl VoiceSettings {
         let zahl = |v: &str| v.trim().parse::<i64>().ok();
         let b = value.trim() == "true";
         match key {
-            "voice_volume_percent" => self.volume_percent = zahl(value).map_or(self.volume_percent, |v| v.clamp(0, u32::MAX as i64) as u32),
-            "voice_mic_gain_db" => self.mic_gain_db = zahl(value).map_or(self.mic_gain_db, |v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+            "voice_volume_percent" => self.volume_percent = zahl(value).map_or(self.volume_percent, |v| v.clamp(0, i64::from(u32::MAX)) as u32),
+            "voice_mic_gain_db" => self.mic_gain_db = zahl(value).map_or(self.mic_gain_db, |v| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32),
             "voice_activation" => self.voice_activation = value.trim() == "voice",
-            "voice_threshold_db" => self.threshold_db = zahl(value).map_or(self.threshold_db, |v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
-            "voice_delay_frames" => self.voice_delay_frames = zahl(value).map_or(self.voice_delay_frames, |v| v.clamp(0, u32::MAX as i64) as u32),
-            "voice_ptt_delay_frames" => self.ptt_delay_frames = zahl(value).map_or(self.ptt_delay_frames, |v| v.clamp(0, u32::MAX as i64) as u32),
+            "voice_threshold_db" => self.threshold_db = zahl(value).map_or(self.threshold_db, |v| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32),
+            "voice_delay_frames" => self.voice_delay_frames = zahl(value).map_or(self.voice_delay_frames, |v| v.clamp(0, i64::from(u32::MAX)) as u32),
+            "voice_ptt_delay_frames" => self.ptt_delay_frames = zahl(value).map_or(self.ptt_delay_frames, |v| v.clamp(0, i64::from(u32::MAX)) as u32),
             "voice_agc" => self.agc = b,
             "voice_denoise" => self.denoise = b,
             "voice_audio_type" => {
@@ -168,8 +168,8 @@ impl VoiceSettings {
                     _ => AudioType::Normal,
                 }
             }
-            "voice_output_buffer" => self.output_buffer_frames = zahl(value).map_or(self.output_buffer_frames, |v| v.clamp(0, u32::MAX as i64) as u32),
-            "voice_packet_threshold" => self.packet_threshold = zahl(value).map_or(self.packet_threshold, |v| v.clamp(0, u32::MAX as i64) as u32),
+            "voice_output_buffer" => self.output_buffer_frames = zahl(value).map_or(self.output_buffer_frames, |v| v.clamp(0, i64::from(u32::MAX)) as u32),
+            "voice_packet_threshold" => self.packet_threshold = zahl(value).map_or(self.packet_threshold, |v| v.clamp(0, i64::from(u32::MAX)) as u32),
             "voice_mic_device" => self.mic_device = value.trim().to_string(),
             "voice_muted" => self.muted = b,
             "voice_disabled" => self.disabled = b,
@@ -190,7 +190,7 @@ pub fn frames_label(frames: u32) -> String {
 // Wie lange nach dem letzten Rahmen ein Spieler noch als "spricht" gilt.
 const TALK_HOLD: Duration = Duration::from_millis(300);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     // Kein Sprachchat auf diesem Server (bisher keine Antwort) oder Modul aus.
     Off,
@@ -231,7 +231,7 @@ pub struct VoiceChat {
 
 impl Default for VoiceChat {
     fn default() -> Self {
-        VoiceChat {
+        Self {
             client: None,
             status: Status::Off,
             states: HashMap::new(),
@@ -268,7 +268,7 @@ pub fn distance_volume(distance: f32, max: f32) -> f32 {
 
 impl VoiceChat {
     pub fn reset(&mut self) {
-        *self = VoiceChat::default();
+        *self = Self::default();
     }
 
     pub fn connect(&mut self, info: SecretInfo, server_host: &str) {
@@ -322,7 +322,7 @@ impl VoiceChat {
     }
 
     pub fn poll(&mut self) -> Vec<VoiceEvent> {
-        let ereignisse = self.client.as_ref().map(|c| c.poll()).unwrap_or_default();
+        let ereignisse = self.client.as_ref().map(voice::VoiceClient::poll).unwrap_or_default();
         for e in &ereignisse {
             match e {
                 VoiceEvent::Connected => self.status = Status::Connected,

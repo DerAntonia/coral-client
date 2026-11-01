@@ -72,7 +72,7 @@ pub struct MerchantState {
 
 impl MerchantState {
     // Wie weit die Liste hoechstens scrollt: alles ueber sieben Angebote hinaus.
-    pub fn max_scroll(&self) -> usize {
+    pub const fn max_scroll(&self) -> usize {
         self.offers.len().saturating_sub(MERCHANT_VISIBLE_OFFERS)
     }
 
@@ -140,7 +140,7 @@ impl Inventory {
     }
 
     // Der gerade sichtbare Container: dessen sync_id, Revision und Slots.
-    pub fn active(&self) -> (i32, i32, &[Option<ItemStack>]) {
+    pub const fn active(&self) -> (i32, i32, &[Option<ItemStack>]) {
         match &self.open {
             Some(container) => (container.sync_id, container.revision, container.slots.as_slice()),
             None => (0, self.player_revision, self.player.as_slice()),
@@ -380,7 +380,7 @@ pub struct Prediction {
 // ALLES stehen -- Slot und Cursor. Das Paket geht trotzdem raus, mit genau diesem
 // unveraenderten Zustand.
 pub fn locked_prediction(cursor: Option<&ItemStack>) -> Prediction {
-    Prediction { modified: Vec::new(), cursor: cursor.cloned(), hashable: cursor.is_none_or(|c| c.hashable()) }
+    Prediction { modified: Vec::new(), cursor: cursor.cloned(), hashable: cursor.is_none_or(protocol::item::ItemStack::hashable) }
 }
 
 // Das Zittern eines gesperrten Slots (Fluch der Bindung) -- KEIN Vanilla-Verhalten, dort
@@ -482,7 +482,7 @@ impl Inventory {
         // hier frueher die GANZE Vorhersage -- also wartete gerade bei echter Ausruestung die
         // Anzeige jedes Mal auf den Server. Sie verhindern nur die Hash-FELDER des Pakets;
         // lokal vorgreifen geht weiterhin (s. Prediction::hashable).
-        let hashable = in_slot.as_ref().is_none_or(|s| s.hashable()) && cursor.as_ref().is_none_or(|s| s.hashable());
+        let hashable = in_slot.as_ref().is_none_or(protocol::item::ItemStack::hashable) && cursor.as_ref().is_none_or(protocol::item::ItemStack::hashable);
         if let Some((p, _klang)) = bundle_click(slot, button, cursor.clone(), in_slot.clone()) {
             return Some(p);
         }
@@ -570,7 +570,7 @@ impl Inventory {
         if in_slot.is_none() && in_hotbar.is_none() {
             return None; // beide leer -- Vanilla tut nichts
         }
-        let hashable = in_slot.as_ref().is_none_or(|s| s.hashable()) && in_hotbar.as_ref().is_none_or(|s| s.hashable());
+        let hashable = in_slot.as_ref().is_none_or(protocol::item::ItemStack::hashable) && in_hotbar.as_ref().is_none_or(protocol::item::ItemStack::hashable);
         Some(Prediction {
             modified: vec![(slot, in_hotbar), (hotbar_slot as i16, in_slot)],
             // Tauschen laesst den Stapel an der Maus unangetastet.
@@ -627,7 +627,7 @@ impl Inventory {
         if geaendert.is_empty() {
             return None; // nichts zu holen -- dann sagt der Server, ob doch
         }
-        let hashable = geaendert.iter().all(|(_, s)| s.as_ref().is_none_or(|s| s.hashable())) && cursor.hashable();
+        let hashable = geaendert.iter().all(|(_, s)| s.as_ref().is_none_or(protocol::item::ItemStack::hashable)) && cursor.hashable();
         Some(Prediction { modified: geaendert, cursor: Some(cursor), hashable })
     }
 
@@ -690,7 +690,7 @@ impl Inventory {
             geaendert.push((ziel as i16, Some(ItemStack { count: vorhanden.count + platz, ..vorhanden.clone() })));
         }
         if rest > 0 {
-            if let Some(&frei) = reihenfolge.iter().find(|&&z| slots.get(z).is_none_or(|s| s.is_none())) {
+            if let Some(&frei) = reihenfolge.iter().find(|&&z| slots.get(z).is_none_or(std::option::Option::is_none)) {
                 geaendert.push((frei as i16, Some(ItemStack { count: rest, ..quelle.clone() })));
                 rest = 0;
             }
@@ -702,7 +702,7 @@ impl Inventory {
         geaendert.push((slot, (rest > 0).then(|| ItemStack { count: rest, ..quelle.clone() })));
 
         // Hashbar nur, wenn JEDER beteiligte Stapel es ist (s. Prediction::hashable).
-        let hashable = quelle.hashable() && geaendert.iter().all(|(_, s)| s.as_ref().is_none_or(|s| s.hashable()));
+        let hashable = quelle.hashable() && geaendert.iter().all(|(_, s)| s.as_ref().is_none_or(protocol::item::ItemStack::hashable));
         Some(Prediction { modified: geaendert, cursor: self.cursor.clone(), hashable })
     }
 
@@ -801,8 +801,8 @@ pub struct DollRect {
 }
 
 impl DollRect {
-    pub fn center(&self) -> (f32, f32) {
-        ((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
+    pub const fn center(&self) -> (f32, f32) {
+        (f32::midpoint(self.x0, self.x1), f32::midpoint(self.y0, self.y1))
     }
 }
 
@@ -856,9 +856,11 @@ pub fn gui_scale(screen: (f32, f32)) -> f32 {
 }
 
 // Hoechste feste Stufe, die die Einstellungen anbieten: was Auto ergibt, aber mindestens
-// x4, damit kleine Fenster ihre gewohnten Stufen behalten.
+// x7 -- auch wenn es dann ueber den Bildschirm hinausgeht.
+pub const GUI_SCALE_MIN_MAX: u32 = 7;
+
 pub fn max_gui_scale(screen: (f32, f32)) -> u32 {
-    (gui_scale(screen) as u32).max(4)
+    (gui_scale(screen) as u32).max(GUI_SCALE_MIN_MAX)
 }
 
 // Obergrenze fuer gespeicherte Werte, bevor die Bildschirmgroesse bekannt ist (8K traegt x18).
@@ -999,7 +1001,7 @@ fn container_layout(screen: (f32, f32), scale: f32, slot_count: usize, screen_ty
 // Wie viele Container-Reihen ein Bildschirmtyp hat, wo das feststeht (Menu-Registry,
 // Reihenfolge der register()-Aufrufe in ScreenHandlerType): generic_9x1..9x6 = 0..5,
 // shulker_box = 20 (drei Reihen).
-pub fn container_rows(screen_type: i32) -> Option<usize> {
+pub const fn container_rows(screen_type: i32) -> Option<usize> {
     match screen_type {
         0..=5 => Some(screen_type as usize + 1),
         20 => Some(3),

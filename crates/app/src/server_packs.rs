@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
     Downloading,
     Ready(PathBuf),
@@ -155,7 +155,7 @@ impl ServerPacks {
 
     // Tab-Wechsel: die Packs des alten Tabs nach `alt`, die des neuen aus `neu` hierher. Der
     // geladene Stapel bleibt, bis neu geladen ist; dafuer reicht schon ein Unterschied.
-    pub fn switch_tab(&mut self, alt: &mut ServerPacks, neu: &mut ServerPacks) {
+    pub fn switch_tab(&mut self, alt: &mut Self, neu: &mut Self) {
         std::mem::swap(&mut self.entries, &mut alt.entries);
         std::mem::swap(&mut self.address, &mut alt.address);
         std::mem::swap(&mut self.entries, &mut neu.entries);
@@ -165,7 +165,7 @@ impl ServerPacks {
     }
 
     #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.applied.is_empty()
     }
 }

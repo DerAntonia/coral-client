@@ -139,7 +139,7 @@ pub fn build_trim_texture(mc: &mut MinecraftInstallation, ebene: &str, muster: &
                 continue;
             }
             let rgb = [px[0], px[1], px[2]];
-            let neu = paare.iter().find(|(k, _)| *k == rgb).map(|(_, f)| *f).unwrap_or(rgb);
+            let neu = paare.iter().find(|(k, _)| *k == rgb).map_or(rgb, |(_, f)| *f);
             let z = (y * TRIM_WIDTH as usize + x) * 4;
             out[z..z + 3].copy_from_slice(&neu);
             out[z + 3] = px[3];
@@ -191,15 +191,17 @@ struct Animation {
 const ANIMATION_COLS: u32 = 8;
 
 impl EntityAtlas {
+    #[must_use] 
     pub fn rect(&self, texture: &str) -> Option<TexRect> {
         self.rects.get(texture).copied()
     }
 
     // Das Bild einer animierten Textur zum Zeitpunkt `ticks` (Spieltick-Zaehler); fuer eine
     // unbewegte Textur einfach ihr Rechteck.
+    #[must_use] 
     pub fn animated_rect(&self, texture: &str, ticks: u64) -> Option<TexRect> {
         let Some(a) = self.animations.get(texture) else { return self.rect(texture) };
-        let mut t = (ticks % a.total_ticks.max(1) as u64) as u32;
+        let mut t = (ticks % u64::from(a.total_ticks.max(1))) as u32;
         let mut bild = a.sequence.first().map_or(0, |s| s.0);
         for &(index, dauer) in &a.sequence {
             if t < dauer {
@@ -214,75 +216,93 @@ impl EntityAtlas {
         Some(normalized(x, y, fw, fh))
     }
 
-    pub fn skin_slot_count(&self) -> usize {
+    #[must_use] 
+    pub const fn skin_slot_count(&self) -> usize {
         self.skin_slots.len()
     }
 
+    #[must_use] 
     pub fn skin_slot_rect(&self, slot: usize) -> Option<TexRect> {
         self.skin_slots.get(slot).map(|(_, _, rect)| *rect)
     }
 
     // Pixelposition eines Skin-Platzes -- der Aufrufer laedt dorthin per write_texture.
+    #[must_use] 
     pub fn skin_slot_origin(&self, slot: usize) -> Option<(u32, u32)> {
         self.skin_slots.get(slot).map(|(x, y, _)| (*x, *y))
     }
 
-    pub fn cape_slot_count(&self) -> usize {
+    #[must_use] 
+    pub const fn cape_slot_count(&self) -> usize {
         self.cape_slots.len()
     }
 
+    #[must_use] 
     pub fn cape_slot_rect(&self, slot: usize) -> Option<TexRect> {
         self.cape_slots.get(slot).map(|(_, _, rect)| *rect)
     }
 
+    #[must_use] 
     pub fn cape_slot_origin(&self, slot: usize) -> Option<(u32, u32)> {
         self.cape_slots.get(slot).map(|(x, y, _)| (*x, *y))
     }
 
-    pub fn item_slot_count(&self) -> usize {
+    #[must_use] 
+    pub const fn item_slot_count(&self) -> usize {
         self.item_slots.len()
     }
 
+    #[must_use] 
     pub fn item_slot_rect(&self, slot: usize) -> Option<TexRect> {
         self.item_slots.get(slot).map(|(_, _, rect)| *rect)
     }
 
+    #[must_use] 
     pub fn item_slot_origin(&self, slot: usize) -> Option<(u32, u32)> {
         self.item_slots.get(slot).map(|(x, y, _)| (*x, *y))
     }
 
-    pub fn map_slot_count(&self) -> usize {
+    #[must_use] 
+    pub const fn map_slot_count(&self) -> usize {
         self.map_slots.len()
     }
 
+    #[must_use] 
     pub fn map_slot_rect(&self, slot: usize) -> Option<TexRect> {
         self.map_slots.get(slot).map(|(_, _, rect)| *rect)
     }
 
+    #[must_use] 
     pub fn map_slot_origin(&self, slot: usize) -> Option<(u32, u32)> {
         self.map_slots.get(slot).map(|(x, y, _)| (*x, *y))
     }
 
-    pub fn trim_slot_count(&self) -> usize {
+    #[must_use] 
+    pub const fn trim_slot_count(&self) -> usize {
         self.trim_slots.len()
     }
 
+    #[must_use] 
     pub fn trim_slot_rect(&self, slot: usize) -> Option<TexRect> {
         self.trim_slots.get(slot).map(|(_, _, rect)| *rect)
     }
 
+    #[must_use] 
     pub fn trim_slot_origin(&self, slot: usize) -> Option<(u32, u32)> {
         self.trim_slots.get(slot).map(|(x, y, _)| (*x, *y))
     }
 
-    pub fn head_slot_count(&self) -> usize {
+    #[must_use] 
+    pub const fn head_slot_count(&self) -> usize {
         self.head_slots.len()
     }
 
+    #[must_use] 
     pub fn head_slot_rect(&self, slot: usize) -> Option<TexRect> {
         self.head_slots.get(slot).map(|(_, _, rect)| *rect)
     }
 
+    #[must_use] 
     pub fn head_slot_origin(&self, slot: usize) -> Option<(u32, u32)> {
         self.head_slots.get(slot).map(|(x, y, _)| (*x, *y))
     }
@@ -290,7 +310,8 @@ impl EntityAtlas {
     // Die weisse Kachel: Farbe mal Weiss ergibt die Farbe -- damit lassen sich einfarbige
     // Flaechen (die Boxen der modellosen Entities) im Entity-Durchgang zeichnen, ohne den
     // Atlas zu wechseln.
-    pub fn white_rect(&self) -> TexRect {
+    #[must_use] 
+    pub const fn white_rect(&self) -> TexRect {
         self.white
     }
 }
@@ -449,7 +470,7 @@ fn animation_sequence(mc: &mut MinecraftInstallation, name: &str, frames: u32) -
     let bytes = mc.load_bytes(&crate::blocks::resource_path("textures", name, ".png.mcmeta")).ok()?;
     let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let anim = json.get("animation")?;
-    let frametime = anim.get("frametime").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as u32;
+    let frametime = anim.get("frametime").and_then(serde_json::Value::as_u64).unwrap_or(1).max(1) as u32;
     let sequence: Vec<(u32, u32)> = match anim.get("frames").and_then(|f| f.as_array()) {
         Some(list) => list
             .iter()
@@ -457,7 +478,7 @@ fn animation_sequence(mc: &mut MinecraftInstallation, name: &str, frames: u32) -
                 serde_json::Value::Number(n) => n.as_u64().map(|i| (i as u32, frametime)),
                 serde_json::Value::Object(o) => {
                     let index = o.get("index")?.as_u64()? as u32;
-                    let time = o.get("time").and_then(|t| t.as_u64()).map_or(frametime, |t| t.max(1) as u32);
+                    let time = o.get("time").and_then(serde_json::Value::as_u64).map_or(frametime, |t| t.max(1) as u32);
                     Some((index, time))
                 }
                 _ => None,

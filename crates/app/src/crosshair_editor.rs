@@ -18,25 +18,25 @@ pub enum Pixel {
 }
 
 impl Pixel {
-    fn to_char(self) -> char {
+    const fn to_char(self) -> char {
         match self {
-            Pixel::Empty => '.',
-            Pixel::Fill => '#',
-            Pixel::Outline => 'o',
+            Self::Empty => '.',
+            Self::Fill => '#',
+            Self::Outline => 'o',
         }
     }
 
-    fn from_char(c: char) -> Option<Self> {
+    const fn from_char(c: char) -> Option<Self> {
         match c {
-            '.' => Some(Pixel::Empty),
-            '#' => Some(Pixel::Fill),
-            'o' => Some(Pixel::Outline),
+            '.' => Some(Self::Empty),
+            '#' => Some(Self::Fill),
+            'o' => Some(Self::Outline),
             _ => None,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pattern {
     pub pixels: Vec<Pixel>,
 }
@@ -50,19 +50,19 @@ pub enum Symmetry {
 }
 
 impl Symmetry {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Symmetry::Off => "Aus",
-            Symmetry::Mirror => "Spiegeln",
-            Symmetry::Quad => "4-fach",
+            Self::Off => "Aus",
+            Self::Mirror => "Spiegeln",
+            Self::Quad => "4-fach",
         }
     }
 
-    pub fn next(self) -> Self {
+    pub const fn next(self) -> Self {
         match self {
-            Symmetry::Off => Symmetry::Mirror,
-            Symmetry::Mirror => Symmetry::Quad,
-            Symmetry::Quad => Symmetry::Off,
+            Self::Off => Self::Mirror,
+            Self::Mirror => Self::Quad,
+            Self::Quad => Self::Off,
         }
     }
 }

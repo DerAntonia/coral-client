@@ -48,6 +48,7 @@ fn target(device: &wgpu::Device, label: &str, (w, h): (u32, u32)) -> Target {
 impl EntityOutline {
     // `target_format`: das Format, in das der Umriss am Ende gemischt wird (die Ansicht des
     // Weltbilds ohne sRGB).
+    #[must_use] 
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("entity outline shader"),
@@ -182,7 +183,7 @@ impl EntityOutline {
     }
 
     // Das Silhouetten-Bild (nach prepare), fuer Tests.
-    pub fn silhouette_texture(&self) -> &wgpu::Texture {
+    pub const fn silhouette_texture(&self) -> &wgpu::Texture {
         &self.silhouette.texture
     }
 

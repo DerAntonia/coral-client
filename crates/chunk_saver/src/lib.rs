@@ -39,11 +39,13 @@ pub use states::LodStates;
 // Ordner der gespeicherten Welten: <Datenordner>/chunk-saver/<Server>/<Dimension>_<Seed>.
 // Der Seed (gehasht, aus Login/Respawn) trennt Welten, die hinter einem Proxy dieselbe
 // Dimension melden (Lobby und Spielserver heissen beide minecraft:overworld).
+#[must_use] 
 pub fn world_dir(base: &Path, server: &str, dimension: &str, seed: i64) -> PathBuf {
     server_dir(base, server).join(format!("{}_{:016x}", sauber(dimension), seed as u64))
 }
 
 // Ordner eines Servers mit seinen gespeicherten Welten.
+#[must_use] 
 pub fn server_dir(base: &Path, server: &str) -> PathBuf {
     base.join("chunk-saver").join(sauber(server))
 }
@@ -142,6 +144,7 @@ pub struct ChunkSaver {
 }
 
 impl ChunkSaver {
+    #[must_use] 
     pub fn new(states: Arc<LodStates>, threads: usize) -> Self {
         let (ingest_tx, ingest_rx) = mpsc::channel();
         let (changed_tx, changed_rx) = mpsc::channel();
@@ -203,7 +206,8 @@ impl ChunkSaver {
         }
     }
 
-    pub fn threads(&self) -> usize {
+    #[must_use] 
+    pub const fn threads(&self) -> usize {
         self.workers.len()
     }
 
@@ -228,7 +232,8 @@ impl ChunkSaver {
         self.forget_meshes();
     }
 
-    pub fn has_world(&self) -> bool {
+    #[must_use] 
+    pub const fn has_world(&self) -> bool {
         self.world.is_some()
     }
 
@@ -269,16 +274,19 @@ impl ChunkSaver {
 
     // Wie viele Chunks noch auf die Aufnahme warten, wie viele Knoten-Meshes auf der GPU liegen,
     // wie viele Mesh-Auftraege laufen.
+    #[must_use] 
     pub fn stats(&self) -> (usize, usize, usize) {
         let meshes = self.nodes.values().filter(|s| s.has_mesh).count();
         (self.ingest_queued.load(Ordering::Relaxed), meshes, self.in_flight)
     }
 
     // Strahl durch die gespeicherte Welt (s. LodWorld::raycast); None ohne offene Welt.
+    #[must_use] 
     pub fn raycast(&self, from: [f64; 3], dir: [f64; 3], reach: f64) -> Option<([i64; 3], usize, i64)> {
         self.world.as_ref()?.raycast(from, dir, reach)
     }
 
+    #[must_use] 
     pub fn disk_bytes(&self) -> Option<u64> {
         self.world.as_ref().map(|w| w.store.disk_bytes())
     }
@@ -568,7 +576,7 @@ mod tests {
 
     // Huegel aus Stein, Erde und Gras, Wasser bis y = 62, ab und zu ein Halm.
     fn gelaende(cx: i32, cz: i32) -> ChunkColumn {
-        let hoehe = |x: i32, z: i32| (64.0 + 12.0 * ((x as f64) * 0.05).sin() * ((z as f64) * 0.04).cos() + 6.0 * ((x + z) as f64 * 0.13).sin()) as i32;
+        let hoehe = |x: i32, z: i32| (64.0 + 12.0 * (f64::from(x) * 0.05).sin() * (f64::from(z) * 0.04).cos() + 6.0 * (f64::from(x + z) * 0.13).sin()) as i32;
         let sections = (0..24)
             .map(|i| {
                 let mut s = vec![0u32; 4096];
@@ -709,8 +717,8 @@ mod tests {
                 println!(
                     "Stufe {level} {}: {knoten} Knoten in {ms:.0} ms ({:.2} ms/Knoten), {:.0} Flaechen/Knoten",
                     if mit_nachbarn { "mit Nachbarn " } else { "ohne Nachbarn" },
-                    ms / knoten.max(1) as f64,
-                    flaechen as f64 / knoten.max(1) as f64
+                    ms / f64::from(knoten.max(1)),
+                    flaechen as f64 / f64::from(knoten.max(1))
                 );
             }
         }

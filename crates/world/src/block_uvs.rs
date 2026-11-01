@@ -64,7 +64,8 @@ pub struct BlockUvs {
 }
 
 impl BlockUvs {
-    pub fn new(per_state: Vec<[UvRect; 6]>, missing: [UvRect; 6]) -> Self {
+    #[must_use] 
+    pub const fn new(per_state: Vec<[UvRect; 6]>, missing: [UvRect; 6]) -> Self {
         Self {
             per_state,
             content_per_state: Vec::new(),
@@ -82,7 +83,8 @@ impl BlockUvs {
         }
     }
 
-    pub fn with_content(
+    #[must_use] 
+    pub const fn with_content(
         per_state: Vec<[UvRect; 6]>,
         content_per_state: Vec<[Option<UvRect>; 6]>,
         water_uv: [UvRect; 6],
@@ -106,7 +108,8 @@ impl BlockUvs {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn with_content_and_overlay(
+    #[must_use] 
+    pub const fn with_content_and_overlay(
         per_state: Vec<[UvRect; 6]>,
         content_per_state: Vec<[Option<UvRect>; 6]>,
         overlay_per_state: Vec<[Option<UvRect>; 6]>,
@@ -133,7 +136,8 @@ impl BlockUvs {
 
     // Ein einheitliches UV fuer alle States/Flaechen -- fuer Tests und Aufrufer ohne echten
     // Atlas (die Mesh-Geometrie stimmt, nur die Textur ist einheitlich).
-    pub fn single_tile() -> Self {
+    #[must_use] 
+    pub const fn single_tile() -> Self {
         let tile = [[0.0, 0.0, 1.0, 1.0]; 6];
         Self {
             per_state: Vec::new(),
@@ -153,7 +157,7 @@ impl BlockUvs {
     }
 
     pub fn face_rect(&self, state: u32, face: usize) -> UvRect {
-        self.per_state.get(state as usize).map(|f| f[face]).unwrap_or(self.missing[face])
+        self.per_state.get(state as usize).map_or(self.missing[face], |f| f[face])
     }
 
     // face_rect(), aber mit Vanillas pseudozufaelliger Block-Rotation (s. world::
@@ -208,7 +212,7 @@ impl BlockUvs {
         self
     }
 
-    pub fn has_anim_variants(&self) -> bool {
+    pub const fn has_anim_variants(&self) -> bool {
         !self.anim_shifts.is_empty()
     }
 
@@ -218,51 +222,51 @@ impl BlockUvs {
     pub fn anim_shifts_at(&self, uv: [f32; 2]) -> &[[f32; 2]] {
         let g = self.anim_grid as f32;
         let (tx, ty) = ((uv[0] * g) as i64, (uv[1] * g) as i64);
-        if tx < 0 || ty < 0 || tx >= self.anim_grid as i64 || ty >= self.anim_grid as i64 {
+        if tx < 0 || ty < 0 || tx >= i64::from(self.anim_grid) || ty >= i64::from(self.anim_grid) {
             return &[];
         }
-        self.anim_shifts.get((ty * self.anim_grid as i64 + tx) as usize).map_or(&[], |b| b)
+        self.anim_shifts.get((ty * i64::from(self.anim_grid) + tx) as usize).map_or(&[], |b| b)
     }
 
-    pub fn water_rect(&self, face: usize) -> UvRect {
+    pub const fn water_rect(&self, face: usize) -> UvRect {
         self.water_uv[face]
     }
 
     // Bewusst ein Builder statt eines fuenften Konstruktor-Parameters: die Fliesstextur ist
     // optional (fehlt sie, sieht Wasser aus wie bisher), und alle vier bestehenden
     // Konstruktoren haetten sie sonst durchreichen muessen, ohne sie zu brauchen.
-    pub fn with_water_flow(mut self, uv: Option<UvRect>) -> Self {
+    pub const fn with_water_flow(mut self, uv: Option<UvRect>) -> Self {
         self.water_flow_uv = uv;
         self
     }
 
-    pub fn with_water_overlay(mut self, uv: Option<UvRect>) -> Self {
+    pub const fn with_water_overlay(mut self, uv: Option<UvRect>) -> Self {
         self.water_overlay_uv = uv;
         self
     }
 
     // None = keine Overlay-Textur verfuegbar; der Aufrufer nimmt dann water_rect().
-    pub fn water_overlay_rect(&self) -> Option<UvRect> {
+    pub const fn water_overlay_rect(&self) -> Option<UvRect> {
         self.water_overlay_uv
     }
 
     // None = keine Fliesstextur verfuegbar; der Aufrufer nimmt dann water_rect().
-    pub fn water_flow_rect(&self) -> Option<UvRect> {
+    pub const fn water_flow_rect(&self) -> Option<UvRect> {
         self.water_flow_uv
     }
 
-    pub fn with_lava_flow(mut self, uv: Option<UvRect>) -> Self {
+    pub const fn with_lava_flow(mut self, uv: Option<UvRect>) -> Self {
         self.lava_flow_uv = uv;
         self
     }
 
     // None = keine Lava-Fliesstextur verfuegbar; der Aufrufer nimmt dann das Stand-Sprite
     // des Lava-States (face_rect).
-    pub fn lava_flow_rect(&self) -> Option<UvRect> {
+    pub const fn lava_flow_rect(&self) -> Option<UvRect> {
         self.lava_flow_uv
     }
 
-    pub fn with_destroy_stages(mut self, uvs: [Option<UvRect>; 10]) -> Self {
+    pub const fn with_destroy_stages(mut self, uvs: [Option<UvRect>; 10]) -> Self {
         self.destroy_stage_uvs = uvs;
         self
     }

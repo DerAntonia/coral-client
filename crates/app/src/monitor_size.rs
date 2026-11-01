@@ -32,17 +32,17 @@ fn connected_edids() -> Vec<Vec<u8>> {
 
 // Breite des bevorzugten Modus: erster Timing-Block ab Byte 54.
 fn preferred_width(edid: &[u8]) -> Option<u32> {
-    let w = edid[56] as u32 | ((edid[58] as u32 >> 4) << 8);
+    let w = u32::from(edid[56]) | ((u32::from(edid[58]) >> 4) << 8);
     (w > 0).then_some(w)
 }
 
 // Bildgroesse: im ersten Timing-Block in mm (genauer), sonst die Basisangabe in ganzen cm.
 fn size_mm(edid: &[u8]) -> Option<f32> {
-    let mm = edid[66] as u32 | ((edid[68] as u32 >> 4) << 8);
+    let mm = u32::from(edid[66]) | ((u32::from(edid[68]) >> 4) << 8);
     if mm > 0 {
         return Some(mm as f32);
     }
-    (edid[21] > 0).then(|| edid[21] as f32 * 10.0)
+    (edid[21] > 0).then(|| f32::from(edid[21]) * 10.0)
 }
 
 #[cfg(test)]

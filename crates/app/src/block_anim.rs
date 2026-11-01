@@ -43,12 +43,12 @@ pub const FADE_FULL: u8 = 20;
 type Key = (AnimationState, u8);
 
 fn apply_fade(mips: &[Vec<u8>], fade: u8) -> Vec<Vec<u8>> {
-    let f = fade as u32;
+    let f = u32::from(fade);
     mips.iter()
         .map(|level| {
             let mut level = level.clone();
             for px in level.chunks_exact_mut(4) {
-                px[3] = ((px[3] as u32 * f + FADE_FULL as u32 / 2) / FADE_FULL as u32) as u8;
+                px[3] = ((u32::from(px[3]) * f + u32::from(FADE_FULL) / 2) / u32::from(FADE_FULL)) as u8;
             }
             level
         })
@@ -152,24 +152,21 @@ impl BlockAnimations {
                 for (index, key) in latest {
                     let Some(animation) = shared.get(index) else { continue };
                     let (state, fade) = key;
-                    let mips = match cache.get(&(index, key)) {
-                        Some(mips) => Arc::clone(mips),
-                        None => {
-                            let mut mips = animation.render(state);
-                            if feuer.get(index).copied().unwrap_or(false) {
-                                binarize_alpha(&mut mips);
-                            }
-                            if fade < FADE_FULL {
-                                mips = apply_fade(&mips, fade);
-                            }
-                            let mips = Arc::new(mips);
-                            // Nur volle Deckkraft: Zwischenstufen gibt es nur waehrend der einen
-                            // Sekunde des Blendens.
-                            if !state.is_interpolated() && fade == FADE_FULL {
-                                cache.insert((index, key), Arc::clone(&mips));
-                            }
-                            mips
+                    let mips = if let Some(mips) = cache.get(&(index, key)) { Arc::clone(mips) } else {
+                        let mut mips = animation.render(state);
+                        if feuer.get(index).copied().unwrap_or(false) {
+                            binarize_alpha(&mut mips);
                         }
+                        if fade < FADE_FULL {
+                            mips = apply_fade(&mips, fade);
+                        }
+                        let mips = Arc::new(mips);
+                        // Nur volle Deckkraft: Zwischenstufen gibt es nur waehrend der einen
+                        // Sekunde des Blendens.
+                        if !state.is_interpolated() && fade == FADE_FULL {
+                            cache.insert((index, key), Arc::clone(&mips));
+                        }
+                        mips
                     };
                     if target.is_some() {
                         fertig.push((mips, animation.origin, animation.tile_size));

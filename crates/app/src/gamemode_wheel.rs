@@ -120,7 +120,7 @@ impl App {
                 lines.push(UiLine { p0: quad[0], p1: quad[1], color: farbe, width: 0.0, feather: 0.0, quad: Some(quad), quad_colors: None, top: false });
             }
             // Symbol und Name in der Feldmitte.
-            let (cx, cy) = punkt((innen + aussen) / 2.0, -90.0 + i as f32 * 90.0);
+            let (cx, cy) = punkt(f32::midpoint(innen, aussen), -90.0 + i as f32 * 90.0);
             let groesse = 16.0 * s;
             if let Some(id) = world::item_registry::item_id_by_name(symbol) {
                 self.push_item_icon_only(sprites, &protocol::item::ItemStack::new(id, 1), cx - groesse / 2.0, cy - groesse * 0.8, groesse);

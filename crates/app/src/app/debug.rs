@@ -1,6 +1,6 @@
 // Debug-Overlay, Verbindungsanzeige, Tearing-Steuerung und Profiler.
 
-use crate::*;
+use crate::{App, physics, DVec3, Instant, GpuState, UiRect, UiLine, UiText, volume_text, UI_SCALE_SMALL, COLOR_WHITE, debug_graph_areas, push_stats_graph, UiOverlay, AppMode, push_stats_graph_frame, UiOverlayGroup, Rect, theme, UI_SCALE_NORMAL, OVERLAY_LOG_LINES, LOG_LINE_HEIGHT, connect_cancel_rect, Button, ButtonAction, styled_button, ui_sound, ConnStatus, MenuScreen, ActiveEventLoop, vblank, Duration, ControlFlow, next_wake, x11_window_id, system_info, shared_config_dir, notifications, COLOR_HUD, TEARING_BAR_WIDTH_PX, TEARING_BAR_COLORS, TEARING_BAR_SECONDS_PER_SWEEP};
 
 impl App {
     // F3-Debug-Overlay: oben links, wie in Vanilla. Zeigt nur Werte, die dieser Client
@@ -54,8 +54,8 @@ impl App {
             4 => DVec3::NEG_X,
             _ => DVec3::X,
         };
-        let start = DVec3::new(hit.block.0 as f64, hit.block.1 as f64, hit.block.2 as f64)
-            + DVec3::new(hit.cursor.0 as f64, hit.cursor.1 as f64, hit.cursor.2 as f64)
+        let start = DVec3::new(f64::from(hit.block.0), f64::from(hit.block.1), f64::from(hit.block.2))
+            + DVec3::new(f64::from(hit.cursor.0), f64::from(hit.cursor.1), f64::from(hit.cursor.2))
             + normale * 0.02;
         if normale.dot(d) <= 0.0 {
             return vec![kopf, format!("Sonnenstrahl: Fläche {:?} zeigt von der Sonne weg", hit.block)];
@@ -67,9 +67,9 @@ impl App {
             let state = self.world.chunk_block_at(b.0, b.1, b.2);
             if state != world::STATE_AIR {
                 let name = world::block_name(state).unwrap_or("?");
-                let lokal = p - DVec3::new(b.0 as f64, b.1 as f64, b.2 as f64);
+                let lokal = p - DVec3::new(f64::from(b.0), f64::from(b.1), f64::from(b.2));
                 let drin = !self.block_shapes.has_resolved_shape(state)
-                    || self.block_shapes.shapes_of(state).iter().any(|s| (0..3).all(|a| lokal[a] >= s.min[a] as f64 && lokal[a] <= s.max[a] as f64));
+                    || self.block_shapes.shapes_of(state).iter().any(|s| (0..3).all(|a| lokal[a] >= f64::from(s.min[a]) && lokal[a] <= f64::from(s.max[a])));
                 if drin {
                     let wirft = if self.block_shapes.has_resolved_shape(state) || name == "water" || name == "lava" { "" } else { " (wirft im Shader KEINEN Schatten)" };
                     return vec![kopf, format!("Sonnenstrahl ab {:?}: trifft {name} bei {:?} nach {t:.1} Blöcken{wirft}", hit.block, b)];
@@ -124,7 +124,7 @@ impl App {
         let mut ziel = None;
         let mut letzte = None;
         for i in 0..512 {
-            let p = start + dir * (i as f64 * 0.25);
+            let p = start + dir * (f64::from(i) * 0.25);
             let key = ((p.x.floor() as i32).div_euclid(16), (p.z.floor() as i32).div_euclid(16));
             if letzte != Some(key) {
                 letzte = Some(key);
@@ -165,7 +165,7 @@ impl App {
         let block_x = pos.x.floor() as i64;
         let block_y = pos.y.floor() as i64;
         let block_z = pos.z.floor() as i64;
-        let section_size = world::SECTION_SIZE as i64;
+        let section_size = i64::from(world::SECTION_SIZE);
         let chunk_x = block_x.div_euclid(section_size);
         let chunk_z = block_z.div_euclid(section_size);
         let local_x = block_x.rem_euclid(section_size);
@@ -313,7 +313,7 @@ impl App {
         for (area, (titel, serie)) in debug_graph_areas(gpu).into_iter().zip([("CPU", &stats.cpu), ("RAM", &stats.ram), ("GPU", &stats.gpu)]) {
             push_stats_graph_frame(gpu, &mut rects, &mut texts, area, titel, serie);
         }
-        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0 });
+        overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0, clip: None });
     }
 
     // Verbindungs-Overlay (World-Modus, bevor der erste Chunk da ist): Titel + Status +
@@ -387,7 +387,7 @@ impl App {
     pub(crate) fn tear_control_active(&self) -> bool {
         self.settings.tear_position != 0
             && self.vblank.as_ref().is_some_and(|v| v.latest().is_some())
-            && !self.gpu.as_ref().is_some_and(|gpu| gpu.present_mode_self_paces())
+            && !self.gpu.as_ref().is_some_and(super::super::GpuState::present_mode_self_paces)
     }
 
     // Wo im Bildaufbau (ns seit Beginn des Auslesens von Zeile 0) der Bildwechsel liegen soll.
@@ -400,18 +400,15 @@ impl App {
         // Luecke hin ist unsichtbar, einer ins Bild hinein laege nur wenige Zeilen tief.
         const MARGIN_NS: f64 = 150_000.0;
         // Mit den echten Zeilen des Bildmodus, sonst geschaetzt.
-        let visible = match self.vblank.as_ref().and_then(|v| v.lines) {
-            Some((sichtbar, gesamt)) => period_ns * sichtbar as f64 / gesamt as f64,
-            None => {
-                let height = self.gpu.as_ref()?.size().1 as f64;
-                period_ns * height / (height + BLANK_LINES)
-            }
+        let visible = if let Some((sichtbar, gesamt)) = self.vblank.as_ref().and_then(|v| v.lines) { period_ns * f64::from(sichtbar) / f64::from(gesamt) } else {
+            let height = f64::from(self.gpu.as_ref()?.size().1);
+            period_ns * height / (height + BLANK_LINES)
         };
         let sichtbar_ziel = match self.settings.tear_position {
             1 => visible - MARGIN_NS,
             _ => return None,
         };
-        Some((sichtbar_ziel + self.settings.tear_timing_us as f64 * 1000.0).rem_euclid(period_ns))
+        Some((sichtbar_ziel + f64::from(self.settings.tear_timing_us) * 1000.0).rem_euclid(period_ns))
     }
 
     // Wie viele Monitorbilder ein Frame mit Riss-Steuerung dauert: aus dem FPS-Limit gerundet
@@ -461,7 +458,7 @@ impl App {
     // Drittel der Reserve oder zu spaet) sofort deutlich mehr, sonst langsam zurueck -- jede
     // Millisekunde Vorlauf ist eine Millisekunde Latenz.
     pub(crate) fn adapt_tear_lead(&mut self, ready_ns: i64, present_at_ns: i64) {
-        let want = self.settings.tear_reserve_us as f64 * 1000.0;
+        let want = f64::from(self.settings.tear_reserve_us) * 1000.0;
         let slack = (present_at_ns - ready_ns) as f64;
         if slack < want / 3.0 {
             self.tear_lead_ns += want - slack;
@@ -524,7 +521,7 @@ impl App {
         let path = shared_config_dir().map(|dir| dir.join("frame_profile.csv"));
         let csv = self.profiler.toggle(path);
         if self.profiler.active() {
-            let wohin = csv.map(|p| p.display().to_string()).unwrap_or_else(|| "keine CSV-Datei".into());
+            let wohin = csv.map_or_else(|| "keine CSV-Datei".into(), |p| p.display().to_string());
             self.push_log(format!("Frame-Profiler an, schreibt {wohin}"));
             self.notify(notifications::Notification::success("Frame-Profiler an".to_string(), wohin));
         } else {
@@ -535,7 +532,7 @@ impl App {
     // Das Frame-Intervall, das wir selbst anpeilen -- None, wenn der Present-Modus taktet
     // (Fifo) oder kein Deckel gesetzt ist. Nur fuer die Ausreisser-Erkennung des Profilers.
     pub(crate) fn profiler_target_interval(&self) -> Option<Duration> {
-        if self.gpu.as_ref().is_some_and(|gpu| gpu.present_mode_self_paces()) {
+        if self.gpu.as_ref().is_some_and(super::super::GpuState::present_mode_self_paces) {
             return None;
         }
         Some(self.effective_frame_interval()).filter(|d| !d.is_zero())

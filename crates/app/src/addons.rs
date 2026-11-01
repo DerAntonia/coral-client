@@ -36,7 +36,7 @@ pub struct PacketTx {
 
 impl PacketTx {
     pub fn new(inner: tokio::sync::mpsc::UnboundedSender<Vec<u8>>, hold: bool) -> Self {
-        PacketTx { inner, held: std::rc::Rc::new(std::cell::RefCell::new(hold.then(Vec::new))) }
+        Self { inner, held: std::rc::Rc::new(std::cell::RefCell::new(hold.then(Vec::new))) }
     }
 
     pub fn send(&self, packet: Vec<u8>) -> Result<(), tokio::sync::mpsc::error::SendError<Vec<u8>>> {
@@ -165,7 +165,7 @@ impl Addon {
         let bytes = api::encode(event);
         // SAFETY: nur die Lebensdauer wird vergessen; der Zeiger wird in call() wieder auf None
         // gesetzt, bevor `host` ungueltig werden kann.
-        let ptr = unsafe { std::mem::transmute::<*const (dyn Host + '_), *const (dyn Host + 'static)>(host as *const dyn Host) };
+        let ptr = unsafe { std::mem::transmute::<*const (dyn Host + '_), *const (dyn Host + 'static)>(std::ptr::from_ref::<dyn Host>(host)) };
         self.store.data_mut().host = Some(HostPtr(ptr));
         self.store.set_fuel(FUEL_PER_CALL).map_err(|e| e.to_string())?;
         let ziel = self.alloc.call(&mut self.store, bytes.len() as u32).map_err(|e| e.to_string())?;
@@ -299,14 +299,14 @@ impl Addons {
 }
 
 // Abfragen beantwortet der Host sofort; alles andere ist eine Aktion fuer nach dem Hook.
-fn is_query(c: &api::Call) -> bool {
+const fn is_query(c: &api::Call) -> bool {
     matches!(c, api::Call::Player | api::Call::Inventory | api::Call::Entities { .. } | api::Call::Block { .. } | api::Call::Target | api::Call::Players | api::Call::Screen | api::Call::GetSetting { .. })
 }
 
 fn linker(engine: &Engine) -> wasmtime::Result<Linker<Data>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap("coral", "call", |mut caller: Caller<'_, Data>, ptr: u32, len: u32| -> u32 {
-        let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else { return 0 };
+        let Some(mem) = caller.get_export("memory").and_then(wasmtime::Extern::into_memory) else { return 0 };
         let mut buf = vec![0u8; len as usize];
         if mem.read(&caller, ptr as usize, &mut buf).is_err() {
             return 0;
@@ -327,7 +327,7 @@ fn linker(engine: &Engine) -> wasmtime::Result<Linker<Data>> {
         data.answer.len() as u32
     })?;
     linker.func_wrap("coral", "answer", |mut caller: Caller<'_, Data>, dst: u32| {
-        let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else { return };
+        let Some(mem) = caller.get_export("memory").and_then(wasmtime::Extern::into_memory) else { return };
         let (speicher, data) = mem.data_and_store_mut(&mut caller);
         let n = data.answer.len();
         if let Some(ziel) = speicher.get_mut(dst as usize..dst as usize + n) {

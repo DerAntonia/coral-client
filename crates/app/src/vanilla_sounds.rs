@@ -41,7 +41,7 @@ pub struct Resolved {
 }
 
 impl VanillaSounds {
-    pub fn load(installation: &mut assets::MinecraftInstallation) -> VanillaSounds {
+    pub fn load(installation: &mut assets::MinecraftInstallation) -> Self {
         let index = match assets::SoundIndex::load(installation) {
             Ok(index) => {
                 println!("[audio] {} Sound-Events aus sounds.json geladen", index.len());
@@ -53,10 +53,10 @@ impl VanillaSounds {
                 None
             }
         };
-        VanillaSounds { index, geladen: HashMap::new(), gewarnt: HashMap::new() }
+        Self { index, geladen: HashMap::new(), gewarnt: HashMap::new() }
     }
 
-    pub fn is_ready(&self) -> bool {
+    pub const fn is_ready(&self) -> bool {
         self.index.is_some()
     }
 

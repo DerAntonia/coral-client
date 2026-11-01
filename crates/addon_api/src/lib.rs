@@ -86,45 +86,53 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn as_bool(&self) -> bool {
-        matches!(self, Value::Bool(true))
+    #[must_use] 
+    pub const fn as_bool(&self) -> bool {
+        matches!(self, Self::Bool(true))
     }
 
-    pub fn as_f64(&self) -> Option<f64> {
+    #[must_use] 
+    pub const fn as_f64(&self) -> Option<f64> {
         match self {
-            Value::Number(n) => Some(*n),
+            Self::Number(n) => Some(*n),
             _ => None,
         }
     }
 
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         match self {
-            Value::Text(s) => s,
+            Self::Text(s) => s,
             _ => "",
         }
     }
 }
 
 impl Setting {
+    #[must_use] 
     pub fn toggle(key: &str, label: &str, default: bool) -> Self {
-        Setting { key: key.into(), label: label.into(), kind: SettingKind::Toggle, default: Value::Bool(default) }
+        Self { key: key.into(), label: label.into(), kind: SettingKind::Toggle, default: Value::Bool(default) }
     }
 
+    #[must_use] 
     pub fn slider(key: &str, label: &str, min: f64, max: f64, step: f64, unit: &str, default: f64) -> Self {
-        Setting { key: key.into(), label: label.into(), kind: SettingKind::Slider { min, max, step, unit: unit.into() }, default: Value::Number(default) }
+        Self { key: key.into(), label: label.into(), kind: SettingKind::Slider { min, max, step, unit: unit.into() }, default: Value::Number(default) }
     }
 
+    #[must_use] 
     pub fn choice(key: &str, label: &str, options: &[&str], default: &str) -> Self {
         let options = options.iter().map(|&o| String::from(o)).collect();
-        Setting { key: key.into(), label: label.into(), kind: SettingKind::Choice { options }, default: Value::Text(default.into()) }
+        Self { key: key.into(), label: label.into(), kind: SettingKind::Choice { options }, default: Value::Text(default.into()) }
     }
 
+    #[must_use] 
     pub fn color(key: &str, label: &str, default: &str) -> Self {
-        Setting { key: key.into(), label: label.into(), kind: SettingKind::Color, default: Value::Text(default.into()) }
+        Self { key: key.into(), label: label.into(), kind: SettingKind::Color, default: Value::Text(default.into()) }
     }
 
+    #[must_use] 
     pub fn button(key: &str, label: &str) -> Self {
-        Setting { key: key.into(), label: label.into(), kind: SettingKind::Button, default: Value::None }
+        Self { key: key.into(), label: label.into(), kind: SettingKind::Button, default: Value::None }
     }
 }
 
@@ -189,28 +197,29 @@ pub enum Event {
 }
 
 impl Event {
-    pub fn hook(&self) -> Option<Hook> {
+    #[must_use] 
+    pub const fn hook(&self) -> Option<Hook> {
         Some(match self {
-            Event::Tick => Hook::Tick,
-            Event::Frame { .. } => Hook::Frame,
-            Event::Join { .. } => Hook::Join,
-            Event::Leave { .. } => Hook::Leave,
-            Event::ChatIn { .. } => Hook::ChatIn,
-            Event::ChatOut { .. } => Hook::ChatOut,
-            Event::PacketIn { .. } => Hook::PacketIn,
-            Event::PacketOut { .. } => Hook::PacketOut,
-            Event::Key { .. } => Hook::Key,
-            Event::Mouse { .. } => Hook::Mouse,
-            Event::Scroll { .. } => Hook::Scroll,
-            Event::Death => Hook::Death,
-            Event::Init { .. } | Event::ModuleEnabled { .. } | Event::Setting { .. } | Event::Button { .. } | Event::Command { .. } => return None,
+            Self::Tick => Hook::Tick,
+            Self::Frame { .. } => Hook::Frame,
+            Self::Join { .. } => Hook::Join,
+            Self::Leave { .. } => Hook::Leave,
+            Self::ChatIn { .. } => Hook::ChatIn,
+            Self::ChatOut { .. } => Hook::ChatOut,
+            Self::PacketIn { .. } => Hook::PacketIn,
+            Self::PacketOut { .. } => Hook::PacketOut,
+            Self::Key { .. } => Hook::Key,
+            Self::Mouse { .. } => Hook::Mouse,
+            Self::Scroll { .. } => Hook::Scroll,
+            Self::Death => Hook::Death,
+            Self::Init { .. } | Self::ModuleEnabled { .. } | Self::Setting { .. } | Self::Button { .. } | Self::Command { .. } => return None,
         })
     }
 }
 
 // Was ein Hook mit dem Ereignis macht. Mehrere Addons laufen nacheinander: ein Abbruch endet
 // die Kette, ein ersetzter Inhalt geht an das naechste Addon weiter.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub enum Flow {
     #[default]
     Continue,
@@ -327,7 +336,7 @@ pub struct PlayerState {
     pub server: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     // z.B. "minecraft:diamond_sword".
     pub id: String,
@@ -348,7 +357,7 @@ pub struct EntityInfo {
     pub distance: f64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Target {
     #[default]
     Miss,
@@ -356,7 +365,7 @@ pub enum Target {
     Entity { id: i32 },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PlayerEntry {
     pub name: String,
     pub uuid: [u8; 16],
@@ -375,7 +384,7 @@ pub struct ScreenState {
     pub chat_open: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Input {
     pub forward: bool,
     pub back: bool,
@@ -413,6 +422,7 @@ pub fn encode<T: Serialize>(value: &T) -> Vec<u8> {
     postcard::to_allocvec(value).unwrap_or_default()
 }
 
+#[must_use] 
 pub fn decode<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Option<T> {
     postcard::from_bytes(bytes).ok()
 }

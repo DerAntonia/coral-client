@@ -28,48 +28,48 @@ pub enum Deco {
 }
 
 impl Deco {
-    pub const ALL: [Deco; 5] = [Deco::Off, Deco::Solid, Deco::Gradient, Deco::Flowing, Deco::Rainbow];
+    pub const ALL: [Self; 5] = [Self::Off, Self::Solid, Self::Gradient, Self::Flowing, Self::Rainbow];
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         self.label_or("Aus")
     }
 
     // Beschriftung, bei der "Aus" anders heisst (beim Schatten: der uebliche).
-    pub fn label_or(self, aus: &'static str) -> &'static str {
+    pub const fn label_or(self, aus: &'static str) -> &'static str {
         match self {
-            Deco::Off => aus,
-            Deco::Solid => "Einfarbig",
-            Deco::Gradient => "Verlauf",
-            Deco::Flowing => "Verlauf bewegt",
-            Deco::Rainbow => "Regenbogen",
+            Self::Off => aus,
+            Self::Solid => "Einfarbig",
+            Self::Gradient => "Verlauf",
+            Self::Flowing => "Verlauf bewegt",
+            Self::Rainbow => "Regenbogen",
         }
     }
 
-    pub fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
-            Deco::Off => "off",
-            Deco::Solid => "solid",
-            Deco::Gradient => "gradient",
-            Deco::Flowing => "flowing",
-            Deco::Rainbow => "rainbow",
+            Self::Off => "off",
+            Self::Solid => "solid",
+            Self::Gradient => "gradient",
+            Self::Flowing => "flowing",
+            Self::Rainbow => "rainbow",
         }
     }
 
-    pub fn parse(s: &str) -> Option<Deco> {
-        Deco::ALL.into_iter().find(|d| d.key() == s)
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.key() == s)
     }
 
-    pub fn next(self) -> Deco {
-        Deco::ALL[(self as usize + 1) % Deco::ALL.len()]
+    pub const fn next(self) -> Self {
+        Self::ALL[(self as usize + 1) % Self::ALL.len()]
     }
 
     // Braucht die zweite Farbe.
-    pub fn two_colors(self) -> bool {
-        matches!(self, Deco::Gradient | Deco::Flowing)
+    pub const fn two_colors(self) -> bool {
+        matches!(self, Self::Gradient | Self::Flowing)
     }
 
-    pub fn moves(self) -> bool {
-        matches!(self, Deco::Flowing | Deco::Rainbow)
+    pub const fn moves(self) -> bool {
+        matches!(self, Self::Flowing | Self::Rainbow)
     }
 }
 
@@ -200,7 +200,7 @@ pub struct Rewrite<'a> {
     pub shadow: bool,
 }
 
-fn word_char(b: u8) -> bool {
+const fn word_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 

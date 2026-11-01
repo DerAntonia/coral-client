@@ -24,7 +24,7 @@ pub fn copy(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: 
     let padded_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("screenshot readback"),
-        size: padded_row as u64 * height as u64,
+        size: u64::from(padded_row) * u64::from(height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });

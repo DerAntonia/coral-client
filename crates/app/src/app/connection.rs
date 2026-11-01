@@ -1,10 +1,16 @@
 // Verbinden und Trennen, Microsoft-Login und Kontenverwaltung.
 
-use crate::*;
+use crate::{theme, App, ConnStatus, modules, sound_log, toteming, accounts, addons, AZURE_CLIENT_ID, AuthEvent, ACCOUNT_RECHECK, Instant, notifications, open_external_command, uuid_bytes_from_hex, ACCOUNT_HEAD_RETRY, AppMode, MenuScreen, KeyBindAction};
 
 impl App {
     // Verbindet; laeuft schon eine Verbindung, wird sie vorher getrennt (Reconnect).
     pub(crate) fn start_connect(&mut self) {
+        self.start_session(None);
+    }
+
+    // Wie start_connect, mit `replay` aber eine Aufnahme statt eines Servers (s. app/replay.rs):
+    // Pfad, Uhr der Wiedergabe und der aufgenommene Server (fuer dessen Resourcepacks).
+    pub(crate) fn start_session(&mut self, replay: Option<(std::path::PathBuf, std::sync::Arc<record::ReplayClock>, String)>) {
         let previous = self.conn_task.take();
         if previous.is_some() {
             self.push_log("== reconnect ==");
@@ -14,12 +20,15 @@ impl App {
         self.reset_world();
         self.server_packs.clear();
         self.sky_time_pending = true;
-        self.lod_preview_saved();
-        self.request_connect_view();
+        // In der Wiedergabe gehoeren Fernsicht und Vorschaubild nicht zum gewaehlten Server.
+        if replay.is_none() {
+            self.lod_preview_saved();
+            self.request_connect_view();
+        }
         self.connect_view_taken = false;
         self.connect_view_first_at = None;
 
-        let address = self.server_address.clone();
+        let address = replay.as_ref().map_or_else(|| self.server_address.clone(), |r| r.2.clone());
         self.server_packs.set_address(&address);
         // Der Sofort-Ton-Haken (s. net::Events::with_immediate). Er laeuft im Netzwerk-Task,
         // also darf er NUR auf threadsichere Dinge zugreifen: den Mixer-Griff und die
@@ -74,7 +83,9 @@ impl App {
         }))
         // Rohe Pakete fuer Addons (Hook::PacketIn), nur solange eines sie hoert.
         .with_raw(std::sync::Arc::clone(&self.addon_raw_in))
-        .with_background(hinten);
+        .with_background(hinten)
+        // coral-record: die Verbindung meldet hier ihre Sitzung (s. app/record.rs).
+        .with_record(std::sync::Arc::clone(&self.tabs[self.active_tab].record_slot));
         // Angemeldet -> echtes Konto (Online-Mode). Sonst Offline-Mode mit "Player" (wie
         // bisher, fuer den lokalen Test-Server mit online-mode=false).
         let credentials = self.credentials.clone();
@@ -99,6 +110,10 @@ impl App {
             if let Some(prev) = previous {
                 prev.abort();
                 let _ = prev.await;
+            }
+            if let Some((pfad, uhr, _)) = replay {
+                let _ = net::replay(pfad, uhr, events, outgoing_rx, rotation).await;
+                return;
             }
             let mut credentials = credentials;
             if abgelaufen {
@@ -453,10 +468,10 @@ impl App {
         } else {
             // Sofort als gewaehlt zeigen, die Anmeldung laeuft im Hintergrund (s. account_switching).
             self.account_switching = Some((accounts::key(&a.uuid), Instant::now()));
-            if !a.refresh_token.is_empty() {
-                self.redeem_refresh_token(a.refresh_token, a.client_id);
-            } else {
+            if a.refresh_token.is_empty() {
                 self.submit_token_login(a.access_token, a.source);
+            } else {
+                self.redeem_refresh_token(a.refresh_token, a.client_id);
             }
         }
     }
@@ -592,6 +607,7 @@ impl App {
         }
         self.column_history.clear();
         self.world_reset_debug = None;
+        self.replay = None;
         self.start_connect();
         self.mode = AppMode::World;
         self.screen = MenuScreen::Main;
@@ -640,7 +656,10 @@ impl App {
             return;
         };
         task.abort();
-        self.keep_last_view();
+        // Eine Wiedergabe ist kein Blick auf den gewaehlten Server.
+        if self.replay.take().is_none() {
+            self.keep_last_view();
+        }
         // Der abgebrochene Task kommt nicht mehr dazu, ein Disconnected-Event zu senden --
         // den Status setzen wir daher hier selbst.
         self.conn_status = ConnStatus::Disconnected;

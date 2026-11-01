@@ -108,13 +108,10 @@ impl JavaZip {
         }
         let start = loc + LOC_LEN + u16_at(&self.data, loc + 26)? as usize + u16_at(&self.data, loc + 28)? as usize;
         let raw = self.data.get(start..start.checked_add(e.compressed as usize)?)?;
-        match e.method {
-            0 => Some(raw.to_vec()),
-            _ => {
-                let mut out = Vec::with_capacity(e.size as usize);
-                flate2::read::DeflateDecoder::new(raw).read_to_end(&mut out).ok()?;
-                Some(out)
-            }
+        if e.method == 0 { Some(raw.to_vec()) } else {
+            let mut out = Vec::with_capacity(e.size as usize);
+            flate2::read::DeflateDecoder::new(raw).read_to_end(&mut out).ok()?;
+            Some(out)
         }
     }
 }

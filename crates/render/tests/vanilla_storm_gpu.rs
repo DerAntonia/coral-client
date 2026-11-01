@@ -48,7 +48,7 @@ fn bild(device: &wgpu::Device, queue: &wgpu::Queue, draw: &VanillaDraw) -> Vec<u
         });
         draw.draw_items(&mut pass);
     }
-    let lese = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (W * W * 4) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let lese = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(W * W * 4), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
     enc.copy_texture_to_buffer(
         ziel.as_image_copy(),
         wgpu::ImageCopyBuffer { buffer: &lese, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(W * 4), rows_per_image: Some(W) } },
@@ -114,7 +114,7 @@ fn die_sturmwand_erscheint_von_innen() {
 
     draw.set_item_vertices(&device, &queue, &quad);
     let mit = bild(&device, &queue, &draw);
-    let rote = mit.chunks(4).filter(|p| p[0] > 20 && p[0] as u16 > p[1] as u16 + 15 && p[0] as u16 > p[2] as u16 + 15).count();
+    let rote = mit.chunks(4).filter(|p| p[0] > 20 && u16::from(p[0]) > u16::from(p[1]) + 15 && u16::from(p[0]) > u16::from(p[2]) + 15).count();
     eprintln!("rote Pixel: {rote} von {}", W * W);
     // MC_STORM_DUMP=datei.ppm: das Bild zum Ansehen ablegen.
     if let Some(pfad) = std::env::var_os("MC_STORM_DUMP") {

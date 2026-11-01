@@ -22,22 +22,22 @@ pub enum WallpaperMode {
 }
 
 impl WallpaperMode {
-    pub const ALL: [WallpaperMode; 4] = [WallpaperMode::None, WallpaperMode::File, WallpaperMode::Desktop, WallpaperMode::Coral];
+    pub const ALL: [Self; 4] = [Self::None, Self::File, Self::Desktop, Self::Coral];
 
     pub fn from_index(i: u8) -> Self {
-        Self::ALL.get(i as usize).copied().unwrap_or(WallpaperMode::None)
+        Self::ALL.get(i as usize).copied().unwrap_or(Self::None)
     }
 
     pub fn index(self) -> u8 {
         Self::ALL.iter().position(|&m| m == self).unwrap_or(0) as u8
     }
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            WallpaperMode::None => "Keins",
-            WallpaperMode::File => "Eigenes Bild",
-            WallpaperMode::Desktop => "Linux-Desktop",
-            WallpaperMode::Coral => "Coral",
+            Self::None => "Keins",
+            Self::File => "Eigenes Bild",
+            Self::Desktop => "Linux-Desktop",
+            Self::Coral => "Coral",
         }
     }
 }
@@ -62,9 +62,9 @@ const MAX_TEXTURE_SIDE: u32 = 8192;
 /// (wie "Zoom" beim Desktop-Hintergrund). Nie vergroessert -- das macht die GPU beim
 /// Zeichnen ohnehin, und ein groesseres Bild kostet nur Speicher.
 pub fn cover_size(bild: (u32, u32), ziel: (u32, u32)) -> (u32, u32) {
-    let (w, h) = (bild.0.max(1) as f64, bild.1.max(1) as f64);
-    let deckend = (ziel.0.max(1) as f64 / w).max(ziel.1.max(1) as f64 / h).min(1.0);
-    let grenze = (MAX_TEXTURE_SIDE as f64 / w.max(h)).min(1.0);
+    let (w, h) = (f64::from(bild.0.max(1)), f64::from(bild.1.max(1)));
+    let deckend = (f64::from(ziel.0.max(1)) / w).max(f64::from(ziel.1.max(1)) / h).min(1.0);
+    let grenze = (f64::from(MAX_TEXTURE_SIDE) / w.max(h)).min(1.0);
     let s = deckend.min(grenze);
     (((w * s).ceil() as u32).max(1), ((h * s).ceil() as u32).max(1))
 }
@@ -103,7 +103,7 @@ pub fn decode(path: &Path, ziel: (u32, u32)) -> Result<Decoded, String> {
 
 /// Pfad des aktuellen Desktop-Hintergrunds, oder None, wenn die Arbeitsumgebung keinen
 /// verraet. Gefragt wird der Reihe nach, was die verbreiteten Umgebungen benutzen; die
-/// laufende (XDG_CURRENT_DESKTOP) zuerst, damit etwa ein uebrig gebliebener GNOME-Eintrag
+/// laufende (`XDG_CURRENT_DESKTOP`) zuerst, damit etwa ein uebrig gebliebener GNOME-Eintrag
 /// unter Cinnamon nicht gewinnt.
 pub fn desktop_wallpaper() -> Option<PathBuf> {
     #[cfg(windows)]
@@ -355,7 +355,7 @@ pub struct Loader {
 impl Default for Loader {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
-        Loader { tx, rx, generation: 0, stand: None, picking: false }
+        Self { tx, rx, generation: 0, stand: None, picking: false }
     }
 }
 
@@ -418,7 +418,7 @@ impl Loader {
         self.stand.as_ref().map(|(p, _)| p.as_path())
     }
 
-    pub fn picking(&self) -> bool {
+    pub const fn picking(&self) -> bool {
         self.picking
     }
 

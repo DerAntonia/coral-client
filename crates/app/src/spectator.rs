@@ -47,8 +47,8 @@ pub fn landing_spot(hit: &physics::BlockRayHit) -> DVec3 {
         protocol::packets::FACE_WEST => (-1, 0, 0),
         _ => (1, 0, 0),
     };
-    let fuss = if hit.face == protocol::packets::FACE_DOWN { (y + dy) as f64 + 1.0 - physics::PLAYER_HEIGHT as f64 } else { (y + dy) as f64 };
-    DVec3::new((x + dx) as f64 + 0.5, fuss + LANDING_HEIGHT, (z + dz) as f64 + 0.5)
+    let fuss = if hit.face == protocol::packets::FACE_DOWN { f64::from(y + dy) + 1.0 - f64::from(physics::PLAYER_HEIGHT) } else { f64::from(y + dy) };
+    DVec3::new(f64::from(x + dx) + 0.5, fuss + LANDING_HEIGHT, f64::from(z + dz) + 0.5)
 }
 
 // Ein Tick des Klick-Teleports: von `pos` hoechstens SPRUNG Bloecke Richtung `ziel`. Dazu, ob
@@ -69,6 +69,7 @@ impl App {
         if neu != self.settings.spectator_speed {
             self.settings.spectator_speed = neu;
             let _ = self.settings.save();
+            self.note_config_written();
         }
         let text = format!("Fluggeschwindigkeit: {neu} Blöcke/s");
         self.action_bar = Some((vec![protocol::nbt::TextSpan { text, color: None, link: None, action: None, style: 0, shadow: None }], std::time::Instant::now()));
@@ -82,7 +83,7 @@ impl App {
         }
         let eye = self.physics.eye_pos();
         let dir = self.camera.forward();
-        let dir = DVec3::new(dir.x as f64, dir.y as f64, dir.z as f64);
+        let dir = DVec3::new(f64::from(dir.x), f64::from(dir.y), f64::from(dir.z));
         if let Some(hit) = physics::raycast_block_far(eye, dir, TELEPORT_REACH, &self.world, &self.block_shapes).or_else(|| self.lod_teleport_hit(eye, dir)) {
             self.spectator_flight = Some(landing_spot(&hit));
         }
@@ -91,7 +92,7 @@ impl App {
 
     // Hinter den geladenen Chunks: die gespeicherten Bloecke der Fernsicht (Modul Chunk-Saver).
     fn lod_teleport_hit(&self, eye: DVec3, dir: DVec3) -> Option<physics::BlockRayHit> {
-        let reach = TELEPORT_REACH.max(self.lod_radius_chunks() as f64 * 16.0);
+        let reach = TELEPORT_REACH.max(f64::from(self.lod_radius_chunks()) * 16.0);
         let (block, achse, schritt) = self.lod.raycast(eye.to_array(), dir.to_array(), reach)?;
         let face = match (achse, schritt > 0) {
             (0, true) => protocol::packets::FACE_WEST,
@@ -175,7 +176,7 @@ mod tests {
         assert_eq!(landing_spot(&hit(protocol::packets::FACE_NORTH)), DVec3::new(10.5, 69.0, -3.5));
         // Von unten: der Kopf steckt in der Zelle darunter, die Fuesse haengen tiefer.
         let unten = landing_spot(&hit(protocol::packets::FACE_DOWN));
-        assert!((unten.y - (64.0 - physics::PLAYER_HEIGHT as f64 + 5.0)).abs() < 1e-9);
+        assert!((unten.y - (64.0 - f64::from(physics::PLAYER_HEIGHT) + 5.0)).abs() < 1e-9);
     }
 
     #[test]

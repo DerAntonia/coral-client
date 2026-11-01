@@ -202,7 +202,7 @@ pub(crate) struct Element {
     pub(crate) shade: bool,
 }
 
-fn shade_default() -> bool {
+const fn shade_default() -> bool {
     true
 }
 
@@ -251,6 +251,7 @@ pub(crate) fn strip_ns(s: &str) -> &str {
 // "textures", "items"), `id` eine Ressourcen-ID mit oder ohne Namespace. "block/stone" und
 // "minecraft:block/stone" liegen unter minecraft/, "uhc:item/storm_wall" unter uhc/ --
 // Server-Packs bringen ihre Modelle und Texturen in eigenen Namespaces mit.
+#[must_use] 
 pub fn resource_path(kind: &str, id: &str, ext: &str) -> String {
     match id.split_once(':') {
         Some((ns, pfad)) => format!("{ns}/{kind}/{pfad}{ext}"),
@@ -272,8 +273,8 @@ fn first_model(bs: &BlockstateJson) -> Option<(String, i32, i32)> {
             other => other,
         };
         let model = obj.get("model").and_then(|m| m.as_str())?;
-        let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let x = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+        let y = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
         Some((strip_ns(model).to_string(), x, y))
     };
     if let Some(v) = bs.variants.values().next() {
@@ -302,8 +303,8 @@ fn all_variant_entries(bs: &BlockstateJson) -> Option<Vec<(i32, i32, bool)>> {
             .map(|obj| {
                 let model = obj.get("model").and_then(|m| m.as_str()).unwrap_or("");
                 let mirrored = strip_ns(model).ends_with("_mirrored");
-                let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let x = obj.get("x").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+                let y = obj.get("y").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
                 (x, y, mirrored)
             })
             .collect(),
@@ -677,9 +678,10 @@ pub fn animation_meta(mc: &mut MinecraftInstallation, png: &str) -> Option<serde
 // fehlen beide, ein Quadrat aus der kuerzeren Seite. Ohne Animation das ganze Bild. Die Bilder
 // liegen zeilenweise im Raster (s. frame_pixels) -- nicht zwingend quadratisch und nicht
 // zwingend untereinander (cpvpwars: 12x1974-Bilder fuer ihre Zonenwaende).
+#[must_use] 
 pub fn frame_size(animation: Option<&serde_json::Value>, width: u32, height: u32) -> (u32, u32) {
     let Some(a) = animation else { return (width, height) };
-    let wert = |k: &str| a.get(k).and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0);
+    let wert = |k: &str| a.get(k).and_then(serde_json::Value::as_u64).map(|v| v as u32).filter(|&v| v > 0);
     match (wert("width"), wert("height")) {
         (Some(w), Some(h)) => (w.min(width), h.min(height)),
         (Some(w), None) => (w.min(width), height),
@@ -690,6 +692,7 @@ pub fn frame_size(animation: Option<&serde_json::Value>, width: u32, height: u32
 
 // Die Pixel von Bild `index` (SpriteContents: Spalte index % Bilder_je_Zeile, Zeile
 // index / Bilder_je_Zeile).
+#[must_use] 
 pub fn frame_pixels(rgba: &[u8], width: u32, (fw, fh): (u32, u32), index: u32) -> Vec<u8> {
     let je_zeile = (width / fw.max(1)).max(1);
     let (x0, y0) = ((index % je_zeile) * fw, (index / je_zeile) * fh);
@@ -787,7 +790,7 @@ pub struct TileAnimation {
     // anders, die sonst alle im selben Tick und im selben Takt das Bild wechselten.
     tick_offset: u64,
     rate: u64,
-    /// Texturpfad ("block/fire_0"), fuer Tests und Fehlersuche.
+    /// Texturpfad ("`block/fire_0`"), fuer Tests und Fehlersuche.
     pub path: String,
 }
 
@@ -804,12 +807,14 @@ pub struct AnimationState {
 impl AnimationState {
     /// Zwischen zwei Frames gemischt? Solche Staende wiederholen sich kaum (jeder Tick ein
     /// anderer), ein Zwischenspeicher lohnt sich fuer sie nicht.
-    pub fn is_interpolated(&self) -> bool {
+    #[must_use] 
+    pub const fn is_interpolated(&self) -> bool {
         self.sub != 0
     }
 
     /// Welcher Frame gerade gezeigt wird (ohne Ueberblendung).
-    pub fn frame_index(&self) -> u32 {
+    #[must_use] 
+    pub const fn frame_index(&self) -> u32 {
         self.frame
     }
 }
@@ -831,7 +836,7 @@ impl TileAnimation {
             return None;
         }
         let mip_levels = if tile.0 == tile.1 { mip_levels } else { 1 };
-        let frametime = animation.get("frametime").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as u32;
+        let frametime = animation.get("frametime").and_then(serde_json::Value::as_u64).unwrap_or(1).max(1) as u32;
         let sequence: Vec<(u32, u32)> = match animation.get("frames").and_then(|f| f.as_array()) {
             Some(frames) => frames
                 .iter()
@@ -839,7 +844,7 @@ impl TileAnimation {
                     serde_json::Value::Number(n) => Some((n.as_u64()? as u32, frametime)),
                     serde_json::Value::Object(o) => {
                         let index = o.get("index")?.as_u64()? as u32;
-                        let time = o.get("time").and_then(|t| t.as_u64()).map_or(frametime, |t| t.max(1) as u32);
+                        let time = o.get("time").and_then(serde_json::Value::as_u64).map_or(frametime, |t| t.max(1) as u32);
                         Some((index, time))
                     }
                     _ => None,
@@ -851,7 +856,7 @@ impl TileAnimation {
         if sequence.len() < 2 {
             return None;
         }
-        let interpolate = animation.get("interpolate").and_then(|v| v.as_bool()).unwrap_or(false);
+        let interpolate = animation.get("interpolate").and_then(serde_json::Value::as_bool).unwrap_or(false);
         Some(Self {
             origin,
             tile_size: tile.0,
@@ -871,23 +876,25 @@ impl TileAnimation {
 
     /// Stand zum Spieltick `tick` (20 pro Sekunde, laeuft einfach durch).
     /// Gerechnet wird in RATE_UNIT-teln eines Ticks: so laeuft eine Kopie mit anderem Tempo
-    /// (s. variant_timing) langsamer oder schneller, und ihre Ueberblendung bleibt trotzdem weich.
+    /// (s. `variant_timing`) langsamer oder schneller, und ihre Ueberblendung bleibt trotzdem weich.
+    #[must_use] 
     pub fn state_at(&self, tick: u64) -> AnimationState {
-        let total: u64 = self.sequence.iter().map(|&(_, t)| t as u64 * RATE_UNIT).sum();
+        let total: u64 = self.sequence.iter().map(|&(_, t)| u64::from(t) * RATE_UNIT).sum();
         let mut rest = (tick * self.rate + self.tick_offset * RATE_UNIT) % total;
         for (i, &(frame, ticks)) in self.sequence.iter().enumerate() {
             let ticks = ticks * RATE_UNIT as u32;
-            if rest < ticks as u64 {
+            if rest < u64::from(ticks) {
                 let next = self.sequence[(i + 1) % self.sequence.len()].0;
                 let sub = if self.interpolate && frame != next { rest as u32 } else { 0 };
                 return AnimationState { frame, next, sub, ticks };
             }
-            rest -= ticks as u64;
+            rest -= u64::from(ticks);
         }
         AnimationState { frame: self.sequence[0].0, next: self.sequence[0].0, sub: 0, ticks: 1 }
     }
 
     /// Alle Mip-Stufen der Kachel fuer `state`, Stufe 0 zuerst.
+    #[must_use] 
     pub fn render(&self, state: AnimationState) -> Vec<Vec<u8>> {
         let frame = |f: u32| frame_pixels(&self.strip, self.tex_width, self.frame, f.min(self.frame_count - 1));
         let pixels = if state.sub == 0 {
@@ -897,10 +904,10 @@ impl TileAnimation {
             // Frame, Anteil des naechsten = sub / Dauer. Alpha bleibt beim aktuellen Frame.
             let t = state.sub as f32 / state.ticks as f32;
             let (a, b) = (frame(state.frame), frame(state.next));
-            let mut out = a.to_vec();
+            let mut out = a.clone();
             for i in (0..out.len()).step_by(4) {
                 for c in 0..3 {
-                    out[i + c] = (a[i + c] as f32 * (1.0 - t) + b[i + c] as f32 * t).round() as u8;
+                    out[i + c] = (f32::from(a[i + c]) * (1.0 - t) + f32::from(b[i + c]) * t).round() as u8;
                 }
             }
             out
@@ -934,28 +941,11 @@ fn intern(key: String, source: TextureSource, needed: &mut Vec<(String, TextureS
     key
 }
 
-// NUR die eingefaerbten Glas-Bloecke UND tinted_glass: per Datei-Check (nicht geraten,
-// s. Kommentar unten) sind deren Texturen komplett OPAK (Alpha=255 ueberall) -- die
-// Durchsichtigkeit kommt in Vanilla ausschliesslich aus einem eigenen "translucent"-
-// Renderpass, den dieser Client nicht hat (bewusste MVP-Entscheidung, kein echtes
-// Alpha-Blending, s. block.wgsl). Klarglas ("glass") und ALLE Glasscheiben ("*_pane",
-// auch eingefaerbte) sind davon ausgenommen: deren Texturen haben schon von Vanilla aus
-// ein echtes Alpha-Cutout-Muster (Rahmen opak, Mitte transparent) -- per
-// `python3 -c "...PIL..."` gegen die echte 1.21.11.jar geprueft, nicht geraten (eine
-// fruehere Version dieser Funktion hatte genau das geraten und lag falsch: sie hat
-// Klarglas/Scheiben zusaetzlich durchloechert und ihr sauberes Rahmenmuster kaputt
-// gemacht -- das sah dann wie verrauschter Schnee statt Glas aus). Fuer die bereits
-// korrekten Texturen genuegt der vorhandene Cutout (Alpha<0.5 verwerfen) unveraendert.
-fn is_translucent_glass(name: &str) -> bool {
-    name == "tinted_glass" || name.ends_with("_stained_glass")
-}
-
 // Vanillas "Grafik: Schnell"-Verhalten fuer Laub: die echten Laubtexturen tragen ein
 // Alpha-Kanal mit durchsichtigen Luecken (das "Fancy"-Look-Durchsehen). Das kostet Leistung
 // (Alpha-Test/discard() im Fragment-Shader, s. block.wgsl) fuer wenig sichtbaren Gewinn, vor
 // allem bei grossen Baumkronen. Auf Nutzerwunsch fest deaktiviert (nicht nur ein Toggle) --
-// Alpha wird beim Atlas-Bau hart auf voll gesetzt, GENAU wie is_translucent_glass/
-// dither_translucent dieselbe Kachel VOR dem Kopieren in den Atlas nachbearbeiten.
+// Alpha wird beim Atlas-Bau hart auf voll gesetzt (force_opaque), VOR dem Kopieren in den Atlas.
 fn is_leaves(name: &str) -> bool {
     name.ends_with("_leaves")
 }
@@ -973,6 +963,10 @@ fn is_leaves(name: &str) -> bool {
 // Rundungsreste der UV-Interpolation liegen um Groessenordnungen darunter; ein 32stel Texel
 // verschiebt die Texelgrenzen dagegen nicht sichtbar.
 const TILE_UV_INSET_PX: f32 = 1.0 / 32.0;
+// Mindestens aber ein Schritt der Gelaende-UV (world::TerrainVertex: u16 in 1/65536 des
+// Atlas): ab 4096 Atlaspixeln ist ein 32stel Texel hoechstens ein halber Schritt, und
+// das Runden legte die rechte/untere Kachelkante wieder genau auf die Nachbarkachel.
+const TILE_UV_INSET_MIN: f32 = 1.0 / 65536.0;
 
 const WATER_FLOW_TEXTURE: &str = "block/water_flow";
 
@@ -985,7 +979,8 @@ const WATER_FLOW_TEXTURE: &str = "block/water_flow";
 pub const FIRE_TEXTURE_PAIRS: [[&str; 2]; 2] = [["block/fire_0", "block/fire_1"], ["block/soul_fire_0", "block/soul_fire_1"]];
 pub const FIRE_VARIANTS: u64 = 4;
 
-/// Ist `path` eine der Feuertexturen (s. FIRE_TEXTURE_PAIRS)?
+/// Ist `path` eine der Feuertexturen (s. `FIRE_TEXTURE_PAIRS`)?
+#[must_use] 
 pub fn is_fire_texture(path: &str) -> bool {
     FIRE_TEXTURE_PAIRS.iter().flatten().any(|p| *p == path)
 }
@@ -1006,7 +1001,7 @@ const VARIANT_RATES: [u64; 7] = [14, 16, 18, 22, 24, 27, 30];
 // jede Kopie ein eigenes Tempo hat, laufen sie danach immer weiter auseinander und wieder
 // zusammen, statt einen festen Abstand zu halten.
 fn variant_timing(path: &str, variant: u64, count: u64, total: u64) -> (u64, u64) {
-    let salt = path.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+    let salt = path.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)));
     let step = (total / count).max(1);
     let rate = if variant == 0 { RATE_UNIT } else { VARIANT_RATES[((salt + variant - 1) % VARIANT_RATES.len() as u64) as usize] };
     (variant * step + salt % step, rate)
@@ -1094,8 +1089,6 @@ impl BlockAtlas {
         let mut block_overlay: HashMap<String, [Option<String>; 6]> = HashMap::new();
         let mut block_particle: HashMap<String, String> = HashMap::new();
         let mut needed: Vec<(String, TextureSource)> = Vec::new();
-        #[allow(unused_mut, unused_variables)]
-        let mut translucent_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut opaque_leaf_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
         for &block in block_names {
             if block == "air" || block.ends_with("air") {
@@ -1130,7 +1123,6 @@ impl BlockAtlas {
                 }
                 continue;
             }
-            let translucent = is_translucent_glass(block);
             let leaves = is_leaves(block);
             let particle = resolve_particle(mc, block);
             if let Some(p) = &particle {
@@ -1141,20 +1133,17 @@ impl BlockAtlas {
                 Some((faces, overlay, content)) => {
                     let interned: [String; 6] =
                         std::array::from_fn(|i| intern(faces[i].clone(), TextureSource::Plain(faces[i].clone()), &mut needed));
-                    if translucent {
-                        translucent_paths.extend(interned.iter().cloned());
-                    }
                     if leaves {
                         opaque_leaf_paths.extend(interned.iter().cloned());
                     }
                     block_faces.insert(block.to_string(), interned);
-                    if content.iter().any(|c| c.is_some()) {
+                    if content.iter().any(std::option::Option::is_some) {
                         let interned_content: [Option<String>; 6] = std::array::from_fn(|i| {
                             content[i].as_ref().map(|path| intern(path.clone(), TextureSource::Plain(path.clone()), &mut needed))
                         });
                         block_content.insert(block.to_string(), interned_content);
                     }
-                    if overlay.iter().any(|o| o.is_some()) {
+                    if overlay.iter().any(std::option::Option::is_some) {
                         let interned_overlay: [Option<String>; 6] = std::array::from_fn(|i| {
                             overlay[i].as_ref().map(|path| intern(path.clone(), TextureSource::Plain(path.clone()), &mut needed))
                         });
@@ -1164,9 +1153,6 @@ impl BlockAtlas {
                 None => {
                     if let Some(p) = particle {
                         let interned = intern(p.clone(), TextureSource::Plain(p), &mut needed);
-                        if translucent {
-                            translucent_paths.insert(interned.clone());
-                        }
                         if leaves {
                             opaque_leaf_paths.insert(interned.clone());
                         }
@@ -1258,8 +1244,7 @@ impl BlockAtlas {
                 // Texel auf Alpha 0), um Transparenz im Opak-Pass vorzutaeuschen -- das ergab
                 // Fliegengitter statt Glas. Glas laeuft jetzt ueber den Translucent-Pass mit
                 // echtem Alpha-Blending (s. world::mesher::is_glass), die Kachel bleibt
-                // deshalb unveraendert. `translucent_paths` markiert weiterhin, WELCHE
-                // Kacheln das betrifft -- gebraucht wird die Menge aktuell aber nicht mehr.
+                // deshalb unveraendert.
                 if opaque_leaf_paths.contains(key) {
                     force_opaque(&mut tile);
                 }
@@ -1274,7 +1259,7 @@ impl BlockAtlas {
         // waeren die schon fest verrechneten UV-Bruchteile aller anderen Bloecke falsch
         // (sie sind relativ zur GESAMTEN Atlasgroesse normiert, s. uv_of-Kommentar unten).
         let mut rng_tile_keys: HashMap<String, Vec<[String; 6]>> = HashMap::new();
-        for block in block_faces.keys().cloned().collect::<Vec<_>>() {
+        for block in block_faces.keys().cloned() {
             let Ok(bytes) = mc.load_bytes(&format!("minecraft/blockstates/{block}.json")) else { continue };
             let Ok(bs) = serde_json::from_slice::<BlockstateJson>(&bytes) else { continue };
             let Some(variants) = all_variant_entries(&bs) else { continue };
@@ -1312,7 +1297,7 @@ impl BlockAtlas {
 
         // 3) Atlas-Groesse: quadratisch, tile_size-Kacheln, Zweierpotenz-Kantenlaenge.
         let tile_count = tiles.len() as u32;
-        let tiles_per_row = (tile_count as f64).sqrt().ceil() as u32;
+        let tiles_per_row = f64::from(tile_count).sqrt().ceil() as u32;
         let tiles_per_row = tiles_per_row.max(1).next_power_of_two();
         let size = tiles_per_row * tile_size;
         // Jede Kachel um einen Bruchteil eines Atlaspixels nach innen (TILE_UV_INSET_PX): ein
@@ -1324,7 +1309,7 @@ impl BlockAtlas {
         let uv_of = |index: u32| -> UvRect {
             let (tx, ty) = (index % tiles_per_row, index / tiles_per_row);
             let s = tile_size as f32 / size as f32;
-            let e = TILE_UV_INSET_PX / size as f32;
+            let e = (TILE_UV_INSET_PX / size as f32).max(TILE_UV_INSET_MIN);
             [tx as f32 * s + e, ty as f32 * s + e, (tx + 1) as f32 * s - e, (ty + 1) as f32 * s - e]
         };
 
@@ -1360,7 +1345,7 @@ impl BlockAtlas {
         let missing_uv = uv_of(0);
         let mut uvs: HashMap<String, [UvRect; 6]> = HashMap::new();
         for (block, faces) in &block_faces {
-            let rects: [UvRect; 6] = std::array::from_fn(|i| tile_index.get(&faces[i]).map(|&idx| uv_of(idx as u32)).unwrap_or(missing_uv));
+            let rects: [UvRect; 6] = std::array::from_fn(|i| tile_index.get(&faces[i]).map_or(missing_uv, |&idx| uv_of(idx as u32)));
             uvs.insert(block.clone(), rects);
         }
         let mut content_uvs: HashMap<String, [Option<UvRect>; 6]> = HashMap::new();
@@ -1378,7 +1363,7 @@ impl BlockAtlas {
         let variant_uvs: HashMap<String, ([UvRect; 6], [Option<UvRect>; 6])> = variant_faces
             .iter()
             .map(|(model, (faces, overlay))| {
-                let rects = std::array::from_fn(|i| tile_index.get(&faces[i]).map(|&idx| uv_of(idx as u32)).unwrap_or(missing_uv));
+                let rects = std::array::from_fn(|i| tile_index.get(&faces[i]).map_or(missing_uv, |&idx| uv_of(idx as u32)));
                 let over = std::array::from_fn(|i| overlay[i].as_ref().and_then(|k| tile_index.get(k)).map(|&idx| uv_of(idx as u32)));
                 (model.clone(), (rects, over))
             })
@@ -1389,7 +1374,7 @@ impl BlockAtlas {
         for (block, variants) in &rng_tile_keys {
             let resolved: Vec<[UvRect; 6]> = variants
                 .iter()
-                .map(|face_keys| std::array::from_fn(|i| tile_index.get(&face_keys[i]).map(|&idx| uv_of(idx as u32)).unwrap_or(missing_uv)))
+                .map(|face_keys| std::array::from_fn(|i| tile_index.get(&face_keys[i]).map_or(missing_uv, |&idx| uv_of(idx as u32))))
                 .collect();
             rng_face_uvs.insert(block.clone(), resolved);
         }
@@ -1432,7 +1417,7 @@ impl BlockAtlas {
                 let origin = ((idx % tiles_per_row) * tile_size, (idx / tiles_per_row) * tile_size);
                 let mut animation = TileAnimation::load(mc, path, origin, (tile_size, tile_size), mip_levels);
                 if let Some(a) = animation.as_mut() {
-                    let total = a.sequence.iter().map(|&(_, t)| t as u64).sum();
+                    let total = a.sequence.iter().map(|&(_, t)| u64::from(t)).sum();
                     if is_fire_texture(path) {
                         let variant = key.split("\0phase").nth(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
                         (a.tick_offset, a.rate) = variant_timing(path, variant, FIRE_VARIANTS, total);
@@ -1524,7 +1509,7 @@ fn downsample_tile(tile: &[u8], size: u32) -> Vec<u8> {
             for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                 let src = (((y * 2 + dy) * size + (x * 2 + dx)) * 4) as usize;
                 for (c, s) in sum.iter_mut().enumerate() {
-                    *s += tile[src + c] as u32;
+                    *s += u32::from(tile[src + c]);
                 }
             }
             let dst = ((y * half + x) * 4) as usize;
@@ -1559,7 +1544,7 @@ fn downsample_tile_cutout(tile: &[u8], size: u32) -> Vec<u8> {
     let mut gesamt = [0.0f32; 3];
     let mut gesamt_gewicht = 0.0f32;
     for p in tile.chunks_exact(4) {
-        let a = p[3] as f32 / 255.0;
+        let a = f32::from(p[3]) / 255.0;
         for c in 0..3 {
             gesamt[c] += lin(p[c]) * a;
         }
@@ -1576,12 +1561,12 @@ fn downsample_tile_cutout(tile: &[u8], size: u32) -> Vec<u8> {
             let mut alpha = 0u32;
             for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                 let src = (((y * 2 + dy) * size + (x * 2 + dx)) * 4) as usize;
-                let a = tile[src + 3] as f32 / 255.0;
+                let a = f32::from(tile[src + 3]) / 255.0;
                 for c in 0..3 {
                     farbe[c] += lin(tile[src + c]) * a;
                 }
                 gewicht += a;
-                alpha += tile[src + 3] as u32;
+                alpha += u32::from(tile[src + 3]);
             }
             let dst = ((y * half + x) * 4) as usize;
             let rgb = if gewicht > 0.0 { farbe.map(|c| srgb(c / gewicht)) } else { rueckfall };
@@ -1612,12 +1597,12 @@ fn deckungsgrad(tile: &[u8], size: u32, schwelle: f32, alpha_faktor: f32) -> f32
     if size < 2 {
         // Bei 1x1 gibt es kein Texelpaar zum Interpolieren -- Vanilla teilt hier durch
         // (w-1)*(h-1) und wuerde durch Null laufen. Der Alphawert selbst ist die Antwort.
-        let a = tile.first().map(|_| tile[3] as f32 / 255.0).unwrap_or(0.0);
+        let a = tile.first().map_or(0.0, |_| f32::from(tile[3]) / 255.0);
         return if a * alpha_faktor > schwelle { 1.0 } else { 0.0 };
     }
     let alpha_bei = |x: u32, y: u32| {
         let i = ((y * size + x) * 4 + 3) as usize;
-        (tile[i] as f32 / 255.0 * alpha_faktor).clamp(0.0, 1.0)
+        (f32::from(tile[i]) / 255.0 * alpha_faktor).clamp(0.0, 1.0)
     };
     let mut summe = 0.0f32;
     for y in 0..size - 1 {
@@ -1685,7 +1670,7 @@ fn korrigiere_alpha_auf_deckung(tile: &mut [u8], size: u32, ziel: f32, schwelle:
     for p in tile.chunks_exact_mut(4) {
         // Das +0.025 stammt aus Vanilla: ein kleiner Grundzuschlag, damit ganz schwache
         // Raender nicht doch noch wegkippen.
-        let a = (p[3] as f32 / 255.0 * bester + 0.025).clamp(0.0, 1.0);
+        let a = (f32::from(p[3]) / 255.0 * bester + 0.025).clamp(0.0, 1.0);
         p[3] = (a * 255.0).round() as u8;
     }
 }
@@ -1804,7 +1789,7 @@ mod mipmap_alpha_tests {
     #[test]
     fn ohne_korrektur_wuerde_das_glas_absacken() {
         let kachel = glasartige_kachel(16);
-        let mut stufe = kachel.clone();
+        let mut stufe = kachel;
         let mut size = 16;
         for _ in 0..3 {
             stufe = downsample_tile(&stufe, size);
@@ -1839,7 +1824,7 @@ mod mipmap_alpha_tests {
     #[test]
     fn deckungsgrad_abkuerzung_wie_volle_rechnung() {
         fn voll(tile: &[u8], size: u32, schwelle: f32, faktor: f32) -> f32 {
-            let alpha = |x: u32, y: u32| (tile[((y * size + x) * 4 + 3) as usize] as f32 / 255.0 * faktor).clamp(0.0, 1.0);
+            let alpha = |x: u32, y: u32| (f32::from(tile[((y * size + x) * 4 + 3) as usize]) / 255.0 * faktor).clamp(0.0, 1.0);
             let mut summe = 0.0f32;
             for y in 0..size - 1 {
                 for x in 0..size - 1 {

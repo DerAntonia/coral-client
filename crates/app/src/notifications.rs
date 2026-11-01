@@ -7,7 +7,7 @@
 //! Die API fuer den Rest des Clients ist `Notifications::push` (und `dismiss`). Alles
 //! andere -- Stapeln, Einblenden, Ziehen, Wegwerfen -- passiert hier drin.
 //!
-//! Wie cursor_fx ist das Modul frei von Fenster- und GPU-Zustand: es bekommt Zeitpunkte,
+//! Wie `cursor_fx` ist das Modul frei von Fenster- und GPU-Zustand: es bekommt Zeitpunkte,
 //! Zeigerpositionen und die Hoehe jeder Karte und liefert Rechtecke. Die Hoehe misst der
 //! Aufrufer, weil nur er die Schrift kennt (Zeilenumbruch des Textes).
 
@@ -41,7 +41,7 @@ pub struct Notification {
 #[allow(dead_code)] // Oeffentliche API, s. Kind.
 impl Notification {
     pub fn new(kind: Kind, title: impl Into<String>, body: impl Into<String>) -> Self {
-        Notification { kind, title: title.into(), body: body.into(), lifetime: DEFAULT_LIFETIME }
+        Self { kind, title: title.into(), body: body.into(), lifetime: DEFAULT_LIFETIME }
     }
 
     pub fn info(title: impl Into<String>, body: impl Into<String>) -> Self {
@@ -60,7 +60,7 @@ impl Notification {
         Self::new(Kind::Error, title, body)
     }
 
-    pub fn with_lifetime(mut self, lifetime: Duration) -> Self {
+    pub const fn with_lifetime(mut self, lifetime: Duration) -> Self {
         self.lifetime = lifetime;
         self
     }
@@ -141,7 +141,7 @@ struct Toast {
     id: NotificationId,
     note: Notification,
     born: Instant,
-    /// Wie lange die Karte schon unbeobachtet stand (s. Notification::lifetime).
+    /// Wie lange die Karte schon unbeobachtet stand (s. `Notification::lifetime`).
     shown: Duration,
     height: f32,
     /// Oberkante des Stapelplatzes -- folgt ihm weich, statt zu springen.
@@ -216,7 +216,7 @@ impl Notifications {
     }
 
     /// Die Karten beginnen erst unter diesem Streifen (z. B. der Leiste oben in den Menues).
-    pub fn set_top_inset(&mut self, inset: f32) {
+    pub const fn set_top_inset(&mut self, inset: f32) {
         self.top_inset = inset;
     }
 
@@ -282,7 +282,7 @@ impl Notifications {
     }
 
     #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.toasts.is_empty()
     }
 
@@ -741,7 +741,7 @@ mod tests {
             assert!(c.x < start.x, "fliegt nach links");
         }
         // Beschleunigt nach unten: die Schritte werden groesser.
-        assert!(ys[1] - ys[0] > ys[0] - start.y && ys[2] - ys[1] > ys[1] - ys[0], "{:?}", ys);
+        assert!(ys[1] - ys[0] > ys[0] - start.y && ys[2] - ys[1] > ys[1] - ys[0], "{ys:?}");
         assert!(n.cards(t).next().unwrap().angle < start.angle, "dreht sich weiter");
     }
 

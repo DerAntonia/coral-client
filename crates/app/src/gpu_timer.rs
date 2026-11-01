@@ -157,7 +157,7 @@ impl GpuTimer {
         let Some(index) = self.slots.iter().position(|s| s.passes.is_empty()) else { return };
         let count = self.next;
         encoder.resolve_query_set(&self.query_set, 0..count, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.slots[index].buffer, 0, count as u64 * 8);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.slots[index].buffer, 0, u64::from(count) * 8);
         self.slots[index].passes = passes;
         self.slots[index].stamps = count;
         self.submitted = Some(index);
@@ -168,7 +168,7 @@ impl GpuTimer {
         let Some(index) = self.submitted.take() else { return };
         let slot = &mut self.slots[index];
         let flag = slot.mapped.clone();
-        let bytes = slot.stamps as u64 * 8;
+        let bytes = u64::from(slot.stamps) * 8;
         slot.buffer.slice(..bytes).map_async(wgpu::MapMode::Read, move |r| {
             if r.is_ok() {
                 flag.store(true, Ordering::Release);
@@ -190,7 +190,7 @@ impl GpuTimer {
             if !slot.waiting || !slot.mapped.load(Ordering::Acquire) {
                 continue;
             }
-            let bytes = slot.stamps as u64 * 8;
+            let bytes = u64::from(slot.stamps) * 8;
             let stamps: Vec<u64> = {
                 let view = slot.buffer.slice(..bytes).get_mapped_range();
                 bytemuck::cast_slice::<u8, u64>(&view).to_vec()

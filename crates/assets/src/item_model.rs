@@ -23,7 +23,7 @@ use crate::blocks::strip_ns;
 
 // Ein Blatt: das Modell (Pfad wie in den Modell-Dateien, "minecraft:" weggelassen) und seine
 // Toenungsquellen. `special` ist die Art eines Sondermodells ("head", "chest", ...).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Leaf {
     pub model: String,
     pub tints: Vec<Value>,
@@ -43,10 +43,10 @@ pub struct ItemDefinition {
 enum Node {
     Leaf(u32),
     Empty,
-    Composite(Vec<Node>),
-    Condition { prop: Condition, on_true: Box<Node>, on_false: Box<Node> },
-    Select { prop: Select, cases: Vec<(Vec<Value>, Node)>, fallback: Option<Box<Node>> },
-    Range { prop: Range, scale: f32, entries: Vec<(f32, Node)>, fallback: Option<Box<Node>> },
+    Composite(Vec<Self>),
+    Condition { prop: Condition, on_true: Box<Self>, on_false: Box<Self> },
+    Select { prop: Select, cases: Vec<(Vec<Value>, Self)>, fallback: Option<Box<Self>> },
+    Range { prop: Range, scale: f32, entries: Vec<(f32, Self)>, fallback: Option<Box<Self>> },
     BundleSelected,
 }
 
@@ -228,7 +228,7 @@ impl ItemDefinition {
         let wurzel: Value = serde_json::from_slice(crate::installation::strip_bom(json)).ok()?;
         let mut leaves = Vec::new();
         let root = parse_node(wurzel.get("model")?, &mut leaves, 0);
-        Some(ItemDefinition {
+        Some(Self {
             root,
             leaves,
             hand_animation_on_swap: wurzel.get("hand_animation_on_swap").and_then(Value::as_bool).unwrap_or(true),
@@ -252,9 +252,9 @@ fn parse_node(v: &Value, leaves: &mut Vec<Leaf>, tiefe: u32) -> Node {
         return Node::Empty;
     }
     let Some(obj) = v.as_object() else { return Node::Empty };
-    let art = obj.get("type").and_then(Value::as_str).map(strip_ns).unwrap_or("");
+    let art = obj.get("type").and_then(Value::as_str).map_or("", strip_ns);
     let text = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
-    let prop_name = obj.get("property").and_then(Value::as_str).map(strip_ns).unwrap_or("").to_string();
+    let prop_name = obj.get("property").and_then(Value::as_str).map_or("", strip_ns).to_string();
     let index = obj.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
     match art {
         "model" => {
@@ -500,11 +500,11 @@ fn enchantment_matches(pred: &Value, liste: &[(String, i32)]) -> bool {
 fn int_bounds(v: Option<&Value>, x: i32) -> bool {
     match v {
         None => true,
-        Some(Value::Number(n)) => n.as_i64() == Some(x as i64),
+        Some(Value::Number(n)) => n.as_i64() == Some(i64::from(x)),
         Some(o) => {
             let min = o.get("min").and_then(Value::as_i64);
             let max = o.get("max").and_then(Value::as_i64);
-            min.is_none_or(|m| x as i64 >= m) && max.is_none_or(|m| x as i64 <= m)
+            min.is_none_or(|m| i64::from(x) >= m) && max.is_none_or(|m| i64::from(x) <= m)
         }
     }
 }

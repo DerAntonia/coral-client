@@ -31,7 +31,8 @@ pub const DEFAULT_MIN_Y: i32 = -64;
 // Alter Name, damit Tests und Fremdcode weiterlaufen.
 pub const MIN_Y: i32 = DEFAULT_MIN_Y;
 
-pub fn is_solid(state: u32) -> bool {
+#[must_use] 
+pub const fn is_solid(state: u32) -> bool {
     state != STATE_AIR
 }
 
@@ -49,11 +50,13 @@ impl ChunkSection {
     // Fuer Tests/Aufrufer ohne echte Biom-Daten: alles Biom 0 (das erste, per Server-
     // Registrierungsreihenfolge -- typischerweise die Ozean-Variante, aber fuer reine
     // Geometrie-Tests ohne Faerbung irrelevant, welches).
+    #[must_use] 
     pub fn from_states(states: Vec<u32>) -> Self {
         debug_assert_eq!(states.len(), SECTION_VOLUME);
         Self { states, biomes: vec![0; 64] }
     }
 
+    #[must_use] 
     pub fn from_states_and_biomes(mut states: Vec<u32>, biomes: Vec<u32>) -> Self {
         debug_assert_eq!(states.len(), SECTION_VOLUME);
         // Hoehlen-/Leerluft wird Luft, s. block_registry::air_variants.
@@ -67,6 +70,7 @@ impl ChunkSection {
 
     // Nur fuer Koordinaten innerhalb der Sektion; Bereichspruefung macht der Aufrufer
     // (World::block_at), weil ausserhalb der Nachbar-Chunk zustaendig ist, nicht "Luft".
+    #[must_use] 
     pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
         self.states[((y * SECTION_SIZE + z) * SECTION_SIZE + x) as usize]
     }
@@ -80,16 +84,24 @@ impl ChunkSection {
 
     // Biom-ID an einer sektionslokalen Koordinate -- eine 4x4x4-Zelle deckt vier
     // Block-Koordinaten je Achse ab, daher die Division.
+    #[must_use] 
     pub fn biome_at(&self, x: i32, y: i32, z: i32) -> u32 {
         let (bx, by, bz) = (x / 4, y / 4, z / 4);
         self.biomes[((by * 4 + bz) * 4 + bx) as usize]
     }
 
     // Alle 4096 State-IDs in Protokollreihenfolge (Index = (y * 16 + z) * 16 + x).
+    #[must_use] 
+    pub fn biomes(&self) -> &[u32] {
+        &self.biomes
+    }
+
+    #[must_use] 
     pub fn states(&self) -> &[u32] {
         &self.states
     }
 
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.states.iter().all(|&s| !is_solid(s))
     }
@@ -113,6 +125,7 @@ impl ChunkColumn {
     // Mesher (s. mesher.rs) direkt auf Arc<ChunkColumn>-Nachbarn zugreift, ohne den Umweg
     // ueber World::block_at -- der bräuchte eine &World, die ein Worker-Thread nicht
     // borgen kann, waehrend der Hauptthread parallel weiter an der World arbeitet.
+    #[must_use] 
     pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
         let index = (y - self.min_y).div_euclid(SECTION_SIZE);
         if index < 0 || index as usize >= self.sections.len() {
@@ -124,6 +137,7 @@ impl ChunkColumn {
     // Biom-ID an einer Spalten-lokalen Koordinate (x/z 0..16, y absolute Welt-Hoehe). 0 fuer
     // ausserhalb der geladenen Sections -- ein plausibler, wenn auch nicht immer exakter
     // Default (echte Randfaerbung braucht ohnehin den Nachbarn).
+    #[must_use] 
     pub fn biome_at(&self, x: i32, y: i32, z: i32) -> u32 {
         let index = (y - self.min_y).div_euclid(SECTION_SIZE);
         if index < 0 || index as usize >= self.sections.len() {
@@ -205,6 +219,7 @@ impl Default for World {
 }
 
 impl World {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             columns: HashMap::default(),
@@ -221,7 +236,8 @@ impl World {
         }
     }
 
-    pub fn min_y(&self) -> i32 {
+    #[must_use] 
+    pub const fn min_y(&self) -> i32 {
         self.min_y
     }
 
@@ -236,15 +252,18 @@ impl World {
         self.clear();
     }
 
+    #[must_use] 
     pub fn column_count(&self) -> usize {
         self.columns.len()
     }
 
     // s. Feldkommentar an column_generation.
-    pub fn column_generation(&self) -> u64 {
+    #[must_use] 
+    pub const fn column_generation(&self) -> u64 {
         self.column_generation
     }
 
+    #[must_use] 
     pub fn dirty_count(&self) -> usize {
         self.dirty.len()
     }
@@ -255,6 +274,7 @@ impl World {
 
     // Fuer den Mesher: ein eigenes Arc, das laenger lebt als der Borrow auf `self` und
     // damit an einen Worker-Thread uebergeben werden kann (s. mesher::ColumnNeighbors).
+    #[must_use] 
     pub fn column_arc(&self, x: i32, z: i32) -> Option<Arc<ChunkColumn>> {
         self.columns.get(&(x, z)).cloned()
     }
@@ -263,6 +283,7 @@ impl World {
     // Ganzes an einen Worker-Thread geschickt werden kann -- None, wenn die Zielspalte
     // selbst noch nicht geladen ist (fehlende NACHBARN sind dagegen normal und zaehlen
     // im Mesher als Luft, s. dort).
+    #[must_use] 
     pub fn column_neighbors(&self, x: i32, z: i32) -> Option<crate::mesher::ColumnNeighbors> {
         let target = self.column_arc(x, z)?;
         Some(crate::mesher::ColumnNeighbors {
@@ -337,6 +358,7 @@ impl World {
     // Block an absoluten Weltkoordinaten. Nicht geladene Chunks zaehlen als Luft -- an
     // solchen Raendern entstehen dadurch ueberfluessige Quads, die verschwinden, sobald
     // der Nachbar ankommt und die Spalte neu gemesht wird.
+    #[must_use] 
     pub fn block_at(&self, x: i32, y: i32, z: i32) -> u32 {
         // Vorhergesagte Bloecke gehen vor (s. Feldkommentar an `pending`).
         if let Some(&state) = self.pending.get(&(x, y, z)) {
@@ -350,6 +372,7 @@ impl World {
     }
 
     // Biom-ID an absoluten Weltkoordinaten; 0 fuer nicht geladene Spalten.
+    #[must_use] 
     pub fn biome_at(&self, x: i32, y: i32, z: i32) -> u32 {
         let key = (x.div_euclid(SECTION_SIZE), z.div_euclid(SECTION_SIZE));
         self.columns.get(&key).map_or(0, |c| c.biome_at(x.rem_euclid(SECTION_SIZE), y, z.rem_euclid(SECTION_SIZE)))
@@ -391,6 +414,7 @@ impl World {
 
     // Der Block OHNE die Vorhersage -- was zuletzt wirklich vom Server kam. Fuer den
     // Aufrufer, der wissen muss, worauf er zuruecknehmen wuerde.
+    #[must_use] 
     pub fn server_block_at(&self, x: i32, y: i32, z: i32) -> u32 {
         let key = (x.div_euclid(SECTION_SIZE), z.div_euclid(SECTION_SIZE));
         match self.columns.get(&key) {
@@ -412,6 +436,7 @@ impl World {
 
     // Der vorhergesagte Zustand an dieser Stelle, falls es einen gibt.
     // Der Zustand in den echten Chunk-Daten, OHNE die Vorhersage-Schicht.
+    #[must_use] 
     pub fn chunk_block_at(&self, x: i32, y: i32, z: i32) -> u32 {
         let key = (x.div_euclid(SECTION_SIZE), z.div_euclid(SECTION_SIZE));
         match self.columns.get(&key) {
@@ -420,6 +445,7 @@ impl World {
         }
     }
 
+    #[must_use] 
     pub fn pending_block_at(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         self.pending.get(&(x, y, z)).copied()
     }
@@ -428,6 +454,7 @@ impl World {
         self.pending.iter().map(|(&pos, &state)| (pos, state))
     }
 
+    #[must_use] 
     pub fn has_pending_blocks(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -467,6 +494,14 @@ impl World {
     // fuer den Zeichenpfad -- der Aufrufer sortiert per bed_instance/shulker_instance.
     pub fn beds(&self) -> impl Iterator<Item = ((i32, i32, i32), u32)> + '_ {
         self.beds.iter().map(|(pos, state)| (*pos, *state))
+    }
+
+    // Wie beds(), aber mit der Vorhersage-Schicht (s. `pending`): eine gerade gesetzte Truhe
+    // erscheint sofort, eine vorhergesagt abgebaute verschwindet sofort.
+    pub fn model_blocks(&self) -> impl Iterator<Item = ((i32, i32, i32), u32)> + '_ {
+        let echt = self.beds.iter().filter(|(pos, _)| !self.pending.contains_key(*pos)).map(|(pos, state)| (*pos, *state));
+        let vorhergesagt = self.pending.iter().filter(|(_, &state)| crate::block_entity::is_model_block(state)).map(|(pos, state)| (*pos, *state));
+        echt.chain(vorhergesagt)
     }
 
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, state: u32) {
@@ -556,6 +591,7 @@ impl World {
     }
 
     // Steht diese Spalte gerade in der Mesh-Warteschlange?
+    #[must_use] 
     pub fn is_dirty(&self, x: i32, z: i32) -> bool {
         self.dirty.contains(&(x, z))
     }
@@ -692,7 +728,7 @@ mod tests {
         world.insert_column(1, 0, empty_column());
         world.insert_column(0, 1, empty_column());
         let mut keys: Vec<(i32, i32)> = world.column_keys().collect();
-        keys.sort();
+        keys.sort_unstable();
         assert_eq!(keys, vec![(0, 0), (0, 1), (1, 0)]);
     }
 }
@@ -700,6 +736,20 @@ mod tests {
 #[cfg(test)]
 mod pending_und_dirty_tests {
     use super::*;
+
+    // Eine vorhergesagt gesetzte Endertruhe wird sofort gezeichnet, eine vorhergesagt
+    // abgebaute Truhe sofort nicht mehr.
+    #[test]
+    fn modellbloecke_sehen_die_vorhersage() {
+        let truhe = (0..crate::state_count() as u32).find(|&s| crate::block_name(s) == Some("ender_chest")).unwrap();
+        let mut w = World::new();
+        assert_eq!(w.model_blocks().count(), 0);
+        w.set_pending_block(1, 64, 2, truhe);
+        assert_eq!(w.model_blocks().collect::<Vec<_>>(), vec![((1, 64, 2), truhe)]);
+        w.beds.insert((5, 64, 5), truhe);
+        w.set_pending_block(5, 64, 5, STATE_AIR);
+        assert!(w.model_blocks().all(|(pos, _)| pos != (5, 64, 5)));
+    }
 
     // Der vorhergesagte Zustand muss einzeln abfragbar sein: beim Ack entscheidet der
     // Vergleich mit der Server-Aufloesung darueber, ob der Geisterblock noch stehen bleibt

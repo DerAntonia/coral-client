@@ -65,8 +65,8 @@ pub struct Output {
 // mittendrin.
 pub fn pick_output(outputs: &[Output], target: Option<Target>) -> Option<Output> {
     let Some(t) = target else { return outputs.first().copied() };
-    let lage = |o: &&Output| o.x as i64 == t.x as i64 && o.y as i64 == t.y as i64 && o.w == t.w && o.h == t.h;
-    let rate = |o: &&Output| t.refresh_mhz.is_some_and(|r| (o.refresh_mhz as i64 - r as i64).abs() <= 1500);
+    let lage = |o: &&Output| i64::from(o.x) == i64::from(t.x) && i64::from(o.y) == i64::from(t.y) && o.w == t.w && o.h == t.h;
+    let rate = |o: &&Output| t.refresh_mhz.is_some_and(|r| (i64::from(o.refresh_mhz) - i64::from(r)).abs() <= 1500);
     outputs.iter().find(lage).or_else(|| outputs.iter().find(|o| rate(o) && o.w == t.w && o.h == t.h)).or_else(|| outputs.iter().find(rate)).or(outputs.first()).copied()
 }
 
@@ -99,7 +99,7 @@ impl VblankMonitor {
         let first = inner.samples[0];
         let (mut sx, mut sy, mut sxx, mut sxy) = (0.0, 0.0, 0.0, 0.0);
         for s in &inner.samples {
-            let x = s.seq.wrapping_sub(first.seq) as f64;
+            let x = f64::from(s.seq.wrapping_sub(first.seq));
             let y = (s.ts_ns - first.ts_ns) as f64;
             sx += x;
             sy += y;
@@ -117,7 +117,7 @@ impl VblankMonitor {
 #[cfg(target_os = "linux")]
 pub fn monotonic_ns() -> i64 {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut ts) };
     ts.tv_sec * 1_000_000_000 + ts.tv_nsec
 }
 
@@ -224,23 +224,23 @@ mod drm {
     // Alle aktiven Ausgaenge dieser Karte (leer, wenn der Treiber keine Moderessourcen hat).
     pub fn outputs(fd: libc::c_int) -> Vec<super::Output> {
         let mut res = CardRes::default();
-        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &mut res as *mut CardRes) } != 0 || res.count_crtcs == 0 {
+        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &raw mut res) } != 0 || res.count_crtcs == 0 {
             return Vec::new();
         }
         let mut ids = vec![0u32; res.count_crtcs.min(32) as usize];
         let mut res2 = CardRes { crtc_id_ptr: ids.as_mut_ptr() as u64, count_crtcs: ids.len() as u32, ..Default::default() };
-        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &mut res2 as *mut CardRes) } != 0 {
+        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &raw mut res2) } != 0 {
             return Vec::new();
         }
         let mut out = Vec::new();
         for (pipe, &crtc_id) in ids.iter().enumerate().take(res2.count_crtcs.min(32) as usize) {
             let mut c = ModeCrtc { crtc_id, ..Default::default() };
-            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETCRTC as _, &mut c as *mut ModeCrtc) } != 0 || c.mode_valid == 0 {
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETCRTC as _, &raw mut c) } != 0 || c.mode_valid == 0 {
                 continue;
             }
             let m = &c.mode;
             let refresh_mhz = if m.htotal > 0 && m.vtotal > 0 {
-                (m.clock as u64 * 1_000_000 / (m.htotal as u64 * m.vtotal as u64)) as u32
+                (u64::from(m.clock) * 1_000_000 / (u64::from(m.htotal) * u64::from(m.vtotal))) as u32
             } else {
                 m.vrefresh * 1000
             };
@@ -248,9 +248,9 @@ mod drm {
                 pipe: pipe as u32,
                 x: c.x,
                 y: c.y,
-                w: m.hdisplay as u32,
-                h: m.vdisplay as u32,
-                vtotal: m.vtotal as u32,
+                w: u32::from(m.hdisplay),
+                h: u32::from(m.vdisplay),
+                vtotal: u32::from(m.vtotal),
                 refresh_mhz,
             });
         }
@@ -266,7 +266,7 @@ mod drm {
             kind |= (crtc << VBLANK_HIGH_CRTC_SHIFT) & VBLANK_HIGH_CRTC_MASK;
         }
         let mut req = WaitVblank { kind, sequence: 1, tval_sec: 0, tval_usec: 0 };
-        let r = unsafe { libc::ioctl(fd, DRM_IOCTL_WAIT_VBLANK as _, &mut req as *mut WaitVblank) };
+        let r = unsafe { libc::ioctl(fd, DRM_IOCTL_WAIT_VBLANK as _, &raw mut req) };
         (r == 0).then(|| (req.sequence, req.tval_sec * 1_000_000_000 + req.tval_usec * 1000))
     }
 }
@@ -312,7 +312,7 @@ pub fn start(target: Option<Target>) -> Option<Arc<VblankMonitor>> {
             let monitor = Arc::new(VblankMonitor {
                 inner: Mutex::new(Inner::default()),
                 source: match modus {
-                    Some(o) => format!("{} crtc {crtc} ({}x{} bei {},{}, {:.2} Hz)", path.display(), o.w, o.h, o.x, o.y, o.refresh_mhz as f64 / 1000.0),
+                    Some(o) => format!("{} crtc {crtc} ({}x{} bei {},{}, {:.2} Hz)", path.display(), o.w, o.h, o.x, o.y, f64::from(o.refresh_mhz) / 1000.0),
                     None => format!("{} crtc {crtc}", path.display()),
                 },
                 lines: modus.filter(|o| o.vtotal > o.h && o.h > 0).map(|o| (o.h, o.vtotal)),
@@ -611,7 +611,7 @@ mod tests {
     fn phase_liegt_in_der_periode() {
         let m = VblankMonitor { inner: Mutex::new(Inner::default()), source: String::new(), lines: None };
         for i in 0..20u32 {
-            m.push(VblankSample { seq: 100 + i, ts_ns: 1_000_000 + i as i64 * 8_333_333 });
+            m.push(VblankSample { seq: 100 + i, ts_ns: 1_000_000 + i64::from(i) * 8_333_333 });
         }
         let (last, period) = m.latest().unwrap();
         assert!((period - 8_333_333.0).abs() < 1.0);

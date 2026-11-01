@@ -25,7 +25,8 @@ impl ArmorSlot {
     // Set Equipment nennt EquipmentSlot.ordinal() (s. packets::EQUIPMENT_SLOT_MAINHAND fuer
     // die vollstaendige Reihenfolge): MAINHAND, OFFHAND, FEET, LEGS, CHEST, HEAD, BODY,
     // SADDLE. BODY/SADDLE sind Tier-Slots und haben am Biped nichts zu suchen.
-    pub fn from_equipment_slot(slot: u8) -> Option<Self> {
+    #[must_use] 
+    pub const fn from_equipment_slot(slot: u8) -> Option<Self> {
         match slot {
             2 => Some(Self::Feet),
             3 => Some(Self::Legs),
@@ -38,15 +39,17 @@ impl ArmorSlot {
     // ArmorFeatureRenderer.usesInnerModel: NUR die Hose nimmt das innere Modell. Der
     // Unterschied ist die Aufblaehung (0.5 statt 1.0 Pixel) -- ohne sie steckten Brustpanzer
     // und Hose an der Huefte ineinander und flimmerten gegeneinander.
-    pub fn inner(self) -> bool {
+    #[must_use] 
+    pub const fn inner(self) -> bool {
         matches!(self, Self::Legs)
     }
 
     // Zeichenreihenfolge aus ArmorFeatureRenderer.render -- Brust, Hose, Schuhe, Kopf.
-    pub const ALL: [ArmorSlot; 4] = [Self::Chest, Self::Legs, Self::Feet, Self::Head];
+    pub const ALL: [Self; 4] = [Self::Chest, Self::Legs, Self::Feet, Self::Head];
 
     // Nur fuer Tabellen/Tests: ein fortlaufender Index.
-    pub fn index(self) -> usize {
+    #[must_use] 
+    pub const fn index(self) -> usize {
         match self {
             Self::Feet => 0,
             Self::Legs => 1,
@@ -132,6 +135,7 @@ pub const MATERIALS: [Material; 8] = [
 // Alle Texturpfade, die in den Entity-Atlas muessen. Anders als Skins werden sie NICHT
 // nachgeladen: es sind siebzehn kleine 64x32-Bilder, die beim Atlasbau feststehen, und ein
 // Spieler in voller Ruestung wuerde sonst vier Nachladeplaetze auf einmal belegen.
+#[must_use] 
 pub fn all_textures() -> Vec<&'static str> {
     let mut out = Vec::with_capacity(MATERIALS.len() * 3);
     for m in &MATERIALS {
@@ -146,6 +150,7 @@ pub fn all_textures() -> Vec<&'static str> {
 }
 
 // Item -> (welcher Slot, welches Material). None fuer alles, was keine Vanilla-Ruestung ist.
+#[must_use] 
 pub fn armor_of(item: &str) -> Option<(ArmorSlot, &'static Material)> {
     let (slot, prefix) = if let Some(p) = item.strip_suffix("_helmet") {
         (ArmorSlot::Head, p)
@@ -183,9 +188,9 @@ pub enum Equip {
 impl Equip {
     pub fn from_stack(s: &protocol::item::ItemStack) -> Self {
         match crate::item_components::Components::of(s).equippable() {
-            Some(e) => Equip::Set { slot: e.slot, asset: e.asset_id.as_deref().map(asset_index) },
-            None if s.equippable_removed() || crate::item_components::loaded() => Equip::Removed,
-            None => Equip::Default,
+            Some(e) => Self::Set { slot: e.slot, asset: e.asset_id.as_deref().map(asset_index) },
+            None if s.equippable_removed() || crate::item_components::loaded() => Self::Removed,
+            None => Self::Default,
         }
     }
 }
@@ -196,23 +201,21 @@ static ASSETS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new())
 // HeldItem Copy bleibt (wie entity::custom_model_id).
 pub fn asset_index(id: &str) -> u32 {
     let id = if id.contains(':') { id.to_string() } else { format!("minecraft:{id}") };
-    let mut liste = ASSETS.lock().unwrap_or_else(|e| e.into_inner());
-    match liste.iter().position(|a| *a == id) {
-        Some(i) => i as u32,
-        None => {
-            liste.push(id);
-            liste.len() as u32 - 1
-        }
+    let mut liste = ASSETS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(i) = liste.iter().position(|a| *a == id) { i as u32 } else {
+        liste.push(id);
+        liste.len() as u32 - 1
     }
 }
 
 pub fn asset_name(index: u32) -> Option<String> {
-    ASSETS.lock().unwrap_or_else(|e| e.into_inner()).get(index as usize).cloned()
+    ASSETS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(index as usize).cloned()
 }
 
 // Welches Equipment-Asset ein Item an diesem Slot zeigt (Vanillas
 // HumanoidArmorLayer.shouldRender: die Component nennt genau diesen Slot und ein Asset).
 // None = an diesem Slot nichts.
+#[must_use] 
 pub fn worn_asset(item: &str, equip: Equip, slot: ArmorSlot) -> Option<String> {
     match equip {
         Equip::Default => {
@@ -231,6 +234,7 @@ pub fn worn_asset(item: &str, equip: Equip, slot: ArmorSlot) -> Option<String> {
 
 // Das Equipment-Asset fuer die Fluegel am Ruecken (WingsLayer): das der equippable-Component
 // des Brust-Items, ohne Slot-Pruefung. Von Haus aus hat nur die Elytra eins.
+#[must_use] 
 pub fn wings_asset(item: &str, equip: Equip) -> Option<String> {
     match equip {
         Equip::Default => (item == "elytra").then(|| "minecraft:elytra".to_string()),
@@ -242,7 +246,8 @@ pub fn wings_asset(item: &str, equip: Equip) -> Option<String> {
 // Die Ebene dieses Materials fuer diesen Slot. Welche der beiden gespeicherten gilt, haengt
 // allein daran, ob der Slot die INNERE Modellebene nutzt (s. ArmorSlot::inner). None, wenn es
 // das Material fuer diese Ebene gar nicht gibt (Schildkroetenpanzer als Hose).
-pub fn layer_for(material: &'static Material, slot: ArmorSlot) -> Option<&'static Layer> {
+#[must_use] 
+pub const fn layer_for(material: &'static Material, slot: ArmorSlot) -> Option<&'static Layer> {
     if slot.inner() {
         material.leggings.as_ref()
     } else {

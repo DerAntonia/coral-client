@@ -3,7 +3,7 @@
 //! Die Schrift hat unterschiedlich breite Ziffern ("1" ist schmaler als "8"). Springt eine
 //! Zahl hin und her, rutscht alles hinter ihr mit -- und bei mittigem oder rechtsbuendigem
 //! Text die ganze Zeile. Feste Ziffernbreiten ueberall kommen nicht in Frage: ein frueherer
-//! Versuch riss die schmale "1" in ruhigem Text sichtbar auseinander (s. font_atlas).
+//! Versuch riss die schmale "1" in ruhigem Text sichtbar auseinander (s. `font_atlas`).
 //!
 //! Deshalb wird ERKANNT, welche Zahl sich tatsaechlich aendert. Ein Text wird dazu auf sein
 //! Muster reduziert: jede Ziffernfolge wird ein Platzhalter ("Kills: 12" -> "Kills: _").
@@ -111,7 +111,7 @@ impl StableNumbers {
         self.entries.clear();
     }
 
-    pub fn set_enabled(&mut self, an: bool) {
+    pub const fn set_enabled(&mut self, an: bool) {
         self.enabled = an;
     }
 

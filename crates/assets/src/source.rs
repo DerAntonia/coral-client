@@ -38,7 +38,7 @@ pub struct GameFiles {
     /// Enthaelt indexes/ und objects/.
     pub assets_dir: PathBuf,
     pub client_jar: PathBuf,
-    /// Dateiname (ohne .json) unter assets_dir/indexes/.
+    /// Dateiname (ohne .json) unter `assets_dir/indexes`/.
     pub asset_index: String,
 }
 
@@ -46,7 +46,7 @@ pub struct GameFiles {
 #[derive(Clone, Debug)]
 pub struct Candidate {
     pub source: GameSource,
-    /// Anzeigename, z.B. "Offizieller Launcher" oder "Prism: PvP".
+    /// Anzeigename, z.B. "Offizieller Launcher" oder "Prism: `PvP`".
     pub label: String,
     /// Minecraft-Version der Quelle, falls bekannt (bei Prism aus der Instanz, beim offiziellen
     /// Launcher die gesuchte, falls installiert).
@@ -77,7 +77,7 @@ struct MmcComponent {
     version: Option<String>,
 }
 
-/// Was es braucht, um Klassen aus dem Client-Jar mit Java zu laden (s. entity_models).
+/// Was es braucht, um Klassen aus dem Client-Jar mit Java zu laden (s. `entity_models`).
 #[derive(Clone, Debug)]
 pub struct JavaLaunch {
     pub version_json: PathBuf,
@@ -108,9 +108,10 @@ fn official_runtime_dirs(dir: &Path) -> Vec<PathBuf> {
 
 impl GameSource {
     /// Pfade fuer einen Java-Start gegen das Client-Jar von `version`.
+    #[must_use] 
     pub fn java_launch(&self, version: &str) -> JavaLaunch {
         match self {
-            GameSource::Official { dir } => {
+            Self::Official { dir } => {
                 let version_dir = dir.join("versions").join(version);
                 JavaLaunch {
                     version_json: version_dir.join(format!("{version}.json")),
@@ -119,7 +120,7 @@ impl GameSource {
                     runtime_dirs: official_runtime_dirs(dir),
                 }
             }
-            GameSource::Prism { root, .. } => JavaLaunch {
+            Self::Prism { root, .. } => JavaLaunch {
                 version_json: root.join("meta").join("net.minecraft").join(format!("{version}.json")),
                 client_jar: root.join("libraries").join("com/mojang/minecraft").join(version).join(format!("minecraft-{version}-client.jar")),
                 libraries_dir: root.join("libraries"),
@@ -133,11 +134,11 @@ impl GameSource {
     /// beim Spielstart.
     pub fn resolve(&self, version: &str) -> Result<GameFiles, AssetsError> {
         let (version_json_path, client_jar, assets_dir) = match self {
-            GameSource::Official { dir } => {
+            Self::Official { dir } => {
                 let version_dir = dir.join("versions").join(version);
                 (version_dir.join(format!("{version}.json")), version_dir.join(format!("{version}.jar")), dir.join("assets"))
             }
-            GameSource::Prism { root, instance } => {
+            Self::Prism { root, instance } => {
                 let instance_version = prism_instance_version(&prism_instances_dir(root).join(instance));
                 if instance_version.as_deref() != Some(version) {
                     return Err(AssetsError::VersionNotFound {
@@ -170,17 +171,18 @@ impl GameSource {
     }
 
     /// Einzeilige Beschreibung fuer Anzeige und Log.
+    #[must_use] 
     pub fn describe(&self) -> String {
         match self {
-            GameSource::Official { dir } => format!("offizielles Layout in {}", dir.display()),
-            GameSource::Prism { root, instance } => format!("Prism-Instanz \"{instance}\" in {}", root.display()),
+            Self::Official { dir } => format!("offizielles Layout in {}", dir.display()),
+            Self::Prism { root, instance } => format!("Prism-Instanz \"{instance}\" in {}", root.display()),
         }
     }
 
     fn serialize(&self) -> String {
         match self {
-            GameSource::Official { dir } => format!("kind=official\ndir={}\n", dir.display()),
-            GameSource::Prism { root, instance } => format!("kind=prism\nroot={}\ninstance={instance}\n", root.display()),
+            Self::Official { dir } => format!("kind=official\ndir={}\n", dir.display()),
+            Self::Prism { root, instance } => format!("kind=prism\nroot={}\ninstance={instance}\n", root.display()),
         }
     }
 
@@ -201,8 +203,8 @@ impl GameSource {
             }
         }
         match kind.as_deref()? {
-            "official" => Some(GameSource::Official { dir: dir? }),
-            "prism" => Some(GameSource::Prism { root: root?, instance: instance? }),
+            "official" => Some(Self::Official { dir: dir? }),
+            "prism" => Some(Self::Prism { root: root?, instance: instance? }),
             _ => None,
         }
     }
@@ -235,6 +237,7 @@ fn home_base() -> Option<PathBuf> {
 
 /// Konfigurationsordner des Clients (~/.config/coral-client bzw. %APPDATA%\coral-client) --
 /// derselbe, in dem settings.conf liegt.
+#[must_use] 
 pub fn config_dir() -> Option<PathBuf> {
     Some(config_base()?.join(DIR_NAME))
 }
@@ -242,6 +245,7 @@ pub fn config_dir() -> Option<PathBuf> {
 /// Datenordner des Clients (~/.local/share/coral-client bzw. %APPDATA%\coral-client) -- fuer
 /// Dateien, die der Client selbst sammelt und die sich nicht neu erzeugen lassen (gespeicherte
 /// Chunks des Moduls Chunk-Saver).
+#[must_use] 
 pub fn data_dir() -> Option<PathBuf> {
     Some(data_base()?.join(DIR_NAME))
 }
@@ -249,12 +253,14 @@ pub fn data_dir() -> Option<PathBuf> {
 /// Sichtbarer Ordner im Benutzerverzeichnis (~/coral-client bzw. %USERPROFILE%\coral-client) --
 /// fuer alles, was man selbst anfasst: Skin-Packs in skins/, das Client-Programm des Launchers
 /// in binary/.
+#[must_use] 
 pub fn user_dir() -> Option<PathBuf> {
     Some(home_base()?.join(DIR_NAME))
 }
 
 /// Speicher-Ordner (~/coral-client/storage): Spieldaten aus dem Jar (s. storage.rs) und das
-/// Startbild des Launchers. Lag frueher im Datenordner, migrate_legacy_dirs zieht ihn um.
+/// Startbild des Launchers. Lag frueher im Datenordner, `migrate_legacy_dirs` zieht ihn um.
+#[must_use] 
 pub fn storage_dir() -> Option<PathBuf> {
     Some(user_dir()?.join("storage"))
 }
@@ -285,7 +291,7 @@ pub fn migrate_legacy_dirs() {
     // Der Speicher lag im Datenordner; jetzt liegt er sichtbar im Benutzerordner.
     if let (Some(alt), Some(neu)) = (data_dir().map(|d| d.join("storage")), storage_dir()) {
         if alt.is_dir() && !neu.exists() {
-            let ergebnis = neu.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::rename(&alt, &neu));
+            let ergebnis = neu.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(&alt, &neu));
             if let Err(e) = ergebnis {
                 eprintln!("[ordner] {} nicht nach {} verschoben: {e}", alt.display(), neu.display());
             }
@@ -298,6 +304,7 @@ fn selection_path() -> Option<PathBuf> {
 }
 
 /// Die im Launcher gewaehlte Quelle, None = nie gewaehlt (bzw. Datei unlesbar).
+#[must_use] 
 pub fn load_selection() -> Option<GameSource> {
     GameSource::parse(&std::fs::read_to_string(selection_path()?).ok()?)
 }
@@ -310,8 +317,9 @@ pub fn save_selection(source: &GameSource) -> std::io::Result<()> {
     std::fs::write(path, source.serialize())
 }
 
-/// Die Quelle, die der Client beim Start benutzt: CORAL_MINECRAFT_DIR (Tests/Sonderfaelle)
+/// Die Quelle, die der Client beim Start benutzt: `CORAL_MINECRAFT_DIR` (Tests/Sonderfaelle)
 /// vor der Auswahl im Launcher vor der Standard-.minecraft.
+#[must_use] 
 pub fn active_source() -> Option<GameSource> {
     if let Ok(override_path) = std::env::var("CORAL_MINECRAFT_DIR") {
         return Some(GameSource::Official { dir: PathBuf::from(override_path) });
@@ -321,6 +329,7 @@ pub fn active_source() -> Option<GameSource> {
 
 /// Alle gefundenen Installationen, jeweils mit dem Ergebnis fuer `version`. Die offizielle
 /// zuerst, danach die Prism-Instanzen alphabetisch.
+#[must_use] 
 pub fn discover(version: &str) -> Vec<Candidate> {
     let mut candidates = Vec::new();
 
@@ -393,7 +402,7 @@ fn prism_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// instances/ -- oder der in prismlauncher.cfg eingestellte Ordner (InstanceDir=, relativ zum
+/// instances/ -- oder der in prismlauncher.cfg eingestellte Ordner (`InstanceDir`=, relativ zum
 /// Datenordner oder absolut).
 fn prism_instances_dir(root: &Path) -> PathBuf {
     let configured = std::fs::read_to_string(root.join("prismlauncher.cfg")).ok().and_then(|cfg| {

@@ -7,6 +7,7 @@
 pub struct Uuid(pub [u8; 16]);
 
 impl Uuid {
+    #[must_use] 
     pub fn random_v4() -> Self {
         let mut bytes = [0u8; 16];
         rand::Rng::fill(&mut rand::thread_rng(), &mut bytes);
@@ -16,17 +17,20 @@ impl Uuid {
     }
 
     // 16 Bytes big-endian (obere 64 Bit, dann untere 64 Bit), wie im Protokoll gefordert.
-    pub fn to_bytes(self) -> [u8; 16] {
+    #[must_use] 
+    pub const fn to_bytes(self) -> [u8; 16] {
         self.0
     }
 
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+    #[must_use] 
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
 
     // Parst die 32-stellige Hex-UUID (mit oder ohne Bindestriche), wie sie der
     // Mojang-Profil-Endpunkt liefert (`id`). Fuer den Online-Mode-Login-Start, wo -- anders
     // als offline -- die ECHTE Konto-UUID gesendet werden muss.
+    #[must_use] 
     pub fn from_hex(s: &str) -> Option<Self> {
         let hex: String = s.chars().filter(|c| *c != '-').collect();
         if hex.len() != 32 {

@@ -239,6 +239,15 @@ Frame-Profiler an	Frame profiler on	Profiler imāginum sīc
 Frame-Profiler aus	Frame profiler off	Profiler imāginum nōn
 Sound-Debug	Sound debug	Debug sonī
 Zwei Balken: wie laut gerade der linke und der rechte Kanal ist	Two bars: how loud the left and right channel currently are	Duae virgae: quam sonōrus nunc canālis sinister et dexter sit
+Hand-Debug	Hand debug	Debug manūs
+Pfeiltasten: links/rechts, hoch/runter; PgUp/PgDn: vor/zurück	Arrow keys: left/right, up/down; PgUp/PgDn: forward/back	Sagittae: sinistrōrsum/dextrōrsum, sursum/deorsum; Pāgina sursum/deorsum: prōrsum/retrōrsum
+Mit Alt: hoch/runter kippen, links/rechts schwenken, PgUp/PgDn rollen, Komma/Punkt Arm verdrehen	With Alt: up/down tilt, left/right swing, PgUp/PgDn roll, comma/period twist arm	Cum Alt: sursum/deorsum inclīnāre, sinistrōrsum/dextrōrsum vertere, pāgina sursum/deorsum volvere, virgula/punctum bracchium torquēre
+Mit Strg: Schulter um die Faust drehen	With Ctrl: turn the shoulder around the fist	Cum Ctrl: umerum circa pugnum vertere
+Pfeile: Hand	Arrows: hand	Sagittae: manus
+Leere Hand	Empty hand	Manus vacua
+Pfeile: Item	Arrows: item	Sagittae: rēs
+Rücktaste: Arm wie mit leerer Hand / Standard	Backspace: arm as with an empty hand / default	Clāvis retrōrsum: bracchium ut manū vacuā / praefīnītum
+Verkleinert das Bild nach links oben, Hand und Items ragen ungeschnitten über den schwarzen Rand	Shrinks the picture to the top left, hand and items reach uncut over the black border	Imāginem sursum sinistrōrsum minuit, manus et rēs integrae super marginem nigrum exstant
 Hitbox	Hitbox	Capsa ictus
 Hitbox-Anzeige	Hitbox display	Index capsārum ictus
 Trefferbox anderer Entities: geglättet und/oder roh	Hitbox of other entities: smoothed and/or raw	Capsa ictus aliōrum entium: lēvigāta et/vel crūda
@@ -373,6 +382,9 @@ Angreifen/Abbauen	Attack/Destroy	Oppugnāre/Fodere
 Benutzen/Platzieren	Use/Place	Ūtī/Pōnere
 Item wegwerfen	Drop item	Rem abicere
 Mit Zweithand tauschen	Swap with offhand	Cum manū altera permūtāre
+Item in der Hand ansehen	Inspect held item	Rem in manū īnspicere
+Item ansehen	Inspect item	Rem īnspicere
+Hand-Debug an/aus	Toggle Hand-Debug	Hand-Debug commūtāre
 Hotbar nach links	Hotbar left	Virga sinistrōrsum
 Hotbar nach rechts	Hotbar right	Virga dextrōrsum
 Hotbar 1	Hotbar 1	Virga 1
@@ -948,6 +960,7 @@ Zahl-Größe	Number size	Magnitūdō numerī
 Zahl X	Number X	Numerus X
 Zahl Y	Number Y	Numerus Y
 Grün bei >87 %	Green at >87 %	Viride ad >87 %
+Mending-Ring	Mending ring	Anulus reficiendi
 Chat-Zeile {}	Chat line {}	Versus colloquiī {}
 Noch keine Server gespeichert. Unten auf "Neuer Eintrag".	No servers saved yet. Click "New entry" below.	Nūllī servītōrēs adhūc servātī. Īnfrā "Īnscrīptiō nova" preme.
 Item-Hitbox	Item hitbox	Capsa ictūs reī
@@ -1077,6 +1090,8 @@ Klick auf eine Config wechselt sofort -- auch mitten im Spiel.	Clicking a config
 Configs	Configs	Cōnfigūrātiōnēs
 + {} weitere (im Launcher)	+ {} more (in the launcher)	+ {} aliae (in launchere)
 Suche	Search	Quaerere
+Nichts gefunden.	Nothing found.	Nihil inventum.
+Einstellung oder Modul, Enter sucht	Setting or module, Enter searches	Optio vel modulus, Enter quaerit
 Fackel, Laterne, ...	Torch, lantern, ...	Fax, lanterna, ...
 Keine Lichtquelle gefunden.	No light source found.	Nūllus fōns lūminis inventus.
 {}–{} von {} (Mausrad)	{}–{} of {} (mouse wheel)	{}–{} ex {} (rota mūris)
@@ -1299,3 +1314,58 @@ Kein Dateidialog gefunden (zenity oder kdialog installieren)	No file dialog foun
 Token von {}	Token of {}	Tessera {}
 Refresh-Token von {}	Refresh token of {}	Tessera renovātiōnis {}
 Namen anzeigen	Show name	Nōmen ostendere
+Haltungen für Spieler in der dritten Person, die Vanilla nur in der Ich-Sicht oder gar nicht zeigt (wie die Mod Not Enough Animations) -- bei anderen Spielern und bei dir in F5. Schild, Speer und Schläge bleiben wie in Vanilla.	Poses for players in third person that Vanilla only shows in first person or not at all (like the Not Enough Animations mod) -- on other players and on you in F5. Shield, spear and swings stay as in Vanilla.	Habitūs lūsōrum in persōnā tertiā, quōs Vanilla tantum in persōnā prīmā aut omnīnō nōn ostendit (ut Not Enough Animations) -- in aliīs lūsōribus et in tē in F5. Scūtum, hasta, ictūs ut in Vanilla manent.
+Essen & Trinken	Eating & drinking	Edere et bibere
+Fackel, Laterne, Kompass, Uhr hochhalten	Hold up torch, lantern, compass, clock	Facem, lucernam, pyxidem, hōrologium tollere
+Karte halten	Hold map	Tabulam tenēre
+Leiter klettern	Climb ladders	Scālās scandere
+Kriechen	Crawling	Rēpere
+Brennen	Burning	Ārdēre
+Frieren	Freezing	Algēre
+Hände tauschen	Swap hands	Manūs permūtāre
+Elytra	Elytra	Elytra
+Zügel halten	Hold the reins	Habēnās tenēre
+Rudern	Rowing	Rēmigāre
+Weiche Übergänge	Smooth transitions	Trānsitūs mollēs
+Beim Essen und Blocken zum Blick drehen	Turn towards view while eating and blocking	Edendo et parandō ad aspectum vertere
+Laternen pendeln	Swinging lanterns	Lucernae oscillantēs
+Nebenhand beim Bogen verstecken	Hide offhand while using bows	Manum alteram arcū ūtendō cēlāre
+Beine beim Reiten	Legs while riding	Crūra equitandō
+Ruhig im Bett	Still in bed	Quiētus in lectō
+Haustiere streicheln	Pet animals	Bēstiās mulcēre
+Umarmen	Hugging	Amplectī
+Fallen	Falling	Cadere
+Naruto-Rennen	Naruto running	Cursus Narutōnis
+Bogen schräg halten	Hold bow tilted	Arcum oblīquē tenēre
+Armbrust tiefer halten	Hold crossbow lower	Arcuballistam īnferius tenēre
+Schwert auf dem Rücken	Sword on the back	Gladius in tergō
+Modified View Model	Modified View Model	Exemplar visūs mūtātum
+In der Ich-Sicht hält deine Hand das Item, mit den im Hand-Debug je Item eingestellten Werten. Aus: wie in Vanilla, das Item ohne Arm.	In first person your hand holds the item, with the values set per item in Hand-Debug. Off: like vanilla, the item without an arm.	In aspectū prīmae persōnae manus tua rem tenet, cum valōribus in Hand-Debug singulīs rēbus statūtīs. Nōn: ut in Vanilla, rēs sine bracchiō.
+Mit Alt: Item um den Griff drehen (hoch/runter kippen, links/rechts schwenken, PgUp/PgDn rollen)	With Alt: turn the item around the grip (up/down tilt, left/right swing, PgUp/PgDn roll)	Cum Alt: rem circa capulum vertere (sursum/deorsum inclīnāre, sinistrōrsum/dextrōrsum vertere, pāgina sursum/deorsum volvere)
+Großbuchstaben	Capital letters	Litterae maiusculae
+Aus: aller Text wird klein geschrieben gezeichnet, auch Chat, Namen und Scoreboard. Was der Server schickt und was du tippst, bleibt unverändert.	Off: all text is drawn in lower case, including chat, names and the scoreboard. What the server sends and what you type stay unchanged.	Exstinctum: omnis textus litteris minusculis pingitur, etiam colloquium, nomina et tabula. Quae servitor mittit et quae scribis immutata manent.
+Bogenhand	Bow hand	Manus arcūs
+Sehnenhand	String hand	Manus nervī
+Farbe der Anzahl	Count colour	Color numerī
+Anzahl in der Hotbar	Count in the hotbar	Numerus in hotbar
+Anzahl im Inventar	Count in the inventory	Numerus in inventāriō
+Farbe der Stückzahl in den Slots von Inventar und Kisten. Die Hotbar hat ihre eigene (HUD-Editor, Hotbar).	Colour of the stack count in inventory and chest slots. The hotbar has its own (HUD editor, Hotbar).	Color numerī in loculīs inventāriī et arcārum. Hotbar suum habet (HUD editor, Hotbar).
+Wie weit der Vanilla-Schatten neben dem Text liegt: wie in Minecraft einen Schriftpixel nach rechts und nach unten, oder nur einen halben -- dann ist er schmaler und der Text bleibt besser lesbar.	How far the vanilla shadow sits beside the text: one font pixel right and down like in Minecraft, or only half of one -- then it is thinner and the text stays easier to read.	Quam procul umbra Vanilla iuxta textum iacet: ut in Minecraft ūnum pixellum dextrōrsum et deorsum, aut dīmidium tantum -- tum tenuior est et textus facilius legitur.
+Schulterkamera	Shoulder camera	Camera umerī
+Seitlicher Versatz	Side offset	Dēclīnātiō laterālis
+Zielendes Fadenkreuz	Aiming crosshair	Crux collīneāns
+Spieler durchsichtig nah	Fade player when close	Lūsor prope perlūcidus
+Kamera frei vom Körper	Camera free from body	Camera ā corpore lībera
+Freelook (Modul)	Freelook (module)	Aspectus līber (modulus)
+Freelook	Freelook	Aspectus līber
+Schulter wechseln	Switch shoulder	Umerum mūtāre
+Ansicht	View	Aspectus
+Aktuelle	Current	Praesēns
+Ich-Sicht	First person	Prīma persōna
+Hinten	Behind	Post
+Vorne	Front	Ante
+Solange die Freelook-Taste (Steuerung) aktiv ist, dreht die Maus nur die Kamera, der Spieler schaut weiter geradeaus	While the freelook key (controls) is active, the mouse only turns the camera, the player keeps looking ahead	Dum clāvis aspectūs līberī (moderāmina) agit, mūs sōlam cameram vertit, lūsor rēctā prōspicit
+Wie die Mod Shoulder Surfing Reloaded: in der 3. Person von hinten sitzt die Kamera seitlich über der Schulter. Abstand und Höhe kommen aus dem Abschnitt Kamera. Die Taste "Schulter wechseln" (Steuerung, Ansicht) setzt sie auf die andere Seite.	Like the mod Shoulder Surfing Reloaded: in third person from behind, the camera sits to the side over the shoulder. Distance and height come from the Camera section. The "Switch shoulder" key (Controls, View) moves it to the other side.	Ut modulus Shoulder Surfing Reloaded: in tertiā persōnā ā tergō camera ad latus super umerum sedet. Spatium et altitūdō ā sectiōne Camera veniunt. Clāvis "Umerum mūtāre" (Moderāmina, Aspectus) eam in alterum latus pōnit.
+Das Fadenkreuz steht dort, wo dein Spieler wirklich hinzielt -- über der Schulter liegt das nicht in der Bildmitte. Mit "Kamera frei vom Körper" bleibt es in der Mitte: dort zielt dann die Kamera, und beim Angreifen oder Benutzen dreht sich der Spieler dorthin.	The crosshair sits where your player is really aiming -- over the shoulder that is not the middle of the screen. With "Camera free from body" it stays in the middle: the camera aims there, and attacking or using turns the player towards it.	Crux stat ubi lūsor tuus rē vērā collīneat -- super umerum id nōn est medium imāginis. Cum "Camera ā corpore lībera" in mediō manet: ibi camera collīneat, et feriendō vel ūtendō lūsor eō vertitur.
+Kommt die Kamera deinem Spieler nahe (etwa an einer Wand), wird er durchsichtig, damit er nicht das ganze Bild verdeckt.	When the camera comes close to your player (for example at a wall), the player turns see-through so it does not cover the whole picture.	Cum camera lūsōrī tuō appropinquat (exempli grātiā ad mūrum), lūsor perlūcidus fit, nē tōtam imāginem tegat.
+Die Maus dreht nur die Kamera. Dein Spieler läuft in die Richtung, in die du ihn steuerst, und dreht sich beim Angreifen, Abbauen oder Benutzen zu dem, was in der Bildmitte liegt.	The mouse only turns the camera. Your player walks in the direction you steer and turns to whatever is in the middle of the screen when attacking, mining or using.	Mūs sōlam cameram vertit. Lūsor tuus eō ambulat quō eum regis, et feriendō, effodiendō vel ūtendō ad id vertitur quod in mediō imāginis est.

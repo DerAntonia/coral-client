@@ -18,7 +18,7 @@ pub const CB_PLAY_OPEN_SIGN_EDITOR: i32 = 0x3A;
 pub const SB_PLAY_SIGN_UPDATE: i32 = 0x3B;
 
 // Eine Seite eines Schildes.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SignSide {
     pub lines: [Vec<TextSpan>; 4],
     // DyeColor-Index (0 weiss .. 15 schwarz).
@@ -26,7 +26,7 @@ pub struct SignSide {
     pub glowing: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SignText {
     pub front: SignSide,
     pub back: SignSide,
@@ -59,6 +59,7 @@ fn side_from_nbt(v: Option<&NbtValue>) -> SignSide {
 }
 
 // Schildtext aus dem NBT eines Block-Entities, oder None, wenn es kein Schild ist.
+#[must_use] 
 pub fn sign_from_nbt(v: &NbtValue) -> Option<SignText> {
     if v.get("front_text").is_none() && v.get("back_text").is_none() {
         return None;
@@ -96,6 +97,7 @@ pub fn read_open_sign_editor(payload: &[u8]) -> Result<((i32, i32, i32), bool), 
 }
 
 // Sign Update (UpdateSignC2SPacket): Position, Seite, vier Zeilen als Klartext.
+#[must_use] 
 pub fn sign_update_payload(pos: (i32, i32, i32), front: bool, lines: &[String; 4]) -> Vec<u8> {
     let mut w = PacketWriter::new();
     w.write_varint(SB_PLAY_SIGN_UPDATE);

@@ -463,11 +463,18 @@ fn fs_entity_lit(in: EntityLitOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_entity_translucent_lit(in: EntityLitOutput) -> @location(0) vec4<f32> {
     let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
-    if (tex.a < 0.1) {
+    let deckung = entity_fade(in.tint.a);
+    if (tex.a < 0.1 || tex.a * deckung < 0.02) {
         discard;
     }
     let base = linear_to_srgb(tex.rgb) * in.color;
-    return vec4<f32>(tonemap_neutral(srgb_to_linear(mix(base, in.tint.rgb, in.tint.a)) * in.light), tex.a);
+    return vec4<f32>(tonemap_neutral(srgb_to_linear(mix(base, in.tint.rgb, max(in.tint.a, 0.0))) * in.light), tex.a * deckung);
+}
+
+// Ausgeblendetes Entity (der eigene Spieler nah an der Schulterkamera): ein Tint-Alpha unter
+// -0.5 traegt statt der Schadens-Mischung die Deckkraft als -1 - Deckkraft. Sonst ganz deckend.
+fn entity_fade(tint_a: f32) -> f32 {
+    return select(1.0, clamp(-tint_a - 1.0, 0.0, 1.0), tint_a < -0.5);
 }
 
 // Die Ego-Hand: Licht an der Augenposition aus dem Hand-Kamera-Uniform (hitbox.x, Bits).
@@ -486,11 +493,12 @@ fn fs_hand_lit(in: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_entity_translucent(in: EntityOutput) -> @location(0) vec4<f32> {
     let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
-    if (tex.a < 0.1) {
+    let deckung = entity_fade(in.tint.a);
+    if (tex.a < 0.1 || tex.a * deckung < 0.02) {
         discard;
     }
     let base = linear_to_srgb(tex.rgb) * in.color;
-    return vec4<f32>(srgb_to_linear(mix(base, in.tint.rgb, in.tint.a)), tex.a);
+    return vec4<f32>(srgb_to_linear(mix(base, in.tint.rgb, max(in.tint.a, 0.0))), tex.a * deckung);
 }
 
 // Fuer die Wasser-Pipeline (echtes Alpha-Blending, kein Tiefenschreiben, s.

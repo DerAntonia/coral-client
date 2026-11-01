@@ -33,12 +33,14 @@ fn name(stack: &ItemStack) -> &'static str {
 }
 
 // Hat der Stapel Haltbarkeit (max_damage, nicht unzerbrechlich)?
+#[must_use] 
 pub fn damageable(stack: &ItemStack) -> bool {
     let c = Components::of(stack);
     c.max_damage() > 0 && !c.unbreakable()
 }
 
 // ItemStack.nextDamageWillBreak: beschaedigbar und nur noch ein Punkt uebrig.
+#[must_use] 
 pub fn next_damage_will_break(stack: &ItemStack) -> bool {
     let c = Components::of(stack);
     damageable(stack) && c.damage() >= c.max_damage() - 1
@@ -46,6 +48,7 @@ pub fn next_damage_will_break(stack: &ItemStack) -> bool {
 
 // Gleitet man damit (LivingEntity.canGlideUsing)? Die Component, im Slot, in den das Item
 // gehoert, und nicht kurz vor dem Zerbrechen. `slot` ist die EquipmentSlot-Ordinalzahl.
+#[must_use] 
 pub fn can_glide_with(stack: &ItemStack, slot: u8) -> bool {
     let c = Components::of(stack);
     let gleiter = if loaded() { c.has(COMPONENT_GLIDER) } else { name(stack) == "elytra" };
@@ -57,6 +60,7 @@ pub fn can_glide_with(stack: &ItemStack, slot: u8) -> bool {
 }
 
 // Rettet der Stapel vor dem Tod (Totem)?
+#[must_use] 
 pub fn death_protection(stack: &ItemStack) -> bool {
     if loaded() {
         Components::of(stack).has(COMPONENT_DEATH_PROTECTION)
@@ -66,6 +70,7 @@ pub fn death_protection(stack: &ItemStack) -> bool {
 }
 
 // Blockt der Stapel Angriffe (Schild), und mit welcher Verzoegerung?
+#[must_use] 
 pub fn blocks_attacks(stack: &ItemStack) -> Option<BlocksAttacks> {
     let c = Components::of(stack);
     if !loaded() {
@@ -86,6 +91,7 @@ pub const SWING_WHACK: i32 = 1;
 pub const SWING_STAB: i32 = 2;
 
 // swing_animation: Art und Dauer in Ticks.
+#[must_use] 
 pub fn swing(stack: &ItemStack) -> (i32, u32) {
     if !loaded() {
         let n = name(stack);
@@ -99,6 +105,7 @@ pub fn swing(stack: &ItemStack) -> (i32, u32) {
 
 // Wie weit der Angriff mindestens aufgeladen sein muss, bevor ein Linksklick ueberhaupt etwas
 // tut (minimum_attack_charge, Speere 1.0; ohne die Component 0 = jederzeit).
+#[must_use] 
 pub fn minimum_attack_charge(stack: &ItemStack) -> f32 {
     if loaded() {
         pick(stack, COMPONENT_MINIMUM_ATTACK_CHARGE, |s| s.minimum_attack_charge).unwrap_or(0.0)
@@ -110,6 +117,7 @@ pub fn minimum_attack_charge(stack: &ItemStack) -> f32 {
 }
 
 // Sticht der Linksklick statt zu schlagen (piercing_weapon, die Speere)?
+#[must_use] 
 pub fn piercing(stack: &ItemStack) -> bool {
     if loaded() {
         Components::of(stack).has(COMPONENT_PIERCING_WEAPON)
@@ -119,6 +127,7 @@ pub fn piercing(stack: &ItemStack) -> bool {
 }
 
 // Der Ansturm beim gehaltenen Rechtsklick (kinetic_weapon), in den Zeitmarken der Ego-Haltung.
+#[must_use] 
 pub fn kinetic(stack: &ItemStack) -> Option<crate::entity_model::SpearKinetic> {
     if !loaded() {
         return reg::spear_kinetic(name(stack));
@@ -129,6 +138,7 @@ pub fn kinetic(stack: &ItemStack) -> Option<crate::entity_model::SpearKinetic> {
 }
 
 // use_effects: darf man beim Benutzen sprinten, und mit welchem Tempo-Faktor geht man?
+#[must_use] 
 pub fn use_effects(stack: &ItemStack) -> UseEffects {
     let standard = UseEffects { can_sprint: false, interact_vibrations: true, speed_multiplier: DEFAULT_USE_SPEED };
     if !loaded() {
@@ -139,6 +149,7 @@ pub fn use_effects(stack: &ItemStack) -> UseEffects {
 
 // Wie lange Essen/Trinken dauert (consumable), in Ticks -- None, wenn das Item nicht verzehrt
 // wird. Ohne Standards gilt fuer nicht gesetzte Werte die Namenstabelle.
+#[must_use] 
 pub fn consume_ticks(stack: &ItemStack) -> Option<u32> {
     let id = protocol::item::COMPONENT_CONSUMABLE;
     if !loaded() && stack.consume_seconds.is_none() && !stack.removed_components.contains(&id) {
@@ -149,6 +160,7 @@ pub fn consume_ticks(stack: &ItemStack) -> Option<u32> {
 }
 
 // Braucht das Essen Hunger (food ohne can_always_eat)? Ohne food-Component gar nicht.
+#[must_use] 
 pub fn needs_hunger(stack: &ItemStack) -> bool {
     let id = protocol::item::COMPONENT_FOOD;
     if !loaded() && stack.food_always_edible.is_none() && !stack.removed_components.contains(&id) {
@@ -161,6 +173,7 @@ pub fn needs_hunger(stack: &ItemStack) -> bool {
 }
 
 // Wird es getrunken statt gegessen (ItemUseAnimation DRINK)?
+#[must_use] 
 pub fn is_drink(stack: &ItemStack) -> bool {
     const DRINK: i32 = 2;
     match pick(stack, protocol::item::COMPONENT_CONSUMABLE, |s| s.consume_animation) {
@@ -169,8 +182,61 @@ pub fn is_drink(stack: &ItemStack) -> bool {
     }
 }
 
+// ItemUseAnimation (Ids wie im Jar): wie die Figur das Item beim Benutzen haelt.
+pub const USE_ANIM_NONE: i32 = 0;
+pub const USE_ANIM_BLOCK: i32 = 3;
+pub const USE_ANIM_BOW: i32 = 4;
+pub const USE_ANIM_TRIDENT: i32 = 5;
+pub const USE_ANIM_CROSSBOW: i32 = 6;
+pub const USE_ANIM_SPYGLASS: i32 = 7;
+pub const USE_ANIM_TOOT_HORN: i32 = 8;
+pub const USE_ANIM_BRUSH: i32 = 9;
+pub const USE_ANIM_SPEAR: i32 = 11;
+
+// Item.getUseAnimation samt der Items, die sie selbst festlegen (BowItem, CrossbowItem,
+// TridentItem, SpyglassItem, InstrumentItem, BrushItem): sonst die Animation aus consumable,
+// sonst Block bei blocks_attacks, Speer bei kinetic_weapon.
+#[must_use] 
+pub fn use_animation(stack: &ItemStack) -> i32 {
+    match name(stack) {
+        "bow" => return USE_ANIM_BOW,
+        "crossbow" => return USE_ANIM_CROSSBOW,
+        "trident" => return USE_ANIM_TRIDENT,
+        "spyglass" => return USE_ANIM_SPYGLASS,
+        "goat_horn" => return USE_ANIM_TOOT_HORN,
+        "brush" => return USE_ANIM_BRUSH,
+        _ => {}
+    }
+    if let Some(a) = pick(stack, protocol::item::COMPONENT_CONSUMABLE, |s| s.consume_animation) {
+        return a;
+    }
+    if consume_ticks(stack).is_some() {
+        return 1;
+    }
+    if blocks_attacks(stack).is_some() {
+        return USE_ANIM_BLOCK;
+    }
+    if kinetic(stack).is_some() {
+        return USE_ANIM_SPEAR;
+    }
+    USE_ANIM_NONE
+}
+
+// Wird es gegessen oder getrunken (ItemUseAnimation EAT oder DRINK)? Ein verzehrbares Item
+// ohne eigene Animation isst man (Consumable.DEFAULT_ANIMATION).
+#[must_use] 
+pub fn eaten_or_drunk(stack: &ItemStack) -> bool {
+    const EAT: i32 = 1;
+    const DRINK: i32 = 2;
+    match pick(stack, protocol::item::COMPONENT_CONSUMABLE, |s| s.consume_animation) {
+        Some(a) => a == EAT || a == DRINK,
+        None => consume_ticks(stack).is_some(),
+    }
+}
+
 // Kruemelt es beim Verzehr (consumable.has_consume_particles)? Ohne Standards: alles, was
 // gegessen statt getrunken wird.
+#[must_use] 
 pub fn consume_particles(stack: &ItemStack) -> bool {
     if !loaded() && stack.consume_particles.is_none() {
         return consume_ticks(stack).is_some() && !is_drink(stack);
@@ -180,6 +246,7 @@ pub fn consume_particles(stack: &ItemStack) -> bool {
 
 // Schwingt der Arm bei einem Rechtsklick ins Leere (Item.use mit SUCCESS)? Werfen, Auswerfen und
 // Oeffnen haengen an der Item-Klasse, das Anziehen an der equippable-Component.
+#[must_use] 
 pub fn air_use_swings(stack: &ItemStack) -> bool {
     if !loaded() {
         return reg::air_use_swings(name(stack));
@@ -188,11 +255,13 @@ pub fn air_use_swings(stack: &ItemStack) -> bool {
 }
 
 // Dasselbe mit einem Block im Fadenkreuz (s. item_registry::block_hit_use_swings).
+#[must_use] 
 pub fn block_hit_use_swings(stack: &ItemStack) -> bool {
     reg::empties_bucket(name(stack)) || air_use_swings(stack)
 }
 
 // Nimmt Item.use die Benutzung an (s. item_registry::item_use_accepted)?
+#[must_use] 
 pub fn item_use_accepted(stack: &ItemStack, block_hit: bool) -> bool {
     let schwingt = if block_hit { block_hit_use_swings(stack) } else { air_use_swings(stack) };
     schwingt || used_continuously(stack)
@@ -201,6 +270,7 @@ pub fn item_use_accepted(stack: &ItemStack, block_hit: bool) -> bool {
 // Haelt man das Item durchgehend (Rechtsklick gehalten = Benutzung bis zum Loslassen)? Verzehren,
 // Blocken und Ansturm kommen aus Components; Bogen, Armbrust, Dreizack, Fernrohr, Ziegenhorn und
 // Pinsel sind Item-Klassen ohne eigene Component.
+#[must_use] 
 pub fn used_continuously(stack: &ItemStack) -> bool {
     if !loaded() {
         return reg::is_used_continuously(name(stack));
@@ -211,17 +281,20 @@ pub fn used_continuously(stack: &ItemStack) -> bool {
 
 // Blockt die Benutzung (ItemUseAnimation BLOCK)? Das Schild, aber auch alles, dem ein Server
 // blocks_attacks gibt.
+#[must_use] 
 pub fn use_animation_block(stack: &ItemStack) -> bool {
     blocks_attacks(stack).is_some() || pick(stack, protocol::item::COMPONENT_CONSUMABLE, |s| s.consume_animation) == Some(ANIMATION_BLOCK)
 }
 
 // Zieht ein Rechtsklick das Item an (equippable, swappable, fuer Spieler erlaubt)? Wie in
 // Item.use geht Verzehren vor.
+#[must_use] 
 pub fn equips_on_use(stack: &ItemStack) -> bool {
     equip_slot_on_use(stack).is_some()
 }
 
 // Derselbe Test, mit dem Ziel: EquipmentSlot-Ordinal 2 (Fuesse) bis 5 (Kopf).
+#[must_use] 
 pub fn equip_slot_on_use(stack: &ItemStack) -> Option<u8> {
     if consume_ticks(stack).is_some() {
         return None;
@@ -243,6 +316,7 @@ fn pick<T: Copy>(stack: &ItemStack, id: i32, feld: impl Fn(&ItemStack) -> Option
 // Abenteuermodus (Player.blockActionRestricted / ItemStack.canPlaceOnBlockInAdventureMode):
 // abbauen nur mit can_break, das den Block nennt, platzieren und benutzen nur mit
 // can_place_on fuer den ANGEKLICKTEN Block. Ein Praedikat aus der Liste genuegt.
+#[must_use] 
 pub fn adventure_allows(preds: Option<&[protocol::item::BlockPredicate]>, state: u32) -> bool {
     preds.is_some_and(|p| p.iter().any(|p| block_predicate_matches(p, state)))
 }
@@ -268,8 +342,8 @@ fn block_predicate_matches(p: &protocol::item::BlockPredicate, state: u32) -> bo
         match matcher {
             StateValueMatcher::Exact(v) => wert == v,
             StateValueMatcher::Range(min, max) => {
-                min.as_deref().is_none_or(|m| property_order(wert, m).is_some_and(|o| o.is_ge()))
-                    && max.as_deref().is_none_or(|m| property_order(wert, m).is_some_and(|o| o.is_le()))
+                min.as_deref().is_none_or(|m| property_order(wert, m).is_some_and(std::cmp::Ordering::is_ge))
+                    && max.as_deref().is_none_or(|m| property_order(wert, m).is_some_and(std::cmp::Ordering::is_le))
             }
         }
     })

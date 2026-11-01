@@ -1,6 +1,6 @@
 // Das Modul-Menue: Zeilen, Kacheln, Layout und Modul-Aktionen.
 
-use crate::*;
+use crate::{ego_name, toteming, App, ModuleRow, ShieldColor, ButtonAction, ModuleId, HitboxVariant, hsv_to_rgb, hitbox_kinds, ColorTarget, HITBOX_DENSITY_MIN, HITBOX_DENSITY_MAX, teams, ARROW_EMPTY_FEEDBACK_NAMES, TRAIL_HOLD_MAX_TENTHS, TRAIL_FADE_MAX_TENTHS, HudElement, session_info, pick_two, SHIELD_SELF_MODE_NAMES, ShieldMark, sky_time_label, SKY_TIME_DAY, SKY_TIME_STEP, SkyMode, precipitation, COLOR_SATURATION_MAX, discord_rpc, BLOCK_OUTLINE_WIDTH_MIN, BLOCK_OUTLINE_WIDTH_MAX, VoiceKnob, VoiceFlag, voicechat, FREELOOK_VIEW_NAMES, ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX, ZOOM_SENS_MIN, ZOOM_SENS_MAX, EAT_HOLD_THROUGH_MAX, NO_TOOL_BREAK_MIN_RESERVE, NO_TOOL_BREAK_MAX_RESERVE, SATURATION_BAR_HEIGHT_MIN, SATURATION_BAR_HEIGHT_MAX, EGO_SPEED_MIN, EGO_SPEED_MAX, volume_text, AUTOCLICKER_CPS_MIN, AUTOCLICKER_CPS_MAX, LAG_DELAY_MAX_MS, GHOST_TOLERANCE_MIN_MS, GHOST_TOLERANCE_MAX_MS, GpuState, MODULE_DETAIL_PX_HEAD, MODULE_DETAIL_PX_FOOT, SETTINGS_ROW_H, MODULE_TILE_NAME_PX, SETTINGS_SCROLL_ROWS_PER_NOTCH, Rect, MODULE_DETAIL_PX_W, MODULE_DETAIL_PX_PAD, SETTINGS_FIRST_Y, SETTINGS_LABEL_X, AppMode, MenuScreen, ModuleDetailLayout, STEPPER_BTN_W, SETTINGS_CTRL_H, Button, UI_SCALE_SMALL, ModuleCategory, theme, pick_buttons, i18n, UiRect, UiText, TOGGLE_W, STEPPER_GAP, push_slider_unit, SliderKey, COLOR_GRID_LINE, styled_button, mix_color, HITBOX_DENSITY_STEP, ConnStatus, FREELOOK_VIEW_FRONT, ZOOM_FACTOR_STEP, ZOOM_SENS_STEP, EAT_HOLD_THROUGH_STEP, Instant, ARROW_OPACITY_STEP, ARROW_OPACITY_MIN, TRAIL_TENTHS_STEP, lod, COLOR_SATURATION_STEP, adjust_shield_color, ThemeNameDialog, text_field, EGO_ALIAS_MAX, NameDialogPurpose, GHOST_TOLERANCE_STEP_MS, LAG_DELAY_STEP_MS, adjust_sky_time, ui_sound};
 
 impl App {
     // Der Hauptschalter des gerade gezeigten Moduls. Er steht ZWEIMAL im Menue: klein am
@@ -41,7 +41,7 @@ impl App {
                 text: format!("{wert} {}", achse.unit()),
                 can_prev: achse.cyclic() || wert > min,
                 can_next: achse.cyclic() || wert < max,
-                slider: Some((wert as f64, min as f64, max as f64)),
+                slider: Some((f64::from(wert), f64::from(min), f64::from(max))),
             });
         }
     }
@@ -55,7 +55,7 @@ impl App {
             text: format!("{wert} %"),
             can_prev: wert > 0,
             can_next: wert < 100,
-            slider: Some((wert as f64, 0.0, 100.0)),
+            slider: Some((f64::from(wert), 0.0, 100.0)),
         }
     }
 
@@ -72,159 +72,9 @@ impl App {
                 action: ButtonAction::ToggleModuleTotemSound,
                 on: set.module_totem_sound,
             }),
-            ModuleId::Hitbox => {
-                // Je Zeile der Schalter und rechts daneben sein Farbfeld; die Regler stecken im
-                // Farbfenster (s. ColorPopup).
-                for (variant, label, on, action) in [
-                    (HitboxVariant::Smoothed, "Geglättet", set.module_hitbox_show_smoothed, ButtonAction::ToggleModuleHitboxSmoothed),
-                    (HitboxVariant::Raw, "Roh (Server)", set.module_hitbox_show_raw, ButtonAction::ToggleModuleHitboxRaw),
-                ] {
-                    let (hue, saturation, value) = self.hitbox_color_of(variant);
-                    let rgb = hsv_to_rgb(hue as f32, saturation as f32 / 100.0, value as f32 / 100.0);
-                    rows.push(ModuleRow::ToggleSwatch { label: label.to_string(), action, on, swatch: ButtonAction::HitboxColorEditor(variant), rgb });
-                }
-                let art_zeile = |art: hitbox_kinds::HitboxKind, label: &str| {
-                    let st = set.module_hitbox_styles[art.index()];
-                    ModuleRow::ToggleSwatch {
-                        label: label.to_string(),
-                        action: ButtonAction::ToggleHitboxKind(art),
-                        on: st.on,
-                        swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
-                        rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
-                    }
-                };
-                // Die Farbe der Items ist die von "Geglättet", eine eigene gibt es unten mit
-                // Ueberschreiben.
-                rows.push(ModuleRow::Toggle { label: "Item-Hitbox".to_string(), action: ButtonAction::ToggleModuleHitboxItems, on: set.module_hitbox_items });
-                rows.push(ModuleRow::Toggle { label: "Eigene Hitbox".to_string(), action: ButtonAction::ToggleModuleHitboxSelf, on: set.module_hitbox_self });
-                rows.push(art_zeile(hitbox_kinds::HitboxKind::Cobweb, "Spinnennetz-Hitbox"));
-                rows.push(art_zeile(hitbox_kinds::HitboxKind::Water, "Wasser-Hitbox"));
-                rows.push(ModuleRow::Toggle {
-                    label: "Gepunktet".to_string(),
-                    action: ButtonAction::ToggleModuleHitboxDotted,
-                    on: set.module_hitbox_dotted,
-                });
-                rows.push(ModuleRow::Stepper {
-                    label: "Dichte".to_string(),
-                    prev: ButtonAction::HitboxDensityPrev,
-                    next: ButtonAction::HitboxDensityNext,
-                    text: format!("{} px", set.module_hitbox_density_px),
-                    can_prev: set.module_hitbox_density_px > HITBOX_DENSITY_MIN,
-                    can_next: set.module_hitbox_density_px < HITBOX_DENSITY_MAX,
-                    slider: Some((set.module_hitbox_density_px as f64, HITBOX_DENSITY_MIN as f64, HITBOX_DENSITY_MAX as f64)),
-                });
-                rows.push(ModuleRow::Stepper {
-                    label: "Deckkraft".to_string(),
-                    prev: ButtonAction::HitboxOpacityPrev,
-                    next: ButtonAction::HitboxOpacityNext,
-                    text: format!("{} %", set.module_hitbox_opacity),
-                    can_prev: set.module_hitbox_opacity > 0,
-                    can_next: set.module_hitbox_opacity < 100,
-                    slider: Some((set.module_hitbox_opacity as f64, 0.0, 100.0)),
-                });
-                // Je PvP-Entity: ob es die Vorgaben von oben ueberschreibt, und wenn ja, ob es
-                // sichtbar ist und in welcher Farbe und Deckkraft (im Farbfenster). Ohne
-                // Ueberschreiben sind Sichtbar und Farbe ausgegraut. Was hier fehlt (Mobs), hat
-                // immer die Vorgaben.
-                rows.push(ModuleRow::Heading { label: "Individuelle Farben".to_string(), columns: &["Überschreiben", "Sichtbar"] });
-                for art in hitbox_kinds::HitboxKind::entities() {
-                    let st = set.module_hitbox_styles[art.index()];
-                    rows.push(ModuleRow::TwoTogglesSwatch {
-                        label: art.label().to_string(),
-                        first: (ButtonAction::ToggleHitboxKindOverride(art), st.custom),
-                        second: (ButtonAction::ToggleHitboxKind(art), st.on),
-                        swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
-                        rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
-                    });
-                }
-            }
-            ModuleId::Teams => {
-                // Verbuendet ist, wer bei einer eingeschalteten Erkennung passt.
-                rows.push(ModuleRow::Heading { label: "Erkennung".to_string(), columns: &[] });
-                for (i, label) in teams::Matchers::LABELS.iter().enumerate() {
-                    rows.push(ModuleRow::Toggle { label: label.to_string(), action: ButtonAction::TeamMatch(i), on: set.team_match.get(i) });
-                }
-                // Die eigene Teamfarbe: automatisch oder eine der Namensfarben, die gerade
-                // jemand traegt (Hex-Werte tippt niemand ab).
-                let rgb = |c: u32| [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0];
-                rows.push(ModuleRow::ColorPicks {
-                    label: "Eigene Teamfarbe".to_string(),
-                    first: ("Automatisch", ButtonAction::TeamOwnColor(None), set.team_own_color.is_none()),
-                    colors: self
-                        .team_color_suggestions()
-                        .into_iter()
-                        .map(|c| (ButtonAction::TeamOwnColor(Some(c)), rgb(c), set.team_own_color == Some(c)))
-                        .collect(),
-                });
-                for seite in teams::Side::ALL {
-                    let st = set.team_hitboxes[seite.index()];
-                    rows.push(ModuleRow::Heading { label: format!("{}-Hitboxen", seite.label()), columns: &[] });
-                    rows.push(ModuleRow::Toggle { label: "Überschreiben".to_string(), action: ButtonAction::TeamToggle(seite), on: st.on });
-                    rows.push(ModuleRow::Pick {
-                        label: "Farbe".to_string(),
-                        options: vec![
-                            ("Namensschild", ButtonAction::TeamNametag(seite, true), st.nametag),
-                            ("Fest", ButtonAction::TeamNametag(seite, false), !st.nametag),
-                        ],
-                        // Das Farbfeld nur mit fester Farbe -- mit Namensschild gibt es nichts einzustellen.
-                        swatch: (!st.nametag).then(|| {
-                            (
-                                ButtonAction::OpenColorPicker(ColorTarget::Team(seite)),
-                                hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
-                            )
-                        }),
-                    });
-                    rows.push(ModuleRow::Stepper {
-                        label: "Deckkraft".to_string(),
-                        prev: ButtonAction::TeamOpacity(seite, false),
-                        next: ButtonAction::TeamOpacity(seite, true),
-                        text: format!("{} %", st.opacity),
-                        can_prev: st.opacity > 0,
-                        can_next: st.opacity < 100,
-                        slider: Some((st.opacity as f64, 0.0, 100.0)),
-                    });
-                    rows.push(ModuleRow::Stepper {
-                        label: "Dichte".to_string(),
-                        prev: ButtonAction::TeamDensity(seite, false),
-                        next: ButtonAction::TeamDensity(seite, true),
-                        text: format!("{} px", st.density_px),
-                        can_prev: st.density_px > HITBOX_DENSITY_MIN,
-                        can_next: st.density_px < HITBOX_DENSITY_MAX,
-                        slider: Some((st.density_px as f64, HITBOX_DENSITY_MIN as f64, HITBOX_DENSITY_MAX as f64)),
-                    });
-                    rows.push(ModuleRow::Toggle { label: "Gepunktet".to_string(), action: ButtonAction::TeamDotted(seite), on: st.dotted });
-                }
-            }
-            ModuleId::Arrows => {
-                let zehntel = |t: u32| format!("{}.{} s", t / 10, t % 10);
-                // Wie die Anzeige aussieht, stellt ihr Fenster im HUD-Editor ein.
-                rows.push(ModuleRow::Toggle { label: "Anzeige".to_string(), action: ButtonAction::ToggleArrowIndicator, on: set.arrow_indicator });
-                rows.push(ModuleRow::Choice {
-                    label: "Ohne Pfeile".to_string(),
-                    action: ButtonAction::CycleArrowEmptyFeedback,
-                    text: ARROW_EMPTY_FEEDBACK_NAMES[set.arrow_empty_feedback as usize].to_string(),
-                });
-                rows.push(ModuleRow::Toggle { label: "Weißer Pfeil".to_string(), action: ButtonAction::ToggleArrowWhite, on: set.arrow_white });
-                rows.push(ModuleRow::Toggle { label: "Trail".to_string(), action: ButtonAction::ToggleArrowTrail, on: set.arrow_trail });
-                rows.push(ModuleRow::Stepper {
-                    label: "  Zeit bis Fade".to_string(),
-                    prev: ButtonAction::TrailHoldPrev,
-                    next: ButtonAction::TrailHoldNext,
-                    text: zehntel(set.trail_hold_tenths),
-                    can_prev: set.trail_hold_tenths > 0,
-                    can_next: set.trail_hold_tenths < TRAIL_HOLD_MAX_TENTHS,
-                    slider: Some((set.trail_hold_tenths as f64, 0.0, TRAIL_HOLD_MAX_TENTHS as f64)),
-                });
-                rows.push(ModuleRow::Stepper {
-                    label: "  Fade-Dauer".to_string(),
-                    prev: ButtonAction::TrailFadePrev,
-                    next: ButtonAction::TrailFadeNext,
-                    text: zehntel(set.trail_fade_tenths),
-                    can_prev: set.trail_fade_tenths > 0,
-                    can_next: set.trail_fade_tenths < TRAIL_FADE_MAX_TENTHS,
-                    slider: Some((set.trail_fade_tenths as f64, 0.0, TRAIL_FADE_MAX_TENTHS as f64)),
-                });
-            }
+            ModuleId::Hitbox => self.rows_hitbox(&mut rows),
+            ModuleId::Teams => self.rows_teams(&mut rows),
+            ModuleId::Arrows => self.rows_arrows(&mut rows),
             ModuleId::ArmorHud => {
                 rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Armor), text: "Im HUD-Editor".to_string() });
             }
@@ -272,7 +122,7 @@ impl App {
                         text: sky_time_label(set.module_sky_time),
                         can_prev: true,
                         can_next: true,
-                        slider: Some((set.module_sky_time as f64, 0.0, (SKY_TIME_DAY - SKY_TIME_STEP) as f64)),
+                        slider: Some((f64::from(set.module_sky_time), 0.0, f64::from(SKY_TIME_DAY - SKY_TIME_STEP))),
                     });
                 }
                 rows.push(ModuleRow::Choice { label: "Himmel".to_string(), action: ButtonAction::CycleSkyMode, text: set.sky_mode.label().to_string() });
@@ -302,7 +152,7 @@ impl App {
                     text: format!("{} Blöcke", set.weather_radius_inner),
                     can_prev: set.weather_radius_inner > 0,
                     can_next: set.weather_radius_inner + 1 < set.weather_radius,
-                    slider: Some((set.weather_radius_inner as f64, 0.0, set.weather_radius.saturating_sub(1) as f64)),
+                    slider: Some((f64::from(set.weather_radius_inner), 0.0, f64::from(set.weather_radius.saturating_sub(1)))),
                 });
                 rows.push(ModuleRow::Stepper {
                     label: "Bis".to_string(),
@@ -311,13 +161,13 @@ impl App {
                     text: format!("{} Blöcke", set.weather_radius),
                     can_prev: set.weather_radius > precipitation::RADIUS_MIN.max(set.weather_radius_inner + 1),
                     can_next: set.weather_radius < precipitation::RADIUS_MAX,
-                    slider: Some((set.weather_radius as f64, precipitation::RADIUS_MIN as f64, precipitation::RADIUS_MAX as f64)),
+                    slider: Some((f64::from(set.weather_radius), f64::from(precipitation::RADIUS_MIN), f64::from(precipitation::RADIUS_MAX))),
                 });
             }
             ModuleId::TotemWarning | ModuleId::TotemSlots | ModuleId::PopSounds | ModuleId::PopVisuals => {
                 rows.extend(self.toteming_rows(self.module_menu_selected));
             }
-            ModuleId::CrystalOptimizer | ModuleId::UseTimer | ModuleId::BotcheckPass | ModuleId::DynamicFire | ModuleId::ShowMarkers | ModuleId::SoundDebug | ModuleId::ConnectionDebug | ModuleId::FpsDisplay | ModuleId::InputLog => {}
+            ModuleId::CrystalOptimizer | ModuleId::UseTimer | ModuleId::BotcheckPass | ModuleId::DynamicFire | ModuleId::ShowMarkers | ModuleId::SoundDebug | ModuleId::HandDebug | ModuleId::ConnectionDebug | ModuleId::FpsDisplay | ModuleId::InputLog | ModuleId::CoralRecord => {}
             ModuleId::Sustainability => {
                 rows.push(ModuleRow::Toggle {
                     label: "Im Hintergrund pausieren".to_string(),
@@ -335,7 +185,7 @@ impl App {
                     text: format!("{} %", set.color_saturation),
                     can_prev: set.color_saturation > 0,
                     can_next: set.color_saturation < COLOR_SATURATION_MAX,
-                    slider: Some((set.color_saturation as f64, 0.0, COLOR_SATURATION_MAX as f64)),
+                    slider: Some((f64::from(set.color_saturation), 0.0, f64::from(COLOR_SATURATION_MAX))),
                 });
             }
             ModuleId::DiscordStatus => {
@@ -348,108 +198,12 @@ impl App {
                 let status = if set.module_discord_status { self.discord.status() } else { discord_rpc::Status::Off };
                 rows.push(ModuleRow::Choice { label: "Status".to_string(), action: ButtonAction::DiscordPasteClientId, text: status.label().to_string() });
             }
-            ModuleId::BlockOutline => {
-                // Komplementaer oder Einfarbig, rechts daneben die Farbe; ein Klick darauf oeffnet
-                // das Farbfenster (Ton, Saettigung, Helligkeit, Deckkraft) daneben.
-                let [r, g, b, _] = set.block_outline_rgba();
-                let komplementaer = set.block_outline_complementary;
-                rows.push(ModuleRow::Pick {
-                    label: "Farbe".to_string(),
-                    options: vec![
-                        ("Komplementär", ButtonAction::SetBlockOutlineComplementary(true), komplementaer),
-                        ("Einfarbig", ButtonAction::SetBlockOutlineComplementary(false), !komplementaer),
-                    ],
-                    swatch: Some((ButtonAction::BlockOutlineEditor, [r, g, b])),
-                });
-                rows.push(ModuleRow::Stepper {
-                    label: "Breite".to_string(),
-                    prev: ButtonAction::BlockOutlineWidthPrev,
-                    next: ButtonAction::BlockOutlineWidthNext,
-                    text: format!("{} px", set.block_outline_width_px),
-                    can_prev: set.block_outline_width_px > BLOCK_OUTLINE_WIDTH_MIN,
-                    can_next: set.block_outline_width_px < BLOCK_OUTLINE_WIDTH_MAX,
-                    slider: Some((set.block_outline_width_px as f64, BLOCK_OUTLINE_WIDTH_MIN as f64, BLOCK_OUTLINE_WIDTH_MAX as f64)),
-                });
-                rows.push(ModuleRow::Toggle {
-                    label: "Beim Abbauen ausblenden".to_string(),
-                    action: ButtonAction::ToggleBlockOutlineHideMining,
-                    on: set.block_outline_hide_mining,
-                });
-            }
-            ModuleId::VoiceChat => {
-                let v = &set.voice;
-                // Zahlenwert als Regler: Wert und Grenzen, die Pfeile schlagen an den Grenzen an.
-                let stepper = |rows: &mut Vec<ModuleRow>, label: &str, knob: VoiceKnob, text: String, wert: i64, min: i64, max: i64| {
-                    rows.push(ModuleRow::Stepper {
-                        label: label.to_string(),
-                        prev: ButtonAction::VoiceStep(knob, false),
-                        next: ButtonAction::VoiceStep(knob, true),
-                        text,
-                        can_prev: wert > min,
-                        can_next: wert < max,
-                        slider: Some((wert as f64, min as f64, max as f64)),
-                    });
-                };
-                let schalter = |rows: &mut Vec<ModuleRow>, label: &str, flag: VoiceFlag, on: bool| {
-                    rows.push(ModuleRow::Toggle { label: label.to_string(), action: ButtonAction::VoiceFlag(flag), on });
-                };
-                let auswahl = |rows: &mut Vec<ModuleRow>, label: &str, flag: VoiceFlag, text: String| {
-                    rows.push(ModuleRow::Choice { label: label.to_string(), action: ButtonAction::VoiceFlag(flag), text });
-                };
-                stepper(&mut rows, "Lautstärke der anderen", VoiceKnob::Volume, format!("{} %", v.volume_percent), v.volume_percent as i64, 0, voicechat::VOLUME_MAX as i64);
-                stepper(
-                    &mut rows,
-                    "Mikrofon-Verstärkung",
-                    VoiceKnob::MicGain,
-                    format!("{:+} dB", v.mic_gain_db),
-                    v.mic_gain_db as i64,
-                    voicechat::GAIN_DB_MIN as i64,
-                    voicechat::GAIN_DB_MAX as i64,
-                );
-                rows.push(pick_two("Aktivierung", ButtonAction::VoiceFlag(VoiceFlag::Activation), ["Sprechtaste", "Sprachaktivierung"], v.voice_activation as usize));
-                if v.voice_activation {
-                    // Mit dem aktuellen Pegel daneben, damit sich die Schwelle einstellen laesst.
-                    let jetzt = if self.voice.mic.is_some() { format!(" (jetzt {:.0})", self.voice.level_db) } else { String::new() };
-                    stepper(
-                        &mut rows,
-                        "Aktivierungsschwelle",
-                        VoiceKnob::Threshold,
-                        format!("{} dB{jetzt}", v.threshold_db),
-                        v.threshold_db as i64,
-                        voicechat::THRESHOLD_DB_MIN as i64,
-                        0,
-                    );
-                }
-                let nachlauf = if v.voice_activation { v.voice_delay_frames } else { v.ptt_delay_frames };
-                stepper(&mut rows, "Nachlauf", VoiceKnob::Delay, voicechat::frames_label(nachlauf), nachlauf as i64, 0, voicechat::DELAY_MAX_FRAMES as i64);
-                schalter(&mut rows, "Mikrofon stumm", VoiceFlag::Muted, v.muted);
-                schalter(&mut rows, "Sprachchat taub", VoiceFlag::Disabled, v.disabled);
-                schalter(&mut rows, "Stumm beim Betreten", VoiceFlag::MuteOnJoin, v.mute_on_join);
-                schalter(&mut rows, "Automatische Verstärkung", VoiceFlag::Agc, v.agc);
-                schalter(&mut rows, "Rauschunterdrückung", VoiceFlag::Denoise, v.denoise);
-                auswahl(&mut rows, "3D-Klang", VoiceFlag::AudioType, v.audio_type.label().to_string());
-                stepper(
-                    &mut rows,
-                    "Ausgabepuffer",
-                    VoiceKnob::OutputBuffer,
-                    voicechat::frames_label(v.output_buffer_frames),
-                    v.output_buffer_frames as i64,
-                    1,
-                    voicechat::BUFFER_MAX_FRAMES as i64,
-                );
-                stepper(
-                    &mut rows,
-                    "Paket-Schwelle",
-                    VoiceKnob::PacketThreshold,
-                    v.packet_threshold.to_string(),
-                    v.packet_threshold as i64,
-                    0,
-                    voicechat::PACKET_THRESHOLD_MAX as i64,
-                );
-                auswahl(&mut rows, "Mikrofon", VoiceFlag::MicDevice, if v.mic_device.is_empty() { "Standard".to_string() } else { v.mic_device.clone() });
-                schalter(&mut rows, "Mikrofon mithören", VoiceFlag::Monitor, self.voice.monitor);
-                schalter(&mut rows, "Symbol am Namensschild", VoiceFlag::NametagIcons, v.nametag_icons);
-                schalter(&mut rows, "Anzeige im HUD", VoiceFlag::HudIcons, v.hud_icons);
+            ModuleId::BlockOutline => self.rows_block_outline(&mut rows),
+            ModuleId::VoiceChat => self.rows_voice_chat(&mut rows),
+            ModuleId::Freelook => {
+                // Halten oder Umschalten stellt die Taste selbst ein (Steuerung, Ansicht).
+                let options = FREELOOK_VIEW_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::FreelookView(i as u8), set.freelook_view == i as u8)).collect();
+                rows.push(ModuleRow::Pick { label: "Ansicht".to_string(), options, swatch: None });
             }
             ModuleId::Zoom => {
                 rows.push(ModuleRow::Stepper {
@@ -459,7 +213,7 @@ impl App {
                     text: format!("{:.1} x", set.zoom_factor_tenths as f32 / 10.0),
                     can_prev: set.zoom_factor_tenths > ZOOM_FACTOR_MIN,
                     can_next: set.zoom_factor_tenths < ZOOM_FACTOR_MAX,
-                    slider: Some((set.zoom_factor_tenths as f64, ZOOM_FACTOR_MIN as f64, ZOOM_FACTOR_MAX as f64)),
+                    slider: Some((f64::from(set.zoom_factor_tenths), f64::from(ZOOM_FACTOR_MIN), f64::from(ZOOM_FACTOR_MAX))),
                 });
                 rows.push(ModuleRow::Stepper {
                     label: "Sens-Koeffizient".to_string(),
@@ -468,7 +222,7 @@ impl App {
                     text: format!("{:.2}", set.zoom_sens_percent as f32 / 100.0),
                     can_prev: set.zoom_sens_percent > ZOOM_SENS_MIN,
                     can_next: set.zoom_sens_percent < ZOOM_SENS_MAX,
-                    slider: Some((set.zoom_sens_percent as f64, ZOOM_SENS_MIN as f64, ZOOM_SENS_MAX as f64)),
+                    slider: Some((f64::from(set.zoom_sens_percent), f64::from(ZOOM_SENS_MIN), f64::from(ZOOM_SENS_MAX))),
                 });
             }
             ModuleId::ConsumableOptimizer => {
@@ -479,7 +233,7 @@ impl App {
                     text: if set.eat_hold_through_ms == 0 { "aus".to_string() } else { format!("{} ms", set.eat_hold_through_ms) },
                     can_prev: set.eat_hold_through_ms > 0,
                     can_next: set.eat_hold_through_ms < EAT_HOLD_THROUGH_MAX,
-                    slider: Some((set.eat_hold_through_ms as f64, 0.0, EAT_HOLD_THROUGH_MAX as f64)),
+                    slider: Some((f64::from(set.eat_hold_through_ms), 0.0, f64::from(EAT_HOLD_THROUGH_MAX))),
                 });
                 rows.push(ModuleRow::Toggle {
                     label: "Slotwechsel erst nach dem Essen".to_string(),
@@ -499,98 +253,10 @@ impl App {
                 text: set.no_tool_break_reserve.to_string(),
                 can_prev: set.no_tool_break_reserve > NO_TOOL_BREAK_MIN_RESERVE,
                 can_next: set.no_tool_break_reserve < NO_TOOL_BREAK_MAX_RESERVE,
-                slider: Some((set.no_tool_break_reserve as f64, NO_TOOL_BREAK_MIN_RESERVE as f64, NO_TOOL_BREAK_MAX_RESERVE as f64)),
+                slider: Some((f64::from(set.no_tool_break_reserve), f64::from(NO_TOOL_BREAK_MIN_RESERVE), f64::from(NO_TOOL_BREAK_MAX_RESERVE))),
             }),
-            ModuleId::SaturationHud => {
-                rows.push(ModuleRow::Swatch {
-                    label: "Farbe".to_string(),
-                    action: ButtonAction::OpenColorPicker(ColorTarget::SaturationHud),
-                    rgb: set.saturation_hud_rgb(),
-                });
-                rows.push(ModuleRow::Stepper {
-                    label: "Dicke".to_string(),
-                    prev: ButtonAction::SaturationHeightPrev,
-                    next: ButtonAction::SaturationHeightNext,
-                    text: format!("{} px", set.saturation_hud_height),
-                    can_prev: set.saturation_hud_height > SATURATION_BAR_HEIGHT_MIN,
-                    can_next: set.saturation_hud_height < SATURATION_BAR_HEIGHT_MAX,
-                    slider: Some((set.saturation_hud_height as f64, SATURATION_BAR_HEIGHT_MIN as f64, SATURATION_BAR_HEIGHT_MAX as f64)),
-                });
-                for (raster, label, wert) in [(false, "Grund", set.saturation_hud_bg_alpha), (true, "Raster", set.saturation_hud_grid_alpha)] {
-                    rows.push(ModuleRow::Stepper {
-                        label: label.to_string(),
-                        prev: ButtonAction::SaturationAlpha(raster, false),
-                        next: ButtonAction::SaturationAlpha(raster, true),
-                        text: format!("{wert} %"),
-                        can_prev: wert > 0,
-                        can_next: wert < 100,
-                        slider: Some((wert as f64, 0.0, 100.0)),
-                    });
-                }
-            }
-            ModuleId::EgoName => {
-                use ego_name::Deco;
-                rows.push(ModuleRow::Choice {
-                    label: "Anzeigen als".to_string(),
-                    action: ButtonAction::EditEgoAlias,
-                    text: if set.ego_alias.is_empty() { "eigener Name".to_string() } else { set.ego_alias.clone() },
-                });
-                rows.push(ModuleRow::Choice { label: "Färbung".to_string(), action: ButtonAction::CycleEgoDeco, text: set.ego_deco.label().to_string() });
-                if matches!(set.ego_deco, Deco::Solid | Deco::Gradient | Deco::Flowing) {
-                    let erste = if set.ego_deco.two_colors() { "Farbe 1" } else { "Farbe" };
-                    rows.push(ModuleRow::Swatch { label: erste.to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(0)), rgb: set.ego_rgb(0) });
-                }
-                if set.ego_deco.two_colors() {
-                    rows.push(ModuleRow::Swatch { label: "Farbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(1)), rgb: set.ego_rgb(1) });
-                }
-                if set.ego_deco == Deco::Rainbow {
-                    rows.push(Self::ego_light_row(false, set.ego_light));
-                }
-                if set.ego_deco.moves() || set.ego_shadow.moves() {
-                    rows.push(ModuleRow::Stepper {
-                        label: "Tempo".to_string(),
-                        prev: ButtonAction::EgoSpeed(false),
-                        next: ButtonAction::EgoSpeed(true),
-                        text: format!("{:.1} /s", set.ego_speed as f32 / 10.0),
-                        can_prev: set.ego_speed > EGO_SPEED_MIN,
-                        can_next: set.ego_speed < EGO_SPEED_MAX,
-                        slider: Some((set.ego_speed as f64, EGO_SPEED_MIN as f64, EGO_SPEED_MAX as f64)),
-                    });
-                }
-                rows.push(ModuleRow::Choice { label: "Schatten".to_string(), action: ButtonAction::CycleEgoShadow, text: set.ego_shadow.label_or("Standard").to_string() });
-                if set.ego_shadow != Deco::Off {
-                    // Die erste Schattenfarbe traegt die Deckkraft -- auch beim Regenbogen.
-                    let erste = match set.ego_shadow {
-                        Deco::Rainbow => "Schatten-Deckkraft",
-                        d if d.two_colors() => "Schattenfarbe 1",
-                        _ => "Schattenfarbe",
-                    };
-                    rows.push(ModuleRow::Swatch { label: erste.to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(2)), rgb: set.ego_rgb(2) });
-                }
-                if set.ego_shadow.two_colors() {
-                    rows.push(ModuleRow::Swatch { label: "Schattenfarbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(3)), rgb: set.ego_rgb(3) });
-                }
-                if set.ego_shadow == Deco::Rainbow {
-                    rows.push(Self::ego_light_row(true, set.ego_shadow_light));
-                }
-                rows.push(ModuleRow::Choice {
-                    label: "Ton bei Erwähnung".to_string(),
-                    action: ButtonAction::CycleEgoSound,
-                    text: ego_name::sound_label(&set.ego_sound).to_string(),
-                });
-                if !set.ego_sound.is_empty() {
-                    rows.push(ModuleRow::Stepper {
-                        label: "Lautstärke".to_string(),
-                        prev: ButtonAction::EgoVolume(false),
-                        next: ButtonAction::EgoVolume(true),
-                        text: volume_text(set.ego_volume),
-                        can_prev: set.ego_volume > 0.0,
-                        // Ohne Obergrenze; der Regler reicht bis 200 %, darueber tippen oder Pfeile.
-                        can_next: true,
-                        slider: Some((set.ego_volume as f64, 0.0, set.ego_volume.max(200.0) as f64)),
-                    });
-                }
-            }
+            ModuleId::SaturationHud => self.rows_saturation_hud(&mut rows),
+            ModuleId::EgoName => self.rows_ego_name(&mut rows),
             ModuleId::Autoclicker => rows.push(ModuleRow::Stepper {
                 label: "Klicks je Sekunde".to_string(),
                 prev: ButtonAction::AutoclickerCpsPrev,
@@ -598,7 +264,7 @@ impl App {
                 text: format!("{} CPS", set.autoclicker_cps),
                 can_prev: set.autoclicker_cps > AUTOCLICKER_CPS_MIN,
                 can_next: set.autoclicker_cps < AUTOCLICKER_CPS_MAX,
-                slider: Some((set.autoclicker_cps as f64, AUTOCLICKER_CPS_MIN as f64, AUTOCLICKER_CPS_MAX as f64)),
+                slider: Some((f64::from(set.autoclicker_cps), f64::from(AUTOCLICKER_CPS_MIN), f64::from(AUTOCLICKER_CPS_MAX))),
             }),
             ModuleId::Delay => rows.push(ModuleRow::Stepper {
                 label: "Verzögerung je Richtung".to_string(),
@@ -607,7 +273,7 @@ impl App {
                 text: format!("{} ms", set.lag_delay_ms),
                 can_prev: set.lag_delay_ms > 0,
                 can_next: set.lag_delay_ms < LAG_DELAY_MAX_MS,
-                slider: Some((set.lag_delay_ms as f64, 0.0, LAG_DELAY_MAX_MS as f64)),
+                slider: Some((f64::from(set.lag_delay_ms), 0.0, f64::from(LAG_DELAY_MAX_MS))),
             }),
             ModuleId::GhostTolerance => rows.push(ModuleRow::Stepper {
                 label: "Toleranz".to_string(),
@@ -616,7 +282,7 @@ impl App {
                 text: format!("{} ms", set.ghost_tolerance_ms),
                 can_prev: set.ghost_tolerance_ms > GHOST_TOLERANCE_MIN_MS,
                 can_next: set.ghost_tolerance_ms < GHOST_TOLERANCE_MAX_MS,
-                slider: Some((set.ghost_tolerance_ms as f64, GHOST_TOLERANCE_MIN_MS as f64, GHOST_TOLERANCE_MAX_MS as f64)),
+                slider: Some((f64::from(set.ghost_tolerance_ms), f64::from(GHOST_TOLERANCE_MIN_MS), f64::from(GHOST_TOLERANCE_MAX_MS))),
             }),
         }
         // Was gerade nicht wirkt, steht gar nicht erst da: bei ausgeschaltetem Modul nur der
@@ -626,6 +292,366 @@ impl App {
         }
         rows.retain(|r| !self.module_row_greyed(r));
         rows
+    }
+
+    fn rows_hitbox(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        // Je Zeile der Schalter und rechts daneben sein Farbfeld; die Regler stecken im
+        // Farbfenster (s. ColorPopup).
+        for (variant, label, on, action) in [
+            (HitboxVariant::Smoothed, "Geglättet", set.module_hitbox_show_smoothed, ButtonAction::ToggleModuleHitboxSmoothed),
+            (HitboxVariant::Raw, "Roh (Server)", set.module_hitbox_show_raw, ButtonAction::ToggleModuleHitboxRaw),
+        ] {
+            let (hue, saturation, value) = self.hitbox_color_of(variant);
+            let rgb = hsv_to_rgb(hue as f32, saturation as f32 / 100.0, value as f32 / 100.0);
+            rows.push(ModuleRow::ToggleSwatch { label: label.to_string(), action, on, swatch: ButtonAction::HitboxColorEditor(variant), rgb });
+        }
+        let art_zeile = |art: hitbox_kinds::HitboxKind, label: &str| {
+            let st = set.module_hitbox_styles[art.index()];
+            ModuleRow::ToggleSwatch {
+                label: label.to_string(),
+                action: ButtonAction::ToggleHitboxKind(art),
+                on: st.on,
+                swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
+                rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
+            }
+        };
+        // Die Farbe der Items ist die von "Geglättet", eine eigene gibt es unten mit
+        // Ueberschreiben.
+        rows.push(ModuleRow::Toggle { label: "Item-Hitbox".to_string(), action: ButtonAction::ToggleModuleHitboxItems, on: set.module_hitbox_items });
+        rows.push(ModuleRow::Toggle { label: "Eigene Hitbox".to_string(), action: ButtonAction::ToggleModuleHitboxSelf, on: set.module_hitbox_self });
+        rows.push(art_zeile(hitbox_kinds::HitboxKind::Cobweb, "Spinnennetz-Hitbox"));
+        rows.push(art_zeile(hitbox_kinds::HitboxKind::Water, "Wasser-Hitbox"));
+        rows.push(ModuleRow::Toggle {
+            label: "Gepunktet".to_string(),
+            action: ButtonAction::ToggleModuleHitboxDotted,
+            on: set.module_hitbox_dotted,
+        });
+        rows.push(ModuleRow::Stepper {
+            label: "Dichte".to_string(),
+            prev: ButtonAction::HitboxDensityPrev,
+            next: ButtonAction::HitboxDensityNext,
+            text: format!("{} px", set.module_hitbox_density_px),
+            can_prev: set.module_hitbox_density_px > HITBOX_DENSITY_MIN,
+            can_next: set.module_hitbox_density_px < HITBOX_DENSITY_MAX,
+            slider: Some((f64::from(set.module_hitbox_density_px), f64::from(HITBOX_DENSITY_MIN), f64::from(HITBOX_DENSITY_MAX))),
+        });
+        rows.push(ModuleRow::Stepper {
+            label: "Deckkraft".to_string(),
+            prev: ButtonAction::HitboxOpacityPrev,
+            next: ButtonAction::HitboxOpacityNext,
+            text: format!("{} %", set.module_hitbox_opacity),
+            can_prev: set.module_hitbox_opacity > 0,
+            can_next: set.module_hitbox_opacity < 100,
+            slider: Some((f64::from(set.module_hitbox_opacity), 0.0, 100.0)),
+        });
+        // Je PvP-Entity: ob es die Vorgaben von oben ueberschreibt, und wenn ja, ob es
+        // sichtbar ist und in welcher Farbe und Deckkraft (im Farbfenster). Ohne
+        // Ueberschreiben sind Sichtbar und Farbe ausgegraut. Was hier fehlt (Mobs), hat
+        // immer die Vorgaben.
+        rows.push(ModuleRow::Heading { label: "Individuelle Farben".to_string(), columns: &["Überschreiben", "Sichtbar"] });
+        for art in hitbox_kinds::HitboxKind::entities() {
+            let st = set.module_hitbox_styles[art.index()];
+            rows.push(ModuleRow::TwoTogglesSwatch {
+                label: art.label().to_string(),
+                first: (ButtonAction::ToggleHitboxKindOverride(art), st.custom),
+                second: (ButtonAction::ToggleHitboxKind(art), st.on),
+                swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
+                rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
+            });
+        }
+    }
+
+    fn rows_teams(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        // Verbuendet ist, wer bei einer eingeschalteten Erkennung passt.
+        rows.push(ModuleRow::Heading { label: "Erkennung".to_string(), columns: &[] });
+        for (i, label) in teams::Matchers::LABELS.iter().enumerate() {
+            rows.push(ModuleRow::Toggle { label: label.to_string(), action: ButtonAction::TeamMatch(i), on: set.team_match.get(i) });
+        }
+        // Die eigene Teamfarbe: automatisch oder eine der Namensfarben, die gerade
+        // jemand traegt (Hex-Werte tippt niemand ab).
+        let rgb = |c: u32| [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0];
+        rows.push(ModuleRow::ColorPicks {
+            label: "Eigene Teamfarbe".to_string(),
+            first: ("Automatisch", ButtonAction::TeamOwnColor(None), set.team_own_color.is_none()),
+            colors: self
+                .team_color_suggestions()
+                .into_iter()
+                .map(|c| (ButtonAction::TeamOwnColor(Some(c)), rgb(c), set.team_own_color == Some(c)))
+                .collect(),
+        });
+        for seite in teams::Side::ALL {
+            let st = set.team_hitboxes[seite.index()];
+            rows.push(ModuleRow::Heading { label: format!("{}-Hitboxen", seite.label()), columns: &[] });
+            rows.push(ModuleRow::Toggle { label: "Überschreiben".to_string(), action: ButtonAction::TeamToggle(seite), on: st.on });
+            rows.push(ModuleRow::Pick {
+                label: "Farbe".to_string(),
+                options: vec![
+                    ("Namensschild", ButtonAction::TeamNametag(seite, true), st.nametag),
+                    ("Fest", ButtonAction::TeamNametag(seite, false), !st.nametag),
+                ],
+                // Das Farbfeld nur mit fester Farbe -- mit Namensschild gibt es nichts einzustellen.
+                swatch: (!st.nametag).then(|| {
+                    (
+                        ButtonAction::OpenColorPicker(ColorTarget::Team(seite)),
+                        hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
+                    )
+                }),
+            });
+            rows.push(ModuleRow::Stepper {
+                label: "Deckkraft".to_string(),
+                prev: ButtonAction::TeamOpacity(seite, false),
+                next: ButtonAction::TeamOpacity(seite, true),
+                text: format!("{} %", st.opacity),
+                can_prev: st.opacity > 0,
+                can_next: st.opacity < 100,
+                slider: Some((f64::from(st.opacity), 0.0, 100.0)),
+            });
+            rows.push(ModuleRow::Stepper {
+                label: "Dichte".to_string(),
+                prev: ButtonAction::TeamDensity(seite, false),
+                next: ButtonAction::TeamDensity(seite, true),
+                text: format!("{} px", st.density_px),
+                can_prev: st.density_px > HITBOX_DENSITY_MIN,
+                can_next: st.density_px < HITBOX_DENSITY_MAX,
+                slider: Some((f64::from(st.density_px), f64::from(HITBOX_DENSITY_MIN), f64::from(HITBOX_DENSITY_MAX))),
+            });
+            rows.push(ModuleRow::Toggle { label: "Gepunktet".to_string(), action: ButtonAction::TeamDotted(seite), on: st.dotted });
+        }
+    }
+
+    fn rows_arrows(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        let zehntel = |t: u32| format!("{}.{} s", t / 10, t % 10);
+        // Wie die Anzeige aussieht, stellt ihr Fenster im HUD-Editor ein.
+        rows.push(ModuleRow::Toggle { label: "Anzeige".to_string(), action: ButtonAction::ToggleArrowIndicator, on: set.arrow_indicator });
+        rows.push(ModuleRow::Choice {
+            label: "Ohne Pfeile".to_string(),
+            action: ButtonAction::CycleArrowEmptyFeedback,
+            text: ARROW_EMPTY_FEEDBACK_NAMES[set.arrow_empty_feedback as usize].to_string(),
+        });
+        rows.push(ModuleRow::Toggle { label: "Weißer Pfeil".to_string(), action: ButtonAction::ToggleArrowWhite, on: set.arrow_white });
+        rows.push(ModuleRow::Toggle { label: "Trail".to_string(), action: ButtonAction::ToggleArrowTrail, on: set.arrow_trail });
+        rows.push(ModuleRow::Stepper {
+            label: "  Zeit bis Fade".to_string(),
+            prev: ButtonAction::TrailHoldPrev,
+            next: ButtonAction::TrailHoldNext,
+            text: zehntel(set.trail_hold_tenths),
+            can_prev: set.trail_hold_tenths > 0,
+            can_next: set.trail_hold_tenths < TRAIL_HOLD_MAX_TENTHS,
+            slider: Some((f64::from(set.trail_hold_tenths), 0.0, f64::from(TRAIL_HOLD_MAX_TENTHS))),
+        });
+        rows.push(ModuleRow::Stepper {
+            label: "  Fade-Dauer".to_string(),
+            prev: ButtonAction::TrailFadePrev,
+            next: ButtonAction::TrailFadeNext,
+            text: zehntel(set.trail_fade_tenths),
+            can_prev: set.trail_fade_tenths > 0,
+            can_next: set.trail_fade_tenths < TRAIL_FADE_MAX_TENTHS,
+            slider: Some((f64::from(set.trail_fade_tenths), 0.0, f64::from(TRAIL_FADE_MAX_TENTHS))),
+        });
+    }
+
+    fn rows_block_outline(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        // Komplementaer oder Einfarbig, rechts daneben die Farbe; ein Klick darauf oeffnet
+        // das Farbfenster (Ton, Saettigung, Helligkeit, Deckkraft) daneben.
+        let [r, g, b, _] = set.block_outline_rgba();
+        let komplementaer = set.block_outline_complementary;
+        rows.push(ModuleRow::Pick {
+            label: "Farbe".to_string(),
+            options: vec![
+                ("Komplementär", ButtonAction::SetBlockOutlineComplementary(true), komplementaer),
+                ("Einfarbig", ButtonAction::SetBlockOutlineComplementary(false), !komplementaer),
+            ],
+            swatch: Some((ButtonAction::BlockOutlineEditor, [r, g, b])),
+        });
+        rows.push(ModuleRow::Stepper {
+            label: "Breite".to_string(),
+            prev: ButtonAction::BlockOutlineWidthPrev,
+            next: ButtonAction::BlockOutlineWidthNext,
+            text: format!("{} px", set.block_outline_width_px),
+            can_prev: set.block_outline_width_px > BLOCK_OUTLINE_WIDTH_MIN,
+            can_next: set.block_outline_width_px < BLOCK_OUTLINE_WIDTH_MAX,
+            slider: Some((f64::from(set.block_outline_width_px), f64::from(BLOCK_OUTLINE_WIDTH_MIN), f64::from(BLOCK_OUTLINE_WIDTH_MAX))),
+        });
+        rows.push(ModuleRow::Toggle {
+            label: "Beim Abbauen ausblenden".to_string(),
+            action: ButtonAction::ToggleBlockOutlineHideMining,
+            on: set.block_outline_hide_mining,
+        });
+    }
+
+    fn rows_voice_chat(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        let v = &set.voice;
+        // Zahlenwert als Regler: Wert und Grenzen, die Pfeile schlagen an den Grenzen an.
+        let stepper = |rows: &mut Vec<ModuleRow>, label: &str, knob: VoiceKnob, text: String, wert: i64, min: i64, max: i64| {
+            rows.push(ModuleRow::Stepper {
+                label: label.to_string(),
+                prev: ButtonAction::VoiceStep(knob, false),
+                next: ButtonAction::VoiceStep(knob, true),
+                text,
+                can_prev: wert > min,
+                can_next: wert < max,
+                slider: Some((wert as f64, min as f64, max as f64)),
+            });
+        };
+        let schalter = |rows: &mut Vec<ModuleRow>, label: &str, flag: VoiceFlag, on: bool| {
+            rows.push(ModuleRow::Toggle { label: label.to_string(), action: ButtonAction::VoiceFlag(flag), on });
+        };
+        let auswahl = |rows: &mut Vec<ModuleRow>, label: &str, flag: VoiceFlag, text: String| {
+            rows.push(ModuleRow::Choice { label: label.to_string(), action: ButtonAction::VoiceFlag(flag), text });
+        };
+        stepper(rows, "Lautstärke der anderen", VoiceKnob::Volume, format!("{} %", v.volume_percent), i64::from(v.volume_percent), 0, i64::from(voicechat::VOLUME_MAX));
+        stepper(
+            rows,
+            "Mikrofon-Verstärkung",
+            VoiceKnob::MicGain,
+            format!("{:+} dB", v.mic_gain_db),
+            i64::from(v.mic_gain_db),
+            i64::from(voicechat::GAIN_DB_MIN),
+            i64::from(voicechat::GAIN_DB_MAX),
+        );
+        rows.push(pick_two("Aktivierung", ButtonAction::VoiceFlag(VoiceFlag::Activation), ["Sprechtaste", "Sprachaktivierung"], usize::from(v.voice_activation)));
+        if v.voice_activation {
+            // Mit dem aktuellen Pegel daneben, damit sich die Schwelle einstellen laesst.
+            let jetzt = if self.voice.mic.is_some() { format!(" (jetzt {:.0})", self.voice.level_db) } else { String::new() };
+            stepper(
+                rows,
+                "Aktivierungsschwelle",
+                VoiceKnob::Threshold,
+                format!("{} dB{jetzt}", v.threshold_db),
+                i64::from(v.threshold_db),
+                i64::from(voicechat::THRESHOLD_DB_MIN),
+                0,
+            );
+        }
+        let nachlauf = if v.voice_activation { v.voice_delay_frames } else { v.ptt_delay_frames };
+        stepper(rows, "Nachlauf", VoiceKnob::Delay, voicechat::frames_label(nachlauf), i64::from(nachlauf), 0, i64::from(voicechat::DELAY_MAX_FRAMES));
+        schalter(rows, "Mikrofon stumm", VoiceFlag::Muted, v.muted);
+        schalter(rows, "Sprachchat taub", VoiceFlag::Disabled, v.disabled);
+        schalter(rows, "Stumm beim Betreten", VoiceFlag::MuteOnJoin, v.mute_on_join);
+        schalter(rows, "Automatische Verstärkung", VoiceFlag::Agc, v.agc);
+        schalter(rows, "Rauschunterdrückung", VoiceFlag::Denoise, v.denoise);
+        auswahl(rows, "3D-Klang", VoiceFlag::AudioType, v.audio_type.label().to_string());
+        stepper(
+            rows,
+            "Ausgabepuffer",
+            VoiceKnob::OutputBuffer,
+            voicechat::frames_label(v.output_buffer_frames),
+            i64::from(v.output_buffer_frames),
+            1,
+            i64::from(voicechat::BUFFER_MAX_FRAMES),
+        );
+        stepper(
+            rows,
+            "Paket-Schwelle",
+            VoiceKnob::PacketThreshold,
+            v.packet_threshold.to_string(),
+            i64::from(v.packet_threshold),
+            0,
+            i64::from(voicechat::PACKET_THRESHOLD_MAX),
+        );
+        auswahl(rows, "Mikrofon", VoiceFlag::MicDevice, if v.mic_device.is_empty() { "Standard".to_string() } else { v.mic_device.clone() });
+        schalter(rows, "Mikrofon mithören", VoiceFlag::Monitor, self.voice.monitor);
+        schalter(rows, "Symbol am Namensschild", VoiceFlag::NametagIcons, v.nametag_icons);
+        schalter(rows, "Anzeige im HUD", VoiceFlag::HudIcons, v.hud_icons);
+    }
+
+    fn rows_saturation_hud(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        rows.push(ModuleRow::Swatch {
+            label: "Farbe".to_string(),
+            action: ButtonAction::OpenColorPicker(ColorTarget::SaturationHud),
+            rgb: set.saturation_hud_rgb(),
+        });
+        rows.push(ModuleRow::Stepper {
+            label: "Dicke".to_string(),
+            prev: ButtonAction::SaturationHeightPrev,
+            next: ButtonAction::SaturationHeightNext,
+            text: format!("{} px", set.saturation_hud_height),
+            can_prev: set.saturation_hud_height > SATURATION_BAR_HEIGHT_MIN,
+            can_next: set.saturation_hud_height < SATURATION_BAR_HEIGHT_MAX,
+            slider: Some((f64::from(set.saturation_hud_height), f64::from(SATURATION_BAR_HEIGHT_MIN), f64::from(SATURATION_BAR_HEIGHT_MAX))),
+        });
+        for (raster, label, wert) in [(false, "Grund", set.saturation_hud_bg_alpha), (true, "Raster", set.saturation_hud_grid_alpha)] {
+            rows.push(ModuleRow::Stepper {
+                label: label.to_string(),
+                prev: ButtonAction::SaturationAlpha(raster, false),
+                next: ButtonAction::SaturationAlpha(raster, true),
+                text: format!("{wert} %"),
+                can_prev: wert > 0,
+                can_next: wert < 100,
+                slider: Some((f64::from(wert), 0.0, 100.0)),
+            });
+        }
+    }
+
+    fn rows_ego_name(&self, rows: &mut Vec<ModuleRow>) {
+        let set = &self.settings;
+        use ego_name::Deco;
+        rows.push(ModuleRow::Choice {
+            label: "Anzeigen als".to_string(),
+            action: ButtonAction::EditEgoAlias,
+            text: if set.ego_alias.is_empty() { "eigener Name".to_string() } else { set.ego_alias.clone() },
+        });
+        rows.push(ModuleRow::Choice { label: "Färbung".to_string(), action: ButtonAction::CycleEgoDeco, text: set.ego_deco.label().to_string() });
+        if matches!(set.ego_deco, Deco::Solid | Deco::Gradient | Deco::Flowing) {
+            let erste = if set.ego_deco.two_colors() { "Farbe 1" } else { "Farbe" };
+            rows.push(ModuleRow::Swatch { label: erste.to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(0)), rgb: set.ego_rgb(0) });
+        }
+        if set.ego_deco.two_colors() {
+            rows.push(ModuleRow::Swatch { label: "Farbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(1)), rgb: set.ego_rgb(1) });
+        }
+        if set.ego_deco == Deco::Rainbow {
+            rows.push(Self::ego_light_row(false, set.ego_light));
+        }
+        if set.ego_deco.moves() || set.ego_shadow.moves() {
+            rows.push(ModuleRow::Stepper {
+                label: "Tempo".to_string(),
+                prev: ButtonAction::EgoSpeed(false),
+                next: ButtonAction::EgoSpeed(true),
+                text: format!("{:.1} /s", set.ego_speed as f32 / 10.0),
+                can_prev: set.ego_speed > EGO_SPEED_MIN,
+                can_next: set.ego_speed < EGO_SPEED_MAX,
+                slider: Some((f64::from(set.ego_speed), f64::from(EGO_SPEED_MIN), f64::from(EGO_SPEED_MAX))),
+            });
+        }
+        rows.push(ModuleRow::Choice { label: "Schatten".to_string(), action: ButtonAction::CycleEgoShadow, text: set.ego_shadow.label_or("Standard").to_string() });
+        if set.ego_shadow != Deco::Off {
+            // Die erste Schattenfarbe traegt die Deckkraft -- auch beim Regenbogen.
+            let erste = match set.ego_shadow {
+                Deco::Rainbow => "Schatten-Deckkraft",
+                d if d.two_colors() => "Schattenfarbe 1",
+                _ => "Schattenfarbe",
+            };
+            rows.push(ModuleRow::Swatch { label: erste.to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(2)), rgb: set.ego_rgb(2) });
+        }
+        if set.ego_shadow.two_colors() {
+            rows.push(ModuleRow::Swatch { label: "Schattenfarbe 2".to_string(), action: ButtonAction::OpenColorPicker(ColorTarget::EgoName(3)), rgb: set.ego_rgb(3) });
+        }
+        if set.ego_shadow == Deco::Rainbow {
+            rows.push(Self::ego_light_row(true, set.ego_shadow_light));
+        }
+        rows.push(ModuleRow::Choice {
+            label: "Ton bei Erwähnung".to_string(),
+            action: ButtonAction::CycleEgoSound,
+            text: ego_name::sound_label(&set.ego_sound).to_string(),
+        });
+        if !set.ego_sound.is_empty() {
+            rows.push(ModuleRow::Stepper {
+                label: "Lautstärke".to_string(),
+                prev: ButtonAction::EgoVolume(false),
+                next: ButtonAction::EgoVolume(true),
+                text: volume_text(set.ego_volume),
+                can_prev: set.ego_volume > 0.0,
+                // Ohne Obergrenze; der Regler reicht bis 200 %, darueber tippen oder Pfeile.
+                can_next: true,
+                slider: Some((f64::from(set.ego_volume), 0.0, f64::from(set.ego_volume.max(200.0)))),
+            });
+        }
     }
 
     // Detailzeilen der vier Toteming-Module (s. toteming.rs), ohne den Hauptschalter.
@@ -650,7 +676,7 @@ impl App {
             text,
             can_prev: value > min,
             can_next: value < max,
-            slider: Some((value as f64, min as f64, max as f64)),
+            slider: Some((f64::from(value), f64::from(min), f64::from(max))),
         };
         let mut rows = Vec::new();
         match id {
@@ -693,7 +719,7 @@ impl App {
 
     // HSV-Werte einer Variante -- eine Quelle fuer Anzeige (module_detail_rows) und
     // Vertexbau (build_hitbox_vertices).
-    pub(crate) fn hitbox_color_of(&self, variant: HitboxVariant) -> (u32, u32, u32) {
+    pub(crate) const fn hitbox_color_of(&self, variant: HitboxVariant) -> (u32, u32, u32) {
         let set = &self.settings;
         match variant {
             HitboxVariant::Smoothed => {
@@ -1082,29 +1108,42 @@ impl App {
     pub(crate) fn fit_texts(gpu: &GpuState, rects: &[UiRect], texts: &mut [UiText], rechts: f32) {
         // Grosse Flaechen (Tafeln, Zeilen-Hintergruende) zaehlen weder als Rahmen noch als Nachbar.
         let element = |r: &Rect| r.w < 600.0 && r.h <= 64.0;
+        // Beschnittenes Zeilenband (s. push_clip_marker) und Reiter darueber sind getrennte
+        // Ebenen: eine angeschnittene Zeile unter einem Reiter passt sich nicht in den Reiter ein.
+        let (mut frei, mut im_band, mut band) = (Vec::new(), Vec::new(), false);
+        for r in rects {
+            match crate::clip_marker_rect(r) {
+                Some(an) => band = an,
+                None if band => im_band.push(r.rect),
+                None => frei.push(r.rect),
+            }
+        }
+        let mut band = false;
         for t in texts.iter_mut() {
+            if let Some(an) = crate::clip_marker_text(t) {
+                band = an;
+                continue;
+            }
+            let rects = if band { &im_band } else { &frei };
             let w = gpu.measure_text(&t.text, t.scale);
             let h = gpu.text_height(t.scale);
             let (mx, my) = (t.x + w / 2.0, t.y + h / 2.0);
             let rahmen = rects
                 .iter()
-                .map(|r| r.rect)
+                .copied()
                 .filter(|r| element(r) && r.h >= 16.0 && r.contains(mx, my))
                 .min_by(|a, b| (a.w * a.h).total_cmp(&(b.w * b.h)));
-            let (platz, mitte) = match rahmen {
-                Some(r) => {
-                    let mittig = (mx - (r.x + r.w / 2.0)).abs() < 2.0;
-                    if mittig { (r.w - 12.0, Some(r)) } else { (r.x + r.w - 6.0 - t.x, None) }
-                }
-                None => {
-                    let naechstes = rects
-                        .iter()
-                        .map(|r| r.rect)
-                        .filter(|r| element(r) && r.h >= 4.0 && r.x > t.x + 4.0 && r.y < t.y + h && r.y + r.h > t.y)
-                        .map(|r| r.x)
-                        .fold(rechts, f32::min);
-                    (naechstes - 12.0 - t.x, None)
-                }
+            let (platz, mitte) = if let Some(r) = rahmen {
+                let mittig = (mx - (r.x + r.w / 2.0)).abs() < 2.0;
+                if mittig { (r.w - 12.0, Some(r)) } else { (r.x + r.w - 6.0 - t.x, None) }
+            } else {
+                let naechstes = rects
+                    .iter()
+                    .copied()
+                    .filter(|r| element(r) && r.h >= 4.0 && r.x > t.x + 4.0 && r.y < t.y + h && r.y + r.h > t.y)
+                    .map(|r| r.x)
+                    .fold(rechts, f32::min);
+                (naechstes - 12.0 - t.x, None)
             };
             if w <= platz || platz < 24.0 {
                 continue;
@@ -1139,60 +1178,7 @@ impl App {
         }
         let buttons = self.module_menu_buttons(gpu);
 
-        if !self.module_menu_detail {
-            texts.push(UiText { text: "Module".to_string(), x: panel.x + 8.0 * scale, y: panel.y + 6.0 * scale, color: theme::text(), scale: UI_SCALE_SMALL });
-            // Trennlinie zwischen Kategorien und Kacheln.
-            let trenn_x = panel.x + Self::MODULE_CAT_W * scale + 2.0 * scale;
-            rects.push(UiRect { rect: Rect { x: trenn_x, y: panel.y + Self::MODULE_TOP_H * scale, w: 1.0, h: panel.h - Self::MODULE_TOP_H * scale }, color: COLOR_GRID_LINE, ..UiRect::FLAT });
-            for button in &buttons {
-                if let ButtonAction::SelectModuleCategory(kategorie) = button.action {
-                    // Die gewaehlte wie der aktive Eintrag der Seitenleiste (Theme-Farbe).
-                    // Rand und Hover wie die Knoepfe der Einstellungsseiten (styled_button).
-                    let flaeche = Rect { h: button.rect.h - 2.0 * scale, ..button.rect };
-                    let (px, py) = self.pointer();
-                    let (stil, schrift) = styled_button(button, self.hover_level(button.rect, button.hits(px, py)));
-                    rects.push(UiRect { rect: flaeche, ..stil });
-                    texts.push(UiText {
-                        text: Self::fit_text(gpu, kategorie.label(), button.rect.w - 6.0 * scale, UI_SCALE_SMALL),
-                        x: button.rect.x + 6.0 * scale,
-                        y: (flaeche.y + (flaeche.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round(),
-                        color: schrift,
-                        scale: UI_SCALE_SMALL,
-                    });
-                }
-            }
-            let (px, py) = self.pointer();
-            for (id, tile) in self.module_tiles(gpu) {
-                let on = id.enabled(&self.settings);
-                // Wie ein Knopf der Einstellungsseiten: Rand, beim Hover heller (s. styled_button).
-                // Eingeschaltete mit Akzentrand -- man sieht den Stand der ganzen Kategorie auf
-                // einen Blick.
-                let k = self.hover_level(tile, tile.contains(px, py));
-                let g = theme::get;
-                let flaeche = mix_color(g(theme::Slot::Surface2), g(theme::Slot::Surface3), k);
-                let rand = if on { g(theme::Slot::Accent) } else { mix_color(g(theme::Slot::Border2), g(theme::Slot::BorderStrong), k.min(1.0)) };
-                rects.push(UiRect::framed(tile, flaeche, 6.0, 1.0, rand));
-                let text_x = tile.x + 6.0 * scale;
-                let schalter = Self::module_tile_toggle_rect(tile, scale);
-                // Nur der Name, mittig in der Hoehe: die Beschreibung passte nie ganz hinein und
-                // steht in der Detailansicht ohnehin.
-                let name = Self::fit_text(gpu, id.label(), schalter.x - text_x - 2.0 * scale, UI_SCALE_SMALL);
-                let y = (tile.y + (tile.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-                texts.push(UiText { text: name, x: text_x, y, color: theme::text(), scale: UI_SCALE_SMALL });
-            }
-            if self.module_menu_category.modules().is_empty() {
-                texts.push(UiText {
-                    text: "Keine Module".to_string(),
-                    x: panel.x + (Self::MODULE_CAT_W + Self::MODULE_PAD) * scale,
-                    y: panel.y + Self::MODULE_TOP_H * scale,
-                    color: theme::text(),
-                    scale: UI_SCALE_SMALL,
-                });
-            }
-            let top = panel.y + Self::MODULE_TOP_H * scale;
-            let hoehe = self.module_visible_rows(gpu) as f32 * (Self::MODULE_TILE_H + Self::MODULE_TILE_GAP) * scale;
-            self.draw_module_scrollbar(gpu, panel, top, hoehe, rects);
-        } else {
+        if self.module_menu_detail {
             let layout = self.module_detail_layout(gpu);
             let th = gpu.text_height(UI_SCALE_SMALL);
             // Kopf: Name rechts neben dem Zurueck-Pfeil, darunter die Kurzbeschreibung, dann eine
@@ -1259,7 +1245,8 @@ impl App {
                             Some((p, buf)) if p == prev => self.push_value_input(gpu, kasten, zahl, buf, rects, texts),
                             _ => texts.push(gpu.centered_text(kasten, zahl, theme::text(), UI_SCALE_SMALL)),
                         }
-                        let t = ((wert - min) / (max - min).max(1e-9)) as f32;
+                        let ende = self.step_slider_end(&sl);
+                        let t = self.glide_slider(SliderKey::Step(*prev), ((wert - min) / (ende - min).max(1e-9)) as f32);
                         let aktiv = self.step_drag == Some(*prev);
                         let hover = sl.rect().contains(px, py);
                         Self::push_slider_visual(rects, sl.track(), t, hover || aktiv, aktiv, enabled);
@@ -1310,6 +1297,59 @@ impl App {
                 }
             }
             self.draw_module_scrollbar(gpu, panel, layout.top, self.module_visible_rows(gpu) as f32 * SETTINGS_ROW_H, rects);
+        } else {
+            texts.push(UiText { text: "Module".to_string(), x: panel.x + 8.0 * scale, y: panel.y + 6.0 * scale, color: theme::text(), scale: UI_SCALE_SMALL });
+            // Trennlinie zwischen Kategorien und Kacheln.
+            let trenn_x = panel.x + Self::MODULE_CAT_W * scale + 2.0 * scale;
+            rects.push(UiRect { rect: Rect { x: trenn_x, y: panel.y + Self::MODULE_TOP_H * scale, w: 1.0, h: panel.h - Self::MODULE_TOP_H * scale }, color: COLOR_GRID_LINE, ..UiRect::FLAT });
+            for button in &buttons {
+                if let ButtonAction::SelectModuleCategory(kategorie) = button.action {
+                    // Die gewaehlte wie der aktive Eintrag der Seitenleiste (Theme-Farbe).
+                    // Rand und Hover wie die Knoepfe der Einstellungsseiten (styled_button).
+                    let flaeche = Rect { h: button.rect.h - 2.0 * scale, ..button.rect };
+                    let (px, py) = self.pointer();
+                    let (stil, schrift) = styled_button(button, self.hover_level(button.rect, button.hits(px, py)));
+                    rects.push(UiRect { rect: flaeche, ..stil });
+                    texts.push(UiText {
+                        text: Self::fit_text(gpu, kategorie.label(), button.rect.w - 6.0 * scale, UI_SCALE_SMALL),
+                        x: button.rect.x + 6.0 * scale,
+                        y: (flaeche.y + (flaeche.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round(),
+                        color: schrift,
+                        scale: UI_SCALE_SMALL,
+                    });
+                }
+            }
+            let (px, py) = self.pointer();
+            for (id, tile) in self.module_tiles(gpu) {
+                let on = id.enabled(&self.settings);
+                // Wie ein Knopf der Einstellungsseiten: Rand, beim Hover heller (s. styled_button).
+                // Eingeschaltete mit Akzentrand -- man sieht den Stand der ganzen Kategorie auf
+                // einen Blick.
+                let k = self.hover_level(tile, tile.contains(px, py));
+                let g = theme::get;
+                let flaeche = mix_color(g(theme::Slot::Surface2), g(theme::Slot::Surface3), k);
+                let rand = if on { g(theme::Slot::Accent) } else { mix_color(g(theme::Slot::Border2), g(theme::Slot::BorderStrong), k.min(1.0)) };
+                rects.push(UiRect::framed(tile, flaeche, 6.0, 1.0, rand));
+                let text_x = tile.x + 6.0 * scale;
+                let schalter = Self::module_tile_toggle_rect(tile, scale);
+                // Nur der Name, mittig in der Hoehe: die Beschreibung passte nie ganz hinein und
+                // steht in der Detailansicht ohnehin.
+                let name = Self::fit_text(gpu, id.label(), schalter.x - text_x - 2.0 * scale, UI_SCALE_SMALL);
+                let y = (tile.y + (tile.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                texts.push(UiText { text: name, x: text_x, y, color: theme::text(), scale: UI_SCALE_SMALL });
+            }
+            if self.module_menu_category.modules().is_empty() {
+                texts.push(UiText {
+                    text: "Keine Module".to_string(),
+                    x: panel.x + (Self::MODULE_CAT_W + Self::MODULE_PAD) * scale,
+                    y: panel.y + Self::MODULE_TOP_H * scale,
+                    color: theme::text(),
+                    scale: UI_SCALE_SMALL,
+                });
+            }
+            let top = panel.y + Self::MODULE_TOP_H * scale;
+            let hoehe = self.module_visible_rows(gpu) as f32 * (Self::MODULE_TILE_H + Self::MODULE_TILE_GAP) * scale;
+            self.draw_module_scrollbar(gpu, panel, top, hoehe, rects);
         }
 
         // Knoepfe mit Beschriftung (Zu, Zurueck, Schalter, Pfeile). Die ohne Beschriftung
@@ -1405,7 +1445,7 @@ impl App {
             }
             ButtonAction::ToggleModuleHitbox => self.settings.module_hitbox_enabled = !self.settings.module_hitbox_enabled,
             ButtonAction::ToggleModuleHitboxSmoothed => {
-                self.settings.module_hitbox_show_smoothed = !self.settings.module_hitbox_show_smoothed
+                self.settings.module_hitbox_show_smoothed = !self.settings.module_hitbox_show_smoothed;
             }
             ButtonAction::ToggleModuleHitboxRaw => self.settings.module_hitbox_show_raw = !self.settings.module_hitbox_show_raw,
             ButtonAction::ToggleModuleHitboxDotted => self.settings.module_hitbox_dotted = !self.settings.module_hitbox_dotted,
@@ -1421,17 +1461,17 @@ impl App {
             }
             ButtonAction::HitboxDensityPrev => {
                 self.settings.module_hitbox_density_px =
-                    self.settings.module_hitbox_density_px.saturating_sub(HITBOX_DENSITY_STEP).max(HITBOX_DENSITY_MIN)
+                    self.settings.module_hitbox_density_px.saturating_sub(HITBOX_DENSITY_STEP).max(HITBOX_DENSITY_MIN);
             }
             ButtonAction::HitboxDensityNext => {
                 self.settings.module_hitbox_density_px =
-                    (self.settings.module_hitbox_density_px + HITBOX_DENSITY_STEP).min(HITBOX_DENSITY_MAX)
+                    (self.settings.module_hitbox_density_px + HITBOX_DENSITY_STEP).min(HITBOX_DENSITY_MAX);
             }
             ButtonAction::HitboxOpacityPrev => self.settings.module_hitbox_opacity = self.settings.module_hitbox_opacity.saturating_sub(5),
             ButtonAction::HitboxOpacityNext => self.settings.module_hitbox_opacity = (self.settings.module_hitbox_opacity + 5).min(100),
             ButtonAction::ToggleModuleSkyColor => self.settings.module_sky_color_enabled = !self.settings.module_sky_color_enabled,
             ButtonAction::ToggleModuleGhostTolerance => {
-                self.settings.module_ghost_tolerance = !self.settings.module_ghost_tolerance
+                self.settings.module_ghost_tolerance = !self.settings.module_ghost_tolerance;
             }
             ButtonAction::ToggleModuleCrystalOptimizer => {
                 self.settings.module_crystal_optimizer = !self.settings.module_crystal_optimizer;
@@ -1450,8 +1490,15 @@ impl App {
             }
             ButtonAction::VoiceStep(knob, hoch) => self.voice_step(knob, hoch),
             ButtonAction::VoiceFlag(flag) => self.voice_flag(flag),
+            ButtonAction::ToggleModuleFreelook => {
+                self.settings.module_freelook = !self.settings.module_freelook;
+                if !self.settings.module_freelook {
+                    self.set_freelook(false);
+                }
+            }
+            ButtonAction::FreelookView(v) => self.settings.freelook_view = v.min(FREELOOK_VIEW_FRONT),
             ButtonAction::ZoomFactorPrev => {
-                self.settings.zoom_factor_tenths = self.settings.zoom_factor_tenths.saturating_sub(ZOOM_FACTOR_STEP).max(ZOOM_FACTOR_MIN)
+                self.settings.zoom_factor_tenths = self.settings.zoom_factor_tenths.saturating_sub(ZOOM_FACTOR_STEP).max(ZOOM_FACTOR_MIN);
             }
             ButtonAction::ZoomFactorNext => self.settings.zoom_factor_tenths = (self.settings.zoom_factor_tenths + ZOOM_FACTOR_STEP).min(ZOOM_FACTOR_MAX),
             ButtonAction::ZoomSensPrev => self.settings.zoom_sens_percent = self.settings.zoom_sens_percent.saturating_sub(ZOOM_SENS_STEP).max(ZOOM_SENS_MIN),
@@ -1462,7 +1509,7 @@ impl App {
             ButtonAction::ToggleEatSlotLock => self.settings.eat_slot_lock = !self.settings.eat_slot_lock,
             ButtonAction::ToggleEatAggressivePrediction => self.settings.eat_aggressive_prediction = !self.settings.eat_aggressive_prediction,
             ButtonAction::EatHoldThroughNext => {
-                self.settings.eat_hold_through_ms = (self.settings.eat_hold_through_ms + EAT_HOLD_THROUGH_STEP).min(EAT_HOLD_THROUGH_MAX)
+                self.settings.eat_hold_through_ms = (self.settings.eat_hold_through_ms + EAT_HOLD_THROUGH_STEP).min(EAT_HOLD_THROUGH_MAX);
             }
             ButtonAction::ToggleModuleConsumableOptimizer => {
                 self.settings.module_consumable_optimizer = !self.settings.module_consumable_optimizer;
@@ -1507,17 +1554,17 @@ impl App {
             ButtonAction::ToggleArrowNumberOnly => self.settings.arrow_number_only = !self.settings.arrow_number_only,
             ButtonAction::ToggleArrowWhite => self.settings.arrow_white = !self.settings.arrow_white,
             ButtonAction::ArrowOpacityPrev => {
-                self.settings.arrow_opacity = self.settings.arrow_opacity.saturating_sub(ARROW_OPACITY_STEP).max(ARROW_OPACITY_MIN)
+                self.settings.arrow_opacity = self.settings.arrow_opacity.saturating_sub(ARROW_OPACITY_STEP).max(ARROW_OPACITY_MIN);
             }
             ButtonAction::ArrowOpacityNext => self.settings.arrow_opacity = (self.settings.arrow_opacity + ARROW_OPACITY_STEP).min(100),
             ButtonAction::ToggleArrowTrail => self.settings.arrow_trail = !self.settings.arrow_trail,
             ButtonAction::TrailHoldPrev => self.settings.trail_hold_tenths = self.settings.trail_hold_tenths.saturating_sub(TRAIL_TENTHS_STEP),
             ButtonAction::TrailHoldNext => {
-                self.settings.trail_hold_tenths = (self.settings.trail_hold_tenths + TRAIL_TENTHS_STEP).min(TRAIL_HOLD_MAX_TENTHS)
+                self.settings.trail_hold_tenths = (self.settings.trail_hold_tenths + TRAIL_TENTHS_STEP).min(TRAIL_HOLD_MAX_TENTHS);
             }
             ButtonAction::TrailFadePrev => self.settings.trail_fade_tenths = self.settings.trail_fade_tenths.saturating_sub(TRAIL_TENTHS_STEP),
             ButtonAction::TrailFadeNext => {
-                self.settings.trail_fade_tenths = (self.settings.trail_fade_tenths + TRAIL_TENTHS_STEP).min(TRAIL_FADE_MAX_TENTHS)
+                self.settings.trail_fade_tenths = (self.settings.trail_fade_tenths + TRAIL_TENTHS_STEP).min(TRAIL_FADE_MAX_TENTHS);
             }
             ButtonAction::ToggleShieldCdSelf => self.settings.shield_cd_self = !self.settings.shield_cd_self,
             ButtonAction::ToggleShieldCdPlayers => self.settings.shield_cd_players = !self.settings.shield_cd_players,
@@ -1539,7 +1586,7 @@ impl App {
             ButtonAction::CycleShieldCdTextStyle => self.settings.shield_cd_text_style ^= 1,
             ButtonAction::CycleArrowTextStyle => self.settings.arrow_text_style ^= 1,
             ButtonAction::CycleArrowEmptyFeedback => {
-                self.settings.arrow_empty_feedback = (self.settings.arrow_empty_feedback + 1) % ARROW_EMPTY_FEEDBACK_NAMES.len() as u8
+                self.settings.arrow_empty_feedback = (self.settings.arrow_empty_feedback + 1) % ARROW_EMPTY_FEEDBACK_NAMES.len() as u8;
             }
             ButtonAction::ToggleModuleShowMarkers => {
                 self.settings.module_show_markers = !self.settings.module_show_markers;
@@ -1549,6 +1596,7 @@ impl App {
                 }
             }
             ButtonAction::ToggleModuleSoundDebug => self.settings.module_sound_debug = !self.settings.module_sound_debug,
+            ButtonAction::ToggleModuleHandDebug => self.settings.module_hand_debug = !self.settings.module_hand_debug,
             ButtonAction::ToggleModuleConnectionDebug => self.settings.module_connection_debug = !self.settings.module_connection_debug,
             ButtonAction::ToggleModuleDelay => {
                 self.settings.module_delay = !self.settings.module_delay;
@@ -1561,6 +1609,11 @@ impl App {
                 // Den Logger sofort mitziehen: einschalten beginnt beim naechsten Ereignis eine
                 // neue Sitzung, ausschalten leert den Puffer und schliesst die Datei.
                 self.input_log.set_enabled(self.settings.module_input_log_enabled);
+            }
+            ButtonAction::ToggleModuleCoralRecord => {
+                self.settings.module_coral_record = !self.settings.module_coral_record;
+                record::set_enabled(self.settings.module_coral_record);
+                self.push_log(format!("coral-record: Modul {}", if record::enabled() { "an" } else { "aus" }));
             }
             ButtonAction::ToggleModuleColor => self.settings.module_color = !self.settings.module_color,
             ButtonAction::ToggleModuleSustainability => self.settings.module_sustainability = !self.settings.module_sustainability,
@@ -1575,37 +1628,37 @@ impl App {
             | ButtonAction::ChunkSaverDistancePrev
             | ButtonAction::ChunkSaverDistanceNext => lod::apply_action(&mut self.settings, action),
             ButtonAction::ColorSaturationPrev => {
-                self.settings.color_saturation = self.settings.color_saturation.saturating_sub(COLOR_SATURATION_STEP)
+                self.settings.color_saturation = self.settings.color_saturation.saturating_sub(COLOR_SATURATION_STEP);
             }
             ButtonAction::ColorSaturationNext => {
-                self.settings.color_saturation = (self.settings.color_saturation + COLOR_SATURATION_STEP).min(COLOR_SATURATION_MAX)
+                self.settings.color_saturation = (self.settings.color_saturation + COLOR_SATURATION_STEP).min(COLOR_SATURATION_MAX);
             }
             ButtonAction::DiscordPasteClientId => {
                 // Wechselt zwischen Vorgabe und eigener ID: steht eine eigene drin, fuehrt der
                 // Klick zur Vorgabe zurueck; sonst kommt eine aus der Zwischenablage. Die ID der
                 // Vorgabe selbst zaehlt als Vorgabe (leer), damit sie spaeteren Aenderungen folgt.
-                if !self.settings.discord_client_id.is_empty() {
-                    self.settings.discord_client_id.clear();
-                } else {
+                if self.settings.discord_client_id.is_empty() {
                     let text = arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default();
                     let id: String = text.trim().chars().filter(char::is_ascii_digit).collect();
                     if discord_rpc::valid_client_id(&id) && id != discord_rpc::DEFAULT_CLIENT_ID {
                         self.settings.discord_client_id = id;
                     }
+                } else {
+                    self.settings.discord_client_id.clear();
                 }
             }
             ButtonAction::ShieldColorPrev(farbe, achse) => adjust_shield_color(&mut self.settings, farbe, achse, -1),
             ButtonAction::ShieldColorNext(farbe, achse) => adjust_shield_color(&mut self.settings, farbe, achse, 1),
             ButtonAction::NoToolBreakReservePrev => {
-                self.settings.no_tool_break_reserve = self.settings.no_tool_break_reserve.saturating_sub(1).max(NO_TOOL_BREAK_MIN_RESERVE)
+                self.settings.no_tool_break_reserve = self.settings.no_tool_break_reserve.saturating_sub(1).max(NO_TOOL_BREAK_MIN_RESERVE);
             }
             ButtonAction::NoToolBreakReserveNext => {
-                self.settings.no_tool_break_reserve = (self.settings.no_tool_break_reserve + 1).min(NO_TOOL_BREAK_MAX_RESERVE)
+                self.settings.no_tool_break_reserve = (self.settings.no_tool_break_reserve + 1).min(NO_TOOL_BREAK_MAX_RESERVE);
             }
             ButtonAction::ToggleModuleAutoclicker => self.settings.module_autoclicker = !self.settings.module_autoclicker,
             ButtonAction::ToggleModuleSaturationHud => self.settings.module_saturation_hud = !self.settings.module_saturation_hud,
             ButtonAction::SaturationHeightPrev => {
-                self.settings.saturation_hud_height = self.settings.saturation_hud_height.saturating_sub(1).max(SATURATION_BAR_HEIGHT_MIN)
+                self.settings.saturation_hud_height = self.settings.saturation_hud_height.saturating_sub(1).max(SATURATION_BAR_HEIGHT_MIN);
             }
             ButtonAction::SaturationHeightNext => self.settings.saturation_hud_height = (self.settings.saturation_hud_height + 1).min(SATURATION_BAR_HEIGHT_MAX),
             ButtonAction::SaturationAlpha(raster, hoch) => {
@@ -1645,7 +1698,7 @@ impl App {
             #[allow(clippy::unnecessary_min_or_max)]
             ButtonAction::GhostTolerancePrev => {
                 self.settings.ghost_tolerance_ms =
-                    self.settings.ghost_tolerance_ms.saturating_sub(GHOST_TOLERANCE_STEP_MS).max(GHOST_TOLERANCE_MIN_MS)
+                    self.settings.ghost_tolerance_ms.saturating_sub(GHOST_TOLERANCE_STEP_MS).max(GHOST_TOLERANCE_MIN_MS);
             }
             ButtonAction::LagDelayPrev => {
                 self.settings.lag_delay_ms = self.settings.lag_delay_ms.saturating_sub(LAG_DELAY_STEP_MS);
@@ -1656,7 +1709,7 @@ impl App {
                 self.sync_lag_delay();
             }
             ButtonAction::GhostToleranceNext => {
-                self.settings.ghost_tolerance_ms = (self.settings.ghost_tolerance_ms + GHOST_TOLERANCE_STEP_MS).min(GHOST_TOLERANCE_MAX_MS)
+                self.settings.ghost_tolerance_ms = (self.settings.ghost_tolerance_ms + GHOST_TOLERANCE_STEP_MS).min(GHOST_TOLERANCE_MAX_MS);
             }
             ButtonAction::CycleSkyMode => self.settings.sky_mode = self.settings.sky_mode.next(),
             ButtonAction::ToggleSkySun => self.settings.sky_sun = !self.settings.sky_sun,
@@ -1669,22 +1722,22 @@ impl App {
             ButtonAction::CycleWeatherMode => self.settings.weather_mode = self.settings.weather_mode.next(),
             ButtonAction::WeatherRadiusPrev => {
                 let set = &mut self.settings;
-                set.weather_radius = set.weather_radius.saturating_sub(1).max(precipitation::RADIUS_MIN).max(set.weather_radius_inner + 1)
+                set.weather_radius = set.weather_radius.saturating_sub(1).max(precipitation::RADIUS_MIN).max(set.weather_radius_inner + 1);
             }
             ButtonAction::WeatherRadiusInnerPrev => self.settings.weather_radius_inner = self.settings.weather_radius_inner.saturating_sub(1),
             ButtonAction::WeatherRadiusInnerNext => {
                 let set = &mut self.settings;
-                set.weather_radius_inner = (set.weather_radius_inner + 1).min(set.weather_radius.saturating_sub(1))
+                set.weather_radius_inner = (set.weather_radius_inner + 1).min(set.weather_radius.saturating_sub(1));
             }
             ButtonAction::WeatherRadiusNext => self.settings.weather_radius = (self.settings.weather_radius + 1).min(precipitation::RADIUS_MAX),
             ButtonAction::ToggleModuleBlockOutline => self.settings.module_block_outline = !self.settings.module_block_outline,
             // Oeffnet das Farbfenster, schon beim Klick (s. color_target_of).
             ButtonAction::BlockOutlineEditor => {}
             ButtonAction::BlockOutlineWidthPrev => {
-                self.settings.block_outline_width_px = self.settings.block_outline_width_px.saturating_sub(1).max(BLOCK_OUTLINE_WIDTH_MIN)
+                self.settings.block_outline_width_px = self.settings.block_outline_width_px.saturating_sub(1).max(BLOCK_OUTLINE_WIDTH_MIN);
             }
             ButtonAction::BlockOutlineWidthNext => {
-                self.settings.block_outline_width_px = (self.settings.block_outline_width_px + 1).min(BLOCK_OUTLINE_WIDTH_MAX)
+                self.settings.block_outline_width_px = (self.settings.block_outline_width_px + 1).min(BLOCK_OUTLINE_WIDTH_MAX);
             }
             ButtonAction::ToggleBlockOutlineHideMining => self.settings.block_outline_hide_mining = !self.settings.block_outline_hide_mining,
             ButtonAction::SetBlockOutlineComplementary(an) => self.settings.block_outline_complementary = an,

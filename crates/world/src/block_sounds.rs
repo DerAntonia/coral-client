@@ -1319,6 +1319,7 @@ static BLOCKS: [(&str, u8); 1166] = [
 const STONE: usize = 107;
 
 // Die Klanggruppe eines Blocks (Name ohne Namensraum); unbekannte Bloecke klingen wie Stein.
+#[must_use] 
 pub fn sound_group(block: &str) -> SoundGroup {
     let i = BLOCKS.binary_search_by(|(name, _)| (*name).cmp(block)).map_or(STONE, |k| BLOCKS[k].1 as usize);
     GROUPS[i].1
@@ -1326,10 +1327,12 @@ pub fn sound_group(block: &str) -> SoundGroup {
 
 // BlockTags.INSIDE_STEP_SOUND_BLOCKS und COMBINATION_STEP_SOUND_BLOCKS (data/minecraft/tags/
 // block im 1.21.11-Jar): steht so ein Block UEBER dem, auf dem man laeuft, klingt er (mit).
+#[must_use] 
 pub fn is_inside_step_sound(block: &str) -> bool {
     matches!(block, "powder_snow" | "sculk_vein" | "glow_lichen" | "lily_pad" | "small_amethyst_bud" | "pink_petals" | "wildflowers" | "leaf_litter")
 }
 
+#[must_use] 
 pub fn is_combination_step_sound(block: &str) -> bool {
     block.ends_with("_carpet")
         || matches!(block, "snow" | "nether_sprouts" | "warped_roots" | "crimson_roots" | "resin_clump")

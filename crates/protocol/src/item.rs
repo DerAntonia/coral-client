@@ -28,7 +28,7 @@ use crate::nbt;
 // Ein Stack, reduziert auf das, was Client-Anzeige und Interaktion brauchen. Die uebrigen
 // Components werden korrekt ueberlesen, aber nicht aufgehoben -- wer spaeter z.B. Trims
 // rendern will, faengt hier an.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct ItemStack {
     pub item_id: u32,
     pub count: i32,
@@ -134,7 +134,7 @@ pub struct ItemStack {
     pub can_place_on: Option<Vec<BlockPredicate>>,
     pub can_break: Option<Vec<BlockPredicate>>,
     // bundle_contents: was im Buendel steckt, das zuletzt Eingelegte zuerst.
-    pub bundle_contents: Option<Vec<ItemStack>>,
+    pub bundle_contents: Option<Vec<Self>>,
     // Im Buendel gewaehltes Item (Mausrad ueber dem Buendel), -1 = keins. Nur im Client, wie
     // Vanillas BundleContents.selectedItem -- nicht Teil der Netzform.
     pub bundle_selected: i32,
@@ -156,7 +156,7 @@ pub struct ItemStack {
 
 // Ein Eintrag der attribute_modifiers-Component. `attribute` ist die Roh-ID der eingebauten
 // Attribut-Registry (s. ATTRIBUTE_*), `slot` die EquipmentSlotGroup.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct ItemAttributeModifier {
     pub attribute: i32,
     pub id: String,
@@ -183,7 +183,7 @@ pub const SLOT_GROUP_ARMOR: i32 = 8;
 pub const COMPONENT_ATTRIBUTE_MODIFIERS: i32 = 16;
 pub const COMPONENT_ATTACK_RANGE: i32 = 30;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct WrittenBook {
     pub title: String,
     pub author: String,
@@ -195,14 +195,14 @@ pub struct WrittenBook {
 }
 
 // UseEffects: waehrend der Benutzung sprinten erlaubt, Vibrationen, Tempo-Faktor.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct UseEffects {
     pub can_sprint: bool,
     pub interact_vibrations: bool,
     pub speed_multiplier: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Weapon {
     pub item_damage_per_attack: i32,
     pub disable_blocking_for_seconds: f32,
@@ -210,7 +210,7 @@ pub struct Weapon {
 
 // AttackRange: Reichweite eines Angriffs (Ueberleben und Kreativ), Zuschlag auf die Hitbox und
 // Faktor fuer Mobs.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct AttackRange {
     pub min_reach: f32,
     pub max_reach: f32,
@@ -222,13 +222,13 @@ pub struct AttackRange {
 
 // BlocksAttacks (Schild): Verzoegerung bis zum Blocken und wie stark Axthiebe die Abklingzeit
 // verlaengern -- die Schadenstabellen bleiben Sache des Servers.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct BlocksAttacks {
     pub block_delay_seconds: f32,
     pub disable_cooldown_scale: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PiercingWeapon {
     pub deals_knockback: bool,
     pub dismounts: bool,
@@ -236,7 +236,7 @@ pub struct PiercingWeapon {
 
 // KineticWeapon (Speer-Ansturm): Abklingzeit je Treffer, Verzoegerung und die Hoechstdauern der
 // drei Bedingungen (Absitzen, Rueckstoss, Schaden), alles in Ticks.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct KineticWeapon {
     pub contact_cooldown_ticks: i32,
     pub delay_ticks: i32,
@@ -247,7 +247,7 @@ pub struct KineticWeapon {
     pub damage_multiplier: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct KineticCondition {
     pub max_duration_ticks: i32,
     pub min_speed: f32,
@@ -255,13 +255,13 @@ pub struct KineticCondition {
 }
 
 // SwingAnimation: Art (0 keine, 1 Schlag, 2 Stich) und Dauer in Ticks.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwingAnimation {
     pub kind: i32,
     pub duration: i32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct CustomModelData {
     pub floats: Vec<f32>,
     pub flags: Vec<bool>,
@@ -272,7 +272,7 @@ pub struct CustomModelData {
 // equippable-Component (EquippableComponent): wo das Item getragen wird und wie es dort
 // aussieht. Server bauen damit eigene Ruestung oder machen sie unsichtbar -- UHC Royale gibt
 // dem Helm das Modell "uhc:invisible_helmet", dessen Equipment-Datei keine Ebenen hat.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct Equippable {
     // EquipmentSlot-ORDINAL (wie im Equipment-Paket): 0 Haupthand, 1 Zweithand, 2 Fuesse,
     // 3 Beine, 4 Brust, 5 Kopf, 6 Koerper (Tiere), 7 Sattel. Auf der Leitung steht die Netz-ID,
@@ -321,7 +321,7 @@ pub fn head_profile_from_nbt(v: &crate::nbt::NbtValue) -> Option<HeadProfile> {
 }
 
 // ResolvableProfile, reduziert auf das, was ein Kopf zum Zeichnen braucht.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct HeadProfile {
     pub uuid: Option<[u8; 16]>,
     pub name: Option<String>,
@@ -329,7 +329,7 @@ pub struct HeadProfile {
     pub textures: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Enchantment {
     pub id: u32,
     pub level: i32,
@@ -340,7 +340,7 @@ pub const COMPONENT_ENCHANTMENT_GLINT_OVERRIDE: i32 = 21;
 
 // PotionContents.STREAM_CODEC: optionaler Basistrank (Registry-ID ohne +1), optionale feste
 // Farbe, zusaetzliche Effekte und ein optionaler Namens-Schluessel.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PotionContents {
     pub potion: Option<u32>,
     pub custom_color: Option<i32>,
@@ -349,7 +349,7 @@ pub struct PotionContents {
 }
 
 // Das, was von einer MobEffectInstance fuer die Farbe zaehlt (PotionContents.getColorOptional).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PotionEffect {
     pub effect: u32,
     pub amplifier: i32,
@@ -361,14 +361,14 @@ pub struct PotionEffect {
 
 // ToolComponent wie auf der Leitung. Die Blockmenge einer Regel ist entweder ein Tag oder
 // eine Liste von Block-Roh-IDs (PacketCodecs.registryEntryList).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct ToolData {
     pub rules: Vec<ToolRuleData>,
     pub default_speed: f32,
     pub can_destroy_blocks_in_creative: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct ToolRuleData {
     pub tag: Option<String>,
     pub ids: Vec<i32>,
@@ -384,7 +384,7 @@ pub const COMPONENT_TOOL: i32 = 28;
 pub const COMPONENT_CAN_PLACE_ON: i32 = 14;
 pub const COMPONENT_CAN_BREAK: i32 = 15;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BlockPredicate {
     // None = jeder Block. Sonst wie bei ToolRuleData: Tag ODER Block-Roh-IDs.
     pub blocks: Option<(Option<String>, Vec<i32>)>,
@@ -395,13 +395,13 @@ pub struct BlockPredicate {
     pub needs_block_entity: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum StateValueMatcher {
     Exact(String),
     Range(Option<String>, Option<String>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct UseCooldown {
     pub seconds: f32,
     pub group: Option<String>,
@@ -415,7 +415,8 @@ pub const COMPONENT_USE_COOLDOWN: i32 = 26;
 pub const COMPONENT_EQUIPPABLE: i32 = 32;
 
 impl ItemStack {
-    pub fn new(item_id: u32, count: i32) -> Self {
+    #[must_use] 
+    pub const fn new(item_id: u32, count: i32) -> Self {
         Self {
             item_id,
             count,
@@ -476,17 +477,20 @@ impl ItemStack {
 
     // Hat der Server die equippable-Component dieses Stacks entfernt? Dann traegt Vanilla das
     // Item zwar nicht mehr ueber Rechtsklick, und getragen zeigt es kein Ruestungsbild.
+    #[must_use] 
     pub fn equippable_removed(&self) -> bool {
         self.removed_components.contains(&COMPONENT_EQUIPPABLE)
     }
 
-    pub fn is_charged(&self) -> bool {
+    #[must_use] 
+    pub const fn is_charged(&self) -> bool {
         !self.charged_projectiles.is_empty()
     }
 
     // Laesst sich dieser Stack byte-genau als ItemStackHash beschreiben? (s.
     // has_added_components)
-    pub fn hashable(&self) -> bool {
+    #[must_use] 
+    pub const fn hashable(&self) -> bool {
         !self.has_added_components
     }
 
@@ -500,7 +504,8 @@ impl ItemStack {
     // ECHTER BUG gewesen: vorher galt jeder Stapel MIT gesetzten Components als nie
     // zusammenlegbar. Pfeile mit Trank (sanfter Fall ...) tragen immer welche -- der
     // Doppelklick zum Einsammeln tat bei ihnen deshalb gar nichts.
-    pub fn stackable_with(&self, other: &ItemStack) -> bool {
+    #[must_use] 
+    pub fn stackable_with(&self, other: &Self) -> bool {
         self.item_id == other.item_id
             && self.has_added_components == other.has_added_components
             && self.added_component_bytes == other.added_component_bytes
@@ -508,7 +513,7 @@ impl ItemStack {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
 pub enum SlotError {
     // Buffer zu Ende / kaputtes Packet.
     Read,
@@ -519,7 +524,7 @@ pub enum SlotError {
 
 impl From<ReadError> for SlotError {
     fn from(_: ReadError) -> Self {
-        SlotError::Read
+        Self::Read
     }
 }
 
@@ -625,6 +630,7 @@ thread_local! {
 }
 
 // Die Beschreibung des letzten Lesefehlers dieses Threads (und zuruecksetzen).
+#[must_use] 
 pub fn last_slot_failure() -> Option<String> {
     LETZTER_FEHLER.with(|f| f.borrow_mut().take())
 }

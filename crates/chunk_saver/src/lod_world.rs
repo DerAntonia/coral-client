@@ -54,7 +54,7 @@ impl LodWorld {
         let mut cache = self.cache.lock().unwrap();
         let clock = cache.clock;
         // Waehrenddessen kann der Aufnahme-Thread ihn geaendert haben -- dann gilt seiner.
-        cache.nodes.entry(key).or_insert(Entry { node: node.clone(), dirty: false, used: clock }).node.clone()
+        cache.nodes.entry(key).or_insert(Entry { node, dirty: false, used: clock }).node.clone()
     }
 
     fn put(&self, key: NodeKey, node: Option<Arc<Node>>) {
@@ -189,10 +189,10 @@ impl LodWorld {
     pub fn ingest_column(&self, cx: i32, cz: i32, neighbors: &ColumnNeighbors, states: &LodStates) -> Vec<NodeKey> {
         let column: &ChunkColumn = &neighbors.target;
         let licht = world::light::light_field(neighbors);
-        let (bx, bz) = (cx as i64 * 16, cz as i64 * 16);
+        let (bx, bz) = (i64::from(cx) * 16, i64::from(cz) * 16);
         let mut changed: Vec<NodeKey> = Vec::new();
         for (i, section) in column.sections.iter().enumerate() {
-            let by = column.min_y as i64 + i as i64 * 16;
+            let by = i64::from(column.min_y) + i as i64 * 16;
             let key = NodeKey::of_block(bx, by, bz);
             let n = N as i64;
             let (ox, oy, oz) = (bx.rem_euclid(n) as usize, by.rem_euclid(n) as usize, bz.rem_euclid(n) as usize);

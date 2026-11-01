@@ -45,7 +45,11 @@ struct Laden {
     fenster: Option<(Arc<Window>, VideoModeHandle)>,
     schirm: Option<Schirm>,
     wallpaper: wallpaper::Loader,
-    // Hintergrundbild, schon genau auf Bildschirmgroesse (RGBA, sRGB).
+    // Das geladene Bild in voller Groesse, und daraus genau auf Bildschirmgroesse gebracht
+    // (RGBA, sRGB). Bei jeder Groessenaenderung neu aus dem Original -- das Fenster hat
+    // beim Anlegen oft noch nicht seine Vollbildgroesse, ein schon verkleinertes Bild wieder
+    // hochzuziehen machte es unscharf.
+    original: Option<wallpaper::Decoded>,
     hintergrund: Option<(u32, u32, Vec<u8>)>,
     neu_zeichnen: bool,
 }
@@ -78,10 +82,11 @@ impl Startup {
             fenster: None,
             schirm: None,
             wallpaper: wallpaper::Loader::default(),
+            original: None,
             hintergrund: None,
             neu_zeichnen: true,
         };
-        Startup { phase: Phase::Laden(Box::new(laden)) }
+        Self { phase: Phase::Laden(Box::new(laden)) }
     }
 
     // Assets fertig: Oberflaeche freigeben, App bauen und ihr das Fenster geben.
@@ -108,7 +113,17 @@ impl Startup {
 }
 
 impl Laden {
-    fn schritt(&self) -> &'static str {
+    fn hintergrund_anpassen(&mut self) {
+        if let (Some(b), Some(schirm)) = (&self.original, &self.schirm) {
+            let (w, h) = (schirm.config.width, schirm.config.height);
+            if self.hintergrund.as_ref().is_none_or(|(bw, bh, _)| (*bw, *bh) != (w, h)) {
+                self.hintergrund = Some(auf_schirm(b, w, h));
+            }
+        }
+        self.neu_zeichnen = true;
+    }
+
+    const fn schritt(&self) -> &'static str {
         match self.prozent {
             0..25 => "Block-Texturen",
             25..35 => "Blockzustaende",
@@ -153,7 +168,9 @@ impl Laden {
     fn poll(&mut self, event_loop: &ActiveEventLoop) -> Option<Box<(assets::MinecraftInstallation, Result<WorldAssets, String>)>> {
         if self.fenster.is_none() {
             let fenster = crate::create_game_window(event_loop);
-            let groesse = fenster.0.inner_size();
+            // Die Groesse des Video-Modus, nicht inner_size: die ist direkt nach dem Anlegen
+            // oft noch die vorlaeufige, und das Bild wuerde auf sie heruntergerechnet.
+            let groesse = fenster.1.size();
             self.schirm = Schirm::new(fenster.0.clone());
             let modus = wallpaper::WallpaperMode::from_index(self.settings.wallpaper);
             let gespeichert = crate::shared_config_dir().map(|d| wallpaper::stored_path(&d));
@@ -162,9 +179,9 @@ impl Laden {
             self.neu_zeichnen = true;
         }
         for event in self.wallpaper.poll() {
-            if let (wallpaper::Event::Loaded(b), Some(schirm)) = (event, &self.schirm) {
-                self.hintergrund = Some(auf_schirm(&b, schirm.config.width, schirm.config.height));
-                self.neu_zeichnen = true;
+            if let wallpaper::Event::Loaded(b) = event {
+                self.original = Some(b);
+                self.hintergrund_anpassen();
             }
         }
         let mut fertig = None;
@@ -241,7 +258,7 @@ impl ApplicationHandler for Startup {
                     if let Some(schirm) = laden.schirm.as_mut() {
                         schirm.groesse(groesse.width, groesse.height);
                     }
-                    laden.neu_zeichnen = true;
+                    laden.hintergrund_anpassen();
                 }
                 WindowEvent::RedrawRequested => laden.zeichnen(),
                 _ => {}
@@ -355,7 +372,7 @@ impl Schirm {
         };
         surface.configure(&device, &config);
         let zwischen = zwischen_textur(&device, &config);
-        Some(Schirm { surface, device, queue, config, zwischen })
+        Some(Self { surface, device, queue, config, zwischen })
     }
 
     fn groesse(&mut self, w: u32, h: u32) {

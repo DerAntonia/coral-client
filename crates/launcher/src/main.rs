@@ -129,16 +129,16 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 6] = [Page::Start, Page::Installation, Page::Configs, Page::Updates, Page::Diagnose, Page::Launcher];
+    const ALL: [Self; 6] = [Self::Start, Self::Installation, Self::Configs, Self::Updates, Self::Diagnose, Self::Launcher];
 
-    fn title(self) -> &'static str {
+    const fn title(self) -> &'static str {
         match self {
-            Page::Start => "Start",
-            Page::Installation => "Installation",
-            Page::Configs => "Configs",
-            Page::Updates => "Updates",
-            Page::Diagnose => "Log & Flags",
-            Page::Launcher => "Launcher",
+            Self::Start => "Start",
+            Self::Installation => "Installation",
+            Self::Configs => "Configs",
+            Self::Updates => "Updates",
+            Self::Diagnose => "Log & Flags",
+            Self::Launcher => "Launcher",
         }
     }
 }
@@ -168,11 +168,11 @@ impl ClientLog {
         self.stand = Some(stand);
         let text = std::fs::read(log_path()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let alle: Vec<&str> = text.lines().collect();
-        self.zeilen = alle[alle.len().saturating_sub(LOG_ZEILEN)..].iter().map(|z| z.to_string()).collect();
+        self.zeilen = alle[alle.len().saturating_sub(LOG_ZEILEN)..].iter().map(std::string::ToString::to_string).collect();
     }
 }
 
-/// Stand der extrahierten Spieldaten (s. game_data_section).
+/// Stand der extrahierten Spieldaten (s. `game_data_section`).
 enum GameData {
     Status(assets::GameDataStatus),
     // Laufende Extraktion: der aktuelle Schritt und das Ergebnis.
@@ -637,7 +637,7 @@ impl Launcher {
         }
         match log {
             Ok(log) => {
-                let stderr = log.try_clone().map(Stdio::from).unwrap_or(Stdio::null());
+                let stderr = log.try_clone().map_or(Stdio::null(), Stdio::from);
                 command.stdout(log).stderr(stderr);
             }
             Err(_) => {
@@ -851,9 +851,7 @@ impl Launcher {
             let anzeige = self
                 .releases
                 .iter()
-                .find(|r| r.tag_name == gewaehlt)
-                .map(|r| beschriftung(r, &self.conf.installed))
-                .unwrap_or_else(|| gewaehlt.clone());
+                .find(|r| r.tag_name == gewaehlt).map_or_else(|| gewaehlt.clone(), |r| beschriftung(r, &self.conf.installed));
             egui::ComboBox::from_id_salt("version").selected_text(anzeige).width(220.0).show_ui(ui, |ui| {
                 for r in update::visible(&self.releases, self.conf.beta) {
                     if ui.selectable_label(r.tag_name == gewaehlt, beschriftung(r, &self.conf.installed)).clicked() {
@@ -1072,11 +1070,11 @@ fn custom_candidate(source: GameSource) -> Candidate {
 /// Das Client-Binary liegt in ~/coral-client/binary (bei den Skins), damit der Launcher ueberall
 /// liegen kann -- z.B. allein auf dem Schreibtisch. Ohne Benutzerordner neben dem Launcher.
 fn client_dir() -> PathBuf {
-    assets::user_dir().map(|d| d.join("binary")).unwrap_or_else(launcher_dir)
+    assets::user_dir().map_or_else(launcher_dir, |d| d.join("binary"))
 }
 
 /// Der Client einer Version: coral-client-v26.10.1 (unter Windows mit .exe). Es liegt immer nur
-/// der installierte dort, s. remove_other_clients.
+/// der installierte dort, s. `remove_other_clients`.
 fn client_path(tag: &str) -> PathBuf {
     client_dir().join(format!("coral-client-{tag}{}", std::env::consts::EXE_SUFFIX))
 }
@@ -1158,7 +1156,7 @@ fn running_client() -> Option<u32> {
 }
 
 /// Signal an einen Prozess ("-TERM", "-KILL"). Unter Windows gibt es keine Signale: dort beendet
-/// taskkill hart (laufende Clients erkennt der Launcher dort ohnehin nicht, s. running_client).
+/// taskkill hart (laufende Clients erkennt der Launcher dort ohnehin nicht, s. `running_client`).
 fn signal(pid: u32, sig: &str) {
     #[cfg(unix)]
     let _ = Command::new("kill").arg(sig).arg(pid.to_string()).status();
@@ -1197,8 +1195,8 @@ struct LauncherConf {
 }
 
 /// Ein gespeicherter Schaltername, wie er heute heisst -- oder None, wenn es den Schalter nicht
-/// (mehr) gibt. Bis zur Umbenennung in Coral Client hiessen die Variablen MC_CLIENT_*, MC_PKTLOG
-/// und MC_SOUNDLOG; ohne Uebersetzung zaehlte die Ueberschrift sie als "an", obwohl kein
+/// (mehr) gibt. Bis zur Umbenennung in Coral Client hiessen die Variablen `MC_CLIENT`_*, `MC_PKTLOG`
+/// und `MC_SOUNDLOG`; ohne Uebersetzung zaehlte die Ueberschrift sie als "an", obwohl kein
 /// Haekchen dazu passte.
 fn known_flag(name: &str) -> Option<String> {
     let name = name.trim();
@@ -1214,7 +1212,7 @@ fn known_flag(name: &str) -> Option<String> {
 }
 
 /// Die Diagnose-Schalter des Clients: Umgebungsvariable, Anzeigename, Erklaerung. Alle
-/// schreiben in das Client-Log (s. log_path) -- bis auf den Paket-Mitschnitt und den Klang-Mitschnitt,
+/// schreiben in das Client-Log (s. `log_path`) -- bis auf den Paket-Mitschnitt und den Klang-Mitschnitt,
 /// die je eine eigene Datei daneben bekommen (pktlog.txt, soundlog.txt).
 const DEBUG_FLAGS: &[(&str, &str, &str)] = &[
     ("CORAL_TITLE_DEBUG", "Titel", "Jeden Titel/Untertitel mit Zeichencodes loggen, samt Zeichen, die die Schrift nicht kennt."),

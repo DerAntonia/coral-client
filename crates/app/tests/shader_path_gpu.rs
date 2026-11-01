@@ -124,9 +124,9 @@ fn shader_path_frame_ohne_validierungsfehler() {
     assert!(art(&kante) == 3 && kante[0] >> 30 == 3, "an der Schattenkante kein Sicht-Raster");
     // Das Raster: auf der Flaeche (x 9..10, z 11..12) faellt die Kante der Mauer (x = 9 bei
     // z = 10) von der Fackel aus schraeg -- an einem Ende hell, am anderen dunkel.
-    let seite = lesen(&device, &queue, sp.voxels_mut().lightmap_buffer(), 1024, 1)[0] as u64;
+    let seite = u64::from(lesen(&device, &queue, sp.voxels_mut().lightmap_buffer(), 1024, 1)[0]);
     let fw = render::voxel_volume::LM_FEIN_WORTE as u64;
-    let raster = lesen(&device, &queue, sp.voxels_mut().lightmap_buffer(), render::voxel_volume::LM_FEIN_BASE as u64 + ((seite - 1) * render::voxel_volume::LM_FEIN_PLAETZE as u64 + kante[2] as u64) * fw, fw);
+    let raster = lesen(&device, &queue, sp.voxels_mut().lightmap_buffer(), render::voxel_volume::LM_FEIN_BASE as u64 + ((seite - 1) * render::voxel_volume::LM_FEIN_PLAETZE as u64 + u64::from(kante[2])) * fw, fw);
     let werte: Vec<u32> = raster.iter().flat_map(|w| (0..4).map(move |i| w >> (8 * i) & 255)).collect();
     println!("Raster: kleinster {}, groesster {}", werte.iter().min().unwrap(), werte.iter().max().unwrap());
     assert!(*werte.iter().min().unwrap() < 30 && *werte.iter().max().unwrap() > 225, "Raster an der Kante ohne Hell und Dunkel");
@@ -155,7 +155,7 @@ fn shader_path_frame_ohne_validierungsfehler() {
         e[2] = 0;
         e
     };
-    assert_eq!(ohne_platz(ebenen_der_flaeche(&device, &queue, sp.voxels_mut(), 9, 11)), ohne_platz(kante.clone()), "neu gebacken anders");
+    assert_eq!(ohne_platz(ebenen_der_flaeche(&device, &queue, sp.voxels_mut(), 9, 11)), ohne_platz(kante), "neu gebacken anders");
 }
 
 // Ausgabe einer Szene sammeln und am Ende am Stueck drucken: die Tests laufen parallel.
@@ -169,7 +169,7 @@ macro_rules! say {
 // `f` fuer alle `dinge`, auf alle Kerne verteilt (die Vergleichsrechnungen auf der CPU sind
 // das Langsame an diesen Tests); Ergebnisse in derselben Reihenfolge.
 fn parallel<T: Sync, R: Send>(dinge: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let kerne = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let kerne = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let stueck = dinge.len().div_ceil(kerne).max(1);
     std::thread::scope(|s| {
         let teile: Vec<_> = dinge.chunks(stueck).map(|teil| s.spawn(|| teil.iter().map(&f).collect::<Vec<R>>())).collect();
@@ -206,10 +206,10 @@ fn ebenen_der_flaeche(device: &wgpu::Device, queue: &wgpu::Queue, voxels: &rende
     let seite = lesen(device, queue, voxels.lightmap_buffer(), 1024, 1)[0];
     assert!(seite > 0, "Section ohne Lichtkarten-Seite");
     let flaeche = (z * 16 + x) * 6 + 1;
-    let platz = lesen(device, queue, voxels.lightmap_buffer(), 4096 + (seite as u64 - 1) * 24576 + flaeche, 1)[0];
+    let platz = lesen(device, queue, voxels.lightmap_buffer(), 4096 + (u64::from(seite) - 1) * 24576 + flaeche, 1)[0];
     assert!(platz > 0 && platz != u32::MAX, "keine Lichtkarte fuer ({x}, {z})");
     let n = render::voxel_volume::LM_LAGEN as u64;
-    lesen(device, queue, voxels.lightmap_layer_buffer(), ((seite as u64 - 1) * render::voxel_volume::LM_FACES as u64 + platz as u64 - 1) * n * 4, n * 4)
+    lesen(device, queue, voxels.lightmap_layer_buffer(), ((u64::from(seite) - 1) * render::voxel_volume::LM_FACES as u64 + u64::from(platz) - 1) * n * 4, n * 4)
 }
 
 // Die Lichtkarten gegen eine unabhaengige Rechnung: fuer jede gebackene Flaeche und jede
@@ -347,12 +347,12 @@ fn lichtkarten_stimmen_mit_strahlen() {
     // betritt -- ohne Rand davor: ein Strahl, der vorher die Ecke eines Nachbarblocks streift,
     // ist verdeckt.
     let frei = |o: [f32; 3], l: (i32, i32, i32)| {
-        let ziel = [l.0 as f64 + 0.5, l.1 as f64 + 0.5, l.2 as f64 + 0.5];
-        let o = o.map(|v| v as f64);
+        let ziel = [f64::from(l.0) + 0.5, f64::from(l.1) + 0.5, f64::from(l.2) + 0.5];
+        let o = o.map(f64::from);
         let d = [ziel[0] - o[0], ziel[1] - o[1], ziel[2] - o[2]];
         let mut zelle = o.map(|v| v.floor() as i32);
         let schritt = d.map(|v| if v > 0.0 { 1 } else { -1 });
-        let mut tmax: [f64; 3] = std::array::from_fn(|k| if d[k] == 0.0 { f64::INFINITY } else { ((zelle[k] + (schritt[k] > 0) as i32) as f64 - o[k]) / d[k] });
+        let mut tmax: [f64; 3] = std::array::from_fn(|k| if d[k] == 0.0 { f64::INFINITY } else { (f64::from(zelle[k] + i32::from(schritt[k] > 0)) - o[k]) / d[k] });
         let tdelta: [f64; 3] = std::array::from_fn(|k| if d[k] == 0.0 { f64::INFINITY } else { 1.0 / d[k].abs() });
         for _ in 0..200 {
             if zelle == [l.0, l.1, l.2] {
@@ -386,8 +386,8 @@ fn lichtkarten_stimmen_mit_strahlen() {
     // Section (0, 4, sz) liegt in Slot (4 * 16 + sz) * 16 + 0.
     let seite = lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * sz as u64, 1)[0];
     assert!(seite > 0, "Section {sz} ohne Seite");
-    let index = lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite as u64 - 1) * 24576, 24576);
-    let lagen = lesen(&device, &queue, voxels.lightmap_layer_buffer(), (seite as u64 - 1) * faces * n_lagen * 4, faces * n_lagen * 4);
+    let index = lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (u64::from(seite) - 1) * 24576, 24576);
+    let lagen = lesen(&device, &queue, voxels.lightmap_layer_buffer(), (u64::from(seite) - 1) * faces * n_lagen * 4, faces * n_lagen * 4);
     // Kein Platzmangel: jede sichtbare Flaeche hat einen Platz (die Unterseiten des Bodens
     // zeigen ins Ungeladene und zaehlen nicht).
     let voll = index.iter().filter(|&&p| p == u32::MAX).count();
@@ -420,11 +420,11 @@ fn lichtkarten_stimmen_mit_strahlen() {
                 let mitte = |daten: u32| {
                     let a = rand((daten & 2047) as f32 / 512.0);
                     let bb = rand((daten >> 11 & 2047) as f32 / 512.0);
-                    (a, bb, [(a[0] + bb[0]) / 2.0, (a[1] + bb[1]) / 2.0])
+                    (a, bb, [f32::midpoint(a[0], bb[0]), f32::midpoint(a[1], bb[1])])
                 };
                 let (a0, b0, m0) = mitte(e[2]);
                 let (a1, b1, m1) = mitte(e[3]);
-                let m = [(m0[0] + m1[0]) / 2.0, (m0[1] + m1[1]) / 2.0];
+                let m = [f32::midpoint(m0[0], m1[0]), f32::midpoint(m0[1], m1[1])];
                 let abstand = |a: [f32; 2], bb: [f32; 2]| {
                     let r = [bb[0] - a[0], bb[1] - a[1]];
                     ((r[0] * (m[1] - a[1]) - r[1] * (m[0] - a[0])) / (r[0] * r[0] + r[1] * r[1]).sqrt().max(1e-4)).abs()
@@ -506,10 +506,10 @@ fn lichtkarten_stimmen_mit_strahlen() {
     // Himmelssicht (s. back_himmel): 4x4 Werte je Flaeche, Oberseite (Richtung 1).
     let himmel = |x: i32, y: i32, z: i32| -> Vec<f32> {
         let sz = (z / 16) as u64;
-        let seite = lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * sz, 1)[0] as u64;
+        let seite = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * sz, 1)[0]);
         let lokal = (((y - 64) * 16 + z % 16) * 16 + x) as u64;
-        let platz = lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576 + lokal * 6 + 1, 1)[0] as u64;
-        assert!(platz > 0 && platz != u32::MAX as u64, "Oberseite von ({x}, {y}, {z}) ohne Platz");
+        let platz = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576 + lokal * 6 + 1, 1)[0]);
+        assert!(platz > 0 && platz != u64::from(u32::MAX), "Oberseite von ({x}, {y}, {z}) ohne Platz");
         let basis = 4096 + 768 * 24576 + 768 + 768 * faces + ((seite - 1) * faces + platz - 1) * 4;
         lesen(&device, &queue, voxels.lightmap_buffer(), basis, 4).iter().flat_map(|w| (0..4).map(move |b| (w >> (8 * b) & 255) as f32 / 255.0)).collect()
     };
@@ -533,7 +533,7 @@ fn lichtkarten_stimmen_mit_strahlen() {
     let himmel_je_flaeche = |device: &wgpu::Device, queue: &wgpu::Queue, voxels: &render::voxel_volume::VoxelVolume| {
         let mut alle = std::collections::HashMap::new();
         for sz in 0..2u64 {
-            let seite = lesen(device, queue, voxels.lightmap_buffer(), 1024 + 16 * sz, 1)[0] as u64;
+            let seite = u64::from(lesen(device, queue, voxels.lightmap_buffer(), 1024 + 16 * sz, 1)[0]);
             let index = lesen(device, queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576, 24576);
             let werte = lesen(device, queue, voxels.lightmap_buffer(), 4096 + 768 * 24576 + 768 + 768 * faces + (seite - 1) * faces * 4, faces * 4);
             for (f, &platz) in index.iter().enumerate() {
@@ -787,11 +787,11 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
     // Weiche Sicht auf der CPU: wie light_visibility_n im Shader (Vogel-Spirale ueber die
     // Scheibe, jeder Strahl bis zum Block der Quelle bzw. seiner naechsten Stelle an ihrer
     // Mitte), aber mit 1024 Strahlen und exakter Zellfolge.
-    let tan = (weich_grad.to_radians() * 0.5).tan() as f64;
-    let mitte = [licht.0 as f64 + 0.5, licht.1 as f64 + 0.5, licht.2 as f64 + 0.5];
+    let tan = f64::from((weich_grad.to_radians() * 0.5).tan());
+    let mitte = [f64::from(licht.0) + 0.5, f64::from(licht.1) + 0.5, f64::from(licht.2) + 0.5];
     let frei = |o: [f64; 3], d: [f64; 3]| {
         let inv = d.map(|v| 1.0 / if v.abs() < 1e-9 { 1e-9 } else { v });
-        let lo = [licht.0 as f64, licht.1 as f64, licht.2 as f64];
+        let lo = [f64::from(licht.0), f64::from(licht.1), f64::from(licht.2)];
         let a: [f64; 3] = std::array::from_fn(|k| (lo[k] - o[k]) * inv[k]);
         let b: [f64; 3] = std::array::from_fn(|k| (lo[k] + 1.0 - o[k]) * inv[k]);
         let rein = (0..3).map(|k| a[k].min(b[k])).fold(f64::MIN, f64::max);
@@ -799,7 +799,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
         let ende = if rein <= raus && raus > 0.0 { (rein - 1e-4).max(0.0) } else { (0..3).map(|k| (mitte[k] - o[k]) * d[k]).sum::<f64>().max(0.0) };
         let mut zelle = o.map(|v| v.floor() as i32);
         let schritt = d.map(|v| if v > 0.0 { 1 } else { -1 });
-        let mut tmax: [f64; 3] = std::array::from_fn(|k| ((zelle[k] + (schritt[k] > 0) as i32) as f64 - o[k]) * inv[k]);
+        let mut tmax: [f64; 3] = std::array::from_fn(|k| (f64::from(zelle[k] + i32::from(schritt[k] > 0)) - o[k]) * inv[k]);
         let tdelta: [f64; 3] = std::array::from_fn(|k| inv[k].abs());
         let mut t = 0.0;
         while t < ende {
@@ -832,10 +832,10 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
         let n = 1024;
         let mut summe = 0;
         for s in 0..n {
-            let r = ((s as f64 + 0.5) / n as f64).sqrt() * tan;
-            let wink = s as f64 * 2.39996;
+            let r = ((f64::from(s) + 0.5) / f64::from(n)).sqrt() * tan;
+            let wink = f64::from(s) * 2.39996;
             let d = norm(std::array::from_fn(|k| m[k] + (u[k] * wink.cos() + w[k] * wink.sin()) * r));
-            summe += frei(o, d) as u32;
+            summe += u32::from(frei(o, d));
         }
         summe as f32 / n as f32
     };
@@ -850,7 +850,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
     let mut alle_arten: std::collections::BTreeMap<&str, usize> = Default::default();
     let mut strahlen_flaechen = Vec::new();
     for sz in 0..2u64 {
-        let seite = lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * sz, 1)[0] as u64;
+        let seite = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * sz, 1)[0]);
         let index = lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576, 24576);
         let lagen = lesen(&device, &queue, voxels.lightmap_layer_buffer(), (seite - 1) * faces * n_lagen * 4, faces * n_lagen * 4);
         for (f, &platz) in index.iter().enumerate() {
@@ -895,7 +895,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
                 let e4 = eigene.map_or([0u32; 4], |e| [e[0], e[1], e[2], e[3]]);
                 if e4[0] >> 27 & 3 == 3 && e4[0] >> 31 != 0 && e4[0] >> 30 & 1 != 0 {
                     let fw = render::voxel_volume::LM_FEIN_WORTE as u64;
-                    let basis = render::voxel_volume::LM_FEIN_BASE as u64 + ((seite - 1) * render::voxel_volume::LM_FEIN_PLAETZE as u64 + e4[2] as u64) * fw;
+                    let basis = render::voxel_volume::LM_FEIN_BASE as u64 + ((seite - 1) * render::voxel_volume::LM_FEIN_PLAETZE as u64 + u64::from(e4[2])) * fw;
                     raster_von.insert((x, z), lesen(&device, &queue, voxels.lightmap_buffer(), basis, fw));
                 }
                 ebene.insert((x, z), e4);
@@ -933,11 +933,11 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
         for q in 0..100 {
             let uv = [0.05 + 0.1 * (q % 10) as f32, 0.05 + 0.1 * (q / 10) as f32];
             let Some(g) = gespeicherte_sicht(&e, raster_von.get(&(x, z)).map_or(&[][..], |r| &r[..]), uv, tan as f32, stelle(x, z, uv), mitte32) else { continue };
-            let w = weich([x as f64 + uv[0] as f64, 65.01, z as f64 + uv[1] as f64]);
+            let w = weich([f64::from(x) + f64::from(uv[0]), 65.01, f64::from(z) + f64::from(uv[1])]);
             let f = (g - w).abs();
             summe += f;
             // Feines Raster an einer harten Stufe: fuer sich gezaehlt.
-            if f > 0.1 && art_name(&e) == "Fein" && hart(x as f64 + uv[0] as f64, z as f64 + uv[1] as f64) {
+            if f > 0.1 && art_name(&e) == "Fein" && hart(f64::from(x) + f64::from(uv[0]), f64::from(z) + f64::from(uv[1])) {
                 an_stufe = an_stufe.max(f);
                 continue;
             }
@@ -978,7 +978,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
                 let g = (r[j * 4 + i / 4] >> (8 * (i % 4)) & 255) as f32 / 255.0;
                 let u = (i as f64 / 15.0).clamp(0.01, 0.99);
                 let v = (j as f64 / 15.0).clamp(0.01, 0.99);
-                let w = weich([x as f64 + u, 65.01, z as f64 + v]);
+                let w = weich([f64::from(x) + u, 65.01, f64::from(z) + v]);
                 zeile += &format!(" ({i},{j}) {g:.3}/{w:.3}");
             }
             say!(log, "  Fein ({x}, {z}):{zeile}");
@@ -993,7 +993,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
     // Pixel: die genaue Sicht, die Spirale ist dort nur gedreht).
     let lesen_an = |x: i32, z: i32, uv: [f32; 2]| {
         let e = ebene.get(&(x, z)).copied().unwrap_or([0; 4]);
-        gespeicherte_sicht(&e, raster_von.get(&(x, z)).map_or(&[][..], |r| &r[..]), uv, tan as f32, stelle(x, z, uv), mitte32).unwrap_or_else(|| weich([x as f64 + uv[0] as f64, 65.01, z as f64 + uv[1] as f64]))
+        gespeicherte_sicht(&e, raster_von.get(&(x, z)).map_or(&[][..], |r| &r[..]), uv, tan as f32, stelle(x, z, uv), mitte32).unwrap_or_else(|| weich([f64::from(x) + f64::from(uv[0]), 65.01, f64::from(z) + f64::from(uv[1])]))
     };
     let mut spruenge = Vec::new();
     let mut alle_kanten = Vec::new();
@@ -1008,7 +1008,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
                 if x + 1 < 16 && ebene.contains_key(&(x + 1, z)) {
                     let (a, b) = (lesen_an(x, z, [0.999, t]), lesen_an(x + 1, z, [0.001, t]));
                     let s = ((a - b).abs(), x, z, "x+", art_name(&ebene[&(x, z)]), art_name(&ebene[&(x + 1, z)]), a.min(b), a.max(b));
-                    if !hart(x as f64 + 1.0, z as f64 + t as f64) {
+                    if !hart(f64::from(x) + 1.0, f64::from(z) + f64::from(t)) {
                         spruenge.push(s);
                     }
                     alle_kanten.push(s);
@@ -1016,7 +1016,7 @@ fn fernlicht_szene(name: &str, licht: (i32, i32, i32), bloecke: &[(i32, i32, i32
                 if z + 1 < 32 && ebene.contains_key(&(x, z + 1)) {
                     let (a, b) = (lesen_an(x, z, [t, 0.999]), lesen_an(x, z + 1, [t, 0.001]));
                     let s = ((a - b).abs(), x, z, "z+", art_name(&ebene[&(x, z)]), art_name(&ebene[&(x, z + 1)]), a.min(b), a.max(b));
-                    if !hart(x as f64 + t as f64, z as f64 + 1.0) {
+                    if !hart(f64::from(x) + f64::from(t), f64::from(z) + 1.0) {
                         spruenge.push(s);
                     }
                     alle_kanten.push(s);
@@ -1129,10 +1129,10 @@ fn fernlicht_nachtraeglich_gesetzt() {
     backen(&mut sp);
     // Oberseite von (8, 64, 40): Section 2, 38 Bloecke von der Quelle.
     let voxels = sp.voxels_mut();
-    let seite = lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * 2, 1)[0] as u64;
+    let seite = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * 2, 1)[0]);
     assert!(seite > 0, "Section 2 ohne Seite");
-    let platz = lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576 + ((8 * 16 + 8) * 6 + 1), 1)[0] as u64;
-    assert!(platz > 0 && platz != u32::MAX as u64, "Flaeche ohne Platz");
+    let platz = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576 + ((8 * 16 + 8) * 6 + 1), 1)[0]);
+    assert!(platz > 0 && platz != u64::from(u32::MAX), "Flaeche ohne Platz");
     let n = render::voxel_volume::LM_LAGEN as u64;
     let ebenen = lesen(&device, &queue, voxels.lightmap_layer_buffer(), ((seite - 1) * render::voxel_volume::LM_FACES as u64 + platz - 1) * n * 4, n * 4);
     println!("Ebenen der fernen Flaeche: {:?}", ebenen.chunks(4).take_while(|e| e[0] >> 27 & 3 != 0).map(|e| e[0] >> 27 & 3).collect::<Vec<_>>());
@@ -1238,9 +1238,9 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
         .map(|&((x, y, z), n)| {
             let st = state(n);
             let e = world::light::emission(st);
-            let farbe = [e & 15, e >> 4 & 15, e >> 8 & 15].map(|v| v as f64);
-            let weit = farbe.iter().cloned().fold(0.0, f64::max).max(world::light::emission_level(st) as f64);
-            ([x, y, z], [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5], farbe, weit)
+            let farbe = [e & 15, e >> 4 & 15, e >> 8 & 15].map(f64::from);
+            let weit = farbe.iter().copied().fold(0.0, f64::max).max(f64::from(world::light::emission_level(st)));
+            ([x, y, z], [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5], farbe, weit)
         })
         .collect();
     let idx = |x: i32, y: i32, z: i32| ((z / 16) * 4096 + ((y - 64) * 16 + z % 16) * 16 + x) as usize;
@@ -1300,7 +1300,7 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
         let inv = d.map(|v| 1.0 / if v.abs() < 1e-12 { 1e-12 } else { v });
         let mut zelle = o.map(|v| v.floor() as i32);
         let schritt = d.map(|v| if v > 0.0 { 1 } else { -1 });
-        let mut tmax: [f64; 3] = std::array::from_fn(|k| ((zelle[k] + (schritt[k] > 0) as i32) as f64 - o[k]) * inv[k]);
+        let mut tmax: [f64; 3] = std::array::from_fn(|k| (f64::from(zelle[k] + i32::from(schritt[k] > 0)) - o[k]) * inv[k]);
         let tdelta: [f64; 3] = std::array::from_fn(|k| inv[k].abs());
         let mut t = 0.0;
         let mut n = [0.0; 3];
@@ -1313,7 +1313,7 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
             zelle[k] += schritt[k];
             tmax[k] += tdelta[k];
             n = [0.0; 3];
-            n[k] = -schritt[k] as f64;
+            n[k] = f64::from(-schritt[k]);
         }
         None
     };
@@ -1358,8 +1358,8 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
     let halton = |i: u32, b: u32| {
         let (mut f, mut r, mut i) = (1.0, 0.0, i);
         while i > 0 {
-            f /= b as f64;
-            r += f * (i % b) as f64;
+            f /= f64::from(b);
+            r += f * f64::from(i % b);
             i /= b;
         }
         r
@@ -1373,7 +1373,7 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
             0 => ([0, -1, 0], [1, 0, 0], [0, 0, 1]),
             _ => ([-1, 0, 0], [0, 0, 1], [0, 1, 0]),
         };
-        let nf = n.map(|v| v as f64);
+        let nf = n.map(f64::from);
         let weiter = |su: i32, sv: i32| {
             let nb: [i32; 3] = std::array::from_fn(|k| b[k] + ua[k] * su + va[k] * sv);
             let davor: [i32; 3] = std::array::from_fn(|k| nb[k] + n[k]);
@@ -1388,7 +1388,7 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
             // Unabhaengig von den Richtungen (Halton in hohen Basen haengt bei wenigen tausend
             // Punkten zusammen und verzerrt die Gegend).
             let zufall = |salz: u64| {
-                let mut h = (s as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15) ^ salz.wrapping_mul(0xD1B54A32D192ED03);
+                let mut h = (u64::from(s) + 1).wrapping_mul(0x9E3779B97F4A7C15) ^ salz.wrapping_mul(0xD1B54A32D192ED03);
                 h ^= h >> 31;
                 h = h.wrapping_mul(0xBF58476D1CE4E5B9);
                 h ^= h >> 29;
@@ -1403,8 +1403,8 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
                 continue;
             }
             gezaehlt += 1;
-            let p: [f64; 2] = std::array::from_fn(|k| zq[k] as f64 + (q[k] - zq[k] as f64).clamp(0.01, 0.99));
-            let o: [f64; 3] = std::array::from_fn(|k| b[k] as f64 + 0.5 + nf[k] * 0.51 + ua[k] as f64 * (p[0] - 0.5) + va[k] as f64 * (p[1] - 0.5));
+            let p: [f64; 2] = std::array::from_fn(|k| f64::from(zq[k]) + (q[k] - f64::from(zq[k])).clamp(0.01, 0.99));
+            let o: [f64; 3] = std::array::from_fn(|k| f64::from(b[k]) + 0.5 + nf[k] * 0.51 + f64::from(ua[k]) * (p[0] - 0.5) + f64::from(va[k]) * (p[1] - 0.5));
             let d = richtung(nf, halton(s + 1, 2), halton(s + 1, 3));
             let Some((t, z, nh)) = treffer(o, d, 16.0) else { continue };
             if t < 1e-3 {
@@ -1430,7 +1430,7 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
                 zweiter[k] += albedo * albedo * e2[k];
             }
         }
-        let zahl = gezaehlt.max(1) as f64;
+        let zahl = f64::from(gezaehlt.max(1));
         let anteil = (bleibt / zahl).min(0.75);
         std::array::from_fn(|k| (erster[k] + zweiter[k] / (1.0 - anteil)) / zahl)
     };
@@ -1463,21 +1463,21 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
                 n = nh;
             }
         }
-        summe.map(|v| v / zahl as f64)
+        summe.map(|v| v / f64::from(zahl))
     };
 
     // --- GPU-Werte lesen: die 16 Punkte der Flaeche `d` des Blocks (x, y, z).
     let voxels = sp.voxels_mut();
     let faces = render::voxel_volume::LM_FACES as u64;
     let gpu = |x: i32, y: i32, z: i32, d: u64| -> Option<Vec<[f64; 3]>> {
-        let seite = lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * (z / 16) as u64, 1)[0] as u64;
+        let seite = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 1024 + 16 * (z / 16) as u64, 1)[0]);
         let lokal = (((y & 15) * 16 + (z & 15)) * 16 + (x & 15)) as u64;
-        let platz = lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576 + lokal * 6 + d, 1)[0] as u64;
-        if platz == 0 || platz == u32::MAX as u64 {
+        let platz = u64::from(lesen(&device, &queue, voxels.lightmap_buffer(), 4096 + (seite - 1) * 24576 + lokal * 6 + d, 1)[0]);
+        if platz == 0 || platz == u64::from(u32::MAX) {
             return None;
         }
         let w = lesen(&device, &queue, voxels.lightmap_buffer(), render::voxel_volume::LM_RUECK_BASE as u64 + ((seite - 1) * faces + platz - 1) * 16, 16);
-        Some(w.iter().map(|&w| [w, w >> 9, w >> 18].map(|m| (m & 511) as f64 * 2f64.powi((w >> 27) as i32 - 24))).collect())
+        Some(w.iter().map(|&w| [w, w >> 9, w >> 18].map(|m| f64::from(m & 511) * 2f64.powi((w >> 27) as i32 - 24))).collect())
     };
     let hell = |c: [f64; 3]| (c[0] + c[1] + c[2]) / 3.0;
     // Punkt (i, j) der Flaeche wie back_punkt: Lage knapp davor und Normale (Oberseite: u = x,
@@ -1485,9 +1485,9 @@ fn rueckwurf_szene(name: &str, fest_an: impl Fn(i32, i32, i32) -> bool, lichter:
     let punkt = |x: i32, y: i32, z: i32, d: u64, i: usize, j: usize| {
         let uv = [i as f64 / 3.0, j as f64 / 3.0].map(|v| v.clamp(0.01, 0.99));
         match d {
-            1 => ([x as f64 + uv[0], y as f64 + 1.01, z as f64 + uv[1]], [0.0, 1.0, 0.0]),
-            0 => ([x as f64 + uv[0], y as f64 - 0.01, z as f64 + uv[1]], [0.0, -1.0, 0.0]),
-            _ => ([x as f64 - 0.01, y as f64 + uv[1], z as f64 + uv[0]], [-1.0, 0.0, 0.0]),
+            1 => ([f64::from(x) + uv[0], f64::from(y) + 1.01, f64::from(z) + uv[1]], [0.0, 1.0, 0.0]),
+            0 => ([f64::from(x) + uv[0], f64::from(y) - 0.01, f64::from(z) + uv[1]], [0.0, -1.0, 0.0]),
+            _ => ([f64::from(x) - 0.01, f64::from(y) + uv[1], f64::from(z) + uv[0]], [-1.0, 0.0, 0.0]),
         }
     };
     if !proben.is_empty() {
@@ -1607,7 +1607,7 @@ fn lichtkarten_nach_wandern_des_rasters() {
             daylight: 0.0,
             view: glam::Mat4::IDENTITY,
             proj: glam::Mat4::perspective_rh(1.2, 4.0 / 3.0, 0.05, 1000.0),
-            eye: glam::DVec3::new(x as f64 + 0.5, 70.0, 8.5),
+            eye: glam::DVec3::new(f64::from(x) + 0.5, 70.0, 8.5),
             celestial: render::shader_path::celestial_light(0.0),
             shadows: true,
             atmosphere: true,
@@ -1908,7 +1908,7 @@ fn chunk_neu_laden_von(auge: [i32; 3]) {
         daylight: 0.0,
         view: glam::Mat4::IDENTITY,
         proj: glam::Mat4::perspective_rh(1.2, 4.0 / 3.0, 0.05, 1000.0),
-        eye: glam::DVec3::new(auge[0] as f64 + 0.5, auge[1] as f64, auge[2] as f64 + 0.5),
+        eye: glam::DVec3::new(f64::from(auge[0]) + 0.5, f64::from(auge[1]), f64::from(auge[2]) + 0.5),
         celestial: render::shader_path::celestial_light(0.0),
         shadows: true,
         atmosphere: true,
@@ -1940,7 +1940,7 @@ fn chunk_neu_laden_von(auge: [i32; 3]) {
         let v = sp.voxels_mut();
         let mut alle = std::collections::BTreeMap::new();
         for sx in 0..2u64 {
-            let seite = lesen(&device, &queue, v.lightmap_buffer(), 1024 + sx, 1)[0] as u64;
+            let seite = u64::from(lesen(&device, &queue, v.lightmap_buffer(), 1024 + sx, 1)[0]);
             if seite == 0 {
                 continue;
             }
@@ -2085,7 +2085,7 @@ fn chunk_neu_laden_von(auge: [i32; 3]) {
         let mut falsch = Vec::new();
         // Rueckwurf auf 1 % gleich: das Raster legt die Quellen je nach Bauweise (ganz oder
         // verschoben) in anderer Reihenfolge ab, die Summen runden dann im letzten Bit anders.
-        let farbe = |w: u32| [w & 511, w >> 9 & 511, w >> 18 & 511].map(|m| m as f64 * 2f64.powi((w >> 27) as i32 - 24));
+        let farbe = |w: u32| [w & 511, w >> 9 & 511, w >> 18 & 511].map(|m| f64::from(m) * 2f64.powi((w >> 27) as i32 - 24));
         let gleich = |v: &Vec<u32>, w: &Vec<u32>| {
             v.len() == w.len()
                 && (0..v.len()).all(|j| {
@@ -2102,9 +2102,9 @@ fn chunk_neu_laden_von(auge: [i32; 3]) {
                 Some(v) => {
                     let teile = [("Ebenen", 1, 65), ("Himmel", 65, 69), ("Raster", 69, 101), ("Rueckwurf", 101, 117), ("Fein", 117, usize::MAX)];
                     let welche: Vec<&str> = teile.iter().filter(|(_, a, b)| v.get(*a..(*b).min(v.len())) != w.get(*a..(*b).min(w.len()))).map(|t| t.0).collect();
-                    falsch.push(format!("{k:?} {} {welche:?}", if v[0] != w[0] { format!("Platz {} statt {}", v[0], w[0]) } else { String::new() }));
+                    falsch.push(format!("{k:?} {} {welche:?}", if v[0] == w[0] { String::new() } else { format!("Platz {} statt {}", v[0], w[0]) }));
                     if welche.contains(&"Rueckwurf") {
-                        let hell = |w: &[u32]| w[101..117].iter().map(|&w| ((w & 511) + (w >> 9 & 511) + (w >> 18 & 511)) as f64 * 2f64.powi((w >> 27) as i32 - 24) / 3.0).sum::<f64>() / 16.0;
+                        let hell = |w: &[u32]| w[101..117].iter().map(|&w| f64::from((w & 511) + (w >> 9 & 511) + (w >> 18 & 511)) * 2f64.powi((w >> 27) as i32 - 24) / 3.0).sum::<f64>() / 16.0;
                         falsch.push(format!("    Rueckwurf {:.3} statt {:.3}", hell(v), hell(w)));
                     }
                     let diff: Vec<String> = (1..65).filter(|&j| v[j] != w[j]).map(|j| format!("{}: {:08x} statt {:08x}", j - 1, v[j], w[j])).collect();

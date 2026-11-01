@@ -9,7 +9,7 @@ use world::{ChunkSection, World};
 fn column(solid_sections: usize) -> Vec<ChunkSection> {
     (0..24)
         .map(|i| {
-            let state = if i < solid_sections { 1 } else { 0 };
+            let state = u32::from(i < solid_sections);
             ChunkSection::from_states(vec![state; SECTION_VOLUME])
         })
         .collect()
@@ -234,7 +234,7 @@ fn weiche_beleuchtung_dunkelt_die_kante_am_nachbarblock() {
     assert!((helligkeit(&flach, 8.0, 8.0) - helligkeit(&flach, 2.0, 2.0)).abs() < 1e-6);
     // Halbe Staerke: genau die halbe Abdunklung.
     let halb = helligkeit(&mesh(0.5), 8.0, 8.0);
-    assert!((halb - (1.0 + an_der_kante) / 2.0).abs() < 1e-4, "halbe Staerke {halb}, voll {an_der_kante}");
+    assert!((halb - f32::midpoint(1.0, an_der_kante)).abs() < 1e-4, "halbe Staerke {halb}, voll {an_der_kante}");
 }
 
 // Weiche Beleuchtung an einer Gras-Stufe: die Oberseite eines Grasblocks direkt vor einer
@@ -438,7 +438,7 @@ fn schneetreppe_hat_gleiche_stufen() {
     for k in 1..7 {
         let (unten, dunkel, hell) = kante(k);
         assert!((unten - (1.0 + k as f32 / 8.0)).abs() < 1e-5, "Kante {k} beginnt bei {unten}");
-        assert!((dunkel - erste.1).abs() < 1e-4 && (hell - erste.2).abs() < 1e-4, "Kante {k}: {dunkel}/{hell}, erste {:?}", erste);
+        assert!((dunkel - erste.1).abs() < 1e-4 && (hell - erste.2).abs() < 1e-4, "Kante {k}: {dunkel}/{hell}, erste {erste:?}");
         assert!(dunkel < hell - 0.1, "Kante {k} unten {dunkel} nicht dunkler als oben {hell}");
     }
     // Oberseite der Schicht k (x = k-1..k): an x = k (vor der hoeheren Stufe) dunkler als an x = k-1.

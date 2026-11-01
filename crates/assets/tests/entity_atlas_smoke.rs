@@ -129,8 +129,8 @@ fn die_weisse_kachel_ueberlebt_den_vollen_atlas() {
     assert!(u1 > u0 && v1 > v0, "die weisse Kachel hat keinen Platz bekommen");
 
     // Mitte der Kachel im Bild nachschlagen.
-    let px = ((u0 + u1) / 2.0 * atlas.size as f32) as u32;
-    let py = ((v0 + v1) / 2.0 * atlas.size as f32) as u32;
+    let px = (f32::midpoint(u0, u1) * atlas.size as f32) as u32;
+    let py = (f32::midpoint(v0, v1) * atlas.size as f32) as u32;
     let i = ((py * atlas.size + px) * 4) as usize;
     assert_eq!(&atlas.rgba[i..i + 4], &[255, 255, 255, 255], "die Kachel ist nicht weiss -- eine Textur hat sie ueberschrieben");
 }

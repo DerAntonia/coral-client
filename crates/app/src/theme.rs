@@ -45,105 +45,105 @@ pub enum Slot {
 pub const SLOT_COUNT: usize = 28;
 
 impl Slot {
-    pub const ALL: [Slot; SLOT_COUNT] = [
-        Slot::BgApp,
-        Slot::BgPanel,
-        Slot::SurfaceSunken,
-        Slot::Surface1,
-        Slot::Surface2,
-        Slot::Surface3,
-        Slot::SurfacePressed,
-        Slot::Border1,
-        Slot::Border2,
-        Slot::BorderStrong,
-        Slot::Text1,
-        Slot::Text2,
-        Slot::Text3,
-        Slot::TextDisabled,
-        Slot::TextOnAccent,
-        Slot::Accent,
-        Slot::AccentHover,
-        Slot::AccentText,
-        Slot::AccentSurface,
-        Slot::AccentSurfaceHover,
-        Slot::Success,
-        Slot::Warning,
-        Slot::Danger,
-        Slot::DangerSurface,
-        Slot::Selection,
-        Slot::Accent2,
-        Slot::Accent2Hover,
-        Slot::Accent2Text,
+    pub const ALL: [Self; SLOT_COUNT] = [
+        Self::BgApp,
+        Self::BgPanel,
+        Self::SurfaceSunken,
+        Self::Surface1,
+        Self::Surface2,
+        Self::Surface3,
+        Self::SurfacePressed,
+        Self::Border1,
+        Self::Border2,
+        Self::BorderStrong,
+        Self::Text1,
+        Self::Text2,
+        Self::Text3,
+        Self::TextDisabled,
+        Self::TextOnAccent,
+        Self::Accent,
+        Self::AccentHover,
+        Self::AccentText,
+        Self::AccentSurface,
+        Self::AccentSurfaceHover,
+        Self::Success,
+        Self::Warning,
+        Self::Danger,
+        Self::DangerSurface,
+        Self::Selection,
+        Self::Accent2,
+        Self::Accent2Hover,
+        Self::Accent2Text,
     ];
 
-    pub fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self as usize
     }
 
     // Schluessel in der Einstellungsdatei (hinter `theme_`).
-    pub fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
-            Slot::BgApp => "bg_app",
-            Slot::BgPanel => "bg_panel",
-            Slot::SurfaceSunken => "surface_sunken",
-            Slot::Surface1 => "surface_1",
-            Slot::Surface2 => "surface_2",
-            Slot::Surface3 => "surface_3",
-            Slot::SurfacePressed => "surface_pressed",
-            Slot::Border1 => "border_1",
-            Slot::Border2 => "border_2",
-            Slot::BorderStrong => "border_strong",
-            Slot::Text1 => "text_1",
-            Slot::Text2 => "text_2",
-            Slot::Text3 => "text_3",
-            Slot::TextDisabled => "text_disabled",
-            Slot::TextOnAccent => "text_on_accent",
-            Slot::Accent => "accent",
-            Slot::AccentHover => "accent_hover",
-            Slot::AccentText => "accent_text",
-            Slot::AccentSurface => "accent_surface",
-            Slot::AccentSurfaceHover => "accent_surface_hover",
-            Slot::Success => "success",
-            Slot::Warning => "warning",
-            Slot::Danger => "danger",
-            Slot::DangerSurface => "danger_surface",
-            Slot::Selection => "selection",
-            Slot::Accent2 => "accent_2",
-            Slot::Accent2Hover => "accent_2_hover",
-            Slot::Accent2Text => "accent_2_text",
+            Self::BgApp => "bg_app",
+            Self::BgPanel => "bg_panel",
+            Self::SurfaceSunken => "surface_sunken",
+            Self::Surface1 => "surface_1",
+            Self::Surface2 => "surface_2",
+            Self::Surface3 => "surface_3",
+            Self::SurfacePressed => "surface_pressed",
+            Self::Border1 => "border_1",
+            Self::Border2 => "border_2",
+            Self::BorderStrong => "border_strong",
+            Self::Text1 => "text_1",
+            Self::Text2 => "text_2",
+            Self::Text3 => "text_3",
+            Self::TextDisabled => "text_disabled",
+            Self::TextOnAccent => "text_on_accent",
+            Self::Accent => "accent",
+            Self::AccentHover => "accent_hover",
+            Self::AccentText => "accent_text",
+            Self::AccentSurface => "accent_surface",
+            Self::AccentSurfaceHover => "accent_surface_hover",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Danger => "danger",
+            Self::DangerSurface => "danger_surface",
+            Self::Selection => "selection",
+            Self::Accent2 => "accent_2",
+            Self::Accent2Hover => "accent_2_hover",
+            Self::Accent2Text => "accent_2_text",
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Slot::BgApp => "Hintergrund",
-            Slot::BgPanel => "Panel",
-            Slot::SurfaceSunken => "Eingabefeld",
-            Slot::Surface1 => "Fläche 1",
-            Slot::Surface2 => "Fläche 2 (Knopf)",
-            Slot::Surface3 => "Fläche 3 (Hover)",
-            Slot::SurfacePressed => "Gedrückt",
-            Slot::Border1 => "Rahmen",
-            Slot::Border2 => "Rahmen Bedienelement",
-            Slot::BorderStrong => "Rahmen Hover",
-            Slot::Text1 => "Text",
-            Slot::Text2 => "Text sekundär",
-            Slot::Text3 => "Hinweistext",
-            Slot::TextDisabled => "Text deaktiviert",
-            Slot::TextOnAccent => "Text auf Akzent",
-            Slot::Accent => "Akzent",
-            Slot::AccentHover => "Akzent Hover",
-            Slot::AccentText => "Akzent-Text",
-            Slot::AccentSurface => "Ausgewählt",
-            Slot::AccentSurfaceHover => "Ausgewählt Hover",
-            Slot::Success => "Erfolg",
-            Slot::Warning => "Warnung",
-            Slot::Danger => "Gefahr",
-            Slot::DangerSurface => "Gefahr-Fläche",
-            Slot::Selection => "Markierung",
-            Slot::Accent2 => "Akzent 2",
-            Slot::Accent2Hover => "Akzent 2 Hover",
-            Slot::Accent2Text => "Akzent-2-Text",
+            Self::BgApp => "Hintergrund",
+            Self::BgPanel => "Panel",
+            Self::SurfaceSunken => "Eingabefeld",
+            Self::Surface1 => "Fläche 1",
+            Self::Surface2 => "Fläche 2 (Knopf)",
+            Self::Surface3 => "Fläche 3 (Hover)",
+            Self::SurfacePressed => "Gedrückt",
+            Self::Border1 => "Rahmen",
+            Self::Border2 => "Rahmen Bedienelement",
+            Self::BorderStrong => "Rahmen Hover",
+            Self::Text1 => "Text",
+            Self::Text2 => "Text sekundär",
+            Self::Text3 => "Hinweistext",
+            Self::TextDisabled => "Text deaktiviert",
+            Self::TextOnAccent => "Text auf Akzent",
+            Self::Accent => "Akzent",
+            Self::AccentHover => "Akzent Hover",
+            Self::AccentText => "Akzent-Text",
+            Self::AccentSurface => "Ausgewählt",
+            Self::AccentSurfaceHover => "Ausgewählt Hover",
+            Self::Success => "Erfolg",
+            Self::Warning => "Warnung",
+            Self::Danger => "Gefahr",
+            Self::DangerSurface => "Gefahr-Fläche",
+            Self::Selection => "Markierung",
+            Self::Accent2 => "Akzent 2",
+            Self::Accent2Hover => "Akzent 2 Hover",
+            Self::Accent2Text => "Akzent-2-Text",
         }
     }
 }
@@ -335,7 +335,7 @@ pub fn accent2_for(accent: u32) -> u32 {
     PRESETS.iter().find(|p| p.colors[Slot::Accent as usize] == accent).map_or(STANDARD[Slot::Accent2 as usize], |p| p.colors[Slot::Accent2 as usize])
 }
 
-pub fn default_colors() -> Colors {
+pub const fn default_colors() -> Colors {
     STANDARD
 }
 
@@ -375,7 +375,7 @@ pub fn get(slot: Slot) -> [f32; 4] {
     rgba(srgb(slot))
 }
 
-pub fn with_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
+pub const fn with_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
     c[3] = a;
     c
 }

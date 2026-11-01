@@ -39,9 +39,9 @@ impl ChunkBatchSizeCalculator {
             return;
         }
         let elapsed = self.start.elapsed().as_nanos() as f64;
-        let per_chunk = elapsed / batch_size as f64;
+        let per_chunk = elapsed / f64::from(batch_size);
         let clamped = per_chunk.clamp(self.average_nanos_per_chunk / 3.0, self.average_nanos_per_chunk * 3.0);
-        self.average_nanos_per_chunk = (self.average_nanos_per_chunk * self.sample_size as f64 + clamped) / (self.sample_size + 1) as f64;
+        self.average_nanos_per_chunk = (self.average_nanos_per_chunk * f64::from(self.sample_size) + clamped) / f64::from(self.sample_size + 1);
         self.sample_size = (self.sample_size + 1).min(49);
     }
 

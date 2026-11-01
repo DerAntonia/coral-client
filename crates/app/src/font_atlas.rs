@@ -62,33 +62,33 @@ pub enum FontKind {
 impl FontKind {
     // Die Reihenfolge ist der gespeicherte Index (settings.conf: font=, arrow_text_font=, ...)
     // -- neue Schriften nur hinten anhaengen.
-    pub const ALL: [FontKind; 6] = [FontKind::Minecraft, FontKind::DmSans, FontKind::Outfit, FontKind::Lexend, FontKind::LexendExa, FontKind::NotoSans];
+    pub const ALL: [Self; 6] = [Self::Minecraft, Self::DmSans, Self::Outfit, Self::Lexend, Self::LexendExa, Self::NotoSans];
 
     pub fn from_index(i: u8) -> Self {
-        Self::ALL.get(i as usize).copied().unwrap_or(FontKind::Minecraft)
+        Self::ALL.get(i as usize).copied().unwrap_or(Self::Minecraft)
     }
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            FontKind::Minecraft => "Minecraft",
-            FontKind::DmSans => "DM Sans",
-            FontKind::Outfit => "Outfit",
-            FontKind::Lexend => "Lexend",
-            FontKind::LexendExa => "Lexend Exa",
-            FontKind::NotoSans => "Noto Sans",
+            Self::Minecraft => "Minecraft",
+            Self::DmSans => "DM Sans",
+            Self::Outfit => "Outfit",
+            Self::Lexend => "Lexend",
+            Self::LexendExa => "Lexend Exa",
+            Self::NotoSans => "Noto Sans",
         }
     }
 
     // Die eingebettete TTF samt Einstellungen der variablen Achsen, None fuer die
     // Minecraft-Bitmapschrift. Alle freien Schriften (OFL, Lizenzen in assets/fonts).
-    fn ttf(self) -> Option<TtfSpec> {
+    const fn ttf(self) -> Option<TtfSpec> {
         Some(match self {
-            FontKind::Minecraft => return None,
-            FontKind::DmSans => TtfSpec { bytes: DM_SANS_TTF, weight: 400.0, optical_size: Some(14.0) },
-            FontKind::Outfit => TtfSpec { bytes: OUTFIT_TTF, weight: 400.0, optical_size: None },
-            FontKind::Lexend => TtfSpec { bytes: LEXEND_TTF, weight: 400.0, optical_size: None },
-            FontKind::LexendExa => TtfSpec { bytes: LEXEND_EXA_TTF, weight: 400.0, optical_size: None },
-            FontKind::NotoSans => NOTO_SANS,
+            Self::Minecraft => return None,
+            Self::DmSans => TtfSpec { bytes: DM_SANS_TTF, weight: 400.0, optical_size: Some(14.0) },
+            Self::Outfit => TtfSpec { bytes: OUTFIT_TTF, weight: 400.0, optical_size: None },
+            Self::Lexend => TtfSpec { bytes: LEXEND_TTF, weight: 400.0, optical_size: None },
+            Self::LexendExa => TtfSpec { bytes: LEXEND_EXA_TTF, weight: 400.0, optical_size: None },
+            Self::NotoSans => NOTO_SANS,
         })
     }
 }
@@ -96,11 +96,11 @@ impl FontKind {
 impl TtfSpec {
     // Die fette Fassung (s. FontAtlas::place_bold): bei variablen Schriften dieselbe Datei mit
     // Gewicht 700, Noto Sans ist statisch und hat eine eigene Datei.
-    fn bold(self) -> TtfSpec {
+    fn bold(self) -> Self {
         if self.bytes == NOTO_SANS.bytes {
             return NOTO_SANS_BOLD;
         }
-        TtfSpec { weight: 700.0, ..self }
+        Self { weight: 700.0, ..self }
     }
 }
 
@@ -124,14 +124,14 @@ const DM_SANS_ARROWS: TtfSpec = TtfSpec { bytes: DM_SANS_TTF, weight: 400.0, opt
 // Extended-A, Griechisch, Kyrillisch, Satzzeichen, Waehrungen, Pfeile, Kapitaelchen. Alles
 // andere wird wie bei Vanilla doppelt gezeichnet -- fuer jedes Zeichen der Schrift sprengte
 // Noto Sans die 8192 Pixel, die eine Textur hoch sein darf.
-fn has_bold(ch: char) -> bool {
+const fn has_bold(ch: char) -> bool {
     matches!(ch as u32, 0x20..=0x17F | 0x370..=0x3FF | 0x400..=0x45F | 0x2010..=0x205F | 0x20A0..=0x20CF | 0x2190..=0x2195) || is_small_capital(ch)
 }
 
 // Zeichen mit Subpixel-Fassungen (s. SUBPIXEL_STEPS): Latein bis Extended-A, Satzzeichen,
 // Kapitaelchen. Griechisch und Kyrillisch nicht -- mit ihnen passte Noto Sans nicht mehr in eine
 // Textur.
-fn has_subpixel(ch: char) -> bool {
+const fn has_subpixel(ch: char) -> bool {
     matches!(ch as u32, 0x20..=0x17F | 0x2010..=0x205F) || is_small_capital(ch)
 }
 
@@ -139,7 +139,7 @@ fn has_subpixel(ch: char) -> bool {
 // schreiben -- keine OpenType-Funktion, sondern Buchstaben aus dem IPA- und Lautschrift-
 // Block. Kaum eine Schrift hat sie; fehlen sie, kommen sie aus Noto Sans statt aus der
 // Minecraft-Pixelschrift und wirken blockig.
-fn is_small_capital(ch: char) -> bool {
+const fn is_small_capital(ch: char) -> bool {
     matches!(
         ch as u32,
         0x01EB | 0x0262 | 0x026A | 0x0274 | 0x0276 | 0x0280 | 0x0281 | 0x028F | 0x0299 | 0x029B | 0x029C | 0x029F
@@ -153,6 +153,39 @@ fn is_small_capital(ch: char) -> bool {
 // nur fuer die Darstellung, der Text selbst bleibt. Manche nehmen statt s das kyrillische ѕ
 // (DonutSMP: "ѕᴜʀᴠɪᴠᴀʟ"), das einer Vektorschrift ohne Kyrillisch genauso fehlt und dann blockig
 // aus der Pixelschrift kaeme -- es wird ebenso zu ꜱ.
+// Schrift-Tab, Stil: ohne Grossbuchstaben wird aller Text klein gezeichnet (und gemessen).
+static NO_CAPITALS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_capitals(an: bool) {
+    NO_CAPITALS.store(!an, std::sync::atomic::Ordering::Relaxed);
+}
+
+// Zeichen fuer Zeichen klein, aber nur, wo daraus wieder genau EIN Zeichen wird (aus I mit Punkt
+// wuerden zwei): die Zeichenpositionen haengen an der Anzahl.
+fn without_capitals(text: &str) -> std::borrow::Cow<'_, str> {
+    if !NO_CAPITALS.load(std::sync::atomic::Ordering::Relaxed) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    lowercase_same_length(text)
+}
+
+fn lowercase_same_length(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(char::is_uppercase) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(
+        text.chars()
+            .map(|c| {
+                let mut klein = c.to_lowercase();
+                match (klein.next(), klein.next()) {
+                    (Some(k), None) => k,
+                    _ => c,
+                }
+            })
+            .collect(),
+    )
+}
+
 pub(crate) fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
     let ist_s = |c: char| c == 's' || c == '\u{0455}';
     if !text.contains(ist_s) || !text.chars().any(is_small_capital) {
@@ -264,7 +297,7 @@ pub struct PendingFont {
 }
 
 impl PendingFont {
-    pub fn kind(&self) -> FontKind {
+    pub const fn kind(&self) -> FontKind {
         self.kind
     }
 
@@ -365,20 +398,20 @@ impl FontAtlas {
         Ok(())
     }
 
-    pub fn kind(&self) -> FontKind {
+    pub const fn kind(&self) -> FontKind {
         self.kind
     }
 
     // Zeilenhoehe in Font-Pixeln -- mit dem ganzzahligen Faktor multiplizieren.
-    pub fn cell_height_px(&self) -> f32 {
+    pub const fn cell_height_px(&self) -> f32 {
         self.cell_height_px
     }
 
-    pub fn ascent_px(&self) -> f32 {
+    pub const fn ascent_px(&self) -> f32 {
         self.ascent_px
     }
 
-    pub fn descent_px(&self) -> f32 {
+    pub const fn descent_px(&self) -> f32 {
         self.descent_px
     }
 
@@ -387,7 +420,7 @@ impl FontAtlas {
     // Schreibcursor aus, sonst steht er unter den Buchstaben.
     pub fn cap_top_px(&self) -> f32 {
         let top = *DM_SANS_QUARTERS.end();
-        self.placed.get(&(top, 'A')).map_or(0.0, |p| self.ascent_px + p.offset[1] / (top as f32 / 4.0))
+        self.placed.get(&(top, 'A')).map_or(0.0, |p| self.ascent_px + p.offset[1] / (f32::from(top) / 4.0))
     }
 
     // Nur fuer Vorschub/Breite (Font-Pixel) -- gezeichnet wird ueber place().
@@ -449,11 +482,16 @@ impl FontAtlas {
 
     // Text mit ꜱ statt s in Kapitaelchen-Woertern (s. small_caps_s) -- nur, wenn die Schrift ꜱ
     // auch hat, sonst fiele das Zeichen ganz weg.
+    // Ohne Grossbuchstaben (Stil, s. set_capitals) vorher alles klein.
     pub fn display_text<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        let text = without_capitals(text);
         if !self.has_small_capital_s() {
-            return std::borrow::Cow::Borrowed(text);
+            return text;
         }
-        small_caps_s(text)
+        match text {
+            std::borrow::Cow::Borrowed(t) => small_caps_s(t),
+            std::borrow::Cow::Owned(t) => std::borrow::Cow::Owned(small_caps_s(&t).into_owned()),
+        }
     }
 
     // Startpunkt eines genau gerasterten Zeichens (p.snap) auf dem Pixelraster: die
@@ -533,7 +571,7 @@ impl FontAtlas {
 // Kern von FontAtlas::snap_x, auf einer Karte der gerasterten Fassungen.
 fn snap_in(karte: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32, p: PlacedGlyph, x: f32) -> (PlacedGlyph, f32) {
     let ganz = x.floor();
-    let stufe = ((x - ganz) * SUBPIXEL_STEPS as f32).round() as u8;
+    let stufe = ((x - ganz) * f32::from(SUBPIXEL_STEPS)).round() as u8;
     if stufe == SUBPIXEL_STEPS {
         return (p, ganz + 1.0);
     }
@@ -573,12 +611,12 @@ fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, posi
     if zeichen.is_empty() {
         return 0.0;
     }
-    let fassung = |anteil: f32| ((anteil * SUBPIXEL_STEPS as f32).round() as usize) % steps;
+    let fassung = |anteil: f32| ((anteil * f32::from(SUBPIXEL_STEPS)).round() as usize) % steps;
     // Wechsel: bei u + f = (k + 1/2) / 4 springt das Zeichen eine Fassung weiter.
     let mut wechsel: Vec<(f32, usize)> = zeichen
         .iter()
         .enumerate()
-        .flat_map(|(i, &(f, _))| (0..steps).map(move |k| (((k as f32 + 0.5) / SUBPIXEL_STEPS as f32 - f).rem_euclid(1.0), i)))
+        .flat_map(|(i, &(f, _))| (0..steps).map(move |k| (((k as f32 + 0.5) / f32::from(SUBPIXEL_STEPS) - f).rem_euclid(1.0), i)))
         .collect();
     wechsel.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Das erste Stueck [0, erster Wechsel) direkt ausrechnen, dann weiterzaehlen.
@@ -592,7 +630,7 @@ fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, posi
         summe += zeichen[i].1[stufen[i]];
         let bis = wechsel.get(n + 1).map_or(1.0 + wechsel[0].0, |w| w.0);
         if bis - ab > 1e-4 && summe < beste_summe - 1e-3 {
-            (beste, beste_summe) = ((ab + bis) / 2.0, summe);
+            (beste, beste_summe) = (f32::midpoint(ab, bis), summe);
         }
     }
     // Von der jetzigen Lage zur besten, auf kuerzestem Weg.
@@ -618,9 +656,9 @@ fn pick_placed(placed: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32) 
         }
     }
     let (lo, hi) = (*DM_SANS_QUARTERS.start(), *DM_SANS_QUARTERS.end());
-    let first = (quarters.ceil().max(lo as f32) as u8).min(hi);
+    let first = (quarters.ceil().max(f32::from(lo)) as u8).min(hi);
     let (q, p) = (first..=hi).chain((lo..first).rev()).find_map(|q| placed.get(&(q, ch)).map(|p| (q, p)))?;
-    let k = quarters / q as f32;
+    let k = quarters / f32::from(q);
     Some(PlacedGlyph { offset: [p.offset[0] * k, p.offset[1] * k], size: [p.size[0] * k, p.size[1] * k], snap: false, ..*p })
 }
 
@@ -704,45 +742,42 @@ impl PackGlyphCache {
         if w == 0 || h == 0 || w + 2 > SHEET_SIZE || h + 2 > SHEET_SIZE {
             return None;
         }
-        let mut sheet = self.slots.lock().unwrap_or_else(|e| e.into_inner());
-        let pos = match sheet.slots.get(&(page, cx, cy)) {
-            Some(&p) => p,
-            None => {
-                if sheet.x + w + 1 > SHEET_SIZE {
-                    sheet.x = 0;
-                    sheet.y += sheet.row_h + 1;
-                    sheet.row_h = 0;
-                }
-                if sheet.y + h + 1 > SHEET_SIZE {
-                    eprintln!("[font] Pack-Glyphenblatt voll -- wird neu befuellt");
-                    *sheet = Sheet::default();
-                }
-                let p = [sheet.x, sheet.y];
-                sheet.x += w + 1;
-                sheet.row_h = sheet.row_h.max(h);
-                sheet.slots.insert((page, cx, cy), p);
-                let mut pixel = Vec::with_capacity((w * h * 4) as usize);
-                if page == UNIHEX_PAGE {
-                    // Weisse Glyphe, Form im Alpha -- die Textfarbe kommt im Shader dazu.
-                    let g = char::from_u32(cx).and_then(|c| self.fonts.unihex.as_ref()?.glyphs.get(&c).copied())?;
-                    for a in g.pixels() {
-                        pixel.extend_from_slice(&[255, 255, 255, a]);
-                    }
-                } else {
-                    let tex = &self.fonts.pages[page as usize];
-                    for row in 0..h {
-                        let start = (((cy + row) * tex.width + cx) * 4) as usize;
-                        pixel.extend_from_slice(&tex.rgba[start..start + (w * 4) as usize]);
-                    }
-                }
-                self.queue.write_texture(
-                    wgpu::ImageCopyTexture { texture: &self.sheet, mip_level: 0, origin: wgpu::Origin3d { x: p[0], y: p[1], z: 0 }, aspect: wgpu::TextureAspect::All },
-                    &pixel,
-                    wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                );
-                p
+        let mut sheet = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pos = if let Some(&p) = sheet.slots.get(&(page, cx, cy)) { p } else {
+            if sheet.x + w + 1 > SHEET_SIZE {
+                sheet.x = 0;
+                sheet.y += sheet.row_h + 1;
+                sheet.row_h = 0;
             }
+            if sheet.y + h + 1 > SHEET_SIZE {
+                eprintln!("[font] Pack-Glyphenblatt voll -- wird neu befuellt");
+                *sheet = Sheet::default();
+            }
+            let p = [sheet.x, sheet.y];
+            sheet.x += w + 1;
+            sheet.row_h = sheet.row_h.max(h);
+            sheet.slots.insert((page, cx, cy), p);
+            let mut pixel = Vec::with_capacity((w * h * 4) as usize);
+            if page == UNIHEX_PAGE {
+                // Weisse Glyphe, Form im Alpha -- die Textfarbe kommt im Shader dazu.
+                let g = char::from_u32(cx).and_then(|c| self.fonts.unihex.as_ref()?.glyphs.get(&c).copied())?;
+                for a in g.pixels() {
+                    pixel.extend_from_slice(&[255, 255, 255, a]);
+                }
+            } else {
+                let tex = &self.fonts.pages[page as usize];
+                for row in 0..h {
+                    let start = (((cy + row) * tex.width + cx) * 4) as usize;
+                    pixel.extend_from_slice(&tex.rgba[start..start + (w * 4) as usize]);
+                }
+            }
+            self.queue.write_texture(
+                wgpu::ImageCopyTexture { texture: &self.sheet, mip_level: 0, origin: wgpu::Origin3d { x: p[0], y: p[1], z: 0 }, aspect: wgpu::TextureAspect::All },
+                &pixel,
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            p
         };
         let s = SHEET_SIZE as f32;
         Some(([pos[0] as f32 / s, pos[1] as f32 / s], [(pos[0] + w) as f32 / s, (pos[1] + h) as f32 / s]))
@@ -876,7 +911,7 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
     let umriss = |c: char| font.outline(font.glyph_id(c)).map(|o| o.bounds);
     let (unendlich, mitte_acht) = match (umriss('8'), umriss('\u{221E}')) {
         (Some(a), Some(u)) if u.width() > 0.0 && u.height().abs() > 0.0 => {
-            ((a.height().abs() / u.width(), a.width() / u.height().abs()), (a.min.y + a.max.y) / 2.0)
+            ((a.height().abs() / u.width(), a.width() / u.height().abs()), f32::midpoint(a.min.y, a.max.y))
         }
         _ => ((1.0, 1.0), 0.0),
     };
@@ -907,14 +942,14 @@ fn raster_ttf(spec: TtfSpec, bold: bool, nehmen: &dyn Fn(char) -> bool, glyphs: 
     // stattdessen das Einrasten der Breite dort, wo es zaehlt (s. App::latched_width).
 
     for scale in DM_SANS_QUARTERS {
-        let f = scale as f32 / 4.0;
+        let f = f32::from(scale) / 4.0;
         let ps = px_scale(em_font_px * f);
         // Mitte der 8 in Pixeln (y nach unten) -- dort sitzt das ∞.
         let mitte = -mitte_acht * em_font_px * f / units_per_em;
         let links_px = font.as_scaled(ps).h_scale_factor();
         for (&(id, ch, links), stufe) in ids.iter().flat_map(|e| (0..SUBPIXEL_STEPS).filter(move |&s| s == 0 || has_subpixel(e.1)).map(move |s| (e, s))) {
             let k = groesse(ch);
-            let x = stufe as f32 / SUBPIXEL_STEPS as f32 - links * links_px;
+            let x = f32::from(stufe) / f32::from(SUBPIXEL_STEPS) - links * links_px;
             let glyph = id.with_scale_and_position(PxScale { x: ps.x * k.0, y: ps.y * k.1 }, ab_glyph::point(x, 0.0));
             let Some(outline) = font.outline_glyph(glyph) else { continue };
             let mut b = outline.px_bounds();
@@ -974,7 +1009,7 @@ fn build_ttf(minecraft: &AtlasPixels, spec: TtfSpec) -> AtlasPixels {
         }
         let src = &minecraft.levels[0];
         for scale in DM_SANS_QUARTERS.filter(|q| q % 4 == 0) {
-            let f = scale as f32 / 4.0;
+            let f = f32::from(scale) / 4.0;
             let (w, h) = ((g.size_px[0] * f).round().max(1.0) as u32, (g.size_px[1] * f).round().max(1.0) as u32);
             let mut coverage = vec![0u8; (w * h) as usize];
             for y in 0..h {
@@ -1033,7 +1068,7 @@ fn build_ttf(minecraft: &AtlasPixels, spec: TtfSpec) -> AtlasPixels {
                 size: [b.w as f32, b.h as f32],
                 snap: true,
                 pack: false,
-                unschaerfe: b.coverage.iter().map(|&c| c as f32 * (255 - c) as f32).sum::<f32>() / (255.0 * 255.0),
+                unschaerfe: b.coverage.iter().map(|&c| f32::from(c) * f32::from(255 - c)).sum::<f32>() / (255.0 * 255.0),
             },
         );
     }
@@ -1044,7 +1079,7 @@ fn build_ttf(minecraft: &AtlasPixels, spec: TtfSpec) -> AtlasPixels {
     let descent_px = ['g', 'j', 'p', 'q', 'y']
         .iter()
         .filter_map(|c| placed.get(&(top, *c)))
-        .map(|p| (p.offset[1] + p.size[1]) / (top as f32 / 4.0))
+        .map(|p| (p.offset[1] + p.size[1]) / (f32::from(top) / 4.0))
         .fold(minecraft.descent_px, f32::max);
 
     AtlasPixels {
@@ -1106,23 +1141,20 @@ fn make_bind_group(
 ) -> wgpu::BindGroup {
     // Ohne Pack ein 1x1-Platzhalter -- die Bindung muss belegt sein.
     let platzhalter;
-    let pack_view = match pack {
-        Some(p) => &p.view,
-        None => {
-            platzhalter = device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("pack glyph placeholder"),
-                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            &platzhalter
-        }
+    let pack_view = if let Some(p) = pack { &p.view } else {
+        platzhalter = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("pack glyph placeholder"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        &platzhalter
     };
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("font atlas bind group"),
@@ -1193,6 +1225,13 @@ mod tests {
         // Normale Woerter daneben bleiben.
         assert_eq!(small_caps_s("ᴘᴠᴘ servers"), "ᴘᴠᴘ servers");
         assert_eq!(small_caps_s("sss"), "sss");
+    }
+
+    // Ohne Grossbuchstaben alles klein, gleich viele Zeichen (Positionen haengen daran).
+    #[test]
+    fn ohne_grossbuchstaben() {
+        assert_eq!(lowercase_same_length("Hallo WELT Äß"), "hallo welt äß");
+        assert_eq!(lowercase_same_length("\u{130}x").chars().count(), 2);
         // Kyrillisches ѕ (U+0455) ebenso, aber nur in Kapitaelchen-Woertern.
         assert_eq!(small_caps_s("\u{0455}ᴜʀᴠɪᴠᴀʟ"), "ꜱᴜʀᴠɪᴠᴀʟ");
         assert_eq!(small_caps_s("ᴘᴠᴘ \u{0455}ad"), "ᴘᴠᴘ \u{0455}ad");
@@ -1232,7 +1271,7 @@ mod tests {
             let fett = atlas.placed_bold[&(8, 'H')];
             let tinte = |p: &PlacedGlyph| -> u32 {
                 let (x0, y0) = ((p.uv_min[0] * atlas.width as f32) as u32, (p.uv_min[1] * atlas.height as f32) as u32);
-                (y0..y0 + p.size[1] as u32).flat_map(|y| (x0..x0 + p.size[0] as u32).map(move |x| (x, y))).map(|(x, y)| atlas.levels[0][(y * atlas.width + x) as usize] as u32).sum()
+                (y0..y0 + p.size[1] as u32).flat_map(|y| (x0..x0 + p.size[0] as u32).map(move |x| (x, y))).map(|(x, y)| u32::from(atlas.levels[0][(y * atlas.width + x) as usize])).sum()
             };
             assert!(tinte(&fett) as f32 > tinte(&h) as f32 * 1.3, "{}: fettes H nicht dicker", kind.label());
             assert!((fett.size[1] - h.size[1]).abs() <= 1.5, "{}: fettes H ist {} hoch", kind.label(), fett.size[1]);
@@ -1270,7 +1309,7 @@ mod tests {
         let atlas = build_ttf(&leer, FontKind::DmSans.ttf().unwrap());
         for scale in DM_SANS_QUARTERS {
             let h = atlas.placed[&(scale, 'H')];
-            let f = scale as f32 / 4.0;
+            let f = f32::from(scale) / 4.0;
             // Versalhoehe ~7 Font-Pixel je Faktor, auf der Grundlinie aufsitzend (die
             // Kantenglaettung darf einen Pixel ueberstehen).
             assert!((h.size[1] - 7.0 * f).abs() <= 1.5, "H bei Faktor {scale} ist {} hoch", h.size[1]);

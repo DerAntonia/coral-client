@@ -66,7 +66,8 @@ pub struct BlockShapes {
 }
 
 impl BlockShapes {
-    pub fn new(per_state: Vec<Option<Vec<ShapeBox>>>) -> Self {
+    #[must_use] 
+    pub const fn new(per_state: Vec<Option<Vec<ShapeBox>>>) -> Self {
         Self { per_state, ao: Vec::new(), model_quads: Vec::new(), view_blockers: std::sync::OnceLock::new() }
     }
 
@@ -84,17 +85,17 @@ impl BlockShapes {
     }
 
     pub fn model_quads(&self, state: u32) -> Option<&[ModelFace]> {
-        self.model_quads.get(state as usize).and_then(|q| q.as_ref()).and_then(|v| v.first()).map(|v| v.as_slice())
+        self.model_quads.get(state as usize).and_then(|q| q.as_ref()).and_then(|v| v.first()).map(std::vec::Vec::as_slice)
     }
 
     // Die Fassung fuer den Block an (x, y, z): fest je Position, zwischen Nachbarn gestreut.
     pub fn model_quads_at(&self, state: u32, x: i32, y: i32, z: i32) -> Option<&[ModelFace]> {
         let variants = self.model_quads.get(state as usize)?.as_ref()?;
         if variants.len() <= 1 {
-            return variants.first().map(|v| v.as_slice());
+            return variants.first().map(std::vec::Vec::as_slice);
         }
         // Vanillas MathHelper.hashCode(x, y, z), damit benachbarte Bloecke nicht gleich ausfallen.
-        let mut h = (x as i64).wrapping_mul(3129871) ^ (z as i64).wrapping_mul(116129781) ^ (y as i64);
+        let mut h = i64::from(x).wrapping_mul(3129871) ^ i64::from(z).wrapping_mul(116129781) ^ i64::from(y);
         h = h.wrapping_mul(h).wrapping_mul(42317861).wrapping_add(h.wrapping_mul(11));
         let index = ((h >> 16) as u64 % variants.len() as u64) as usize;
         Some(variants[index].as_slice())
@@ -160,7 +161,8 @@ impl BlockShapes {
 
     // Immer Vollwuerfel fuer jeden State -- fuer Tests und Aufrufer ohne echte Formdaten
     // (das bisherige Verhalten, bevor es diese Tabelle gab).
-    pub fn all_full_cubes() -> Self {
+    #[must_use] 
+    pub const fn all_full_cubes() -> Self {
         Self { per_state: Vec::new(), ao: Vec::new(), model_quads: Vec::new(), view_blockers: std::sync::OnceLock::new() }
     }
 

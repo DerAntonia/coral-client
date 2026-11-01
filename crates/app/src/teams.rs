@@ -12,30 +12,30 @@ pub enum Side {
 }
 
 impl Side {
-    pub const ALL: [Side; 2] = [Side::Friendly, Side::Enemy];
+    pub const ALL: [Self; 2] = [Self::Friendly, Self::Enemy];
 
-    pub fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self as usize
     }
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            Side::Friendly => "Verbündete",
-            Side::Enemy => "Gegner",
+            Self::Friendly => "Verbündete",
+            Self::Enemy => "Gegner",
         }
     }
 
-    pub fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
-            Side::Friendly => "teams_friendly",
-            Side::Enemy => "teams_enemy",
+            Self::Friendly => "teams_friendly",
+            Self::Enemy => "teams_enemy",
         }
     }
 
-    pub fn default_style(self) -> TeamHitbox {
+    pub const fn default_style(self) -> TeamHitbox {
         let hue = match self {
-            Side::Friendly => 120,
-            Side::Enemy => 0,
+            Self::Friendly => 120,
+            Self::Enemy => 0,
         };
         TeamHitbox { on: false, nametag: true, hue, saturation: 100, value: 100, opacity: 100, density_px: 2, dotted: false }
     }
@@ -64,12 +64,12 @@ impl TeamHitbox {
     }
 
     // Unlesbares laesst die Vorgabe stehen.
-    pub fn decode(text: &str, default: TeamHitbox) -> TeamHitbox {
+    pub fn decode(text: &str, default: Self) -> Self {
         let teile: Vec<&str> = text.split(',').map(str::trim).collect();
         let [on, nametag, h, s, v, a, d, dotted] = teile[..] else { return default };
         let zahl = |t: &str, min: u32, max: u32| t.parse::<u32>().ok().map(|n| n.clamp(min, max));
         match (zahl(h, 0, 359), zahl(s, 0, 100), zahl(v, 0, 100), zahl(a, 0, u32::MAX), zahl(d, 0, u32::MAX)) {
-            (Some(hue), Some(saturation), Some(value), Some(opacity), Some(density_px)) => TeamHitbox {
+            (Some(hue), Some(saturation), Some(value), Some(opacity), Some(density_px)) => Self {
                 on: on == "true",
                 nametag: nametag == "true",
                 hue,
@@ -99,18 +99,18 @@ pub struct Matchers {
 
 impl Default for Matchers {
     fn default() -> Self {
-        Matchers { scoreboard: true, name_color: true, prefix: false, armor: true }
+        Self { scoreboard: true, name_color: true, prefix: false, armor: true }
     }
 }
 
 impl Matchers {
     pub const LABELS: [&'static str; 4] = ["Scoreboard-Team", "Namensfarbe", "Prefix", "Rüstungsfarbe"];
 
-    pub fn get(&self, i: usize) -> bool {
+    pub const fn get(&self, i: usize) -> bool {
         [self.scoreboard, self.name_color, self.prefix, self.armor][i]
     }
 
-    pub fn toggle(&mut self, i: usize) {
+    pub const fn toggle(&mut self, i: usize) {
         match i {
             0 => self.scoreboard = !self.scoreboard,
             1 => self.name_color = !self.name_color,
@@ -123,11 +123,11 @@ impl Matchers {
         format!("{},{},{},{}", self.scoreboard, self.name_color, self.prefix, self.armor)
     }
 
-    pub fn decode(text: &str) -> Matchers {
+    pub fn decode(text: &str) -> Self {
         let teile: Vec<bool> = text.split(',').map(|t| t.trim() == "true").collect();
         match teile[..] {
-            [scoreboard, name_color, prefix, armor] => Matchers { scoreboard, name_color, prefix, armor },
-            _ => Matchers::default(),
+            [scoreboard, name_color, prefix, armor] => Self { scoreboard, name_color, prefix, armor },
+            _ => Self::default(),
         }
     }
 }
