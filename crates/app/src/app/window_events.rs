@@ -471,9 +471,7 @@ impl App {
         if button != MouseButton::Left {
             return;
         }
-        if self.mouse_left_button(state) {
-            return;
-        }
+        self.mouse_left_button(state);
     }
 
     // Klicks in Dialogen, Popups, Kontextmenues und Auswahllisten. true = verbraucht.
@@ -1015,9 +1013,7 @@ impl App {
 
         // Eingabefeld (Token/Client-ID) hat Vorrang vor der Adresse, solange es offen
         // ist: Text, Einfuegen (Strg+V) und Enter (uebernehmen) gehen dorthin.
-        if self.key_in_menu_fields(&key_event) {
-            return;
-        }
+        self.key_in_menu_fields(&key_event);
     }
 
     // Tasten, waehrend ein Regler- oder Stufenwert getippt wird. true = verbraucht.

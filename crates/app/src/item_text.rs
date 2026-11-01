@@ -254,7 +254,7 @@ pub(crate) fn eating_crumbs_due(dauer: u32, ticks: u32) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) mod kruemel_tests {
+mod kruemel_tests {
     // Brot (32 Ticks): die ersten sieben Ticks nichts, dann alle vier Ticks -- und nach Ablauf
     // der Dauer weiter im selben Takt.
     #[test]

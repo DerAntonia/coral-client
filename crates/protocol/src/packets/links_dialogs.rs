@@ -133,7 +133,7 @@ pub fn config_outgoing_payload(play_payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-pub(crate) mod dialog_packet_tests {
+mod dialog_packet_tests {
     use super::*;
 
     #[test]

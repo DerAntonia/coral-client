@@ -117,7 +117,7 @@ pub fn cookie_response_payload(packet_id: i32, key: &str, value: Option<&[u8]>) 
 }
 
 #[cfg(test)]
-pub(crate) mod cookie_tests {
+mod cookie_tests {
     use super::*;
 
     #[test]
@@ -273,7 +273,7 @@ pub fn config_resource_pack_status(play_payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-pub(crate) mod resource_pack_tests {
+mod resource_pack_tests {
     use super::*;
 
     #[test]

@@ -403,7 +403,7 @@ pub fn read_world_time(payload: &[u8]) -> Result<(i64, i64, bool), ReadError> {
 }
 
 #[cfg(test)]
-pub(crate) mod world_time_tests {
+mod world_time_tests {
     use super::*;
 
     #[test]
@@ -493,7 +493,7 @@ pub fn read_border_update(payload: &[u8]) -> Option<Result<BorderUpdate, ReadErr
 }
 
 #[cfg(test)]
-pub(crate) mod border_tests {
+mod border_tests {
     use super::*;
 
     #[test]
@@ -626,7 +626,7 @@ pub fn read_remove_mob_effect(payload: &[u8]) -> Result<(i32, i32), ReadError> {
 }
 
 #[cfg(test)]
-pub(crate) mod mob_effect_tests {
+mod mob_effect_tests {
     use super::*;
 
     #[test]

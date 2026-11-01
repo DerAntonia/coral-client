@@ -137,8 +137,47 @@ pub fn parse_player_info_update(bytes: &[u8]) -> Option<Vec<PlayerInfoEntry>> {
     Some(out)
 }
 
+// EntityStatusS2CPacket ("Entity Event"): ein Byte-Ereignis fuer ein Entity. Vanilla schickt
+// darueber Dinge, die keinen eigenen Pakettyp verdienen -- Schaden-Blitzen, Explosionen,
+// Zaehmen, und den Fall, um den es hier geht: ein Totem hat gepoppt.
+//
+// Die ID (0x22 = 34) stammt aus der S2C-Registrierungsreihenfolge in PlayStateFactories,
+// gegengeprueft an CONTAINER_SET_SLOT (Position 20 = 0x14) und SYSTEM_CHAT (119 = 0x77) --
+// beides Pakete, die dieser Client nachweislich richtig empfaengt.
+pub const CB_PLAY_ENTITY_EVENT: i32 = 0x22;
+
+// EntityStatuses.USE_TOTEM_OF_UNDYING. Der Server schickt das an alle Spieler, die das
+// Entity sehen -- also auch an einen selbst (LivingEntity.tryUseDeathProtector ruft
+// sendEntityStatus(this, 35), nachdem das Totem verbraucht ist).
+//
+// WICHTIG: der Status sagt NICHT, aus welcher Hand das Totem kam. Das Paket besteht nur aus
+// EntityId und Status. Welche Hand es war, ist aber trotzdem eindeutig bestimmbar, s.
+// app::modules::TotemTracker.
+pub const ENTITY_STATUS_USE_TOTEM: i8 = 35;
+
+// EntityAnimationS2CPacket ("Animate"): ein Entity hat mit der Hand geschlagen, ist aufgewacht
+// oder hat einen Kritischen gelandet.
+//
+// DIE einzige Quelle fuer den Armschwung fremder Spieler. Vanilla rechnet ihn NICHT aus der
+// Bewegung aus (anders als das Schrittschwingen) -- ohne dieses Paket steht der Arm eines
+// Gegners im Nahkampf vollkommen still, egal wie schnell er klickt.
+//
+// Die ID 0x02 ist die dritte Position der S2C-Registrierungsreihenfolge in PlayStateFactories
+// (0 = BundleDelimiter, 1 = EntitySpawn, 2 = EntityAnimation, 3 = Statistics, 4 =
+// PlayerActionResponse). Position 4 ist unser bereits verifiziertes BLOCK_CHANGED_ACK = 0x04
+// und Position 8 das ebenfalls verifizierte BLOCK_UPDATE = 0x08 -- die Zaehlung sitzt also.
+pub const CB_PLAY_ANIMATE: i32 = 0x02;
+
+// Die Animationsarten aus EntityAnimationS2CPacket. Die 1 fehlt in Vanilla ebenfalls (frueher
+// "Schaden genommen", heute ein eigenes Paket) -- die Luecke ist keine Zaehlpanne.
+pub const ANIMATION_SWING_MAIN_HAND: u8 = 0;
+pub const ANIMATION_WAKE_UP: u8 = 2;
+pub const ANIMATION_SWING_OFF_HAND: u8 = 3;
+pub const ANIMATION_CRIT: u8 = 4;
+pub const ANIMATION_ENCHANTED_HIT: u8 = 5;
+
 #[cfg(test)]
-pub(crate) mod player_info_tests {
+mod player_info_tests {
     use super::*;
 
     fn write_string(out: &mut Vec<u8>, text: &str) {
@@ -366,42 +405,3 @@ pub(crate) mod player_info_tests {
         assert!(parse_player_info_update(&bytes).is_none());
     }
 }
-
-// EntityStatusS2CPacket ("Entity Event"): ein Byte-Ereignis fuer ein Entity. Vanilla schickt
-// darueber Dinge, die keinen eigenen Pakettyp verdienen -- Schaden-Blitzen, Explosionen,
-// Zaehmen, und den Fall, um den es hier geht: ein Totem hat gepoppt.
-//
-// Die ID (0x22 = 34) stammt aus der S2C-Registrierungsreihenfolge in PlayStateFactories,
-// gegengeprueft an CONTAINER_SET_SLOT (Position 20 = 0x14) und SYSTEM_CHAT (119 = 0x77) --
-// beides Pakete, die dieser Client nachweislich richtig empfaengt.
-pub const CB_PLAY_ENTITY_EVENT: i32 = 0x22;
-
-// EntityStatuses.USE_TOTEM_OF_UNDYING. Der Server schickt das an alle Spieler, die das
-// Entity sehen -- also auch an einen selbst (LivingEntity.tryUseDeathProtector ruft
-// sendEntityStatus(this, 35), nachdem das Totem verbraucht ist).
-//
-// WICHTIG: der Status sagt NICHT, aus welcher Hand das Totem kam. Das Paket besteht nur aus
-// EntityId und Status. Welche Hand es war, ist aber trotzdem eindeutig bestimmbar, s.
-// app::modules::TotemTracker.
-pub const ENTITY_STATUS_USE_TOTEM: i8 = 35;
-
-// EntityAnimationS2CPacket ("Animate"): ein Entity hat mit der Hand geschlagen, ist aufgewacht
-// oder hat einen Kritischen gelandet.
-//
-// DIE einzige Quelle fuer den Armschwung fremder Spieler. Vanilla rechnet ihn NICHT aus der
-// Bewegung aus (anders als das Schrittschwingen) -- ohne dieses Paket steht der Arm eines
-// Gegners im Nahkampf vollkommen still, egal wie schnell er klickt.
-//
-// Die ID 0x02 ist die dritte Position der S2C-Registrierungsreihenfolge in PlayStateFactories
-// (0 = BundleDelimiter, 1 = EntitySpawn, 2 = EntityAnimation, 3 = Statistics, 4 =
-// PlayerActionResponse). Position 4 ist unser bereits verifiziertes BLOCK_CHANGED_ACK = 0x04
-// und Position 8 das ebenfalls verifizierte BLOCK_UPDATE = 0x08 -- die Zaehlung sitzt also.
-pub const CB_PLAY_ANIMATE: i32 = 0x02;
-
-// Die Animationsarten aus EntityAnimationS2CPacket. Die 1 fehlt in Vanilla ebenfalls (frueher
-// "Schaden genommen", heute ein eigenes Paket) -- die Luecke ist keine Zaehlpanne.
-pub const ANIMATION_SWING_MAIN_HAND: u8 = 0;
-pub const ANIMATION_WAKE_UP: u8 = 2;
-pub const ANIMATION_SWING_OFF_HAND: u8 = 3;
-pub const ANIMATION_CRIT: u8 = 4;
-pub const ANIMATION_ENCHANTED_HIT: u8 = 5;

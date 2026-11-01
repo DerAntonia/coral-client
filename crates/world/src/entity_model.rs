@@ -24,7 +24,7 @@ mod model_table;
 mod biped_pose;
 mod mob_poses;
 #[cfg(test)]
-mod pose_tests;
+mod anim_tests;
 mod signs;
 pub use geometry::*;
 pub use player_models::*;

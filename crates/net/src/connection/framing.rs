@@ -257,20 +257,6 @@ pub(super) const fn meta_betrifft_anzeige(update: &packets::EntityDataUpdate) ->
         || update.interaction_height.is_some()
 }
 
-#[cfg(test)]
-mod meta_filter_neu_tests {
-    use super::*;
-
-    #[test]
-    fn pfeil_und_interaction_kommen_durch() {
-        let leer = packets::EntityDataUpdate::default();
-        assert!(!meta_betrifft_anzeige(&leer));
-        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { arrow_in_ground: Some(true), ..Default::default() }));
-        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { interaction_width: Some(3.0), ..Default::default() }));
-        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { interaction_height: Some(3.0), ..Default::default() }));
-    }
-}
-
 // Beantwortet einen Cookie Request -- in JEDEM Zustand, nur mit der passenden Antwort-ID.
 //
 // Wichtig ist das "immer antworten": kennen wir das Cookie nicht, geht trotzdem eine Antwort
@@ -287,5 +273,19 @@ pub(super) async fn answer_cookie_request(conn: &mut Connection, payload: &[u8],
 pub(super) fn store_cookie(conn: &mut Connection, payload: &[u8]) {
     if let Ok(Some((key, value))) = packets::read_store_cookie(payload) {
         conn.cookies.insert(key, value);
+    }
+}
+
+#[cfg(test)]
+mod meta_filter_neu_tests {
+    use super::*;
+
+    #[test]
+    fn pfeil_und_interaction_kommen_durch() {
+        let leer = packets::EntityDataUpdate::default();
+        assert!(!meta_betrifft_anzeige(&leer));
+        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { arrow_in_ground: Some(true), ..Default::default() }));
+        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { interaction_width: Some(3.0), ..Default::default() }));
+        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { interaction_height: Some(3.0), ..Default::default() }));
     }
 }

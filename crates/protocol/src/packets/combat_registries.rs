@@ -166,7 +166,7 @@ pub fn read_named_registry(payload: &[u8]) -> Result<Option<(String, Vec<(String
 }
 
 #[cfg(test)]
-pub(crate) mod animate_tests {
+mod animate_tests {
     use super::*;
 
     #[test]
@@ -199,7 +199,7 @@ pub(crate) mod animate_tests {
 }
 
 #[cfg(test)]
-pub(crate) mod damage_event_tests {
+mod damage_event_tests {
     use super::*;
 
     #[test]
@@ -308,7 +308,7 @@ pub fn read_entity_event(payload: &[u8]) -> Result<(i32, i8), ReadError> {
 }
 
 #[cfg(test)]
-pub(crate) mod entity_event_tests {
+mod entity_event_tests {
     use super::*;
 
     #[test]

@@ -55,7 +55,7 @@ pub fn read_command_suggestions(payload: &[u8]) -> Option<CommandSuggestions> {
 }
 
 #[cfg(test)]
-pub(crate) mod command_suggestion_tests {
+mod command_suggestion_tests {
     use super::*;
 
     #[test]
@@ -140,7 +140,7 @@ pub fn read_rotate_head(payload: &[u8]) -> Result<(i32, f32), ReadError> {
 }
 
 #[cfg(test)]
-pub(crate) mod rotate_head_tests {
+mod rotate_head_tests {
     use super::*;
 
     #[test]
@@ -328,7 +328,7 @@ pub fn read_stop_sound(payload: &[u8]) -> Result<(Option<u8>, Option<String>), R
 }
 
 #[cfg(test)]
-pub(crate) mod sound_tests {
+mod sound_tests {
     use super::*;
     use crate::sound_events;
 
@@ -556,7 +556,7 @@ pub fn looks_like_sound(payload: &[u8]) -> Option<(bool, String)> {
 }
 
 #[cfg(test)]
-pub(crate) mod sound_probe_tests {
+mod sound_probe_tests {
     use super::*;
 
     #[test]
