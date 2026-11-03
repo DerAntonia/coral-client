@@ -57,7 +57,7 @@ impl App {
                 // Windows: wo die Presents landen (s. vblank::note_present).
                 #[cfg(windows)]
                 // In ms ab Zeile 0 wie Tear timing, mit der Lage der Luecke dahinter.
-                let dwm = match vblank::present_phase() {
+                let dwm = match crate::vblank::present_phase() {
                     Some(p) => format!(
                         "{dwm} · Present {:.2} ms ±{:.2} ({} {:.2}–{:.2})",
                         p.mitte_ms,
@@ -196,7 +196,7 @@ impl App {
         // System-Zeilen, nicht grau: graue Texte filtert build_menu_ui auf Einstellungsseiten weg.
         #[cfg(not(target_os = "linux"))]
         {
-            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(TEARFREE_ROW), w: STEPPER_VALUE_W, h: SETTINGS_CTRL_H };
+            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(crate::TEARFREE_ROW), w: STEPPER_VALUE_W, h: SETTINGS_CTRL_H };
             rects.push(UiRect { rect: feld, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
             texts.push(gpu.centered_text(feld, i18n::tr("nur Linux und AMD").into_owned(), theme::text(), UI_SCALE_SMALL));
         }
