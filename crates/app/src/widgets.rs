@@ -16,13 +16,13 @@ pub(crate) struct AccElem {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccountContextItem {
     Logout,
-    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // Token-Export auskommentiert, vorerst abgeschaltet.
     // ExportToken,
     // ExportRefreshToken,
     Forget,
 }
 
-// Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+// Token-Export auskommentiert, vorerst abgeschaltet.
 // // "Token exportieren" / "Refresh-Token exportieren" (Rechtsklick auf ein Konto): ein Token,
 // // das erst nach einer Warnung sichtbar wird. Mit Refresh-Token wird es frisch geholt, sonst
 // // ist es das gespeicherte Minecraft-Token. Je Stand der Kontoname dazu; `refresh` = das

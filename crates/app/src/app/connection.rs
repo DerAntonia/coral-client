@@ -1,7 +1,7 @@
 // Verbinden und Trennen, Microsoft-Login und Kontenverwaltung.
 
 use crate::{theme, App, ConnStatus, modules, sound_log, toteming, accounts, addons, AZURE_CLIENT_ID, AuthEvent, ACCOUNT_RECHECK, Instant, notifications, open_external_command, uuid_bytes_from_hex, ACCOUNT_HEAD_RETRY, AppMode, MenuScreen, KeyBindAction};
-// Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt. Dann im use oben wieder: TokenExport
+// Token-Export auskommentiert, vorerst abgeschaltet. Dann im use oben wieder: TokenExport
 
 impl App {
     // Verbindet; laeuft schon eine Verbindung, wird sie vorher getrennt (Reconnect).
@@ -565,7 +565,7 @@ impl App {
                     self.persist_accounts();
                     self.set_active_account(credentials);
                 }
-                // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+                // Token-Export auskommentiert, vorerst abgeschaltet.
                 // AuthEvent::TokenExported { key, result } => {
                 //     let (name, refresh) = match &self.token_export {
                 //         Some(TokenExport::Busy { name, refresh }) => (name.clone(), *refresh),

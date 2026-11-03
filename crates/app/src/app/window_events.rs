@@ -180,7 +180,7 @@ impl App {
                         self.build_account_menu(&mut overlay);
                         self.build_account_manager(&mut overlay);
                         self.build_account_context(&mut overlay);
-                        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+                        // Token-Export auskommentiert, vorerst abgeschaltet.
                         // self.build_token_export(&mut overlay);
                         self.build_disconnect_popup(&mut overlay);
                         self.build_dialog_overlay(&mut overlay);
@@ -494,7 +494,7 @@ impl App {
             }
             return true;
         }
-        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+        // Token-Export auskommentiert, vorerst abgeschaltet.
         // // Token-Fenster liegt ueber allem und schluckt jeden Druck.
         // if state == ElementState::Pressed && self.mode == AppMode::Menu && self.token_export.is_some() {
         //     if button == MouseButton::Left {

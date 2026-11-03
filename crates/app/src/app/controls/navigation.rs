@@ -16,7 +16,7 @@ impl App {
         if self.connecting_view() {
             return;
         }
-        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt. Dann wieder: || self.token_export.take().is_some()
+        // Token-Export auskommentiert, vorerst abgeschaltet. Dann wieder: || self.token_export.take().is_some()
         if self.disconnect_popup.take().is_some() || self.theme_delete.take().is_some() || self.theme_name_dialog.take().is_some() {
             self.play_ui_sound(ui_sound::UiSound::Close);
             return;

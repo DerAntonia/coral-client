@@ -319,7 +319,7 @@ pub(crate) struct App {
     pub(crate) account_checks: std::collections::HashMap<String, (accounts::Check, Instant)>,
     // Rechtsklick-Menue im Acc-Manager: Konto (Index in accounts.list) und Klickpunkt.
     pub(crate) account_context: Option<(usize, (f32, f32))>,
-    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // Token-Export auskommentiert, vorerst abgeschaltet.
     // pub(crate) token_export: Option<TokenExport>,
     // Chat (urspruenglich fuers Debugging gedacht: Grim-Meldungen/Server-Antworten
     // direkt im Client sehen, ohne die Server-Konsole zu beobachten). Some(text) waehrend

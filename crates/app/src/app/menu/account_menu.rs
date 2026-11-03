@@ -288,7 +288,7 @@ impl App {
         if self.is_active_account(a) {
             items.push(AccountContextItem::Logout);
         }
-        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+        // Token-Export auskommentiert, vorerst abgeschaltet.
         // // Mit Refresh-Token wird ein neues geholt, ohne zeigt es das gespeicherte.
         // items.push(AccountContextItem::ExportToken);
         // if !a.refresh_token.is_empty() {
@@ -297,7 +297,7 @@ impl App {
         items.push(AccountContextItem::Forget);
         let (sw, sh) = ui_screen();
         let h = items.len() as f32 * SERVER_CONTEXT_ROW_H + 12.0;
-        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt. Dann wieder ACCOUNT_CONTEXT_W statt SERVER_CONTEXT_W.
+        // Token-Export auskommentiert, vorerst abgeschaltet. Dann wieder ACCOUNT_CONTEXT_W statt SERVER_CONTEXT_W.
         let x = at.0.min(sw - SERVER_CONTEXT_W - 8.0);
         let y = at.1.min(sh - h - 8.0);
         let p = Rect { x, y, w: SERVER_CONTEXT_W, h };
@@ -328,7 +328,7 @@ impl App {
                 self.play_ui_sound(ui_sound::UiSound::Click);
                 self.logout();
             }
-            // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+            // Token-Export auskommentiert, vorerst abgeschaltet.
             // Some(AccountContextItem::ExportToken) => {
             //     self.play_ui_sound(ui_sound::UiSound::Open);
             //     self.start_token_export(i, false);
@@ -345,7 +345,7 @@ impl App {
         }
     }
 
-    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // Token-Export auskommentiert, vorerst abgeschaltet.
     // // Token-Export: ueber das Refresh-Token ein neues Minecraft-Token holen. Das Fenster mit
     // // der Warnung steht sofort, das Token zeigt es erst auf "Anzeigen". Geht nur mit einer
     // // Client-ID, die Microsoft annimmt (die eigene erst nach Mojangs Freigabe).
@@ -518,7 +518,7 @@ impl App {
         for (r, item) in zeilen {
             let (label, farbe) = match item {
                 AccountContextItem::Logout => ("Ausloggen", theme::text()),
-                // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+                // Token-Export auskommentiert, vorerst abgeschaltet.
                 // AccountContextItem::ExportToken => ("Token exportieren", theme::text()),
                 // AccountContextItem::ExportRefreshToken => ("Refresh-Token exportieren", theme::text()),
                 AccountContextItem::Forget => ("Account vergessen", g(Slot::Danger)),

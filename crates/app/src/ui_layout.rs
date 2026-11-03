@@ -221,7 +221,7 @@ pub(crate) fn server_dialog_name_toggle() -> Rect {
 
 // Rechtsklick-Menue einer Server-Karte: Zeilen "Bearbeiten" und "Loeschen".
 pub(crate) const SERVER_CONTEXT_W: f32 = 200.0;
-// Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+// Token-Export auskommentiert, vorerst abgeschaltet.
 // // Konto-Menue: breiter, "Refresh-Token exportieren" passt sonst nicht.
 // pub(crate) const ACCOUNT_CONTEXT_W: f32 = 260.0;
 pub(crate) const SERVER_CONTEXT_ROW_H: f32 = 40.0;

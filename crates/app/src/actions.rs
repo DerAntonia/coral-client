@@ -243,7 +243,7 @@ pub(crate) enum AuthEvent {
     // Ein gespeichertes Konto ist geprueft (s. App::check_accounts): Schluessel und entweder
     // die frischen Credentials (bei Erneuerung mit neuem Refresh-Token) oder der Fehler.
     AccountChecked { key: String, result: Result<(auth::Credentials, Option<(String, String)>), auth::AuthError> },
-    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // Token-Export auskommentiert, vorerst abgeschaltet.
     // // Token-Export (s. App::start_token_export): frische Credentials samt neuem Refresh-Token
     // // und Client-ID, oder der Fehler.
     // TokenExported { key: String, result: Result<(auth::Credentials, (String, String)), String> },

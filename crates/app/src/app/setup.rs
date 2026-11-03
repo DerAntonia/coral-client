@@ -245,7 +245,7 @@ impl App {
             accounts: load_account_store(&settings),
             account_checks: std::collections::HashMap::new(),
             account_context: None,
-            // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+            // Token-Export auskommentiert, vorerst abgeschaltet.
             // token_export: None,
             chat_input: None,
             chat_history: load_chat_history(),
