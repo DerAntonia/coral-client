@@ -110,12 +110,12 @@ impl Microphone {
         };
         let err_fn = |e| eprintln!("[audio] Mikrofon-Fehler: {e}");
         let stream = match format {
-            SampleFormat::F32 => device.build_input_stream(config.clone(), move |d: &[f32], _| framer.feed(d.iter().copied(), channels), err_fn, None),
+            SampleFormat::F32 => device.build_input_stream(config, move |d: &[f32], _| framer.feed(d.iter().copied(), channels), err_fn, None),
             SampleFormat::I16 => {
-                device.build_input_stream(config.clone(), move |d: &[i16], _| framer.feed(d.iter().map(|s| f32::from(*s) / 32768.0), channels), err_fn, None)
+                device.build_input_stream(config, move |d: &[i16], _| framer.feed(d.iter().map(|s| f32::from(*s) / 32768.0), channels), err_fn, None)
             }
             SampleFormat::U16 => device.build_input_stream(
-                config.clone(),
+                config,
                 move |d: &[u16], _| framer.feed(d.iter().map(|s| (f32::from(*s) - 32768.0) / 32768.0), channels),
                 err_fn,
                 None,

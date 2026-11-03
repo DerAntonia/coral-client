@@ -1714,8 +1714,7 @@ mod tests {
     // an, der Spielerteil kommt aber an, auch Slot fuer Slot.
     #[test]
     fn abgelehnter_container_spiegelt_nur_den_spielerteil() {
-        let mut inv = Inventory::default();
-        inv.refused = Some((7, 0));
+        let mut inv = Inventory { refused: Some((7, 0)), ..Default::default() };
         let mut slots = vec![None; 27 + 36];
         slots[0] = Some(ItemStack::new(5, 1));
         slots[27 + 27] = Some(ItemStack::new(6, 1));

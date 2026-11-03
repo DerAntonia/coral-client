@@ -498,7 +498,7 @@ impl AudioEngine {
         let err_fn = |e| eprintln!("[audio] Stream-Fehler: {e}");
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
-                config.clone(),
+                config,
                 move |data: &mut [f32], _| {
                     melde(data.len());
                     fill_buffer(data, channels, sample_rate, &state);
@@ -507,7 +507,7 @@ impl AudioEngine {
                 None,
             ),
             SampleFormat::I16 => device.build_output_stream(
-                config.clone(),
+                config,
                 move |data: &mut [i16], _| {
                     melde(data.len());
                     let mut tmp = vec![0.0f32; data.len()];
@@ -520,7 +520,7 @@ impl AudioEngine {
                 None,
             ),
             SampleFormat::U16 => device.build_output_stream(
-                config.clone(),
+                config,
                 move |data: &mut [u16], _| {
                     melde(data.len());
                     let mut tmp = vec![0.0f32; data.len()];

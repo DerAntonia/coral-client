@@ -19,9 +19,9 @@ fn berichtet_die_echte_puffergroesse() {
         println!("kein Ausgabegeraet -- nichts zu messen");
         return;
     };
-    let name = device.name().unwrap_or_else(|_| "?".into());
+    let name = audio::geraete_name(&device).unwrap_or_else(|| "?".into());
     let default = device.default_output_config().expect("Standardkonfiguration");
-    let rate = default.sample_rate().0;
+    let rate = default.sample_rate();
     println!("Geraet: {name}");
     println!("  Format: {:?}, {} Kanaele, {} Hz", default.sample_format(), default.channels(), rate);
 
@@ -36,8 +36,8 @@ fn berichtet_die_echte_puffergroesse() {
             // Die Rate zuerst, sie bestimmt die Pufferdauer. Der Client zieht 48 kHz vor,
             // weil der Audio-Server ueblicherweise damit laeuft -- alles andere laesst
             // PipeWire resampeln (s. audio::PREFERRED_SAMPLE_RATE).
-            println!("  Raten erlaubt: {}..{} Hz", range.min_sample_rate().0, range.max_sample_rate().0);
-            if range.min_sample_rate().0 <= TARGET_RATE && TARGET_RATE <= range.max_sample_rate().0 {
+            println!("  Raten erlaubt: {}..{} Hz", range.min_sample_rate(), range.max_sample_rate());
+            if range.min_sample_rate() <= TARGET_RATE && TARGET_RATE <= range.max_sample_rate() {
                 rate = TARGET_RATE;
                 println!("  -> {TARGET_RATE} Hz moeglich, der Client nimmt sie (kein Resampling)");
             } else {
