@@ -1,6 +1,6 @@
 // Eigene Bildschirme: Buch, Schild, Inventar, Haendler, Amboss, Verzauberung, Tooltips.
 
-use crate::{App, book, AppMode, inventory, GpuState, Rect, UiRect, UiSprite, UiText, dialog_dim, SpriteAtlas, push_span_shadow, wrap_spans, rgb_to_rgba, vanilla_text, theme, COLOR_WHITE, ui_sound, Instant, Key, PhysicalKey, KeyCode, NamedKey, push_typed_marker, SignEdit, ShadowArea, sign_text_color, UI_SCALE_SMALL, BUNDLE_PANEL_W, recipe_book, wrap_measured, enchant_phrase, GAME_MODE_CREATIVE, INVENTORY_GUI_W, item_needs_tooltip, item_shows_held_name, item_attribute_value, decimal_de, max_damage_of, effect_display_name, EffectEntry, format_effect_duration, item_rarity, discord_rpc, ConnStatus, BookAnim, enchant_book_vertices, book_camera};
+use crate::{App, book, AppMode, inventory, inventory_anim, GpuState, Rect, UiRect, UiSprite, UiText, dialog_dim, SpriteAtlas, push_span_shadow, wrap_spans, rgb_to_rgba, vanilla_text, theme, COLOR_WHITE, ui_sound, Instant, Key, PhysicalKey, KeyCode, NamedKey, push_typed_marker, SignEdit, ShadowArea, sign_text_color, UI_SCALE_SMALL, BUNDLE_PANEL_W, recipe_book, wrap_measured, enchant_phrase, GAME_MODE_CREATIVE, INVENTORY_GUI_W, item_needs_tooltip, item_shows_held_name, item_attribute_value, decimal_de, max_damage_of, effect_display_name, EffectEntry, format_effect_duration, item_rarity, discord_rpc, ConnStatus, BookAnim, enchant_book_vertices, book_camera};
 
 impl App {
     // Liegt ein Bildschirm-Overlay ueber der Welt? Inventar und Modul-Menue verhalten sich
@@ -485,7 +485,7 @@ impl App {
     // Zeiger frei, alle Tasten los (wie beim Chat, s. open_chat).
     pub(crate) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
         let seite = self.signs.get(&pos).map(|t| if front { t.front.clone() } else { t.back.clone() });
-        let lines: [String; 4] = std::array::from_fn(|i| seite.as_ref().map(|s| s.lines[i].iter().map(|sp| sp.text.as_str()).collect()).unwrap_or_default());
+        let lines = self.sign_editor_lines(pos, front);
         let (wood, hanging) = match self.sign_at(pos) {
             Some((holz, art, _)) => (holz, matches!(art, world::entity_model::SignKind::Hanging(_))),
             None => (0, false),
@@ -500,6 +500,13 @@ impl App {
             self.cursor_pos = (gpu.size().0 / 2.0, gpu.size().1 / 2.0);
         }
         self.clear_controls();
+    }
+
+    // Womit der Editor vorbefuellt ist: der aufgeloeste Text jeder Zeile dieser Seite (wie
+    // Vanillas Component::getString).
+    pub(crate) fn sign_editor_lines(&self, pos: (i32, i32, i32), front: bool) -> [String; 4] {
+        let seite = self.signs.get(&pos).map(|t| if front { &t.front } else { &t.back });
+        std::array::from_fn(|i| seite.map(|s| s.lines[i].iter().map(|sp| sp.text.as_str()).collect()).unwrap_or_default())
     }
 
     // Fertig (Knopf, Escape): Sign Update senden, lokal schon uebernehmen, schliessen.
@@ -705,8 +712,12 @@ impl App {
         // uebermalte sie.
         let doll_split = layout.doll.map(|_| sprites.len());
 
-        let (_, _, slots) = self.inventory.active();
+        let (sync_id, _, slots) = self.inventory.active();
         let (cx, cy) = self.cursor_pos;
+        // Inventar > Animation: Fluege seit dem letzten Bild weiterzaehlen (s. inventory_anim).
+        let jetzt = Instant::now();
+        let mut anim = self.inventory_anim.borrow_mut();
+        anim.flights.step(sync_id, slots, self.inventory.cursor.as_ref(), jetzt, self.settings.swap_anim_ms);
         // Zusammenfassen bei Hover: der gleichartige Stapel unter dem Zeiger zeigt keine Zahl,
         // der am Zeiger die Summe.
         let zusammen = self
@@ -731,8 +742,14 @@ impl App {
                 }
                 _ => 0.0,
             };
+            // Was noch hierher unterwegs ist, kommt erst mit seinem Flug an.
+            let unterwegs = anim.flights.incoming(slot.index);
             if zusammen.is_some_and(|(index, _)| index == slot.index) {
                 self.push_item(sprites, texts, &protocol::item::ItemStack { count: 1, ..stack.clone() }, slot.x + zittern, slot.y, slot.size);
+            } else if unterwegs > 0 {
+                if stack.count > unterwegs {
+                    self.push_item(sprites, texts, &protocol::item::ItemStack { count: stack.count - unterwegs, ..stack.clone() }, slot.x + zittern, slot.y, slot.size);
+                }
             } else {
                 self.push_item(sprites, texts, stack, slot.x + zittern, slot.y, slot.size);
             }
@@ -740,10 +757,27 @@ impl App {
                 hovered = self.item_hover_tooltip(stack).map(|zeilen| (zeilen, *slot, world::bundle::is_bundle(stack).then_some(stack)));
             }
         }
-        // Slot unter dem Zeiger hervorheben (Vanillas heller Schleier).
-        if let Some(slot) = layout.slots.iter().find(|s| s.contains(cx, cy)) {
-            rects.push(UiRect { rect: Rect { x: slot.x, y: slot.y, w: slot.size, h: slot.size }, color: [1.0, 1.0, 1.0, 0.25], ..UiRect::FLAT });
+        // Fliegende Items, von ihrem alten Platz zum neuen (oder zum Zeiger).
+        for f in &anim.flights.list {
+            let Some(von) = layout.slots.iter().find(|s| s.index == f.from) else { continue };
+            let nach = match f.to {
+                inventory_anim::Target::Slot(i) => layout.slots.iter().find(|s| s.index == i).map(|s| (s.x, s.y)),
+                inventory_anim::Target::Cursor => Some((cx - von.size / 2.0, cy - von.size / 2.0)),
+            };
+            let Some((nx, ny)) = nach else { continue };
+            let t = inventory_anim::Flights::progress(f, jetzt, self.settings.swap_anim_ms);
+            let (x, y) = if f.arc { inventory_anim::arc_point((von.x, von.y), (nx, ny), t) } else { (von.x + (nx - von.x) * t, von.y + (ny - von.y) * t) };
+            self.push_item(sprites, texts, &f.stack, x, y, von.size);
         }
+        // Slot unter dem Zeiger hervorheben (Vanillas heller Schleier), mit weichem Uebergang.
+        let unter_zeiger = layout.slots.iter().find(|s| s.contains(cx, cy)).map(|s| s.index);
+        let farbe = self.settings.slot_hover_rgba();
+        for (index, anteil) in anim.hover.step(sync_id, unter_zeiger, jetzt, self.settings.slot_hover_fade_ms) {
+            if let Some(slot) = layout.slots.iter().find(|s| s.index == index) {
+                rects.push(UiRect { rect: Rect { x: slot.x, y: slot.y, w: slot.size, h: slot.size }, color: [farbe[0], farbe[1], farbe[2], farbe[3] * anteil], ..UiRect::FLAT });
+            }
+        }
+        drop(anim);
 
         // Der Stack an der Maus haengt am Zeiger.
         if let Some(stack) = &self.inventory.cursor {

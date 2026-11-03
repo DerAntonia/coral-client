@@ -105,6 +105,35 @@ impl App {
         self.notify(notifications::Notification::success("Config gewechselt", format!("Aktiv: {name}")));
     }
 
+    // Vor dem Verbinden: gibt es eine Config, die so heisst wie der Server, wird sie aktiv. Die
+    // vorher aktive merkt sich server_config_return fuer das Trennen. Ohne eigene Config gilt
+    // wieder die von vor dem letzten Server (falls man ohne Trennen weiterverbindet).
+    pub(crate) fn apply_server_config(&mut self) {
+        let adresse = self.server_address.trim();
+        let name = self.servers.iter().find(|s| s.address.trim().eq_ignore_ascii_case(adresse)).map(|s| s.name.as_str());
+        let Some(ziel) = server_config_for(&assets::list_configs(), name, adresse) else {
+            self.restore_config_after_server();
+            return;
+        };
+        let vorher = match self.server_config_return.take() {
+            Some((vorher, server)) if server == active_config() => vorher,
+            _ => active_config(),
+        };
+        if ziel != vorher {
+            self.server_config_return = Some((vorher, ziel.clone()));
+        }
+        self.switch_config(&ziel);
+    }
+
+    // Nach dem Trennen: die Config von vor dem Verbinden wieder aktiv -- nicht, wenn man
+    // inzwischen selbst gewechselt hat oder es sie nicht mehr gibt.
+    pub(crate) fn restore_config_after_server(&mut self) {
+        let Some((vorher, server)) = self.server_config_return.take() else { return };
+        if server == active_config() && assets::list_configs().contains(&vorher) {
+            self.switch_config(&vorher);
+        }
+    }
+
     // Eigenes Schreiben der Config merken, damit poll_config_file es nicht fuer eine Aenderung
     // von aussen haelt.
     pub(crate) fn note_config_written(&mut self) {
@@ -307,5 +336,37 @@ impl App {
             }
         }
         fonts
+    }
+}
+
+// Config, die so heisst wie der Server: Name in der Serverliste, Adresse oder Adresse ohne
+// Port (Configs duerfen keinen Doppelpunkt enthalten). Gross/klein egal, in dieser Reihenfolge.
+fn server_config_for(configs: &[String], name: Option<&str>, address: &str) -> Option<String> {
+    let host = address.rsplit_once(':').filter(|(h, p)| !h.contains(':') && p.parse::<u16>().is_ok()).map_or(address, |(h, _)| h);
+    [name.map(str::trim), Some(address), Some(host)]
+        .into_iter()
+        .flatten()
+        .filter(|k| !k.is_empty())
+        .find_map(|k| configs.iter().find(|c| c.eq_ignore_ascii_case(k)))
+        .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_config_for;
+
+    fn configs() -> Vec<String> {
+        ["Standard", "Hypixel", "pvp.land", "localhost"].map(String::from).to_vec()
+    }
+
+    #[test]
+    fn server_config_name_address_host() {
+        let c = configs();
+        assert_eq!(server_config_for(&c, Some("hypixel"), "mc.hypixel.net").as_deref(), Some("Hypixel"));
+        assert_eq!(server_config_for(&c, Some("Land"), "PvP.land").as_deref(), Some("pvp.land"));
+        assert_eq!(server_config_for(&c, None, "pvp.land:25565").as_deref(), Some("pvp.land"));
+        assert_eq!(server_config_for(&c, None, "localhost:25566").as_deref(), Some("localhost"));
+        assert_eq!(server_config_for(&c, Some("Irgendwas"), "example.org"), None);
+        assert_eq!(server_config_for(&c, Some(""), ""), None);
     }
 }

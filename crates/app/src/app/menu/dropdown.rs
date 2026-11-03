@@ -7,7 +7,7 @@ impl App {
     pub(crate) const fn choice_of(action: ButtonAction) -> Option<Choice> {
         Some(match action {
             ButtonAction::CycleProjection => Choice::Projection,
-            ButtonAction::CycleParticles => Choice::Particles,
+            ButtonAction::CycleParticles(own) => Choice::Particles(own),
             ButtonAction::CycleDeathAnimation => Choice::DeathAnimation,
             ButtonAction::CycleWallpaper => Choice::Wallpaper,
             ButtonAction::CycleLanguage(row) => Choice::Language(row),
@@ -29,7 +29,7 @@ impl App {
         let namen = |l: &[&str]| l.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
         match c {
             Choice::Projection => (namen(&PROJECTION_NAMES), Some(s.projection_mode as usize)),
-            Choice::Particles => (namen(&PARTICLE_MODE_NAMES), Some(s.particles_mode as usize)),
+            Choice::Particles(own) => (namen(&PARTICLE_MODE_NAMES), Some(if own { s.particles_mode_own } else { s.particles_mode } as usize)),
             Choice::DeathAnimation => (namen(&DEATH_ANIM_NAMES), Some(s.death_animation as usize)),
             Choice::Wallpaper => (wallpaper::WallpaperMode::ALL.iter().map(|m| m.label().to_string()).collect(), Some(s.wallpaper as usize)),
             Choice::Language(row) => (i18n::Language::ALL.iter().map(|l| l.label().to_string()).collect(), self.language_of_row(row).map(|l| l.index() as usize)),
@@ -105,9 +105,9 @@ impl App {
                 s.projection_mode = vorher as u8;
                 ButtonAction::CycleProjection
             }
-            Choice::Particles => {
-                s.particles_mode = vorher as u8;
-                ButtonAction::CycleParticles
+            Choice::Particles(own) => {
+                *s.particles_mode_of(own) = vorher as u8;
+                ButtonAction::CycleParticles(own)
             }
             Choice::DeathAnimation => {
                 s.death_animation = vorher as u8;

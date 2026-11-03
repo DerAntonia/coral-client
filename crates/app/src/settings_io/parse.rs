@@ -109,40 +109,20 @@ impl Settings {
                     }
                 }
                 // Frueher ein eigener Schalter "Explosion AUS", jetzt die Art Explosion.
-                "explosion_particles" => settings.particle_tuning[particles::KIND_EXPLOSION].enabled = value != "false",
+                "explosion_particles" => {
+                    settings.particle_tuning[particles::KIND_EXPLOSION].enabled = value != "false";
+                    settings.particle_tuning_own[particles::KIND_EXPLOSION].enabled = value != "false";
+                }
+                // Die eigenen Partikel uebernehmen erst die Werte der anderen -- so bleibt eine
+                // Datei von vor der Trennung gleich; ihr eigener Eintrag kommt danach (s. serialize).
                 "particle_tuning" => {
-                    let mut gelesen: std::collections::HashMap<&str, particles::ParticleTuning> = std::collections::HashMap::new();
-                    for eintrag in value.split(';') {
-                        let Some((key, werte)) = eintrag.split_once(':') else { continue };
-                        let w: Vec<u32> = werte.split(',').filter_map(|v| v.trim().parse().ok()).collect();
-                        let klemmen = |v: u32, stufen: &[u32]| v.clamp(stufen[0], *stufen.last().unwrap());
-                        // Vier Werte aus der Zeit vor Menge/Intervall, sonst sieben.
-                        let (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal) = match w[..] {
-                            [an, dauer, deckkraft, tempo] => (an, dauer, deckkraft, tempo, 100, 100, 0),
-                            [an, dauer, deckkraft, tempo, menge, intervall, auf_einmal] => (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal),
-                            _ => continue,
-                        };
-                        gelesen.insert(
-                            key.trim(),
-                            particles::ParticleTuning {
-                                enabled: an != 0,
-                                lifetime_pct: klemmen(dauer, &PARTICLE_LIFETIME_STEPS),
-                                opacity_pct: deckkraft.clamp(PARTICLE_OPACITY_STEP, 100),
-                                speed_pct: klemmen(tempo, &PARTICLE_SPEED_STEPS),
-                                amount_pct: klemmen(menge, &PARTICLE_AMOUNT_STEPS),
-                                interval_pct: klemmen(intervall, &PARTICLE_INTERVAL_STEPS),
-                                all_at_once: auf_einmal != 0,
-                            },
-                        );
-                    }
-                    for (i, k) in particles::KINDS.iter().enumerate() {
-                        // Die Trank-Spritzer gehoerten frueher zu "potion" und erben dessen Werte,
-                        // bis sie eigene haben.
-                        let wert = gelesen.get(k.key).or_else(|| (k.key == "potion_splash").then(|| gelesen.get("potion")).flatten());
-                        if let Some(t) = wert {
-                            settings.particle_tuning[i] = *t;
-                        }
-                    }
+                    read_particle_tuning(&mut settings.particle_tuning, value);
+                    settings.particle_tuning_own = settings.particle_tuning;
+                }
+                "particle_tuning_own" => {
+                    let mut eigene = [particles::ParticleTuning::default(); particles::KINDS.len()];
+                    read_particle_tuning(&mut eigene, value);
+                    settings.particle_tuning_own = eigene;
                 }
                 _ if teams::Side::ALL.iter().any(|s| s.key() == key) => {
                     let seite = *teams::Side::ALL.iter().find(|s| s.key() == key).expect("eben geprueft");
@@ -204,9 +184,22 @@ impl Settings {
                 "chunk_saver_render" => alt_zeichnen = value == "true",
                 "chunk_saver_render_saved" => settings.chunk_saver_render_saved = value == "true",
                 "creative_op_tab" => settings.creative_op_tab = value == "true",
-                // Alter An/Aus-Schalter: An hiess "immer".
-                "no_ui_close_s2c" => settings.no_ui_close = if value == "true" { NO_UI_CLOSE_ALWAYS } else { NO_UI_CLOSE_NEVER },
-                "no_ui_close" => settings.no_ui_close = value.parse::<u8>().unwrap_or(NO_UI_CLOSE_NEVER).min(NO_UI_CLOSE_INVENTORY),
+                // Alte Formen von server_close_blocked: An/Aus (An = alles bleibt offen), dann
+                // No UI close mit 0 nie, 1 immer, 2 nur das eigene Inventar.
+                "no_ui_close_s2c" => settings.server_close_blocked = if value == "true" { u8::MAX } else { 0 },
+                "no_ui_close" => {
+                    settings.server_close_blocked = match value {
+                        "1" => u8::MAX,
+                        "2" => 1 << SERVER_CLOSE_INVENTORY_ROW,
+                        _ => 0,
+                    }
+                }
+                "server_close_blocked" => settings.server_close_blocked = value.parse().unwrap_or(0),
+                "server_open" => {
+                    for (ziel, v) in settings.server_open.iter_mut().zip(value.split(',')) {
+                        *ziel = v.parse::<u8>().unwrap_or(SERVER_OPEN_ALLOW).min(SERVER_OPEN_IGNORE);
+                    }
+                }
                 "no_chat_clear" => settings.no_chat_clear = value == "true",
                 "audio_auto_optimize" => settings.audio_auto_optimize = value == "true",
                 "skip_third_back" => settings.skip_third_back = value == "true",
@@ -218,6 +211,15 @@ impl Settings {
                 "potion_mark_long" => settings.potion_mark_long = value != "false",
                 "potion_mark_weak" => settings.potion_mark_weak = value != "false",
                 "inventory_merge_hover" => settings.inventory_merge_hover = value == "true",
+                "slot_hover_fade_ms" => settings.slot_hover_fade_ms = value.parse::<u32>().unwrap_or(100).min(SLOT_HOVER_FADE_MAX),
+                "slot_hover_color" => {
+                    for (i, (ziel, v)) in settings.slot_hover_color.iter_mut().zip(value.split('/')).enumerate() {
+                        if let Ok(v) = v.parse::<u32>() {
+                            *ziel = if i == 0 { v % 360 } else { v.min(100) };
+                        }
+                    }
+                }
+                "swap_anim_ms" => settings.swap_anim_ms = value.parse::<u32>().unwrap_or(150).min(SWAP_ANIM_MAX),
                 "chunk_saver_threads" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.chunk_saver_threads = v.clamp(1, lod::THREADS_MAX);
@@ -276,6 +278,11 @@ impl Settings {
                 "smooth_lighting_percent" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.smooth_lighting_percent = v;
+                    }
+                }
+                "motion_blur_percent" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.motion_blur_percent = v.min(MOTION_BLUR_MAX);
                     }
                 }
                 "jump_cooldown_enabled" => settings.jump_cooldown_enabled = value == "true",
@@ -872,6 +879,12 @@ impl Settings {
             "particles_mode" => {
                 if let Ok(v) = value.parse::<u8>() {
                     settings.particles_mode = if (v as usize) < PARTICLE_MODE_NAMES.len() { v } else { 0 };
+                    settings.particles_mode_own = settings.particles_mode;
+                }
+            }
+            "particles_mode_own" => {
+                if let Ok(v) = value.parse::<u8>() {
+                    settings.particles_mode_own = if (v as usize) < PARTICLE_MODE_NAMES.len() { v } else { 0 };
                 }
             }
             "cmaa2_enabled" => settings.cmaa2_enabled = value == "true",
@@ -1334,6 +1347,7 @@ impl Settings {
                     settings.anim_flags = world::more_anims::ALL & !v;
                 }
             }
+            "anims_enabled" => settings.anims_enabled = value == "true",
             // Alte Fassung (nur die ersten zwoelf Animationen, gespeichert war, was AN ist).
             "anim_flags" => {
                 if let Ok(v) = value.parse::<u32>() {
@@ -1442,5 +1456,41 @@ impl Settings {
             _ => return false,
         }
         true
+    }
+}
+
+// Eintrag particle_tuning(_own): je Art, die darin steht, ihre Werte nach `ziel`.
+fn read_particle_tuning(ziel: &mut [particles::ParticleTuning; particles::KINDS.len()], value: &str) {
+    let mut gelesen: std::collections::HashMap<&str, particles::ParticleTuning> = std::collections::HashMap::new();
+    for eintrag in value.split(';') {
+        let Some((key, werte)) = eintrag.split_once(':') else { continue };
+        let w: Vec<u32> = werte.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let klemmen = |v: u32, stufen: &[u32]| v.clamp(stufen[0], *stufen.last().unwrap());
+        // Vier Werte aus der Zeit vor Menge/Intervall, sonst sieben.
+        let (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal) = match w[..] {
+            [an, dauer, deckkraft, tempo] => (an, dauer, deckkraft, tempo, 100, 100, 0),
+            [an, dauer, deckkraft, tempo, menge, intervall, auf_einmal] => (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal),
+            _ => continue,
+        };
+        gelesen.insert(
+            key.trim(),
+            particles::ParticleTuning {
+                enabled: an != 0,
+                lifetime_pct: klemmen(dauer, &PARTICLE_LIFETIME_STEPS),
+                opacity_pct: deckkraft.clamp(PARTICLE_OPACITY_STEP, 100),
+                speed_pct: klemmen(tempo, &PARTICLE_SPEED_STEPS),
+                amount_pct: klemmen(menge, &PARTICLE_AMOUNT_STEPS),
+                interval_pct: klemmen(intervall, &PARTICLE_INTERVAL_STEPS),
+                all_at_once: auf_einmal != 0,
+            },
+        );
+    }
+    for (i, k) in particles::KINDS.iter().enumerate() {
+        // Die Trank-Spritzer gehoerten frueher zu "potion" und erben dessen Werte,
+        // bis sie eigene haben.
+        let wert = gelesen.get(k.key).or_else(|| (k.key == "potion_splash").then(|| gelesen.get("potion")).flatten());
+        if let Some(t) = wert {
+            ziel[i] = *t;
+        }
     }
 }

@@ -116,8 +116,8 @@ impl App {
             let e = &self.recordings[i];
             let r = row_rect(i);
             let abspielbar = e.playable;
-            let hover = abspielbar && r.contains(cx, cy);
-            rects.push(UiRect::framed(r, if hover { g(Slot::Surface3) } else { g(Slot::Surface2) }, 8.0, 1.0, g(Slot::Border1)));
+            let k = self.hover_level(r, abspielbar && r.contains(cx, cy));
+            rects.push(UiRect::framed(r, crate::mix_color(g(Slot::Surface2), g(Slot::Surface3), k), 8.0, 1.0, g(Slot::Border1)));
             let start = chrono::DateTime::from_timestamp_millis(e.header.wall_ms as i64)
                 .map_or_else(|| "?".to_string(), |t| t.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M").to_string());
             let farbe = if abspielbar { theme::text() } else { g(Slot::TextDisabled) };

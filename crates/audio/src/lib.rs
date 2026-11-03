@@ -473,7 +473,7 @@ impl AudioEngine {
             Some(name) => host
                 .output_devices()
                 .map_err(|_| AudioError::NoOutputDevice)?
-                .find(|d| d.name().is_ok_and(|n| n == name))
+                .find(|d| geraete_name(d).is_some_and(|n| n == name))
                 .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?,
             None => host.default_output_device().ok_or(AudioError::NoOutputDevice)?,
         };
@@ -481,7 +481,7 @@ impl AudioEngine {
         let (config, sample_format) = low_latency_config(&device, self.buffer_frames)?;
         let state = Arc::clone(&self.state);
         let channels = config.channels as usize;
-        let sample_rate = config.sample_rate.0 as f32;
+        let sample_rate = config.sample_rate as f32;
         let callback_frames = Arc::new(AtomicU32::new(0));
         let gemessen = Arc::clone(&callback_frames);
         let callback_thread = Arc::new(AtomicU32::new(0));
@@ -498,7 +498,7 @@ impl AudioEngine {
         let err_fn = |e| eprintln!("[audio] Stream-Fehler: {e}");
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [f32], _| {
                     melde(data.len());
                     fill_buffer(data, channels, sample_rate, &state);
@@ -507,7 +507,7 @@ impl AudioEngine {
                 None,
             ),
             SampleFormat::I16 => device.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [i16], _| {
                     melde(data.len());
                     let mut tmp = vec![0.0f32; data.len()];
@@ -520,7 +520,7 @@ impl AudioEngine {
                 None,
             ),
             SampleFormat::U16 => device.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [u16], _| {
                     melde(data.len());
                     let mut tmp = vec![0.0f32; data.len()];
@@ -539,13 +539,13 @@ impl AudioEngine {
         stream.play().map_err(|e| AudioError::PlayStream(e.to_string()))?;
 
         self.requested_device = name.map(str::to_string);
-        self.current_device_name = Some(device.name().unwrap_or_else(|_| "unbekannt".to_string()));
+        self.current_device_name = Some(geraete_name(&device).unwrap_or_else(|| "unbekannt".to_string()));
         self.stream = Some(stream);
         let requested_frames = match config.buffer_size {
             BufferSize::Fixed(n) => Some(n),
             BufferSize::Default => None,
         };
-        self.buffer = Some(BufferInfo { requested_frames, sample_rate: config.sample_rate.0, callback_frames, callback_thread });
+        self.buffer = Some(BufferInfo { requested_frames, sample_rate: config.sample_rate, callback_frames, callback_thread });
         Ok(())
     }
 
@@ -1157,8 +1157,8 @@ fn low_latency_config(device: &cpal::Device, buffer_frames: Option<u32>) -> Resu
     if let Ok(mut supported) = device.supported_output_configs() {
         if let Some(range) = supported.find(|r| r.channels() == config.channels && r.sample_format() == sample_format) {
             // Rate zuerst: sie entscheidet, wie lang ein Puffer aus N Frames dauert.
-            if range.min_sample_rate().0 <= PREFERRED_SAMPLE_RATE && PREFERRED_SAMPLE_RATE <= range.max_sample_rate().0 {
-                config.sample_rate = cpal::SampleRate(PREFERRED_SAMPLE_RATE);
+            if range.min_sample_rate() <= PREFERRED_SAMPLE_RATE && PREFERRED_SAMPLE_RATE <= range.max_sample_rate() {
+                config.sample_rate = PREFERRED_SAMPLE_RATE;
             }
             if let (Some(ziel), cpal::SupportedBufferSize::Range { min, max }) = (buffer_frames, range.buffer_size()) {
                 let frames = ziel.clamp(*min, *max);
@@ -1232,12 +1232,21 @@ pub fn render_sample(sample: Arc<wav::Wav>, gain: f32, pitch: f32, sample_rate: 
 #[must_use] 
 pub fn list_output_devices() -> Vec<String> {
     let host = cpal::default_host();
-    host.output_devices().map(|it| it.filter_map(|d| d.name().ok()).collect()).unwrap_or_default()
+    host.output_devices().map(|it| it.filter_map(|d| geraete_name(&d)).collect()).unwrap_or_default()
 }
 
 #[must_use] 
 pub fn default_output_device_name() -> Option<String> {
-    cpal::default_host().default_output_device().and_then(|d| d.name().ok())
+    cpal::default_host().default_output_device().and_then(|d| geraete_name(&d))
+}
+
+/// Name eines Geraets, wie er in den Einstellungen steht. Unter ALSA die PCM-Kennung ("default",
+/// "pipewire", ...) -- so hiessen die Geraete bis cpal 0.15, gespeicherte Auswahlen passen weiter;
+/// sonst der lesbare Name.
+#[must_use]
+pub fn geraete_name(device: &cpal::Device) -> Option<String> {
+    let d = device.description().ok()?;
+    Some(d.driver().unwrap_or(d.name()).to_string())
 }
 
 impl Default for AudioEngine {

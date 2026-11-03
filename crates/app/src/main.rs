@@ -34,6 +34,7 @@ mod hitbox_kinds;
 mod teams;
 mod i18n;
 mod inventory;
+mod inventory_anim;
 mod item_cooldowns;
 mod item_icons;
 mod item_model_input;
@@ -342,7 +343,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         // ebenso Kontenliste und Element-Fenster im HUD-Editor (Nutzerwunsch).
         ButtonAction::OpenQuickConnect | ButtonAction::NewServer | ButtonAction::OpenKeybindAdvanced(_) => UiSound::Open,
         ButtonAction::CloseModuleMenu | ButtonAction::CloseKeybindAdvanced => UiSound::Close,
-        ButtonAction::OpenScreen(_) | ButtonAction::OpenLink(_) | ButtonAction::OpenShaderSettings | ButtonAction::OpenLightLevels | ButtonAction::OpenParticleSettings | ButtonAction::Back => UiSound::Click,
+        ButtonAction::OpenScreen(_) | ButtonAction::OpenLink(_) | ButtonAction::OpenShaderSettings | ButtonAction::OpenLightLevels | ButtonAction::OpenParticleSettings(_) | ButtonAction::OpenAnimSettings | ButtonAction::Back => UiSound::Click,
         // Schrittweise Werte: Stepper, Listen, Auswahl.
         ButtonAction::FrameLatencyDown
         | ButtonAction::FrameLatencyUp
@@ -375,7 +376,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CycleProjection
         | ButtonAction::CycleTearPosition
         | ButtonAction::CycleRenderPath
-        | ButtonAction::CycleParticles
+        | ButtonAction::CycleParticles(_)
         | ButtonAction::CycleDeathAnimation
         | ButtonAction::CycleHoldUseRepeat
         | ButtonAction::CycleWallpaper
@@ -460,6 +461,12 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::DamageTintTicksNext
         | ButtonAction::SmoothLightingDown
         | ButtonAction::SmoothLightingUp
+        | ButtonAction::MotionBlurDown
+        | ButtonAction::MotionBlurUp
+        | ButtonAction::SlotHoverFadeDown
+        | ButtonAction::SlotHoverFadeUp
+        | ButtonAction::SwapAnimDown
+        | ButtonAction::SwapAnimUp
         | ButtonAction::BlockOutlineWidthPrev
         | ButtonAction::BlockOutlineWidthNext
         | ButtonAction::ToggleKeybindMode(_) => UiSound::Step,
@@ -473,8 +480,8 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleEffectsIcon => umschalten(settings.effects_icon),
         ButtonAction::ToggleEffectsHideAmbient => umschalten(settings.effects_hide_ambient),
         ButtonAction::ToggleEffectsName => umschalten(settings.effects_name),
-        ButtonAction::ParticleToggle(i) => umschalten(settings.particle_tuning[i].enabled),
-        ButtonAction::ParticleAllAtOnce(i) => umschalten(settings.particle_tuning[i].all_at_once),
+        ButtonAction::ParticleToggle(own, i) => umschalten(settings.particle_tuning_of(own)[i].enabled),
+        ButtonAction::ParticleAllAtOnce(own, i) => umschalten(settings.particle_tuning_of(own)[i].all_at_once),
         ButtonAction::ParticleStep(..) => UiSound::Step,
         ButtonAction::ToggleCaveCulling => umschalten(settings.cave_culling),
         ButtonAction::ToggleMipmapping => umschalten(settings.mipmapping),
@@ -596,6 +603,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleSustainBackground => umschalten(settings.sustain_background),
         ButtonAction::ToggleSustainPause => umschalten(settings.sustain_pause),
         ButtonAction::ToggleAnimFlag(bit) => umschalten(settings.anim_flags & bit != 0),
+        ButtonAction::ToggleAnims => umschalten(settings.anims_enabled),
         ButtonAction::ToggleModuleChunkSaver => umschalten(settings.module_chunk_saver),
         ButtonAction::ToggleChunkSaverRenderSaved => umschalten(settings.chunk_saver_render_saved),
                 ButtonAction::ToggleArrowIndicator => umschalten(settings.arrow_indicator),

@@ -25,7 +25,7 @@ impl BlockRenderer {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("block shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../block.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crate::block_shader_source().into()),
         });
 
         let atlas_bind_group_layout = create_atlas_bind_group_layout(device);
@@ -640,6 +640,37 @@ impl BlockRenderer {
             cache: None,
         });
 
+        // Maske des eigenen Spielers (Bewegungsunschaerfe, s. crate::motion_blur): dieselbe
+        // Vertex-Stufe und Rasterung wie die Entity-Pipeline, die Tiefe nur gelesen -- so
+        // treffen genau die Pixel, an denen er im Bild zu sehen ist.
+        let own_mask_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("own player mask pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_entity",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[vertex_buffer_layout.clone(), entity_tint_layout.clone()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_entity_mask",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: crate::motion_blur::MASK_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // Wie die Entity-Pipeline, aber gemischt (RenderLayers.entityTranslucent).
         let entity_translucent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("entity translucent pipeline"),
@@ -1092,6 +1123,9 @@ impl BlockRenderer {
             entity_translucent_count: 0,
             entity_head_translucent: 0,
             outline_pipeline,
+            own_mask_pipeline,
+            own_vertex_count: 0,
+            sharp_entity_ranges: Vec::new(),
             outline_buffer,
             outline_color_buffer,
             outline_vertex_count: 0,
@@ -1102,6 +1136,7 @@ impl BlockRenderer {
             lit_entity_pipeline,
             lit_entity_translucent_pipeline,
             hand_light: None,
+            keep_depth: false,
             hand_lit_pipeline,
             ghost_light_buffer,
             ghost_light_count: 0,

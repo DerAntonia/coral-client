@@ -492,6 +492,15 @@ pub struct BlockRenderer {
     gbuffer_ghost_pipeline: wgpu::RenderPipeline,
     // Shader-Pfad: Licht an der Augenposition fuer die Ego-Hand (None = PvP-Pfad, unbeleuchtet).
     pub hand_light: Option<u32>,
+    // Maske des eigenen Spielers (s. render_own_mask) und wie viele Vertices am Anfang der
+    // Entity-Liste ihm gehoeren.
+    own_mask_pipeline: wgpu::RenderPipeline,
+    own_vertex_count: u32,
+    // Lesbare Entity-Bereiche, s. set_sharp_entities.
+    sharp_entity_ranges: Vec<std::ops::Range<u32>>,
+    // Die Tiefe des Welt-Durchgangs stehen lassen: die Bewegungsunschaerfe liest sie danach
+    // (s. crate::motion_blur, depth_view).
+    pub keep_depth: bool,
     hand_lit_pipeline: wgpu::RenderPipeline,
     // Eigene Kamera + eigener Puffer fuer die Ego-Hand. Vanilla zeichnet die Hand in einem
     // getrennten Durchgang mit geleertem Tiefenpuffer und einer EIGENEN Projektion bei festem

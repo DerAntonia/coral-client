@@ -762,6 +762,8 @@ fn collect_spans(value: &NbtValue, inherited: &Style, out: &mut Vec<TextSpan>) {
                         }
                     }
                 }
+            } else if let Some(name) = value.get("keybind").and_then(NbtValue::as_str) {
+                push_legacy_styled(&keybind_text(name), &own, out);
             }
             if let Some(NbtValue::List(extra)) = value.get("extra") {
                 for e in extra {
@@ -771,6 +773,100 @@ fn collect_spans(value: &NbtValue, inherited: &Style, out: &mut Vec<TextSpan>) {
         }
         _ => {}
     }
+}
+
+// --- Tastenbelegung ("keybind"-Components) --------------------------------------------------
+//
+// Vanilla (KeybindContents -> KeyMapping.createNameSupplier) setzt dafuer den Namen der Taste
+// ein, die auf dieser Belegung liegt, unbekannte Belegungen als Component.translatable(name).
+// Ein Server kann das ueber ein Schild abfragen: der Editor loest die Zeilen auf und schickt sie
+// beim Schliessen zurueck (AbstractSignEditScreen). So liessen sich die Tasten jedes Spielers
+// mitlesen. Gemeldet wird deshalb IMMER die Vanilla-Standardtaste, nie die eigene Belegung --
+// das sieht aus wie der haeufigste Vanilla-Spieler und verraet nichts (Nutzerwunsch).
+
+// Alle Belegungen aus Vanillas Options mit ihrer Standardtaste (InputConstants-Name).
+const VANILLA_DEFAULT_KEYS: [(&str, &str); 59] = [
+    ("key.forward", "key.keyboard.w"),
+    ("key.left", "key.keyboard.a"),
+    ("key.back", "key.keyboard.s"),
+    ("key.right", "key.keyboard.d"),
+    ("key.jump", "key.keyboard.space"),
+    ("key.sneak", "key.keyboard.left.shift"),
+    ("key.sprint", "key.keyboard.left.control"),
+    ("key.inventory", "key.keyboard.e"),
+    ("key.swapOffhand", "key.keyboard.f"),
+    ("key.drop", "key.keyboard.q"),
+    ("key.use", "key.mouse.right"),
+    ("key.attack", "key.mouse.left"),
+    ("key.pickItem", "key.mouse.middle"),
+    ("key.chat", "key.keyboard.t"),
+    ("key.playerlist", "key.keyboard.tab"),
+    ("key.command", "key.keyboard.slash"),
+    ("key.socialInteractions", "key.keyboard.p"),
+    ("key.screenshot", "key.keyboard.f2"),
+    ("key.togglePerspective", "key.keyboard.f5"),
+    ("key.smoothCamera", "key.keyboard.unknown"),
+    ("key.fullscreen", "key.keyboard.f11"),
+    ("key.advancements", "key.keyboard.l"),
+    ("key.quickActions", "key.keyboard.g"),
+    ("key.toggleGui", "key.keyboard.f1"),
+    ("key.toggleSpectatorShaderEffects", "key.keyboard.f4"),
+    ("key.hotbar.1", "key.keyboard.1"),
+    ("key.hotbar.2", "key.keyboard.2"),
+    ("key.hotbar.3", "key.keyboard.3"),
+    ("key.hotbar.4", "key.keyboard.4"),
+    ("key.hotbar.5", "key.keyboard.5"),
+    ("key.hotbar.6", "key.keyboard.6"),
+    ("key.hotbar.7", "key.keyboard.7"),
+    ("key.hotbar.8", "key.keyboard.8"),
+    ("key.hotbar.9", "key.keyboard.9"),
+    ("key.saveToolbarActivator", "key.keyboard.c"),
+    ("key.loadToolbarActivator", "key.keyboard.x"),
+    ("key.spectatorOutlines", "key.keyboard.unknown"),
+    ("key.spectatorHotbar", "key.mouse.middle"),
+    ("key.debug.overlay", "key.keyboard.f3"),
+    ("key.debug.modifier", "key.keyboard.f3"),
+    ("key.debug.crash", "key.keyboard.c"),
+    ("key.debug.reloadChunk", "key.keyboard.a"),
+    ("key.debug.showHitboxes", "key.keyboard.b"),
+    ("key.debug.clearChat", "key.keyboard.d"),
+    ("key.debug.showChunkBorders", "key.keyboard.g"),
+    ("key.debug.showAdvancedTooltips", "key.keyboard.h"),
+    ("key.debug.copyRecreateCommand", "key.keyboard.i"),
+    ("key.debug.spectate", "key.keyboard.n"),
+    ("key.debug.switchGameMode", "key.keyboard.f4"),
+    ("key.debug.debugOptions", "key.keyboard.f6"),
+    ("key.debug.focusPause", "key.keyboard.p"),
+    ("key.debug.dumpDynamicTextures", "key.keyboard.s"),
+    ("key.debug.reloadResourcePacks", "key.keyboard.t"),
+    ("key.debug.profiling", "key.keyboard.l"),
+    ("key.debug.copyLocation", "key.keyboard.c"),
+    ("key.debug.dumpVersion", "key.keyboard.v"),
+    ("key.debug.profilingChart", "key.keyboard.1"),
+    ("key.debug.fpsCharts", "key.keyboard.2"),
+    ("key.debug.networkCharts", "key.keyboard.3"),
+];
+
+// Der Text eines "keybind"-Components (s. oben).
+#[must_use]
+pub fn keybind_text(name: &str) -> String {
+    match VANILLA_DEFAULT_KEYS.iter().find(|(n, _)| *n == name) {
+        Some(&(_, key)) => key_display_name(key),
+        None => translate(name).unwrap_or_else(|| name.to_string()),
+    }
+}
+
+// InputConstants.Key.getDisplayName fuer die Standardtasten: druckbare Tasten (glfwGetKeyName)
+// als ihr Zeichen in Grossbuchstaben, alles andere ueber die Sprachdatei ("Space", "Left
+// Button", "Not Bound"). Das Zeichen haengt in Vanilla am Tastaturlayout -- gemeldet wird das
+// US-Layout (auf QWERTZ zeigte Vanilla fuer "/" ein "-").
+fn key_display_name(key: &str) -> String {
+    let zeichen = match key.strip_prefix("key.keyboard.") {
+        Some("slash") => Some("/".to_string()),
+        Some(rest) if rest.chars().count() == 1 => Some(rest.to_uppercase()),
+        _ => None,
+    };
+    zeichen.unwrap_or_else(|| translate(key).unwrap_or_else(|| key.to_string()))
 }
 
 // --- Uebersetzung ("translate"-Components) --------------------------------------------------
@@ -1152,6 +1248,8 @@ pub fn text_to_plain_string(value: &NbtValue) -> String {
                         TranslationPart::Arg(i) => out.push_str(&args.get(i).map(arg_plain_string).unwrap_or_default()),
                     }
                 }
+            } else if let Some(name) = value.get("keybind").and_then(NbtValue::as_str) {
+                out.push_str(&keybind_text(name));
             } else if let Some(key) = value.get("translate").and_then(NbtValue::as_str) {
                 out.push_str(key);
                 if let Some(NbtValue::List(args)) = value.get("with") {
@@ -1189,6 +1287,22 @@ fn arg_plain_string(arg: &NbtValue) -> String {
 #[cfg(test)]
 mod span_tests {
     use super::*;
+
+    // "keybind" wie Vanilla mit Standardtasten: Buchstaben gross, sonst die Sprachdatei,
+    // unbekannte Belegungen (Mod-Tasten) roh -- auf dem Schild und im Klartext.
+    #[test]
+    fn keybind_meldet_vanilla_standardtasten() {
+        let kb = |name: &str| compound(vec![("keybind", NbtValue::String(name.into()))]);
+        let text = |v: &NbtValue| text_to_spans(v).into_iter().map(|s| s.text).collect::<String>();
+        assert_eq!(text(&kb("key.forward")), "W");
+        assert_eq!(text(&kb("key.hotbar.3")), "3");
+        assert_eq!(text(&kb("key.command")), "/");
+        assert_eq!(text(&kb("key.jump")), translate("key.keyboard.space").unwrap_or_else(|| "key.keyboard.space".into()));
+        assert_eq!(text(&kb("key.attack")), translate("key.mouse.left").unwrap_or_else(|| "key.mouse.left".into()));
+        assert_eq!(text(&kb("key.meteor-client.open-gui")), "key.meteor-client.open-gui");
+        assert_eq!(text_to_plain_string(&kb("key.drop")), "Q");
+        assert_eq!(VANILLA_DEFAULT_KEYS.iter().map(|(n, _)| n).collect::<std::collections::HashSet<_>>().len(), VANILLA_DEFAULT_KEYS.len(), "doppelte Belegung");
+    }
 
     #[test]
     fn uebersetzungsmuster_wie_vanilla() {

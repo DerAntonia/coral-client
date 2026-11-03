@@ -733,15 +733,14 @@ impl App {
         for (i, karte) in self.server_cards() {
             let entry = &self.servers[i];
             let hover = karte.contains(cx, cy) && cy >= oben && cy <= unten;
-            // Karte wie in osu!: Flaeche mit Rahmen, beim Draufzeigen heller und mit
-            // Akzentstreifen links.
-            let (fill, rand) = if hover { (g(Slot::Surface2), g(Slot::Accent)) } else { (g(Slot::Surface1), g(Slot::Border1)) };
+            // Wie die Skin-Kacheln: die Flaeche hellt weich auf (s. hover_level, ohne Aufblitzen),
+            // der Rand schaltet hart um.
+            let k = self.hover_level(karte, hover).min(1.0);
+            let fill = mix_color(g(Slot::Surface1), g(Slot::Surface2), k);
+            let rand = if hover { g(Slot::Accent) } else { g(Slot::Border1) };
             rects.push(UiRect::shadow(karte, 8.0, 2.0, 8.0, 0.35));
             rects.push(UiRect::framed(karte, fill, 8.0, 1.0, rand));
             let inhalt_x = karte.x;
-            if hover {
-                rects.push(UiRect::rounded(Rect { x: karte.x + 6.0, y: karte.y + 14.0, w: 4.0, h: karte.h - 28.0 }, g(Slot::Accent), 2.0));
-            }
             // Icon des Servers (aus dem Status-Ping), ohne eins das Vanilla-Bild fuer
             // unbekannte Server (s. server_list_icon).
             let feld = Rect { x: inhalt_x + 16.0, y: karte.y + 12.0, w: icon, h: icon };

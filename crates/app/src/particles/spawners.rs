@@ -230,8 +230,10 @@ impl Particles {
     pub fn on_explosion(&mut self, e: &pp::Explosion, ctx: &SpawnContext) {
         let center = DVec3::new(e.center.0, e.center.1, e.center.2);
         self.add_client(&e.particle, false, false, center, DVec3::new(1.0, 0.0, 0.0), ctx);
-        if self.tuning[KIND_EXPLOSION].enabled && !e.block_particles.is_empty() {
+        let own = own_at(ctx, center);
+        if self.tuning_of(own, KIND_EXPLOSION).enabled && !e.block_particles.is_empty() {
             self.bursts.push(ExplosionBurst {
+                own,
                 center,
                 radius: e.radius,
                 block_count: e.block_count,
@@ -252,7 +254,8 @@ impl Particles {
     ) {
         let mut em = Emitter { entity, effect: ParticleEffect { type_id, options: ParticleOptions::None }, age: 0, max_age };
         // "Alle auf einmal": alle Ticks des Emitters jetzt (das Totem etwa sonst 30 Ticks lang).
-        let sofort = kind_of(type_id).is_some_and(|k| self.tuning[k].all_at_once && KINDS[k].spawn.has_all_at_once());
+        let own = body(entity).is_some_and(|b| own_at(ctx, b.pos));
+        let sofort = kind_of(type_id).is_some_and(|k| self.tuning_of(own, k).all_at_once && KINDS[k].spawn.has_all_at_once());
         if sofort {
             for _ in 0..max_age.max(1) {
                 if !self.tick_emitter(&mut em, body, ctx) {
@@ -318,7 +321,7 @@ impl Particles {
                         let o = (f64::from(n) + 0.5) / f64::from(nk);
                         let p = origin + DVec3::new(g * size.x + min.x, h * size.y + min.y, o * size.z + min.z);
                         if let Some(p) = self.block_dust(p, DVec3::new(g - 0.5, h - 0.5, o - 0.5), state, pos, ctx) {
-                            self.push(p, KIND_BLOCK);
+                            self.push(p, KIND_BLOCK, ctx);
                         }
                     }
                 }
@@ -358,7 +361,7 @@ impl Particles {
             _ => {}
         }
         if let Some(p) = self.block_dust(DVec3::new(x, y, z), DVec3::ZERO, state, pos, ctx) {
-            self.push(p.speed(0.2).scaled(0.6), KIND_BLOCK);
+            self.push(p.speed(0.2).scaled(0.6), KIND_BLOCK, ctx);
         }
     }
 

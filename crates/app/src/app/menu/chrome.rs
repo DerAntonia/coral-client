@@ -273,6 +273,19 @@ impl App {
             b.rect.x += dx;
             b.rect.y += dy;
         }
+        // Ganz aus dem Zeilenband gescrollte Knoepfe sind nicht zu sehen (s. build_menu_ui) und
+        // treffen auch nichts. Button::hits schneidet nur angeschnittene ab -- ein Knopf ganz
+        // hinter den Reitern (Anpassen der anderen Partikel ueber Glint) fing sonst deren Klick ab.
+        if self.mode == AppMode::Menu && self.screen.settings_page().is_some() {
+            if let Some(band) = crate::content_clip() {
+                out.retain(|b| {
+                    let r = b.rect;
+                    matches!(b.action, ButtonAction::SettingsSection(_) | ButtonAction::Back)
+                        || r.x + r.w <= SIDEBAR_W
+                        || (r.x < band.x + band.w && r.x + r.w > band.x && r.y < band.y + band.h && r.y + r.h > band.y)
+                });
+            }
+        }
         out
     }
 
@@ -331,10 +344,10 @@ impl App {
         rects.push(UiRect { rect: Rect { x: 0.0, y: sh - BOTTOMBAR_H, w: sw, h: 1.0 }, color: g(Slot::Border1), ..UiRect::FLAT });
         for (i, (_, label, farbe)) in self.bottom_tiles().into_iter().enumerate() {
             let r = bottom_tile_rect(i);
-            let hover = r.contains(cx, cy);
+            let k = self.hover_level(r, r.contains(cx, cy));
             // Unten ueber den Rand hinaus, damit nur die oberen Ecken rund sind.
             let flaeche = Rect { h: r.h + 12.0, ..r };
-            rects.push(UiRect::framed(flaeche, if hover { g(Slot::Surface3) } else { g(Slot::Surface2) }, 8.0, 1.0, g(Slot::Border1)));
+            rects.push(UiRect::framed(flaeche, mix_color(g(Slot::Surface2), g(Slot::Surface3), k), 8.0, 1.0, g(Slot::Border1)));
             rects.push(UiRect { rect: Rect { x: r.x + 1.0, y: r.y + r.h - 5.0, w: r.w - 2.0, h: 5.0 }, color: farbe, ..UiRect::FLAT });
             texts.push(gpu.centered_text(Rect { h: r.h - 5.0, ..r }, label.to_string(), theme::text(), UI_SCALE_SMALL));
         }

@@ -336,7 +336,7 @@ impl App {
     pub(crate) fn update_hover_sound(&mut self) {
         let jetzt = match self.skin_hover_target() {
             Some(ziel) => ziel,
-            None => self.button_under_cursor().map(HoverTarget::Button).or_else(|| self.drawn_hover().map(HoverTarget::Drawn)),
+            None => self.button_under_cursor().map(HoverTarget::Button).or_else(|| self.drawn_hover().filter(|&k| !self.drawn_is_moved_button(k)).map(HoverTarget::Drawn)),
         };
         if jetzt != self.hovered_button {
             self.hovered_button = jetzt;
@@ -344,6 +344,23 @@ impl App {
                 self.play_ui_sound(ui_sound::UiSound::Hover);
             }
         }
+    }
+
+    // Ein Knopf, der seit dem letzten Bild verschoben wurde (gleitendes Scrollen): gezeichnet
+    // stand er noch unter dem Zeiger, jetzt nicht mehr. Kein eigenes Ziel -- sonst klaenge er
+    // beim Verlassen ein zweites Mal. Erkannt an gleicher Breite, Hoehe und Spalte.
+    fn drawn_is_moved_button(&self, key: (i32, i32, i32, i32)) -> bool {
+        if self.mode != AppMode::Menu {
+            return false;
+        }
+        let modul = match self.gpu.as_ref().filter(|_| self.module_menu_shown()) {
+            Some(gpu) => self.module_menu_buttons(gpu),
+            None => Vec::new(),
+        };
+        self.buttons().into_iter().chain(modul).any(|b| {
+            let r = b.rect;
+            (r.x.round() as i32, r.w.round() as i32, r.h.round() as i32) == (key.0, key.2, key.3) && (r.y.round() as i32 - key.1).abs() <= 200
+        })
     }
 
     // Was zuletzt mit Hover gezeichnet wurde, solange es frisch ist und der Zeiger noch darauf
@@ -414,7 +431,7 @@ impl App {
             MenuScreen::SettingsInventory => self.build_settings_inventory_tab(gpu, rects, texts),
             MenuScreen::SettingsMisc => {
                 let y = (settings_row_y(0) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-                texts.push(UiText { text: "No UI close".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                texts.push(UiText { text: "Server-Bildschirme".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 let y = (settings_row_y(1) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                 texts.push(UiText { text: "No chat clear".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 let y = (settings_row_y(2) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
@@ -433,6 +450,29 @@ impl App {
             MenuScreen::SettingsConfigs => self.build_settings_configs(gpu, rects, texts),
             MenuScreen::SettingsLightLevels => self.build_settings_light_levels(gpu, rects, texts),
             MenuScreen::SettingsParticles => self.build_settings_particles(gpu, rects, texts),
+            MenuScreen::SettingsServerScreens => {
+                for zeile in 0..SERVER_SCREENS_ROWS {
+                    let label = match zeile {
+                        0 => "Eigenes Inventar",
+                        SERVER_CLOSE_SIGN_ROW => "Schild-Editor",
+                        z if z < SERVER_CLOSE_SIGN_ROW => CONTAINER_GROUPS[z - SERVER_CLOSE_GROUP_ROW].0,
+                        z => match z - SERVER_OPEN_ROW {
+                            SERVER_OPEN_SIGN => "Schild-Editor",
+                            SERVER_OPEN_BOOK => "Buch",
+                            i if i < SERVER_OPEN_SIGN => CONTAINER_GROUPS[i].0,
+                            _ => "Dialog",
+                        },
+                    };
+                    let y = (settings_row_y(zeile) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
+            }
+            MenuScreen::SettingsAnimations => {
+                for (i, (_, label)) in world::more_anims::FEATURES.into_iter().enumerate() {
+                    let y = (settings_row_y(i) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
+            }
             MenuScreen::SettingsSetup => self.build_settings_setup(gpu, texts),
             MenuScreen::SettingsSearch => self.build_settings_search(gpu, rects, texts),
             MenuScreen::HudEditor => match (self.crosshair_painter.is_some(), self.hud_selected) {

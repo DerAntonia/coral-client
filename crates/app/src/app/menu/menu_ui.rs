@@ -28,8 +28,21 @@ impl App {
         let (inhalt_r, inhalt_t, inhalt_s) = (rects.len(), texts.len(), sprites.len());
         // Seiten mit Seiten-Scroll: Zeilen werden am Zeilenband beschnitten (s. content_clip),
         // die Reiter darueber nicht.
-        let band = self.screen.settings_page().is_some() && self.mode == AppMode::Menu;
-        let seiten_fade = ScrollFade::new(SETTINGS_CLIP_TOP, settings_rows_bottom(screen_h), SETTINGS_ROW_H, self.page_scroll().stand, self.page_max_scroll() as f32);
+        // Die Partikel-Anpassung hat ihre eigene gleitende Liste (s. particle_list_band).
+        let partikel = self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles;
+        let band = (self.screen.settings_page().is_some() && self.mode == AppMode::Menu) || partikel;
+        let mut seiten_fade = if partikel {
+            self.particle_list_band().1
+        } else {
+            ScrollFade::new(SETTINGS_CLIP_TOP, settings_rows_bottom(screen_h), SETTINGS_ROW_H, self.page_scroll().stand, self.page_max_scroll() as f32)
+        };
+        // Steht ein Abschnitt genau oben, ist darueber nichts von ihm abgeschnitten: oben kein
+        // Verlauf. Er blendet ueber eine Zeile Abstand zum naechsten Abschnittsanfang ein.
+        if let Some(page) = self.screen.settings_page() {
+            let stand = self.page_scroll().stand;
+            let abstand = page.sections.iter().map(|&(_, row)| (stand - page.section_stand(row)).abs()).fold(stand.abs(), f32::min);
+            seiten_fade.edge_top = 1.0 - (1.0 - crate::SCROLL_FADE_EDGE) * abstand.clamp(0.0, 1.0);
+        }
         if band {
             push_clip_marker(&mut rects, &mut texts, true);
             push_fade_marker(&mut rects, &mut texts, Some(seiten_fade));
@@ -43,6 +56,8 @@ impl App {
                 rects.push(UiRect::rounded(r, theme::with_alpha(theme::get(theme::Slot::Accent), 0.35 * k.min(1.0)), 6.0));
             }
         }
+        // Nach einem Klick auf einen Reiter leuchtet sein Abschnitt kurz auf.
+        self.push_section_flash(screen_w, &mut rects);
 
         // Inhalt des aktuellen Screens. Die Bedienelemente selbst kommen aus buttons()
         // (weiter unten) -- hier nur Beschriftungen, Felder, Panels, Editor-Flaeche.
@@ -55,7 +70,9 @@ impl App {
             // Die Reiter liegen ueber dem Zeilenband und werden nicht beschnitten (sie haben
             // weder Regler noch Aufklappliste, kommen also unten an).
             let reiter = band && matches!(button.action, ButtonAction::SettingsSection(_));
-            if reiter {
+            // Ebenso der Zurueck-Knopf einer Unterseite (s. SettingsAnimations): er steht ueber dem Band.
+            let ueber_band = reiter || (band && button.action == ButtonAction::Back);
+            if ueber_band {
                 push_fade_marker(&mut rects, &mut texts, None);
                 push_clip_marker(&mut rects, &mut texts, false);
             }
@@ -92,21 +109,35 @@ impl App {
             let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, hover));
             let (dx, dy) = self.content_offset();
             // Zurueck in Inhaltskoordinaten, die Verschiebung folgt unten fuer alles zusammen.
-            let mut rect = Rect { x: button.rect.x - dx, y: button.rect.y - dy, ..button.rect };
-            // Der aktive Reiter zeichnet seine Hinterlegung dort, wo sie gerade hingleitet.
+            let rect = Rect { x: button.rect.x - dx, y: button.rect.y - dy, ..button.rect };
+            // Gedrueckt zieht er sich zur Mitte hin ein, samt Text (s. menu/press.rs): erst in
+            // voller Groesse gesetzt, dann verkleinert, der Text stufenlos (s. push_zoom_marker).
+            let zoom = Some(self.press_scale(button.action)).filter(|&s| s != 1.0).map(|s| (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0, s));
+            let r0 = rects.len();
+            if zoom.is_some() {
+                crate::push_zoom_marker(&mut texts, zoom);
+            }
+            // Der aktive Reiter zeichnet seine Hinterlegung dort, wo sie gerade hingleitet; der
+            // Text bleibt an seinem Reiter stehen.
+            let mut flaeche_rect = rect;
             if reiter && button.color == theme::get(theme::Slot::AccentSurface) {
                 if let Some((_, r)) = self.section_slide.filter(|&(screen, _)| screen == self.screen) {
-                    rect = Rect { x: r.x, w: r.w, ..rect };
+                    flaeche_rect = Rect { x: r.x, w: r.w, ..rect };
+                    // Unsichtbar der eigene Reiter: an ihm misst fit_texts den Text, nicht an der
+                    // vorbeigleitenden Hinterlegung.
+                    rects.push(UiRect { rect, color: [0.0; 4], ..UiRect::FLAT });
                 }
             }
-            rects.push(UiRect { rect, ..flaeche });
+            rects.push(UiRect { rect: flaeche_rect, ..flaeche });
             if let Some(c) = Self::choice_of(button.action) {
                 let offen = self.dropdown_active().is_some_and(|d| d.choice == c);
                 self.push_dropdown_face(gpu, rect, &button.label, color, button.scale, offen, &mut rects, &mut texts);
+                zoom_pressed(zoom, &mut rects[r0..], &mut texts);
                 continue;
             }
             texts.push(gpu.centered_text(rect, button.label, color, button.scale));
-            if reiter {
+            zoom_pressed(zoom, &mut rects[r0..], &mut texts);
+            if ueber_band {
                 push_clip_marker(&mut rects, &mut texts, true);
                 push_fade_marker(&mut rects, &mut texts, Some(seiten_fade));
             }
@@ -321,7 +352,7 @@ impl App {
                     Some(PROJECTION_TOOLTIP)
                 } else if settings_row_hover_rect(SMOOTH_LIGHTING_ROW).contains(cx, cy) {
                     Some(SMOOTH_LIGHTING_TOOLTIP)
-                } else if settings_row_hover_rect(PARTICLES_ROW).contains(cx, cy) {
+                } else if settings_row_hover_rect(PARTICLES_ROW).contains(cx, cy) || settings_row_hover_rect(PARTICLES_OTHER_ROW).contains(cx, cy) {
                     Some(PARTICLES_TOOLTIP)
                 } else if settings_row_hover_rect(GLINT_SPEED_ROW).contains(cx, cy) {
                     Some(GLINT_SPEED_TOOLTIP)
@@ -337,7 +368,7 @@ impl App {
                     Some(VIEW_MODEL_TOOLTIP)
                 } else if settings_row_hover_rect(DEATH_ANIM_ROW).contains(cx, cy) {
                     Some(DEATH_ANIM_TOOLTIP)
-                } else if (0..world::more_anims::FEATURES.len()).any(|i| settings_row_hover_rect(ANIM_FIRST_ROW + i).contains(cx, cy)) {
+                } else if settings_row_hover_rect(ANIM_ROW).contains(cx, cy) {
                     Some(ANIMS_TOOLTIP)
                 } else if settings_row_hover_rect(RENDER_DISTANCE_ROW).contains(cx, cy) {
                     Some(RENDER_DISTANCE_TOOLTIP)
@@ -398,7 +429,7 @@ impl App {
             MenuScreen::SettingsDesign => None,
             MenuScreen::SettingsMisc => {
                 if settings_row_hover_rect(0).contains(cx, cy) {
-                    Some("Schließt der Server ein offenes Fenster, bleibt es trotzdem offen. Immer: jedes Fenster (Truhe, Inventar, Schild-Editor ...). Nur Inventar: nur das eigene Inventar, Truhen & Co. schließt der Server weiter. Kein Vanilla-Verhalten: Klicks in einen Container, den der Server schon geschlossen hat, nimmt er nicht mehr an.")
+                    Some(SERVER_SCREENS_TOOLTIP)
                 } else if settings_row_hover_rect(2).contains(cx, cy) {
                     Some("An: man schreibt direkt auf das Schild in der Welt, solange man die Seite sieht. Aus: immer das Editor-Fenster wie in Vanilla.")
                 } else if settings_row_hover_rect(3).contains(cx, cy) {
@@ -409,6 +440,17 @@ impl App {
                     None
                 }
             }
+            MenuScreen::SettingsServerScreens => (0..SERVER_SCREENS_ROWS).find(|&z| settings_row_hover_rect(z).contains(cx, cy)).map(|zeile| match zeile {
+                0 => SERVER_CLOSE_INVENTORY_TOOLTIP,
+                SERVER_CLOSE_SIGN_ROW => SERVER_CLOSE_SIGN_TOOLTIP,
+                z if z < SERVER_CLOSE_SIGN_ROW => CONTAINER_GROUPS[z - SERVER_CLOSE_GROUP_ROW].1,
+                z => match z - SERVER_OPEN_ROW {
+                    SERVER_OPEN_SIGN => SERVER_OPEN_SIGN_TOOLTIP,
+                    SERVER_OPEN_BOOK => SERVER_OPEN_BOOK_TOOLTIP,
+                    i if i < SERVER_OPEN_SIGN => CONTAINER_GROUPS[i].2,
+                    _ => SERVER_OPEN_DIALOG_TOOLTIP,
+                },
+            }),
             MenuScreen::SettingsLanguage => {
                 if settings_row_hover_rect(LATIN_MACRONS_ROW).contains(cx, cy) {
                     Some(LATIN_MACRONS_TOOLTIP)
@@ -462,6 +504,12 @@ impl App {
                     Some("Kleines S neben dem Flaschenhals verstärkter Tränke (Stufe II), z. B. Stärke II oder Schnelligkeit II. Gilt im Inventar, nicht in der Hotbar.")
                 } else if settings_row_hover_rect(7).contains(cx, cy) {
                     Some("Kleines L neben dem Flaschenhals verlängerter Tränke (mit Redstone gebraut). Gilt im Inventar, nicht in der Hotbar.")
+                } else if settings_row_hover_rect(SLOT_HOVER_FADE_ROW).contains(cx, cy) {
+                    Some(SLOT_HOVER_FADE_TOOLTIP)
+                } else if settings_row_hover_rect(SLOT_HOVER_COLOR_ROW).contains(cx, cy) {
+                    Some(SLOT_HOVER_COLOR_TOOLTIP)
+                } else if settings_row_hover_rect(SWAP_ANIM_ROW).contains(cx, cy) {
+                    Some(SWAP_ANIM_TOOLTIP)
                 } else if settings_row_hover_rect(8).contains(cx, cy) {
                     Some("Kleines W auf Heil- und Schadenstränken der schwachen Stufe I. Stufe II bekommt keinen Buchstaben, weil sie im PvP der Normalfall ist. Gilt im Inventar, nicht in der Hotbar.")
                 } else {
@@ -497,4 +545,15 @@ impl App {
             _ => None,
         }
     }
+}
+
+// Ende eines gedrueckten Knopfs (s. build_menu_ui): seine Flaechen zur Mitte hin verkleinern,
+// fuer den Text endet der Zoom.
+fn zoom_pressed(zoom: Option<(f32, f32, f32)>, rects: &mut [UiRect], texts: &mut Vec<UiText>) {
+    let Some((mx, my, s)) = zoom else { return };
+    // Marker (leere Flaechen) tragen Daten in x/y, die bleiben.
+    for r in rects.iter_mut().filter(|r| r.rect.w != 0.0 || r.rect.h != 0.0) {
+        r.rect = Rect { x: mx + (r.rect.x - mx) * s, y: my + (r.rect.y - my) * s, w: r.rect.w * s, h: r.rect.h * s };
+    }
+    crate::push_zoom_marker(texts, None);
 }

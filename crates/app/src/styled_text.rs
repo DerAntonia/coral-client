@@ -346,6 +346,7 @@ pub(crate) const SETTINGS_LABELS: [&str; SETTINGS_ROW_COUNT] = [
     "Chunk-Update-Threads",
     "Höhlen-Culling",
     "Mipmapping",
+    "Motion Blur",
     "Tearing-Test",
     "TearFree",
     "Scanout-Timing",
@@ -364,6 +365,7 @@ pub(crate) const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Größe des dedizierten Worker-Pools fürs Chunk-Meshing (nicht das Netzwerk, das läuft getrennt). Mehr Threads bauen Chunks parallel schneller auf, konkurrieren dabei aber mit allem anderen auf der CPU (Physik, Netzwerk-Decoding, Spiel selbst).",
     "Zeichnet nur die 16er-Abschnitte der Welt, die von der Kamera aus durch Luft, Wasser oder Glas überhaupt zu sehen sein können -- Höhlen unter der Oberfläche, und von unten die Oberfläche, fallen weg. Spart GPU-Zeit, ohne dass sich etwas Sichtbares ändert. AUS zum Vergleichen.",
     "Verkleinerte Fassungen der Blocktexturen für entfernte Blöcke, wie in Vanilla. AUS nimmt immer die volle Auflösung: in der Ferne flimmert es dann stärker.",
+    "Bewegungsunschärfe: verwischt die Welt entlang der Kamerabewegung, wie das Auge schnelle Bewegung sieht -- Hand und HUD bleiben scharf. 100 % = die Bewegung während eines Monitorbilds; läuft das Spiel schneller als der Monitor, gleicht die Stärke das aus. Ein Durchgang auf der Grafikkarte ohne gespeicherte alte Bilder, also keine zusätzliche Verzögerung; steht die Kamera still, fällt er ganz weg. Nur mit normaler Projektion.",
     "Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um TearFree und die Riss-Steuerung zu testen. Läuft im Menü und im Spiel.",
     "Globale Anzeigeeinstellung des Grafiktreibers (xrandr) gegen Tearing bei fehlendem Hardware-Flip -- nur bedienbar, wenn der Treiber sie hat (amdgpu, radeon, neuere modesetting; nicht Nvidia).  Gilt nur, während Coral Client im Vordergrund läuft -- danach automatisch zurück auf den Wert von vor dem Start.",
     "Legt bei Immediate (mit FPS-Limit) jeden Bildwechsel knapp vor die Austastlücke des Monitors -- dort ist er unsichtbar, es gibt keinen Riss mehr im Bild. Misst dafür die VBlanks des Monitors (Linux, /dev/dri) und präsentiert jeden Frame auf die Mikrosekunde zu einem daraus berechneten Zeitpunkt; die Bildrate folgt dann exakt dem Monitor (bzw. jedem n-ten Bild bei niedrigerem FPS-Limit). Kostet etwas Latenz (der Frame wird mit Vorlauf fertig gebaut). Bei Fifo wirkungslos -- dort gibt es keinen Riss. Im Frame-Profiler (F6) sieht man, wo er landet.",
@@ -376,7 +378,7 @@ pub(crate) const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Wie das Coral-Fenster gerade auf den Schirm kommt. \"Zusammengesetzt von\": ein Compositor setzt es zusammen und entscheidet, wann ein Bild erscheint -- dann wirken Scanout-Timing und Riss-Timing nicht (Cinnamon: Einstellungen, Allgemein, \"Komposit für Vollbildfenster deaktivieren\" an). Sonst kommt es ohne Compositor per Hardware-Flip oder als Kopie des X-Servers, und dahinter steht, wo der Riss der letzten Bilder lag (gemessen an den Meldungen des X-Servers). Bleibt er bei jeder Einstellung an derselben Stelle, auch wenn man Scanout-Timing und Riss-Timing verstellt, hält der X-Server die Bilder fest -- dann hilft ein Neustart (oder Ab- und wieder Anmelden).",
 ];
 // Zeilen des Render-Tabs (Reihenfolge wie SETTINGS_LABELS), in Abschnitten: Bildrate,
-// Chunks, Tearing, System. Sichtweiten, Entity-Weite und Block-Rotation stehen im Video-Tab.
+// Chunks, Effekte, Tearing, System. Sichtweiten, Entity-Weite und Block-Rotation stehen im Video-Tab.
 pub(crate) const FPS_LIMIT_ROW: usize = 0;
 pub(crate) const FRAME_LATENCY_ROW: usize = 1;
 pub(crate) const MESH_BUDGET_ROW: usize = 2;
@@ -384,14 +386,18 @@ pub(crate) const CHUNK_THREADS_ROW: usize = 3;
 // Hoehlen-Culling an/aus (Settings::cave_culling), s. render::occlusion.
 pub(crate) const CAVE_CULLING_ROW: usize = 4;
 pub(crate) const MIPMAPPING_ROW: usize = 5;
-pub(crate) const TEARING_TEST_ROW: usize = 6;
-pub(crate) const TEARFREE_ROW: usize = 7;
+// Abschnitt Effekte: Bewegungsunschaerfe (Settings::motion_blur_percent).
+pub(crate) const MOTION_BLUR_ROW: usize = 6;
+pub(crate) const MOTION_BLUR_MAX: u32 = 300;
+pub(crate) const MOTION_BLUR_STEP: u32 = 10;
+pub(crate) const TEARING_TEST_ROW: usize = 7;
+pub(crate) const TEARFREE_ROW: usize = 8;
 // Abschnitt System: reine Anzeige (s. system_info).
-pub(crate) const CPU_ROW: usize = 11;
-pub(crate) const GPU_ROW: usize = 12;
-pub(crate) const RAM_ROW: usize = 13;
-pub(crate) const SWAP_ROW: usize = 14;
-pub(crate) const COMPOSITING_ROW: usize = 15;
+pub(crate) const CPU_ROW: usize = 12;
+pub(crate) const GPU_ROW: usize = 13;
+pub(crate) const RAM_ROW: usize = 14;
+pub(crate) const SWAP_ROW: usize = 15;
+pub(crate) const COMPOSITING_ROW: usize = 16;
 pub(crate) const BLOCK_ROTATION_TOOLTIP: &str = "Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.";
 pub(crate) const ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 pub(crate) const BLOCK_ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Block-Entities gezeichnet werden (Truhen, Betten, Shulkerkisten, Köpfe, Statuen, Schilder), in Blöcken. Außerhalb der Render-Distance nie. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";

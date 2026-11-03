@@ -884,6 +884,18 @@ fn partikel_anpassung_wird_gespeichert_und_alter_explosionsschalter_uebernommen(
     assert_eq!(alt.particle_tuning[art("potion")].lifetime_pct, 50);
     assert_eq!(alt.particle_tuning[art("potion_splash")].lifetime_pct, 50);
     assert_eq!(alt.particle_tuning[art("potion")].amount_pct, 100);
+    // Vor der Trennung in eigene und andere Partikel galt eine Anpassung fuer beide.
+    assert_eq!(alt.particle_tuning_own, alt.particle_tuning);
+    let alt = Settings::parse_onto(Settings::base(), "particles_mode=2\n");
+    assert_eq!((alt.particles_mode, alt.particles_mode_own), (2, 2));
+    // Getrennt eingestellt: beide ueberleben das Speichern, die eigenen ohne die der anderen.
+    let mut getrennt = Settings::parse_onto(Settings::base(), "");
+    getrennt.particles_mode_own = 1;
+    getrennt.particle_tuning_own[herzen].enabled = false;
+    let gelesen = Settings::parse_onto(Settings::base(), &getrennt.serialize());
+    assert_eq!((gelesen.particles_mode, gelesen.particles_mode_own), (0, 1));
+    assert_eq!(gelesen.particle_tuning_own, getrennt.particle_tuning_own);
+    assert!(gelesen.particle_tuning[herzen].enabled);
     let alt = Settings::parse_onto(Settings::base(), "explosion_particles=false\n");
     assert!(!alt.particle_tuning[particles::KIND_EXPLOSION].enabled);
     assert!(alt.particle_tuning[0].enabled);
@@ -1701,8 +1713,8 @@ fn kontur_rastet_auf_ganze_pixel_ein() {
 // Der Fadenkreuz-Shader muss sich uebersetzen lassen (Kreise kamen als neue Art dazu).
 #[test]
 fn fadenkreuz_shader_ist_gueltig() {
-    let quelle = include_str!("../crosshair.wgsl");
-    let modul = naga::front::wgsl::parse_str(quelle).unwrap_or_else(|e| panic!("{}", e.emit_to_string(quelle)));
+    let quelle = format!("{}\n{}", include_str!("../crosshair.wgsl"), render::CONTRAST_COLOR_WGSL);
+    let modul = naga::front::wgsl::parse_str(&quelle).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&quelle)));
     naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
         .validate(&modul)
         .expect("crosshair.wgsl ungueltig");
@@ -2135,4 +2147,17 @@ fn worst_case_verzug_verschwindet() {
     let verzug = wake.duration_since(tick);
     assert_eq!(verzug, Duration::ZERO, "der Tick darf keinen Verzug mehr erben");
     assert!(wake < frame, "und er muss VOR dem Frame liegen");
+}
+
+// Angesprungene Abschnitte stehen SECTION_TOP_MARGIN tiefer als die erste Zeile; der erste
+// ganz oben.
+#[test]
+fn abschnitt_steht_knapp_unter_den_reitern() {
+    let page = MenuScreen::SettingsVideo.settings_page().unwrap();
+    let starts = page.section_starts();
+    assert_eq!(page.section_stand(0), 0.0);
+    for &(_, row) in &page.sections[1..] {
+        let y = settings_row_pos(row as f32, starts) - settings_row_pos(page.section_stand(row), starts);
+        assert!((y - SECTION_TOP_MARGIN).abs() < 1e-3, "Zeile {row}: {y}");
+    }
 }

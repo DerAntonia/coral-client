@@ -317,7 +317,7 @@ impl GpuState {
                     glyph_uv: [gu, gv],
                     kind,
                     alpha: t.alpha,
-                    circle: [0.0; 2],
+                    circle: [t.fade_slot as f32, 0.0],
                 };
                 out.extend_from_slice(&[
                     v(x0, y0, uv0[0], uv0[1]),

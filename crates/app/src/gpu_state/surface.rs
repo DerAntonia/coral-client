@@ -115,6 +115,7 @@ impl GpuState {
             &self.offscreen_view,
             &self.crosshair_sampler,
             &self.crosshair_mode_buffer,
+            &self.crosshair_fade_buffer,
         );
         self.color_bind_group =
             create_color_bind_group(&self.device, &self.color_bind_group_layout, &self.offscreen_view, &self.color_settings_buffer);

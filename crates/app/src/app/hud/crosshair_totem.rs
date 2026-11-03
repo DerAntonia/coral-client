@@ -46,6 +46,7 @@ impl App {
                     white: set.shield_cd_text_style == 1,
                     font,
                     alpha: 1.0,
+                    fade_slot: crate::CROSSHAIR_FADE_SHIELD,
                 });
             }
         }
@@ -66,6 +67,7 @@ impl App {
                 white: set.arrow_text_style == 1,
                 font: set.effective_font(ShadowArea::ArrowNumber),
                 alpha: set.arrow_opacity as f32 / 100.0,
+                fade_slot: crate::CROSSHAIR_FADE_ARROWS,
             });
         }
         extras

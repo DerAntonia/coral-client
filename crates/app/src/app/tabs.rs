@@ -209,7 +209,10 @@ tab_state! {
     own_last_render_yaw: f32 = 0.0,
     own_last_render_pitch: f32 = 0.0,
     own_leaning_pitch: f32 = 0.0,
+    own_last_leaning_pitch: f32 = 0.0,
     own_gliding_ticks: u32 = 0,
+    own_tick_vel: DVec3 = DVec3::ZERO,
+    own_last_tick_vel: DVec3 = DVec3::ZERO,
     physics_render_prev: DVec3 = DVec3::new(8.0, 10.0, -10.0),
     camera_eye_height: f32 = physics::EYE_HEIGHT,
     camera_eye_height_prev: f32 = physics::EYE_HEIGHT,
@@ -301,6 +304,12 @@ impl App {
         self.event_backlog = std::mem::take(&mut self.tabs[i].backlog);
         self.tabs[i].mention = false;
         self.active_tab = i;
+        // Die Server-Config geht mit dem Tab: verbunden die seines Servers, sonst die von davor.
+        if self.conn_status == ConnStatus::Disconnected {
+            self.restore_config_after_server();
+        } else {
+            self.apply_server_config();
+        }
 
         self.forget_view_caches();
         if let Some((dimension, seed)) = self.tabs[i].lod_identity.take() {
@@ -454,14 +463,8 @@ impl App {
         let (tabs, plus) = self.tab_rects(l);
         for (i, r) in tabs.iter().enumerate() {
             let vorn = i == self.active_tab;
-            let hover = r.tab.contains(cx, cy);
-            let farbe = if vorn {
-                g(Slot::Surface3)
-            } else if hover {
-                g(Slot::Surface2)
-            } else {
-                g(Slot::Surface1)
-            };
+            let k = self.hover_level(r.tab, !vorn && r.tab.contains(cx, cy));
+            let farbe = if vorn { g(Slot::Surface3) } else { crate::mix_color(g(Slot::Surface1), g(Slot::Surface2), k) };
             // Nur die oberen Ecken rund: die unteren 8 Pixel eckig ueberdeckt, Rand seitlich
             // weitergezogen. Endet genau an der Unterkante der Leiste.
             let rand = g(Slot::Border1);
@@ -483,14 +486,16 @@ impl App {
             let ty = (r.tab.y + (r.tab.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: titel, x: text_x, y: ty, color: theme::text(), scale: UI_SCALE_SMALL });
             let ueber_kreuz = r.close.contains(cx, cy);
-            if ueber_kreuz {
-                rects.push(UiRect::rounded(r.close, g(Slot::Surface3), 4.0));
+            let k = self.hover_level(r.close, ueber_kreuz);
+            if k > 0.0 {
+                rects.push(UiRect::rounded(r.close, theme::with_alpha(crate::mix_color(g(Slot::Surface2), g(Slot::Surface3), k), k.min(1.0)), 4.0));
             }
             push_close_icon(rects, r.close, if ueber_kreuz { theme::text() } else { theme::text_2() });
         }
         let hover = plus.contains(cx, cy);
-        if hover {
-            rects.push(UiRect::rounded(plus, g(Slot::Surface2), 6.0));
+        let k = self.hover_level(plus, hover);
+        if k > 0.0 {
+            rects.push(UiRect::rounded(plus, theme::with_alpha(crate::mix_color(g(Slot::Surface1), g(Slot::Surface2), k), k.min(1.0)), 6.0));
         }
         push_plus_icon(rects, plus, if hover { theme::text() } else { theme::text_2() });
     }

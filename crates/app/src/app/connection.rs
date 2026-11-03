@@ -1,6 +1,7 @@
 // Verbinden und Trennen, Microsoft-Login und Kontenverwaltung.
 
 use crate::{theme, App, ConnStatus, modules, sound_log, toteming, accounts, addons, AZURE_CLIENT_ID, AuthEvent, ACCOUNT_RECHECK, Instant, notifications, open_external_command, uuid_bytes_from_hex, ACCOUNT_HEAD_RETRY, AppMode, MenuScreen, KeyBindAction};
+// Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt. Dann im use oben wieder: TokenExport
 
 impl App {
     // Verbindet; laeuft schon eine Verbindung, wird sie vorher getrennt (Reconnect).
@@ -564,6 +565,33 @@ impl App {
                     self.persist_accounts();
                     self.set_active_account(credentials);
                 }
+                // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+                // AuthEvent::TokenExported { key, result } => {
+                //     let (name, refresh) = match &self.token_export {
+                //         Some(TokenExport::Busy { name, refresh }) => (name.clone(), *refresh),
+                //         // Schon abgebrochen: das neue Token nur speichern.
+                //         _ => (String::new(), false),
+                //     };
+                //     match result {
+                //         Ok((creds, msa)) => {
+                //             let (token, client_id) = if refresh { (msa.0.clone(), Some(msa.1.clone())) } else { (creds.access_token.clone(), None) };
+                //             if let Some(i) = self.accounts.find(&creds.profile_id) {
+                //                 let source = self.accounts.list[i].source;
+                //                 self.accounts.upsert(&creds, Some(msa), source);
+                //                 self.persist_accounts();
+                //                 if self.credentials.as_ref().is_some_and(|c| accounts::key(&c.profile_id) == key) {
+                //                     self.set_active_account(creds);
+                //                 }
+                //             }
+                //             self.account_checks.insert(key, (accounts::Check::Valid, Instant::now()));
+                //             if !name.is_empty() {
+                //                 self.token_export = Some(TokenExport::Ready { name, refresh, token, client_id });
+                //             }
+                //         }
+                //         Err(error) if !name.is_empty() => self.token_export = Some(TokenExport::Failed { name, error }),
+                //         Err(_) => {}
+                //     }
+                // }
                 AuthEvent::AccountChecked { key, result } => {
                     let check = match result {
                         Ok((creds, msa)) => {
@@ -608,6 +636,7 @@ impl App {
         self.column_history.clear();
         self.world_reset_debug = None;
         self.replay = None;
+        self.apply_server_config();
         self.start_connect();
         self.mode = AppMode::World;
         self.screen = MenuScreen::Main;
@@ -671,5 +700,6 @@ impl App {
         self.mode = AppMode::Menu;
         self.screen = MenuScreen::Connect;
         self.push_log("== getrennt (vom Nutzer) ==");
+        self.restore_config_after_server();
     }
 }

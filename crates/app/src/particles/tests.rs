@@ -53,14 +53,14 @@ fn partikel_mit_bildern() -> Particles {
         bursts: Vec::new(),
         unsupported: HashMap::default(),
         new_unsupported: Vec::new(),
-        tuning: [ParticleTuning::default(); KINDS.len()],
-        credit: [0.0; KINDS.len()],
+        tuning: [[ParticleTuning::default(); KINDS.len()]; 2],
+        credit: [[0.0; KINDS.len()]; 2],
     }
 }
 
 fn blasen_laufen_lassen(drag: bool) -> Vec<Particle> {
     let (w, shapes, _) = welt_mit_saeule(drag);
-    let ctx = SpawnContext { camera: DVec3::new(8.5, 2.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(8.5, 2.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut p = partikel_mit_bildern();
     let mut gesehen = Vec::new();
     for _ in 0..200 {
@@ -80,7 +80,7 @@ fn blasen_laufen_lassen(drag: bool) -> Vec<Particle> {
 #[test]
 fn trank_zerplatzt_in_seiner_farbe() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut p = partikel_mit_bildern();
     p.add_potion_splash((0, 5, 0), 0xFF0000, false, &ctx);
     assert_eq!(p.pending.len(), 100);
@@ -93,13 +93,13 @@ fn trank_zerplatzt_in_seiner_farbe() {
 #[test]
 fn menge_skaliert_den_schwall() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let spritzer = KINDS.iter().position(|k| k.key == "potion_splash").unwrap();
     for (menge, erwartet) in [(50, 50), (200, 200)] {
         let mut p = partikel_mit_bildern();
         let mut tuning = [ParticleTuning::default(); KINDS.len()];
         tuning[spritzer].amount_pct = menge;
-        p.set_tuning(tuning);
+        p.set_tuning(tuning, tuning);
         p.add_potion_splash((0, 5, 0), 0xFF0000, false, &ctx);
         assert_eq!(p.pending.len(), erwartet, "Menge {menge} %");
     }
@@ -121,7 +121,7 @@ fn arten_alphabetisch_und_spritzer_getrennt() {
 #[test]
 fn kruemel_vor_dem_gesicht() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut p = partikel_mit_bildern();
     let auge = DVec3::new(0.5, 7.0, 0.5);
     p.add_item_use_particles("bread", 5, auge, 0.0, 0.0, &ctx);
@@ -141,7 +141,7 @@ fn kruemel_vor_dem_gesicht() {
 #[test]
 fn trankwolke_fuellt_ihren_kreis() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut p = partikel_mit_bildern();
     let mitte = DVec3::new(0.5, 5.0, 0.5);
     let gruen = ParticleEffect { type_id: pp::PARTICLE_ENTITY_EFFECT, options: ParticleOptions::Tinted(0xFF00_FF00) };
@@ -162,7 +162,7 @@ fn trankwolke_fuellt_ihren_kreis() {
 #[test]
 fn effekt_wirbel_behalten_ihre_deckkraft() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut p = partikel_mit_bildern();
     let ort = DVec3::new(0.5, 5.0, 0.5);
     // Blindheit, einmal als Ambient-Effekt, einmal normal.
@@ -257,14 +257,14 @@ fn krit_paket() -> pp::LevelParticles {
 // Aus: nichts entsteht, und was schon fliegt, verschwindet mit dem Ausschalten.
 fn ausgeschaltete_art_verschwindet() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut p = partikel_mit_bildern();
     p.on_packet(&krit_paket(), &ctx);
     p.tick(&|_| None, &ctx);
     assert_eq!(p.particles.len(), 1);
     let mut aus = [ParticleTuning::default(); KINDS.len()];
     aus[kind_of(pp::PARTICLE_CRIT).unwrap()].enabled = false;
-    p.set_tuning(aus);
+    p.set_tuning(aus, aus);
     assert!(p.particles.is_empty());
     p.on_packet(&krit_paket(), &ctx);
     p.tick(&|_| None, &ctx);
@@ -276,7 +276,7 @@ fn ausgeschaltete_art_verschwindet() {
 // Bild gleitet dazwischen ohne Sprung weiter.
 fn dauer_und_tempo() {
     let (w, shapes, _) = welt_mit_saeule(false);
-    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
     let mut normal = partikel_mit_bildern();
     normal.on_packet(&krit_paket(), &ctx);
     let vanilla = normal.pending[0].max_age;
@@ -286,7 +286,7 @@ fn dauer_und_tempo() {
     let krit = kind_of(pp::PARTICLE_CRIT).unwrap();
     t[krit].lifetime_pct = 200;
     t[krit].speed_pct = 50;
-    p.set_tuning(t);
+    p.set_tuning(t, t);
     p.on_packet(&krit_paket(), &ctx);
     assert_eq!(p.pending[0].max_age, vanilla * 2);
     p.tick(&|_| None, &ctx);
@@ -305,4 +305,23 @@ fn dauer_und_tempo() {
         p.tick(&|_| None, &ctx);
     }
     assert_eq!(p.particles[0].age - alter, 3, "6 Spielticks bei 50 % = 3 eigene");
+}
+
+#[test]
+// Eigene Partikel: was an der eigenen Figur entsteht, folgt der eigenen Anpassung -- ein
+// Krit dort ist aus, derselbe Krit zwei Bloecke weiter nicht.
+fn eigene_partikel_haben_ihre_eigene_anpassung() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let mut aus = [ParticleTuning::default(); KINDS.len()];
+    aus[kind_of(pp::PARTICLE_CRIT).unwrap()].enabled = false;
+    let paket = krit_paket();
+    let ort = DVec3::new(paket.pos.0, paket.pos.1, paket.pos.2);
+    for (abstand, erwartet) in [(0.0, 0), (2.0, 1)] {
+        let me = NearPlayer { pos: ort - DVec3::new(abstand, 1.0, 0.0), vel_y: 0.0 };
+        let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: Some(me) };
+        let mut p = partikel_mit_bildern();
+        p.set_tuning([ParticleTuning::default(); KINDS.len()], aus);
+        p.on_packet(&paket, &ctx);
+        assert_eq!(p.pending.len(), erwartet, "Abstand {abstand}");
+    }
 }

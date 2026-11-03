@@ -268,7 +268,7 @@ fn fenster_rauschen_seitenwechsel_klicken() {
     // Kontenliste und Element-Fenster im HUD-Editor klicken nur (Nutzerwunsch).
     assert_eq!(ui_sound_for_action(ButtonAction::ToggleAccountMenu, &set), UiSound::Click);
     assert_eq!(ui_sound_for_action(ButtonAction::HudDeselect, &set), UiSound::Click);
-    for seite in [ButtonAction::OpenScreen(MenuScreen::SettingsAudio), ButtonAction::Back, ButtonAction::OpenParticleSettings] {
+    for seite in [ButtonAction::OpenScreen(MenuScreen::SettingsAudio), ButtonAction::Back, ButtonAction::OpenParticleSettings(false)] {
         assert_eq!(ui_sound_for_action(seite, &set), UiSound::Click);
     }
 }

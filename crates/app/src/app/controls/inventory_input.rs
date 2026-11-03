@@ -86,6 +86,7 @@ impl App {
         let vorhersage = inventory::Prediction { modified: vec![(platz as i16, None)], cursor: self.inventory.cursor.clone(), hashable: true };
         let (sync_id, revision, _) = self.inventory.active();
         if let Some(tx) = &self.outgoing_tx {
+            self.inventory_anim.get_mut().flights.click_sent(Instant::now());
             let _ = tx.send(protocol::packets::click_container_payload(
                 sync_id,
                 revision,
@@ -415,6 +416,7 @@ impl App {
             None => (Vec::new(), self.inventory.cursor.clone()),
         };
         if let Some(tx) = &self.outgoing_tx {
+            self.inventory_anim.get_mut().flights.click_sent(Instant::now());
             let _ = tx.send(protocol::packets::click_container_payload(sync_id, revision, slot, button, mode, &modified, cursor.as_ref()));
         }
         if let Some(prediction) = prediction {
@@ -601,6 +603,7 @@ impl App {
     pub(crate) fn send_quick_craft_click(&mut self, slot: i16, button: i8, cursor: Option<&protocol::item::ItemStack>) {
         let (sync_id, revision, _) = self.inventory.active();
         if let Some(tx) = &self.outgoing_tx {
+            self.inventory_anim.get_mut().flights.click_sent(Instant::now());
             let _ = tx.send(protocol::packets::click_container_payload(
                 sync_id,
                 revision,
@@ -649,6 +652,7 @@ impl App {
             None => (Vec::new(), self.inventory.cursor.clone()),
         };
         if let Some(tx) = &self.outgoing_tx {
+            self.inventory_anim.get_mut().flights.click_sent(Instant::now());
             let _ = tx.send(protocol::packets::click_container_payload(sync_id, revision, slot, button, mode, &modified, cursor.as_ref()));
         }
         if let Some(prediction) = prediction {

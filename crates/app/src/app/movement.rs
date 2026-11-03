@@ -457,6 +457,7 @@ impl App {
                 self.physics.pos.z - before_tick.z,
                 self.own_swing_ticks > 0,
             );
+            self.turn_own_body_on_use();
             // Im Boot zeigt der Koerper in Fahrtrichtung (clampPassengerYaw setzt bodyYaw).
             if let Some(boot) = self.own_boat_yaw() {
                 self.own_body_yaw.set_yaw(boot);
@@ -495,8 +496,11 @@ impl App {
             // LivingEntity.updateLeaningPitch: in der Schwimm-Pose hoch, sonst runter, je
             // 0.09 pro Tick.
             let step = if self.physics.swimming { 0.09 } else { -0.09 };
+            self.own_last_leaning_pitch = self.own_leaning_pitch;
             self.own_leaning_pitch = (self.own_leaning_pitch + step).clamp(0.0, 1.0);
             self.own_gliding_ticks = if self.physics.gliding { self.own_gliding_ticks.saturating_add(1) } else { 0 };
+            self.own_last_tick_vel = self.own_tick_vel;
+            self.own_tick_vel = self.physics.vel;
             self.tick_fire_alpha();
             // Den TATSAECHLICH von der Physik entschiedenen Sprint-Zustand melden (self.
             // physics.sprinting NACH dem Tick), nicht eine separat nachgebaute Naeherung der

@@ -180,6 +180,8 @@ impl App {
                         self.build_account_menu(&mut overlay);
                         self.build_account_manager(&mut overlay);
                         self.build_account_context(&mut overlay);
+                        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+                        // self.build_token_export(&mut overlay);
                         self.build_disconnect_popup(&mut overlay);
                         self.build_dialog_overlay(&mut overlay);
                         // Liegt der Zeiger auf etwas, das UEBER dem Inhalt schwebt (Kontextmenue,
@@ -492,6 +494,14 @@ impl App {
             }
             return true;
         }
+        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+        // // Token-Fenster liegt ueber allem und schluckt jeden Druck.
+        // if state == ElementState::Pressed && self.mode == AppMode::Menu && self.token_export.is_some() {
+        //     if button == MouseButton::Left {
+        //         self.token_export_press();
+        //     }
+        //     return true;
+        // }
         // Offene Kontenliste: Klick darin waehlt ein Konto, daneben schliesst sie.
         if button == MouseButton::Left && state == ElementState::Pressed && self.account_menu_open && self.account_menu_press() {
             return true;
@@ -702,6 +712,7 @@ impl App {
                 self.persist_settings();
             }
             self.font_drag_release();
+            self.settings_press_release();
             // Ohne Raw-Maus laeuft auch der Inventar-Klick hier -- dann muss das
             // Loslassen ebenso hier ankommen, sonst bliebe ein Klick mit vollem
             // Zeiger unbeantwortet haengen (s. inventory_release).
@@ -781,8 +792,11 @@ impl App {
             }
         } else if self.drag_scroll_grab(self.list_drag_list()) {
             // In einer Liste: Klick oder Ziehen entscheidet sich beim Loslassen.
+            self.settings_press_begin(false);
         } else if self.server_bar_press() {
             // Bildlaufleiste der Serverliste: der Griff haengt jetzt am Zeiger.
+        } else if self.settings_press_begin(true) {
+            // Einstellungsknopf: loest erst beim Loslassen aus (s. settings_press_release).
         } else if !self.server_card_connect() {
             let (px, py) = self.cursor_pos;
             self.handle_click(px, py);
@@ -1276,6 +1290,18 @@ impl App {
         false
     }
 
+    // Eine Einstellungsseite ohne eigenes Tippfeld: dort fuehrt Tippen in die Suche. Die
+    // Lichtstaerken haben ihr eigenes Suchfeld; offene Fenster und Wertfelder fangen ihre Tasten
+    // schon vorher ab.
+    fn settings_typing_opens_search(&self) -> bool {
+        self.mode == AppMode::Menu
+            && self.screen.settings_category().is_some()
+            && !matches!(self.screen, MenuScreen::SettingsSearch | MenuScreen::SettingsLightLevels)
+            && self.input_field.is_none()
+            && self.awaiting_keybind.is_none()
+            && !self.text_field_focused()
+    }
+
     // Tasten im Eingabefeld, in der Einstellungssuche, in der Lichtseite und Enter.
     fn key_in_menu_fields(&mut self, key_event: &winit::event::KeyEvent) -> bool {
         if self.input_field.is_some() {
@@ -1316,6 +1342,17 @@ impl App {
                 }
             }
             return true;
+        }
+
+        // Andere Einstellungsseite: das erste getippte Zeichen oeffnet die Suche mit diesem
+        // Zeichen als neuem Suchtext (wie die Serversuche auf dem Connect-Screen).
+        if self.settings_typing_opens_search() && !self.modifiers.control_key() && !self.modifiers.alt_key() {
+            if let Some(text) = key_event.text.as_ref().filter(|t| t.chars().any(|c| !c.is_control() && !c.is_whitespace())) {
+                self.settings_search = text.chars().filter(|c| !c.is_control()).collect();
+                self.search_done = None;
+                self.open_settings(MenuScreen::SettingsSearch);
+                return true;
+            }
         }
 
         // Suchseite: Tippen geht ins Suchfeld, Enter sucht.
@@ -1417,6 +1454,10 @@ impl App {
         }
         if self.screen == MenuScreen::SettingsSearch {
             return Some((19, self.settings_search.clone()));
+        }
+        // Wie die Serversuche: zu ist sie leer, so klingt schon das Zeichen, das sie oeffnet.
+        if self.settings_typing_opens_search() {
+            return Some((19, String::new()));
         }
         // Serversuche: zu ist sie leer, so klingt schon das Zeichen, das sie oeffnet.
         if self.mode == AppMode::Menu && self.screen == MenuScreen::Connect {

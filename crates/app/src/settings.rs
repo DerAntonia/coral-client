@@ -271,6 +271,10 @@ pub(crate) struct Settings {
     pub(crate) particles_mode: u8,
     // Partikel-Anpassung je Art (Index = particles::KINDS): an/aus, Dauer, Deckkraft, Tempo.
     pub(crate) particle_tuning: [particles::ParticleTuning; particles::KINDS.len()],
+    // Dasselbe fuer die eigenen Partikel (an der eigenen Figur, s. particles::own_at); die
+    // beiden oben gelten dann fuer die anderen. Ohne eigenen Eintrag in der Datei wie die oben.
+    pub(crate) particles_mode_own: u8,
+    pub(crate) particle_tuning_own: [particles::ParticleTuning; particles::KINDS.len()],
     // Hoehlen-Culling (s. render::occlusion). Nur zum Vergleichen abschaltbar.
     pub(crate) cave_culling: bool,
     // Mip-Stufen des Block-Atlas (aus = immer volle Aufloesung, s. render::BlockRenderer::mipmapping).
@@ -649,8 +653,10 @@ pub(crate) struct Settings {
     pub(crate) module_sustainability: bool,
     pub(crate) sustain_background: bool,
     pub(crate) sustain_pause: bool,
-    // Mehr Animationen (Video-Tab, s. world::more_anims): welche Animationen an sind (Bits).
+    // Mehr Animationen (Video-Tab, s. world::more_anims): welche Animationen an sind (Bits),
+    // und der Hauptschalter davor -- aus ist keine an, die Auswahl bleibt erhalten.
     pub(crate) anim_flags: u32,
+    pub(crate) anims_enabled: bool,
     // Modul Chunk-Saver (s. lod.rs): Chunks speichern, mit so vielen Threads, und das
     // Gespeicherte auch in der normalen Sichtweite zeichnen, bis die echten Chunks da sind
     // (schon beim Verbinden, s. lod::App::lod_preview_saved).
@@ -664,10 +670,11 @@ pub(crate) struct Settings {
     // Vanillas Option "Operator-Items-Reiter": im Kreativmodus mit Operator-Rechten den Reiter
     // mit Befehlsbloecken & Co. zeigen.
     pub(crate) creative_op_tab: bool,
-    // Sonstiges: ClientboundContainerClose ignorieren -- der Server kann kein Fenster mehr
-    // schliessen (s. ClientEvent::CloseScreen). NO_UI_CLOSE_*: nie, immer oder nur das
-    // eigene Inventar (Truhen & Co. schliesst er weiter).
-    pub(crate) no_ui_close: u8,
+    // Sonstiges > Server-Bildschirme: welche offenen Bildschirme ClientboundContainerClose
+    // NICHT schliesst (Bit = Zeile, s. SERVER_CLOSE_*_ROW und ClientEvent::CloseScreen) und
+    // was mit vom Server geoeffneten passiert (SERVER_OPEN_* je Eintrag, s. SERVER_OPEN_SIGN).
+    pub(crate) server_close_blocked: u8,
+    pub(crate) server_open: [u8; SERVER_OPEN_COUNT],
     // Sonstiges: der Server kann den Chat nicht leeren -- weder mit Reset Chat noch mit den
     // Leerzeilen, die Clear-Chat-Plugins schicken (s. push_chat_message).
     pub(crate) no_chat_clear: bool,
@@ -682,6 +689,14 @@ pub(crate) struct Settings {
     // Haelt man einen Stapel ueber einen gleichartigen, steht nur die Summe am Zeiger und die
     // Zahl im Slot verschwindet -- zwei Zahlen dicht uebereinander sind unlesbar.
     pub(crate) inventory_merge_hover: bool,
+    // Inventar > Animation: die Hervorhebung des Slots unter dem Zeiger blendet in so vielen ms
+    // ein und aus (0 = sofort, wie Vanilla), in dieser Farbe (Farbton, Saettigung, Helligkeit,
+    // Deckkraft; Vanilla: weiss, s. slot_hover_rgba).
+    pub(crate) slot_hover_fade_ms: u32,
+    pub(crate) slot_hover_color: [u32; 4],
+    // Inventar > Animation: verschobene Items fliegen in so vielen ms zu ihrem neuen Platz
+    // (0 = aus, sie springen wie in Vanilla; s. inventory_flight).
+    pub(crate) swap_anim_ms: u32,
     // Buchstaben auf Traenken im Inventar (s. world::potion::variant_mark), je einzeln:
     // S = verstaerkt, L = verlaengert, W = schwache Heilung/Schaden.
     pub(crate) potion_mark_strong: bool,
@@ -741,6 +756,9 @@ pub(crate) struct Settings {
     // Client nicht, er rendert absichtlich fullbright. In Prozent der Vanilla-Abdunklung:
     // 0 = aus, 100 = wie Vanilla (Standard).
     pub(crate) smooth_lighting_percent: u32,
+    // Bewegungsunschaerfe der Kamera (render::motion_blur) in Prozent: 100 = die Bewegung
+    // waehrend eines Monitorbilds, 0 = aus.
+    pub(crate) motion_blur_percent: u32,
     // physics::PlayerPhysics::jump_cooldown (Vanillas LivingEntity.jumpingCooldown, s.
     // dortigen Kommentar): 10-Tick-Abklingzeit zwischen zwei echten Spruengen, geteilt
     // zwischen Land- und Wassersprung. An Land praktisch unsichtbar, im flachen Wasser
@@ -853,6 +871,21 @@ pub(crate) const AZURE_CLIENT_ID: &str = "4e36a581-063a-4bbf-98bb-77b91766d32c";
 // vom Launcher, sonst die zuletzt gewaehlte, s. assets::startup_config), danach im Spiel
 // umschaltbar (s. App::switch_config).
 pub(crate) static ACTIVE_CONFIG: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+impl Settings {
+    // Partikel-Stufe und -Anpassung der eigenen (true) oder der anderen Partikel.
+    pub(crate) fn particles_mode_of(&mut self, own: bool) -> &mut u8 {
+        if own { &mut self.particles_mode_own } else { &mut self.particles_mode }
+    }
+
+    pub(crate) const fn particle_tuning_of(&self, own: bool) -> &[particles::ParticleTuning; particles::KINDS.len()] {
+        if own { &self.particle_tuning_own } else { &self.particle_tuning }
+    }
+
+    pub(crate) fn particle_tuning_of_mut(&mut self, own: bool) -> &mut [particles::ParticleTuning; particles::KINDS.len()] {
+        if own { &mut self.particle_tuning_own } else { &mut self.particle_tuning }
+    }
+}
 
 pub(crate) fn active_config() -> String {
     let name = ACTIVE_CONFIG.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();

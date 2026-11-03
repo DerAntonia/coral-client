@@ -221,6 +221,9 @@ pub(crate) fn server_dialog_name_toggle() -> Rect {
 
 // Rechtsklick-Menue einer Server-Karte: Zeilen "Bearbeiten" und "Loeschen".
 pub(crate) const SERVER_CONTEXT_W: f32 = 200.0;
+// Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+// // Konto-Menue: breiter, "Refresh-Token exportieren" passt sonst nicht.
+// pub(crate) const ACCOUNT_CONTEXT_W: f32 = 260.0;
 pub(crate) const SERVER_CONTEXT_ROW_H: f32 = 40.0;
 
 // Gestapelte Buttons in der Bildschirmmitte: Startbildschirm, Pausemenue (Esc) und
@@ -261,7 +264,7 @@ pub(crate) const STEPPER_VALUE_W: f32 = 200.0;
 // Die fruehere lange Hinweiszeile darunter ist weg -- Erklaerungen stecken jetzt als
 // Hover-Tooltip an der jeweiligen Zeile (s. SETTINGS_TOOLTIPS/hovered_tooltip), nicht mehr
 // staendig sichtbar.
-pub(crate) const SETTINGS_ROW_COUNT: usize = 16;
+pub(crate) const SETTINGS_ROW_COUNT: usize = 17;
 
 // Steuerung-Screen (MenuScreen::SettingsControls): zwei Spalten. Links die Tastenbelegung
 // als scrollbare Tabelle (Aktion/Taste/Halten-Umschalten), rechts die uebrigen

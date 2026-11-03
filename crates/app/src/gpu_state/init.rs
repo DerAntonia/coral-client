@@ -230,22 +230,22 @@ impl GpuState {
         });
 
         // --- Crosshair-Pipeline: sampelt offscreen_view DIREKT (kein Kopierschritt mehr,
-        // s. crosshair_vertices-Kommentar) und gibt im Fragment-Shader 1.0 - Farbe aus --
-        // die Komplementaerfarbe des Untergrunds (Schwarz->Weiss, Rot->Gruen, ...).
+        // s. crosshair_vertices-Kommentar) und gibt im Fragment-Shader die Gegenfarbe des
+        // Untergrunds aus (render::CONTRAST_COLOR_WGSL, wird an den Shader angehaengt).
         // Vor der Fadenkreuz-Pipeline: die zeichnet HUD-Zahlen mit den Glyphen dieses Atlas und
         // bindet dafuer sein Layout als Gruppe 1 (s. crosshair.wgsl).
         let mut font_atlas = FontAtlas::build(&device, &queue, installation, font).expect("Minecraft-Font konnte nicht geladen werden");
         let pack_fonts = installation.load_pack_fonts();
         let crosshair_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("crosshair shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../crosshair.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("../crosshair.wgsl"), render::CONTRAST_COLOR_WGSL).into()),
         });
         let crosshair_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("crosshair bind group layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -261,9 +261,20 @@ impl GpuState {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Komplementaer-Farbe ueber mehrere Frames (crosshair.wgsl::CrosshairFade).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -277,20 +288,45 @@ impl GpuState {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
-        // Farbmodus, Aufhellung und feste Farbe (s. crosshair.wgsl::CrosshairSettings/
-        // CROSSHAIR_COLOR_MODES). 16 Byte, weil Uniform-Bloecke in WGSL ein Vielfaches von 16
-        // gross sein muessen -- belegt sind davon zwoelf (u32 Modus, f32 Aufhellung, RGBA8
-        // Farbe). Wird bei jedem
+        // Farbmodus, Aufhellung, feste Farbe, Brenn-Farbe und die Flaeche unter dem Kreuz (s.
+        // crosshair.wgsl::CrosshairSettings/CROSSHAIR_COLOR_MODES), 80 Byte. Wird bei jedem
         // Frame mit den aktuellen Settings-Werten ueberschrieben (render_world), keine eigene
         // Bind-Group-Neuerzeugung noetig.
         let crosshair_mode_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("crosshair settings buffer"),
-            size: 16,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let crosshair_bind_group =
-            create_crosshair_bind_group(&device, &crosshair_bind_group_layout, &offscreen_view, &crosshair_sampler, &crosshair_mode_buffer);
+        // Zustand der Komplementaer-Farbe je Farbplatz (16 Byte, s. crosshair.wgsl::CrosshairFade),
+        // nur auf der GPU gelesen und geschrieben. Anfangs Gelb.
+        let crosshair_fade_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("crosshair fade buffer"),
+            size: 16 * CROSSHAIR_FADE_SLOTS as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let crosshair_bind_group = create_crosshair_bind_group(
+            &device,
+            &crosshair_bind_group_layout,
+            &offscreen_view,
+            &crosshair_sampler,
+            &crosshair_mode_buffer,
+            &crosshair_fade_buffer,
+        );
+        let crosshair_fade_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("crosshair fade pipeline layout"),
+            bind_group_layouts: &[&crosshair_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let crosshair_fade_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("crosshair fade pipeline"),
+            layout: Some(&crosshair_fade_pipeline_layout),
+            module: &crosshair_shader,
+            entry_point: "cs_fade",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
         let crosshair_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("crosshair pipeline layout"),
             bind_group_layouts: &[&crosshair_bind_group_layout, &*font_atlas.bind_group_layout],
@@ -873,6 +909,7 @@ impl GpuState {
 
         let custom_sky = render::custom_sky::SkyRenderer::new(&device, surface_format.remove_srgb_suffix());
         let entity_outline = render::entity_outline::EntityOutline::new(&device, surface_format.remove_srgb_suffix());
+        let motion_blur = render::motion_blur::MotionBlur::new(&device, surface_format);
         let gradient_sky = render::gradient_sky::GradientSky::new(&device, surface_format);
         let device = std::sync::Arc::new(device);
         let queue = std::sync::Arc::new(queue);
@@ -900,6 +937,9 @@ impl GpuState {
             crosshair_bind_group_layout,
             crosshair_sampler,
             crosshair_mode_buffer,
+            crosshair_fade_buffer,
+            crosshair_fade_pipeline,
+            crosshair_fade_clock: Instant::now(),
             crosshair_bind_group,
             cmaa2_output_texture,
             cmaa2_output_view,
@@ -974,6 +1014,9 @@ impl GpuState {
             sky_angle: 0.0,
             custom_sky,
             entity_outline,
+            motion_blur,
+            motion_blur_strength: 0.0,
+            motion_blur_interval_s: 1.0 / 60.0,
             sky_layers: Vec::new(),
             gradient_sky,
             sky_gradient: None,

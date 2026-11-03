@@ -16,8 +16,8 @@ pub(crate) struct CrosshairVertex {
     pub(crate) kind: f32,
     // Deckkraft (Pfeil-Anzeige hat eine eigene).
     pub(crate) alpha: f32,
-    // Nur fuer Kreise (Arten 5 und 6): innerer und aeusserer Radius in Pixeln; glyph_uv ist
-    // dann der Abstand zur Kreismitte in Pixeln.
+    // Kreise (Arten 5 und 6): innerer und aeusserer Radius in Pixeln; glyph_uv ist dann der
+    // Abstand zur Kreismitte in Pixeln. Glyphen: x = Farbplatz (s. CrosshairText::fade_slot).
     pub(crate) circle: [f32; 2],
 }
 
@@ -56,7 +56,15 @@ pub(crate) struct CrosshairText {
     // Schrift (GpuState::hud_font).
     pub(crate) font: FontKind,
     pub(crate) alpha: f32,
+    // Eigene Gegenfarbe zum Untergrund der Zahl (s. crosshair.wgsl::FADE_PLAETZE).
+    pub(crate) fade_slot: u32,
 }
+
+// Farbplaetze der Gegenfarbe (crosshair.wgsl::FADE_PLAETZE): Kreuz und Ring, Schild-Countdown,
+// Pfeilzahl.
+pub(crate) const CROSSHAIR_FADE_SLOTS: usize = 3;
+pub(crate) const CROSSHAIR_FADE_SHIELD: u32 = 1;
+pub(crate) const CROSSHAIR_FADE_ARROWS: u32 = 2;
 
 // Zustand des Pixel-Editors: Malmodus und der laufende Strich (gesetzter Wert, letzter Pixel).
 pub(crate) struct CrosshairPainter {

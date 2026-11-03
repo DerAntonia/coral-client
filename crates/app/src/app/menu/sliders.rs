@@ -609,6 +609,9 @@ impl App {
             ButtonAction::TearTimingDown => (&mut set.tear_timing_us).into(),
             ButtonAction::TearReserveDown => (&mut set.tear_reserve_us).into(),
             ButtonAction::SmoothLightingDown => (&mut set.smooth_lighting_percent).into(),
+            ButtonAction::MotionBlurDown => (&mut set.motion_blur_percent).into(),
+            ButtonAction::SlotHoverFadeDown => (&mut set.slot_hover_fade_ms).into(),
+            ButtonAction::SwapAnimDown => (&mut set.swap_anim_ms).into(),
             ButtonAction::DamageTintTicksPrev => (&mut set.damage_tint_ticks).into(),
             ButtonAction::ChunkSaverThresholdPrev => (&mut set.chunk_saver_threshold).into(),
             ButtonAction::HurtCamStrengthPrev => (&mut set.hurt_cam_strength).into(),
@@ -617,8 +620,8 @@ impl App {
             ButtonAction::ScatteringPrev => (&mut set.shader_scattering_percent).into(),
             ButtonAction::SunSizePrev => (&mut set.shader_sun_size_tenths).into(),
             ButtonAction::BlockSoftnessPrev => (&mut set.shader_block_softness_deg).into(),
-            ButtonAction::ParticleStep(i, col, false) => {
-                let t = set.particle_tuning.get_mut(i)?;
+            ButtonAction::ParticleStep(own, i, col, false) => {
+                let t = set.particle_tuning_of_mut(own).get_mut(i)?;
                 match col {
                     0 => (&mut t.lifetime_pct).into(),
                     1 => (&mut t.opacity_pct).into(),

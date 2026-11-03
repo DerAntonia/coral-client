@@ -61,7 +61,7 @@ impl App {
         // (s. held_item::HeldItems::set_vanilla_route).
         let pack_items = self.gpu.as_ref().is_some_and(|g| g.block_renderer.vanilla.has_item_program());
         self.held_items.set_vanilla_route(pack_items);
-        let (entity_verts, entity_tints, entity_lights, entity_translucent, (outline_verts, outline_colors)) = self.build_entity_vertices();
+        let (entity_verts, entity_tints, entity_lights, entity_translucent, (outline_verts, outline_colors), entity_sharp) = self.build_entity_vertices();
         self.entity_vertex_hint = entity_verts.len();
         self.held_items.set_vanilla_route(false);
         let vanilla_items = self.vanilla_item_lights(self.held_items.take_vanilla_vertices());
@@ -197,6 +197,7 @@ impl App {
                 gpu.block_renderer.set_ghost_vertices(&gpu.queue, &ghost_verts, ghost_solid, ghost_translucent, &ghost_lights);
                 gpu.block_renderer.set_crumbling_vertices(&gpu.queue, &crumbling_verts);
                 gpu.block_renderer.set_entity_vertices(&gpu.queue, &entity_verts, &entity_tints, &entity_lights, entity_translucent);
+                gpu.block_renderer.set_sharp_entities(entity_sharp);
                 gpu.block_renderer.set_outline_vertices(&gpu.queue, &outline_verts, &outline_colors);
                 gpu.block_renderer.vanilla.set_item_vertices(&gpu.device, &gpu.queue, &vanilla_items);
                 gpu.block_renderer.vanilla.set_border(&gpu.queue, self.camera.view_matrix(), glint_ms, border_draw.as_ref());
@@ -241,6 +242,8 @@ impl App {
                 gpu.block_shadows = block_shadows;
                 gpu.block_softness_deg = block_softness_deg;
                 gpu.lightmap_debug = lightmap_debug;
+                gpu.motion_blur_strength = self.settings.motion_blur_percent as f32 / 100.0;
+                gpu.motion_blur_interval_s = self.monitor_frame_interval.as_secs_f32();
                 gpu.render_world(
                     &self.camera,
                     sky,

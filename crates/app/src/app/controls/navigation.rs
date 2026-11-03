@@ -16,6 +16,7 @@ impl App {
         if self.connecting_view() {
             return;
         }
+        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt. Dann wieder: || self.token_export.take().is_some()
         if self.disconnect_popup.take().is_some() || self.theme_delete.take().is_some() || self.theme_name_dialog.take().is_some() {
             self.play_ui_sound(ui_sound::UiSound::Close);
             return;
@@ -137,6 +138,8 @@ impl App {
                 | MenuScreen::SettingsConfigs
                 | MenuScreen::SettingsLightLevels
                 | MenuScreen::SettingsParticles
+                | MenuScreen::SettingsAnimations
+                | MenuScreen::SettingsServerScreens
                 | MenuScreen::SettingsGeneral
                 | MenuScreen::SettingsControls
                 | MenuScreen::SettingsVideo
@@ -209,7 +212,8 @@ impl App {
             MenuScreen::SettingsSensCalc => MenuScreen::SettingsControls,
             MenuScreen::SettingsShader => MenuScreen::SettingsGeneral,
             MenuScreen::SettingsLightLevels => MenuScreen::SettingsShader,
-            MenuScreen::SettingsParticles => MenuScreen::SettingsVideo,
+            MenuScreen::SettingsParticles | MenuScreen::SettingsAnimations => MenuScreen::SettingsVideo,
+            MenuScreen::SettingsServerScreens => MenuScreen::SettingsMisc,
             MenuScreen::HudEditor => self.hud_editor_return,
             // Getrennt ist die Server-Liste der Startpunkt, es gibt nichts dahinter.
             MenuScreen::Account | MenuScreen::Connect if self.conn_status == ConnStatus::Disconnected => MenuScreen::Connect,

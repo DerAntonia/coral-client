@@ -145,7 +145,12 @@ impl GpuState {
         let mut fett_naechster = false;
         let mut getippt_naechster = false;
         let mut fade = None;
+        let mut zoom = None;
         for t in texts {
+            if let Some(z) = zoom_marker_text(t) {
+                zoom = z;
+                continue;
+            }
             if let Some(an) = clip_marker_text(t) {
                 self.text_clips.borrow_mut().push((out.len() as u32, an));
                 continue;
@@ -274,6 +279,12 @@ impl GpuState {
                 }
             }
             runs.push(TextRun { top: t.y, bottom: t.y + self.text_height(scale), glyphs, group });
+            if let Some((zx, zy, s)) = zoom {
+                let mitte = [zx / screen_px.0 * 2.0 - 1.0, 1.0 - zy / screen_px.1 * 2.0];
+                for v in &mut out[text_start..] {
+                    v.position = std::array::from_fn(|i| mitte[i] + (v.position[i] - mitte[i]) * s);
+                }
+            }
             if let Some(f) = fade {
                 fade_text_verts(&mut out[text_start..], f, screen_px.1);
             }

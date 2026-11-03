@@ -78,9 +78,16 @@ fn hand_poses(main: Option<world::HeldItem>, off: Option<world::HeldItem>, left_
 }
 
 impl App {
-    // Die eingeschalteten Animationen (Video-Tab, Abschnitt Animationen).
+    // Die eingeschalteten Animationen (Video-Tab, Abschnitt Animationen); mit dem
+    // Hauptschalter aus keine.
     pub(crate) const fn anim_features(&self) -> u32 {
-        self.settings.anim_flags
+        if self.settings.anims_enabled { self.settings.anim_flags } else { 0 }
+    }
+
+    // Modified View Model: eingeschaltet, oder gerade beim Item-Ansehen -- das braucht die
+    // haltende Hand auch, wenn es sonst aus ist.
+    pub(crate) const fn view_model_on(&self) -> bool {
+        self.settings.modified_view_model || self.own_inspect.is_some()
     }
 
     // Haelt sich jemand mit den Fuessen an dieser Stelle an einer Leiter fest? Dann die Gierung,
@@ -206,6 +213,21 @@ impl App {
         }
     }
 
+    // Schwimm-/Kriech-Neigung der eigenen Figur fuers Bild: zwischen den Ticks interpoliert wie
+    // Vanillas getLeaningPitch(tickDelta). Der rohe Tick-Wert sprang 20-mal pro Sekunde um
+    // 0.09 -- die Figur legte sich in Stufen hin statt weich.
+    pub(crate) fn own_lean(&self, tick_progress: f32) -> f32 {
+        let t = tick_progress.clamp(0.0, 1.0);
+        self.own_last_leaning_pitch + (self.own_leaning_pitch - self.own_last_leaning_pitch) * t
+    }
+
+    // Fluggeschwindigkeit der eigenen Figur fuers Bild, zwischen den Ticks interpoliert. Der
+    // rohe Tick-Wert liess die Drehung im Gleitflug 20-mal pro Sekunde springen.
+    pub(crate) fn own_glide_velocity(&self, tick_progress: f32) -> [f32; 3] {
+        let v = self.own_last_tick_vel.lerp(self.own_tick_vel, f64::from(tick_progress.clamp(0.0, 1.0)));
+        [v.x as f32, v.y as f32, v.z as f32]
+    }
+
     // Eingaben fuer die eigene Figur (dritte Person).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn own_anim_input(
@@ -229,7 +251,7 @@ impl App {
         });
         let (hold_up, map) = hand_poses(main, off, false);
         let (horse, boat) = self.own_ride.as_ref().map_or((None, None), |r| self.ridden(r.vehicle, r.seat.index, tick_progress));
-        let lean = self.own_leaning_pitch;
+        let lean = self.own_lean(tick_progress);
         anims::Input {
             features,
             pitch_deg,
@@ -277,19 +299,27 @@ impl App {
         eintrag.1.apply(pose, dt, [schild.0, schild.1, false, false]);
     }
 
+    // Mehr Animationen, BODY_TURN: beim Essen und Blocken holt der eigene Koerper die Haelfte des
+    // Wegs zum Kopf auf. NACH own_body_yaw.tick aufrufen: frueher stand das in tick_anims, das
+    // VOR dem Koerper-Tick laeuft -- die halbe Drehung lag dann vor dem last_yaw-Schnappschuss,
+    // wurde nie interpoliert, und die Figur sprang beim Essen jeden Tick um bis zu 20 Grad.
+    pub(crate) fn turn_own_body_on_use(&mut self) {
+        if self.anim_features() & anims::BODY_TURN == 0 {
+            return;
+        }
+        let (haupt, neben) = self.own_hand_items();
+        let item = if self.using_offhand { neben } else { haupt };
+        if self.using_item && item.is_some_and(|h| world::entity::turns_body_to_head(&h)) {
+            self.own_body_yaw.turn_to_head();
+        }
+    }
+
     // Je Tick: wer schleichend ein Haustier streichelt oder einen schleichenden Spieler umarmt
-    // (Blick trifft es auf einem Block Entfernung, kaum Hoehenunterschied), und die Koerper-
-    // drehung beim Essen und Blocken. Gestreichelte Tiere zeigen ab und zu Herzchen.
+    // (Blick trifft es auf einem Block Entfernung, kaum Hoehenunterschied). Gestreichelte Tiere
+    // zeigen ab und zu Herzchen.
     pub(crate) fn tick_anims(&mut self) {
         let an = self.anim_features();
         self.entities.body_turn_on_use = an & anims::BODY_TURN != 0;
-        if an & anims::BODY_TURN != 0 {
-            let (haupt, neben) = self.own_hand_items();
-            let item = if self.using_offhand { neben } else { haupt };
-            if self.using_item && item.is_some_and(|h| world::entity::turns_body_to_head(&h)) {
-                self.own_body_yaw.turn_to_head();
-            }
-        }
         self.anim_petting.clear();
         self.anim_hugging.clear();
         if an & (anims::PET | anims::HUG) == 0 {
@@ -787,7 +817,7 @@ impl App {
     // Settings::hand_fist_items), links gespiegelt. Kommt vor die Item-Pose, nur ans Item, die Hand bleibt.
     // `anteil`: wie stark (1 = ganz, s. tuning_share).
     pub(crate) fn item_shift(&self, item: world::HeldItem, right: bool, anteil: f32) -> world::Affine {
-        if !self.settings.modified_view_model {
+        if !self.view_model_on() {
             return world::Affine::IDENTITY;
         }
         let w = self.hand_tuning(item, if right { protocol::packets::HAND_MAIN } else { protocol::packets::HAND_OFF });
@@ -810,7 +840,7 @@ impl App {
     // beim Schlag mit; die Hand bleibt.
     pub(crate) fn item_turn(&self, item: world::HeldItem, hand: i32, ruhe: world::Affine, anteil: f32) -> world::Affine {
         let w = self.hand_tuning(item, hand);
-        if !self.settings.modified_view_model || w[13..16] == [0; 3] {
+        if !self.view_model_on() || w[13..16] == [0; 3] {
             return world::Affine::IDENTITY;
         }
         let right = hand == protocol::packets::HAND_MAIN;
@@ -875,7 +905,7 @@ impl App {
         out: &mut Vec<world::BlockVertex>,
     ) {
         let name = world::item_registry::item_name(item.item_id);
-        if self.own_invisible || name == Some("shield") || !self.settings.modified_view_model {
+        if self.own_invisible || name == Some("shield") || !self.view_model_on() {
             return;
         }
         let right = hand == protocol::packets::HAND_MAIN;

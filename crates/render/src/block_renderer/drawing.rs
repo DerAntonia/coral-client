@@ -200,13 +200,29 @@ impl BlockRenderer {
     }
 
     pub const fn depth_attachment(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
-        // Die Tiefe bleibt nur stehen, wenn der komplementaere Blockumriss sie danach braucht.
-        let store = if self.outline_complement.count > 0 { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard };
+        // Die Tiefe bleibt nur stehen, wenn der komplementaere Blockumriss oder die
+        // Bewegungsunschaerfe sie danach braucht.
+        let store = if self.outline_complement.count > 0 || self.keep_depth { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard };
         wgpu::RenderPassDepthStencilAttachment {
             view: &self.depth_view,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store }),
             stencil_ops: None,
         }
+    }
+
+    // Weiterzeichnen auf der Tiefe des Welt-Durchgangs (nur mit keep_depth), ohne sie danach
+    // noch zu brauchen -- die Hand leert sie ohnehin.
+    pub const fn depth_attachment_load(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+        wgpu::RenderPassDepthStencilAttachment {
+            view: &self.depth_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+            stencil_ops: None,
+        }
+    }
+
+    // Die Tiefe des Welt-Durchgangs (nur mit keep_depth nach dem Durchgang noch gueltig).
+    pub const fn depth_view(&self) -> &wgpu::TextureView {
+        &self.depth_view
     }
 
     // Welche Spalten gezeichnet werden (Sichtkegel, Richtungsgruppen, Reihenfolge), hat

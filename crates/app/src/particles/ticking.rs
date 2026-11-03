@@ -16,7 +16,7 @@ impl Particles {
         let tuning = self.tuning;
         let sprites = &self.sprites;
         for p in &mut self.particles {
-            let speed = tuning[p.kind as usize].speed();
+            let speed = tuning[usize::from(p.own)][p.kind as usize].speed();
             if speed == 1.0 {
                 Self::tick_one(p, sprites, ctx, &mut spawns, &mut boeen);
                 continue;
@@ -168,10 +168,8 @@ impl Particles {
         if self.bursts.is_empty() {
             return;
         }
-        let bursts = std::mem::take(&mut self.bursts);
-        if ctx.mode != ParticleMode::All {
-            return;
-        }
+        let mut bursts = std::mem::take(&mut self.bursts);
+        bursts.retain(|b| ctx.mode_for(b.own) == ParticleMode::All);
         let total: i32 = bursts.iter().map(|b| b.block_count.max(0)).sum();
         if total <= 0 {
             return;
@@ -236,7 +234,7 @@ impl Particles {
         ] {
             let before = out.len();
             for p in self.particles.iter().filter(|p| self.sheet_of(p) == sheet && p.behavior.renders()) {
-                let t = self.tuning[p.kind as usize];
+                let t = self.tuning_of(p.own, p.kind as usize);
                 // Bei eigenem Tempo laeuft die Zeit des Partikels anders: `phase` ist schon
                 // vergangen, der Rest des Spielticks zaehlt mal Tempo. Ueber 1 hinaus (mehr als
                 // ein eigener Tick je Spieltick) geht es den letzten Schritt entlang weiter.
@@ -272,7 +270,7 @@ impl Particles {
     // Opake Partikel mischen nicht -- mit weniger Deckkraft gehen sie ins durchscheinende
     // Blatt (derselbe Atlas, nur mit Mischung).
     pub(super) fn sheet_of(&self, p: &Particle) -> Sheet {
-        if p.sheet == Sheet::Opaque && self.tuning[p.kind as usize].opacity_pct < 100 {
+        if p.sheet == Sheet::Opaque && self.tuning_of(p.own, p.kind as usize).opacity_pct < 100 {
             Sheet::Translucent
         } else {
             p.sheet

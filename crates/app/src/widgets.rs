@@ -16,8 +16,33 @@ pub(crate) struct AccElem {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccountContextItem {
     Logout,
+    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // ExportToken,
+    // ExportRefreshToken,
     Forget,
 }
+
+// Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+// // "Token exportieren" / "Refresh-Token exportieren" (Rechtsklick auf ein Konto): ein Token,
+// // das erst nach einer Warnung sichtbar wird. Mit Refresh-Token wird es frisch geholt, sonst
+// // ist es das gespeicherte Minecraft-Token. Je Stand der Kontoname dazu; `refresh` = das
+// // Refresh-Token statt des Minecraft-Tokens, `client_id` die App, mit der es nur gilt.
+// pub(crate) enum TokenExport {
+//     // Wird gerade ueber das Refresh-Token erneuert; die Warnung steht schon.
+//     Busy { name: String, refresh: bool },
+//     // Da, aber noch verdeckt -- erst "Anzeigen" zeigt es.
+//     Ready { name: String, refresh: bool, token: String, client_id: Option<String> },
+//     Shown { name: String, refresh: bool, token: String, client_id: Option<String> },
+//     Failed { name: String, error: String },
+// }
+
+// // Knoepfe im Token-Fenster.
+// #[derive(Clone, Copy, PartialEq, Eq)]
+// pub(crate) enum TokenExportButton {
+//     Cancel,
+//     Show,
+//     Copy,
+// }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccKind {

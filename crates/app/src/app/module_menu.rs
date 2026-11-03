@@ -1119,9 +1119,16 @@ impl App {
             }
         }
         let mut band = false;
+        let mut zoom = 1.0;
         for t in texts.iter_mut() {
             if let Some(an) = crate::clip_marker_text(t) {
                 band = an;
+                continue;
+            }
+            // Verkleinert gezeichneter Text (s. push_zoom_marker) steht in voller Groesse in
+            // einem mitverkleinerten Kasten: gemessen wird am Kasten in voller Groesse.
+            if let Some(z) = crate::zoom_marker_text(t) {
+                zoom = z.map_or(1.0, |(_, _, s)| s);
                 continue;
             }
             let rects = if band { &im_band } else { &frei };
@@ -1132,10 +1139,15 @@ impl App {
                 .iter()
                 .copied()
                 .filter(|r| element(r) && r.h >= 16.0 && r.contains(mx, my))
-                .min_by(|a, b| (a.w * a.h).total_cmp(&(b.w * b.h)));
+                // Ein Rahmen, in dem der Text mittig steht, vor kleineren, ueber die er nur
+                // hinweglaeuft (gleitende Reiter-Hinterlegung).
+                .min_by(|a, b| {
+                    let daneben = |r: &Rect| (mx - (r.x + r.w / 2.0)).abs() >= 2.0;
+                    (daneben(a), a.w * a.h).partial_cmp(&(daneben(b), b.w * b.h)).unwrap_or(std::cmp::Ordering::Equal)
+                });
             let (platz, mitte) = if let Some(r) = rahmen {
                 let mittig = (mx - (r.x + r.w / 2.0)).abs() < 2.0;
-                if mittig { (r.w - 12.0, Some(r)) } else { (r.x + r.w - 6.0 - t.x, None) }
+                if mittig { (r.w / zoom - 12.0, Some(r)) } else { (r.x + r.w - 6.0 - t.x, None) }
             } else {
                 let naechstes = rects
                     .iter()

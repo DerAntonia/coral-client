@@ -90,11 +90,10 @@ impl App {
             (FIRE_MODE_ROW, "Modus"),
             (FIRE_DETAIL_ROW, detail),
             (DEATH_ANIM_ROW, "Todesanimation"),
+            (ANIM_ROW, "Animationen"),
+            (VIEW_MODEL_ROW, "Standardmäßig an"),
         ] {
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
-        }
-        for (i, (_, label)) in world::more_anims::FEATURES.into_iter().enumerate() {
-            texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(ANIM_FIRST_ROW + i), color: theme::text(), scale: UI_SCALE_SMALL });
         }
         let mut werte = vec![(HURT_CAM_STRENGTH_ROW, set.hurt_cam_strength)];
         if set.fire_mode == FIRE_MODE_VANILLA {
@@ -346,20 +345,33 @@ impl App {
             ((particle_column_x(PARTICLE_ALL_AT_ONCE_COL), PARTICLE_TOGGLE_W), "Auf einmal"),
         ];
         let sichtbar = self.particle_visible_rows();
+        // Welche der beiden Anpassungen (s. ButtonAction::OpenParticleSettings) hier offen ist.
+        let own = self.particle_screen_own;
         let kopf = if particles::KINDS.len() > sichtbar {
             let erste = header_list_first(particles::KINDS.len(), self.particle_scroll.stand, sichtbar);
             let bis = (erste + sichtbar).min(particles::KINDS.len());
-            format!("Partikelart ({}–{} von {})", erste + 1, bis, particles::KINDS.len())
+            if own {
+                format!("Eigene Partikel ({}–{} von {})", erste + 1, bis, particles::KINDS.len())
+            } else {
+                format!("Andere Partikel ({}–{} von {})", erste + 1, bis, particles::KINDS.len())
+            }
+        } else if own {
+            "Eigene Partikel".to_string()
         } else {
-            "Partikelart".to_string()
+            "Andere Partikel".to_string()
         };
+        // Die Koepfe stehen ueber dem Zeilenband: weder beschnitten noch ausgeblendet.
+        push_fade_marker(rects, texts, None);
+        crate::push_clip_marker(rects, texts, false);
         texts.push(UiText { text: kopf, x: SETTINGS_LABEL_X, y: zeile(0), color: theme::text_2(), scale: UI_SCALE_SMALL });
         for ((x, w), text) in koepfe {
             texts.push(gpu.centered_text(Rect { x, y: settings_row_y(0), w, h: SETTINGS_CTRL_H }, text.to_string(), theme::text_2(), UI_SCALE_SMALL));
         }
+        crate::push_clip_marker(rects, texts, true);
+        push_fade_marker(rects, texts, Some(self.particle_list_band().1));
         let text_dy = (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0;
-        for (i, y) in header_list_rows(particles::KINDS.len(), self.particle_scroll.stand, sichtbar) {
-            let t = self.settings.particle_tuning[i];
+        for (i, y) in header_list_rows_smooth(particles::KINDS.len(), self.particle_scroll.stand, sichtbar) {
+            let t = self.settings.particle_tuning_of(own)[i];
             let art = particles::KINDS[i].spawn;
             let farbe = if t == particles::ParticleTuning::default() { theme::text() } else { COLOR_HUD };
             texts.push(UiText { text: particles::KINDS[i].label.to_string(), x: SETTINGS_LABEL_X, y: (y + text_dy).round(), color: farbe, scale: UI_SCALE_SMALL });
@@ -446,9 +458,19 @@ impl App {
             (6, "Trank-Buchstabe S (verstärkt)"),
             (7, "Trank-Buchstabe L (verlängert)"),
             (8, "Trank-Buchstabe W (schwach)"),
+            (SLOT_HOVER_FADE_ROW, "Hover-Übergang"),
+            (SLOT_HOVER_COLOR_ROW, "Hover-Farbe"),
+            (SWAP_ANIM_ROW, "Verschieben animieren"),
         ] {
             let y = (settings_row_y(zeile) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: text.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+        }
+        // Dauern in Millisekunden, 0 heisst aus.
+        for (zeile, ms) in [(SLOT_HOVER_FADE_ROW, self.settings.slot_hover_fade_ms), (SWAP_ANIM_ROW, self.settings.swap_anim_ms)] {
+            let rect = stepper_value_rect(zeile);
+            rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+            let text = if ms == 0 { "Aus".to_string() } else { format!("{ms} ms") };
+            texts.push(gpu.centered_text(rect, text, theme::text(), UI_SCALE_SMALL));
         }
     }
 

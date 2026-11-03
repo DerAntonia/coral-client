@@ -16,7 +16,7 @@ impl App {
             ColorTarget::EgoName(i) => if i == 2 { 4 } else { 3 },
             ColorTarget::Addon(..) => 3,
             ColorTarget::Shield(farbe) => ShieldColor::axes(self.settings.shield_mark(farbe)).len(),
-            ColorTarget::BlockOutline | ColorTarget::DamageTint | ColorTarget::Crit | ColorTarget::HitboxKind(_) => 4,
+            ColorTarget::BlockOutline | ColorTarget::DamageTint | ColorTarget::Crit | ColorTarget::HitboxKind(_) | ColorTarget::SlotHover => 4,
         }
     }
 
@@ -38,6 +38,7 @@ impl App {
             ColorTarget::SaturationHud => "Sättigung".to_string(),
             ColorTarget::StackCount(true) => "Anzahl in der Hotbar".to_string(),
             ColorTarget::StackCount(false) => "Anzahl im Inventar".to_string(),
+            ColorTarget::SlotHover => "Slot-Hervorhebung".to_string(),
             ColorTarget::EgoName(2) => "Namensschatten".to_string(),
             ColorTarget::EgoName(3) => "Namensschatten 2".to_string(),
             ColorTarget::EgoName(i) => format!("Namensfarbe {}", i + 1),
@@ -76,6 +77,7 @@ impl App {
                 [c[0] as f32, c[1] as f32, c[2] as f32, 100.0]
             }
             ColorTarget::EgoName(i) => s.ego_colors[i as usize].map(|v| v as f32),
+            ColorTarget::SlotHover => s.slot_hover_color.map(|v| v as f32),
             ColorTarget::Addon(m, k) => {
                 let (h, sa, v) = theme::to_hsv(addons::parse_color(&self.addon_value(m, k)).unwrap_or(0xFF_FFFF));
                 [h, sa * 100.0, v * 100.0, 100.0]
@@ -145,6 +147,7 @@ impl App {
             }
             ColorTarget::EgoName(i) => set.ego_colors[i as usize] = [h, u(1).min(100), u(2).min(100), if i == 2 { u(3).min(100) } else { 100 }],
             ColorTarget::StackCount(hotbar) => set.stack_count_colors[usize::from(!hotbar)] = [h, u(1).min(100), u(2).min(100)],
+            ColorTarget::SlotHover => set.slot_hover_color = [h, u(1).min(100), u(2).min(100), u(3).min(100)],
             ColorTarget::SaturationHud => {
                 (set.saturation_hud_hue, set.saturation_hud_saturation, set.saturation_hud_value) = (h, u(1).min(100), u(2).min(100));
             }
@@ -182,6 +185,10 @@ impl App {
             ColorTarget::StackCount(_) => {
                 let rgb = hsv_to_rgb(c[0], c[1] / 100.0, c[2] / 100.0).map(world::sky::srgb_to_linear);
                 [rgb[0], rgb[1], rgb[2], 1.0]
+            }
+            ColorTarget::SlotHover => {
+                let rgb = hsv_to_rgb(c[0], c[1] / 100.0, c[2] / 100.0).map(world::sky::srgb_to_linear);
+                [rgb[0], rgb[1], rgb[2], c[3] / 100.0]
             }
             _ => {
                 let rgb = hsv_to_rgb(c[0], c[1] / 100.0, c[2] / 100.0);

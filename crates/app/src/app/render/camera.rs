@@ -158,7 +158,10 @@ impl App {
         }
         let gpu = self.gpu.as_ref()?;
         let (sw, sh) = gpu.size();
-        let eye = self.physics.eye_pos();
+        // Das Auge dieses Bildes (camera.position, zwischen den Ticks interpoliert), nicht
+        // physics.eye_pos(): das steht nur je Tick fest, und das Kreuz sprang im Lauf 20-mal pro
+        // Sekunde mit.
+        let eye = self.camera.position;
         let punkt = self.aim_point(eye, self.camera.forward().as_dvec3());
         let rel = (punkt - self.camera.position).as_vec3();
         let clip = self.camera.view_proj_matrix(sw / sh.max(1.0)) * glam::Vec4::new(rel.x, rel.y, rel.z, 1.0);

@@ -58,8 +58,26 @@ impl App {
             SETTINGS_SCROLL_FIRST.store(0f32.to_bits(), Relaxed);
             SETTINGS_SCROLL_BOTTOM.store(f32::INFINITY.to_bits(), Relaxed);
             store_section_starts(0);
-            store_content_clip(None);
+            // Die Partikel-Anpassung beschneidet ihre gleitende Liste genauso, unter den
+            // Spaltenkoepfen (s. particle_list_band).
+            let partikel = (self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles).then(|| {
+                let (dx, dy) = self.content_offset();
+                let w = self.gpu.as_ref().map_or(1920.0, |g| g.size().0);
+                let band = self.particle_list_band().0;
+                Rect { x: dx, y: band.y + dy, w: w - self.side_strip_w(w) - dx, h: band.h }
+            });
+            store_content_clip(partikel);
         }
+    }
+
+    // Zeilenband der Partikel-Anpassung (Inhaltskoordinaten, nur y und h gelten): von unter den
+    // Spaltenkoepfen bis unter die letzte ganz sichtbare Zeile, mit dem Verlauf an den Raendern.
+    pub(crate) fn particle_list_band(&self) -> (Rect, crate::ScrollFade) {
+        let luecke = (SETTINGS_ROW_H - crate::SETTINGS_CTRL_H) / 2.0;
+        let oben = SETTINGS_FIRST_Y + SETTINGS_ROW_H - luecke;
+        let unten = SETTINGS_FIRST_Y + (self.particle_visible_rows() + 1) as f32 * SETTINGS_ROW_H - luecke;
+        let fade = crate::ScrollFade::new(oben, unten, SETTINGS_ROW_H, self.particle_scroll.stand, self.particle_max_scroll());
+        (Rect { x: 0.0, y: oben, w: 0.0, h: unten - oben }, fade)
     }
 
     // `weg` Zeilen Richtung Seitenende (s. App::wheel_units).
@@ -70,11 +88,13 @@ impl App {
 
     // Reiter angeklickt: Abschnitt `i` nach oben gleiten (so weit die Seite reicht).
     pub(crate) fn jump_to_section(&mut self, i: usize) {
-        let Some(&(_, row)) = self.screen.settings_page().and_then(|p| p.sections.get(i)) else { return };
+        let Some(page) = self.screen.settings_page() else { return };
+        let Some(&(_, row)) = page.sections.get(i) else { return };
         let max = self.page_max_scroll();
         let erste = row.min(max);
-        self.page_scroll_mut().glide_to(erste as f32, max as f32);
+        self.page_scroll_mut().glide_to(page.section_stand(row).min(max as f32), max as f32);
         self.section_click = Some((self.screen, i, erste));
+        self.section_flash = Some((self.screen, i, Instant::now()));
     }
 
     // Linksziehen in den Listen wie in osu! (s. smooth_scroll::DragGrip): die Liste unter dem

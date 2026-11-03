@@ -1,6 +1,6 @@
 // Server-Ereignisse (drain_events), Log, Welt zuruecksetzen, Lagback und Benachrichtigungen.
 
-use crate::{App, Duration, FPS_LIMIT_MONITOR, FPS_LIMIT_UNLIMITED, LOG_MAX_LINES, Instant, ConnStatus, chat_log, DVec3, SlotQueue, AppMode, MenuScreen, disconnect_popup_text, LAGBACK_MIN_BLOCKS, LAGBACK_MAX_BLOCKS, teleport_velocity, physics, ShownEffect, item_cooldowns, BLOCK_INTERACTION_REACH, ENTITY_INTERACTION_REACH, consumable_optimizer, inventory, GAME_MODE_SPECTATOR, GAME_MODE_SURVIVAL, GAME_MODE_ADVENTURE, GAME_MODE_CREATIVE, crystal_optimizer, notifications, ENTITY_STATUS_KINETIC_HIT, ENTITY_STATUS_DIED, ENTITY_STATUS_THROWN_HIT, ENTITY_STATUS_USE_ITEM_COMPLETE, ENTITY_STATUS_DEATH_PARTICLES, JavaRandom, CRIT_GRACE_TICKS, restart_swing, SERVER_SET_FOLLOW, SERVER_SET_RESET, NO_UI_CLOSE_ALWAYS, NO_UI_CLOSE_INVENTORY, TeamInfo, TEAM_VISIBILITY_ALWAYS, MAX_AIR_TICKS, saturate, MeshResult, AoFade, transactions, VANILLA_LOAD_TIMEOUT, VANILLA_CHUNK_FADE_READY, modules, MAX_PITCH, PACKET_GAP_WARN, PACKET_GAP_NOTE_LIFETIME, LAGBACK_GROUP, NOTIFICATION_HISTORY, TOPBAR_H, notification_layout, UiOverlay, notification_accent, theme, UiOverlayGroup, Rect, UiRect, NOTIFICATION_TIMER_H, NOTIFICATION_ACCENT_W, NOTIFICATION_PADDING, UiText, UI_SCALE_SMALL, notification_line_h, NOTIFICATION_BODY_GAP};
+use crate::{App, Duration, FPS_LIMIT_MONITOR, FPS_LIMIT_UNLIMITED, LOG_MAX_LINES, Instant, ConnStatus, chat_log, DVec3, SlotQueue, AppMode, MenuScreen, disconnect_popup_text, LAGBACK_MIN_BLOCKS, LAGBACK_MAX_BLOCKS, teleport_velocity, physics, ShownEffect, item_cooldowns, BLOCK_INTERACTION_REACH, ENTITY_INTERACTION_REACH, consumable_optimizer, inventory, GAME_MODE_SPECTATOR, GAME_MODE_SURVIVAL, GAME_MODE_ADVENTURE, GAME_MODE_CREATIVE, crystal_optimizer, notifications, ENTITY_STATUS_KINETIC_HIT, ENTITY_STATUS_DIED, ENTITY_STATUS_THROWN_HIT, ENTITY_STATUS_USE_ITEM_COMPLETE, ENTITY_STATUS_DEATH_PARTICLES, JavaRandom, CRIT_GRACE_TICKS, restart_swing, SERVER_SET_FOLLOW, SERVER_SET_RESET, SERVER_OPEN_ALLOW, SERVER_OPEN_CLOSE, SERVER_OPEN_SIGN, SERVER_OPEN_BOOK, SERVER_OPEN_DIALOG, SERVER_CLOSE_SIGN_ROW, SERVER_CLOSE_GROUP_ROW, SERVER_CLOSE_INVENTORY_ROW, TeamInfo, TEAM_VISIBILITY_ALWAYS, MAX_AIR_TICKS, saturate, MeshResult, AoFade, transactions, VANILLA_LOAD_TIMEOUT, VANILLA_CHUNK_FADE_READY, modules, MAX_PITCH, PACKET_GAP_WARN, PACKET_GAP_NOTE_LIFETIME, LAGBACK_GROUP, NOTIFICATION_HISTORY, TOPBAR_H, notification_layout, UiOverlay, notification_accent, theme, UiOverlayGroup, Rect, UiRect, NOTIFICATION_TIMER_H, NOTIFICATION_ACCENT_W, NOTIFICATION_PADDING, UiText, UI_SCALE_SMALL, notification_line_h, NOTIFICATION_BODY_GAP};
 
 mod world_mesh;
 mod world_reset;
@@ -388,7 +388,11 @@ impl App {
                     self.dialog_registry = entries;
                 }
                 net::ClientEvent::ServerLinks(links) => self.server_links = links,
-                net::ClientEvent::ShowDialog(d) => self.show_dialog_ref(d),
+                net::ClientEvent::ShowDialog(d) => {
+                    if self.settings.server_open[SERVER_OPEN_DIALOG] == SERVER_OPEN_ALLOW {
+                        self.show_dialog_ref(d);
+                    }
+                }
                 net::ClientEvent::ClearDialog => self.clear_dialog(),
                 net::ClientEvent::CodeOfConduct(text) => self.code_of_conduct_received(text),
                 // Sonstiges > No chat clear: der Chat bleibt.
@@ -441,8 +445,22 @@ impl App {
                     self.signs.insert(pos, text);
                 }
                 net::ClientEvent::HeadAt { pos, profile } => self.note_placed_head(pos, &profile),
-                net::ClientEvent::OpenSignEditor { pos, front } => self.open_sign_editor(pos, front),
-                net::ClientEvent::OpenBook { hand } => self.open_book(hand),
+                net::ClientEvent::OpenSignEditor { pos, front } => match self.settings.server_open[SERVER_OPEN_SIGN] {
+                    SERVER_OPEN_ALLOW => self.open_sign_editor(pos, front),
+                    // Wie geoeffnet und sofort geschlossen: der vorbefuellte Text geht zurueck.
+                    SERVER_OPEN_CLOSE => {
+                        let lines = self.sign_editor_lines(pos, front);
+                        if let Some(tx) = &self.outgoing_tx {
+                            let _ = tx.send(protocol::sign::sign_update_payload(pos, front, &lines));
+                        }
+                    }
+                    _ => {}
+                },
+                net::ClientEvent::OpenBook { hand } => {
+                    if self.settings.server_open[SERVER_OPEN_BOOK] == SERVER_OPEN_ALLOW {
+                        self.open_book(hand);
+                    }
+                }
                 net::ClientEvent::MapData(daten) => self.maps.apply(daten),
                 net::ClientEvent::RainGradient(g) => self.rain_gradient = g,
                 net::ClientEvent::ThunderGradient(g) => self.thunder_gradient = g,
@@ -517,14 +535,9 @@ impl App {
                 net::ClientEvent::RecipeBookRemove(ids) => self.recipe_book.apply_remove(&ids),
                 net::ClientEvent::ItemTags(tags) => self.recipe_book.tags = tags,
                 net::ClientEvent::BlockTags(tags) => world::mining::set_server_block_tags(tags),
-                // Sonstiges > No UI close: der Server schliesst nichts (oder nur das eigene
-                // Inventar nicht -- offen ohne Container und ohne Schild-Editor).
-                net::ClientEvent::CloseScreen(_)
-                    if self.settings.no_ui_close == NO_UI_CLOSE_ALWAYS
-                        || (self.settings.no_ui_close == NO_UI_CLOSE_INVENTORY
-                            && self.inventory.screen_open
-                            && self.inventory.open.is_none()
-                            && self.sign_edit.is_none()) => {}
+                // Sonstiges > Server-Bildschirme: was gerade offen ist, darf der Server nicht
+                // schliessen. Ein abgelehnter Container ist fuer ihn trotzdem zu.
+                net::ClientEvent::CloseScreen(_) if self.server_close_blocked() => self.inventory.refused = None,
                 net::ClientEvent::CloseScreen(_sync_id) => {
                     // Vanilla schliesst bei Container Close jeden offenen Screen, ohne auf die
                     // ID zu schauen -- auch den Schild-Editor, der dabei seinen Text als Sign
@@ -757,6 +770,20 @@ impl App {
     }
 
     fn on_open_screen(&mut self, screen: protocol::packets::OpenScreen) {
+        // Sonstiges > Server-Bildschirme: gesperrt zeigen wir ihn nicht. Sofort zu meldet das
+        // Schliessen gleich zurueck (wie Esc direkt nach dem Oeffnen), Ignorieren laesst ihn
+        // fuer den Server offen. Sein Inhalt kommt in beiden Faellen noch (der Server schickt ihn
+        // gleich hinter dem Oeffnen) und darf keinen Container anlegen.
+        let modus = self.settings.server_open[inventory::menu_group(screen.screen_type)];
+        if modus != SERVER_OPEN_ALLOW {
+            self.inventory.refused = Some((screen.sync_id, 0));
+            if modus == SERVER_OPEN_CLOSE {
+                if let Some(tx) = &self.outgoing_tx {
+                    let _ = tx.send(protocol::packets::close_container_payload(screen.sync_id));
+                }
+            }
+            return;
+        }
         self.quick_craft_pending = None;
         // Vom Server geoeffnet (Truhe, Plugin-Menue): Zeiger wie in Vanilla. Dort
         // zentriert erst das Entsperren der Maus (Mouse.unlockCursor) -- und das
@@ -787,6 +814,22 @@ impl App {
         // unsere Entsprechung -- und behandelt Umschalt-Bindungen richtig, genau
         // wie Vanillas restoreToggleStates beim Schliessen.
         self.clear_controls();
+    }
+
+    // Steht gerade ein Bildschirm offen, den der Server nicht schliessen darf (Sonstiges >
+    // Server-Bildschirme)? Ohne offenen Bildschirm gibt es nichts zu verhindern.
+    fn server_close_blocked(&self) -> bool {
+        let zeile = if self.sign_edit.is_some() {
+            SERVER_CLOSE_SIGN_ROW
+        } else if !self.inventory.screen_open {
+            return false;
+        } else {
+            match self.inventory.open.as_ref() {
+                Some(c) => SERVER_CLOSE_GROUP_ROW + inventory::menu_group(c.screen_type),
+                None => SERVER_CLOSE_INVENTORY_ROW,
+            }
+        };
+        self.settings.server_close_blocked & (1 << zeile) != 0
     }
 
     fn on_chat(&mut self, spans: Vec<protocol::nbt::TextSpan>, overlay: bool) {
@@ -1042,6 +1085,7 @@ impl App {
         self.conn_status = ConnStatus::Disconnected;
         // Der Task hat sich selbst beendet; der Handle ist nur noch Altlast.
         self.conn_task = None;
+        self.restore_config_after_server();
         // Server-Resourcepacks gehoeren zur Verbindung (s. server_packs).
         self.server_packs.clear();
         self.forget_connection_state();

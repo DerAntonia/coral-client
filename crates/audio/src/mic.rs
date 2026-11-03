@@ -75,7 +75,7 @@ impl<F: FnMut(&[i16])> Framer<F> {
 
 #[must_use] 
 pub fn list_input_devices() -> Vec<String> {
-    cpal::default_host().input_devices().map(|ds| ds.filter_map(|d| d.name().ok()).collect()).unwrap_or_default()
+    cpal::default_host().input_devices().map(|ds| ds.filter_map(|d| crate::geraete_name(&d)).collect()).unwrap_or_default()
 }
 
 // Ein offenes Mikrofon; zu, sobald es fallen gelassen wird.
@@ -93,7 +93,7 @@ impl Microphone {
             Some(name) => host
                 .input_devices()
                 .map_err(|_| AudioError::NoOutputDevice)?
-                .find(|d| d.name().is_ok_and(|n| n == name))
+                .find(|d| crate::geraete_name(d).is_some_and(|n| n == name))
                 .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?,
             None => host.default_input_device().ok_or(AudioError::NoOutputDevice)?,
         };
@@ -102,7 +102,7 @@ impl Microphone {
         let config: cpal::StreamConfig = supported.into();
         let channels = config.channels.max(1) as usize;
         let mut framer = Framer {
-            resampler: Resampler::new(f64::from(config.sample_rate.0)),
+            resampler: Resampler::new(f64::from(config.sample_rate)),
             mono: Vec::with_capacity(4096),
             rate48: Vec::with_capacity(4096),
             frame: Vec::with_capacity(FRAME),
@@ -110,12 +110,12 @@ impl Microphone {
         };
         let err_fn = |e| eprintln!("[audio] Mikrofon-Fehler: {e}");
         let stream = match format {
-            SampleFormat::F32 => device.build_input_stream(&config, move |d: &[f32], _| framer.feed(d.iter().copied(), channels), err_fn, None),
+            SampleFormat::F32 => device.build_input_stream(config.clone(), move |d: &[f32], _| framer.feed(d.iter().copied(), channels), err_fn, None),
             SampleFormat::I16 => {
-                device.build_input_stream(&config, move |d: &[i16], _| framer.feed(d.iter().map(|s| f32::from(*s) / 32768.0), channels), err_fn, None)
+                device.build_input_stream(config.clone(), move |d: &[i16], _| framer.feed(d.iter().map(|s| f32::from(*s) / 32768.0), channels), err_fn, None)
             }
             SampleFormat::U16 => device.build_input_stream(
-                &config,
+                config.clone(),
                 move |d: &[u16], _| framer.feed(d.iter().map(|s| (f32::from(*s) - 32768.0) / 32768.0), channels),
                 err_fn,
                 None,
@@ -124,7 +124,7 @@ impl Microphone {
         }
         .map_err(|e| AudioError::BuildStream(e.to_string()))?;
         stream.play().map_err(|e| AudioError::PlayStream(e.to_string()))?;
-        Ok(Self { _stream: stream, device_name: device.name().unwrap_or_default() })
+        Ok(Self { _stream: stream, device_name: crate::geraete_name(&device).unwrap_or_default() })
     }
 }
 

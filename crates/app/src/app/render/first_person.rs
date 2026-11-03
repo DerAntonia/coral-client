@@ -595,7 +595,7 @@ impl App {
                 // (s. Hand-Debug-Werte des Bogens je Spannstufe), nur zur Bildmitte verschoben.
                 // Ohne Vanillas Spann-Dehnung: die eigene Drehung kippt deren Achse ins Bild, der
                 // Bogen wuerde sichtbar groesser.
-                if self.settings.modified_view_model {
+                if self.view_model_on() {
                     let u = (use_ticks / world::hold::BOW_DRAW_TICKS).clamp(0.0, 1.0);
                     let w = u * u * (3.0 - 2.0 * u);
                     let s = if right_hand { 1.0 } else { -1.0 };

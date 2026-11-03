@@ -37,8 +37,12 @@ impl App {
             let fade = fades[usize::from(spalte == Column::Selected)];
             push_fade_marker(rects, texts, Some(fade));
             let Some(sichtbar) = skin_clip(karte) else { continue };
+            // Die Flaeche hellt weich auf wie ein Knopf (s. hover_level), ohne dessen Aufblitzen;
+            // der Rand schaltet hart um (gewuenscht).
             let hover = frei && sichtbar.contains(px, py);
-            let (fill, rand) = if hover { (g(Slot::Surface2), g(Slot::Accent)) } else { (g(Slot::Surface1), g(Slot::Border1)) };
+            let k = self.hover_level(karte, hover).min(1.0);
+            let fill = mix_color(g(Slot::Surface1), g(Slot::Surface2), k);
+            let rand = if hover { g(Slot::Accent) } else { g(Slot::Border1) };
             rects.push(UiRect::shadow(sichtbar, 8.0, 2.0, 8.0, 0.35));
             rects.push(UiRect::framed(sichtbar, fill, 8.0, 1.0, rand));
             let bild = skin_icon_rect(karte);

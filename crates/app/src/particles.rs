@@ -349,8 +349,10 @@ struct Particle {
     needs_water: bool,
     behavior: Behavior,
     sheet: Sheet,
-    // Index in KINDS -- welche Anpassung fuer diesen Partikel gilt.
+    // Index in KINDS -- welche Anpassung fuer diesen Partikel gilt -- und ob die eigene (an
+    // der eigenen Figur entstanden, s. own_at) oder die der anderen.
     kind: u8,
+    own: bool,
     // Registry-ID des Partikeltyps, -1 fuer Partikel ohne eigenen Typ (Blockstaub & Co.) --
     // nur fuer die Debug-Anzeige (s. Particles::type_counts).
     type_id: i32,
@@ -395,6 +397,7 @@ impl Particle {
             behavior: Behavior::Physics,
             sheet: Sheet::Opaque,
             kind: 0,
+            own: false,
             type_id: -1,
             phase: 0.0,
         }
@@ -563,6 +566,8 @@ struct Emitter {
 
 // BlockParticleEffectsManager.Entry.
 struct ExplosionBurst {
+    // An der eigenen Figur (s. own_at): welche Anpassung und Stufe fuer die Truemmer gilt.
+    own: bool,
     center: DVec3,
     radius: f32,
     block_count: i32,
@@ -574,7 +579,9 @@ struct ExplosionBurst {
 // Fabrik).
 pub struct SpawnContext<'a> {
     pub camera: DVec3,
+    // Partikel-Stufe fuer die anderen und fuer die eigenen Partikel (s. own_at).
     pub mode: ParticleMode,
+    pub mode_own: ParticleMode,
     pub world: &'a world::World,
     pub shapes: &'a world::BlockShapes,
     // Biomfarben fuer den Staub gefaerbter Bloecke (Gras, Laub), s. block_dust.
@@ -588,6 +595,25 @@ pub struct SpawnContext<'a> {
 pub struct NearPlayer {
     pub pos: DVec3,
     pub vel_y: f64,
+}
+
+// So weit um den Kasten der eigenen Figur (0.6 breit, 1.8 hoch, `pos` an den Fuessen) zaehlt
+// ein Partikel als eigenes: Treffer, Effekte und das Totem erscheinen rund um den Koerper.
+const OWN_MARGIN: f64 = 0.5;
+
+// "Eigene" Partikel: die an der eigenen Figur entstehen. Der Server sagt nicht, wem ein
+// Partikel gilt -- es zaehlt der Ort, an dem es entsteht.
+fn own_at(ctx: &SpawnContext, pos: DVec3) -> bool {
+    ctx.player.is_some_and(|me| {
+        let d = pos - me.pos;
+        d.x.abs() <= 0.3 + OWN_MARGIN && d.z.abs() <= 0.3 + OWN_MARGIN && d.y >= -OWN_MARGIN && d.y <= 1.8 + OWN_MARGIN
+    })
+}
+
+impl SpawnContext<'_> {
+    const fn mode_for(&self, own: bool) -> ParticleMode {
+        if own { self.mode_own } else { self.mode }
+    }
 }
 
 pub struct Particles {
@@ -612,11 +638,12 @@ pub struct Particles {
     // ein Resourcepack kann das nicht sauber leeren -- das CPvP-Pack etwa laesst in jeder
     // Explosions- und Rauchtextur einen Pixel stehen, der beim Crystallen als weisse Punkte
     // bleibt.
-    tuning: [ParticleTuning; KINDS.len()],
+    // Index 0 die anderen, 1 die eigenen Partikel (s. own_at).
+    tuning: [[ParticleTuning; KINDS.len()]; 2],
     // Guthaben je Art fuer Menge und Intervall: jedes Vanilla-Partikel bringt den Faktor ein,
     // es entstehen so viele, wie ganze Einheiten zusammenkommen. So ergeben 50 % genau jedes
-    // zweite, auch wenn je Ereignis nur eins kommt.
-    credit: [f32; KINDS.len()],
+    // zweite, auch wenn je Ereignis nur eins kommt. Wie `tuning` je andere/eigene.
+    credit: [[f32; KINDS.len()]; 2],
 }
 
 impl Particles {
@@ -633,8 +660,8 @@ impl Particles {
             bursts: Vec::new(),
             unsupported: HashMap::default(),
             new_unsupported: Vec::new(),
-            tuning: [ParticleTuning::default(); KINDS.len()],
-            credit: [0.0; KINDS.len()],
+            tuning: [[ParticleTuning::default(); KINDS.len()]; 2],
+            credit: [[0.0; KINDS.len()]; 2],
         };
         me.set_textures(atlas, block_uvs);
         me
@@ -651,17 +678,21 @@ impl Particles {
     // Neue Anpassung aus den Einstellungen. Was jetzt aus ist, verschwindet sofort; Dauer,
     // Deckkraft und Tempo gelten auch fuer die schon fliegenden Partikel (die Dauer nur fuer
     // neue).
-    pub fn set_tuning(&mut self, tuning: [ParticleTuning; KINDS.len()]) {
+    // `other` gilt fuer die anderen Partikel, `own` fuer die an der eigenen Figur.
+    pub fn set_tuning(&mut self, other: [ParticleTuning; KINDS.len()], own: [ParticleTuning; KINDS.len()]) {
+        let tuning = [other, own];
         if tuning == self.tuning {
             return;
         }
         self.tuning = tuning;
-        let an = |p: &Particle| tuning[p.kind as usize].enabled;
+        let an = |p: &Particle| tuning[usize::from(p.own)][p.kind as usize].enabled;
         self.particles.retain(an);
         self.pending.retain(an);
-        if !tuning[KIND_EXPLOSION].enabled {
-            self.bursts.clear();
-        }
+        self.bursts.retain(|b| tuning[usize::from(b.own)][KIND_EXPLOSION].enabled);
+    }
+
+    fn tuning_of(&self, own: bool, kind: usize) -> ParticleTuning {
+        self.tuning[usize::from(own)][kind]
     }
 
     // ParticleManager.clearParticles -- beim Welt- oder Dimensionswechsel.
@@ -737,11 +768,12 @@ impl Particles {
     // Explosion sind Rauch und Woelkchen, gehoeren aber zur Explosion).
     #[allow(clippy::too_many_arguments)]
     fn add_client_as(&mut self, kind: usize, effect: &ParticleEffect, force: bool, important: bool, pos: DVec3, vel: DVec3, ctx: &SpawnContext) {
-        if !self.tuning[kind].enabled {
+        let own = own_at(ctx, pos);
+        if !self.tuning_of(own, kind).enabled {
             return;
         }
         let force = force || pp::particle_always_spawns(effect.type_id);
-        let mode = self.effective_mode(ctx.mode, important);
+        let mode = self.effective_mode(ctx.mode_for(own), important);
         if !force && (ctx.camera.distance_squared(pos) > MAX_SPAWN_DISTANCE_SQ || mode == ParticleMode::Minimal) {
             return;
         }
@@ -749,11 +781,11 @@ impl Particles {
             p.type_id = effect.type_id;
             // Ein Emitter-Partikel (Explosion, Windkugel) mit "alle auf einmal": seinen ganzen
             // Ausstoss jetzt, statt ueber seine Ticks verteilt.
-            if !p.behavior.renders() && self.tuning[kind].all_at_once && KINDS[kind].spawn.has_all_at_once() {
+            if !p.behavior.renders() && self.tuning_of(own, kind).all_at_once && KINDS[kind].spawn.has_all_at_once() {
                 self.emit_all_now(p, ctx);
                 return;
             }
-            self.push(p, kind);
+            self.push(p, kind, ctx);
         }
     }
 
@@ -771,22 +803,24 @@ impl Particles {
     }
 
     // Wie viele Partikel fuer ein Vanilla-Partikel dieser Art entstehen (s. credit).
-    fn spawn_count(&mut self, kind: usize) -> u32 {
-        let faktor = self.tuning[kind].spawn_factor(KINDS[kind].spawn);
+    fn spawn_count(&mut self, own: bool, kind: usize) -> u32 {
+        let faktor = self.tuning_of(own, kind).spawn_factor(KINDS[kind].spawn);
         if faktor == 1.0 {
             return 1;
         }
-        self.credit[kind] += faktor;
-        let n = self.credit[kind].floor();
-        self.credit[kind] -= n;
+        let guthaben = &mut self.credit[usize::from(own)][kind];
+        *guthaben += faktor;
+        let n = guthaben.floor();
+        *guthaben -= n;
         n as u32
     }
 
     // In den Bestand (am Tickende), mit der Lebensdauer der Art. Emitter zeichnen nichts --
     // ihre Dauer bliebe sonst nicht die Dauer eines Partikels, sondern die Menge, die sie
     // ausstossen.
-    fn push(&mut self, mut p: Particle, kind: usize) {
-        let t = self.tuning[kind];
+    fn push(&mut self, mut p: Particle, kind: usize, ctx: &SpawnContext) {
+        p.own = own_at(ctx, p.pos);
+        let t = self.tuning_of(p.own, kind);
         if !t.enabled {
             return;
         }
@@ -796,7 +830,7 @@ impl Particles {
         p.kind = kind as u8;
         // Menge/Intervall nur fuer sichtbare Partikel -- ein Emitter, der wegfiele, nahme
         // seinen ganzen Ausstoss mit.
-        let n = if p.behavior.renders() { self.spawn_count(kind) } else { 1 };
+        let n = if p.behavior.renders() { self.spawn_count(p.own, kind) } else { 1 };
         for _ in 1..n {
             // Mehr als Vanilla: leicht gestreute Kopien, sonst laegen sie genau aufeinander.
             let mut kopie = p.clone();

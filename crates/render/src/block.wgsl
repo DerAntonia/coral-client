@@ -395,6 +395,17 @@ fn fs_entity_outline(in: EntityOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(in.tint.rgb, 1.0);
 }
 
+// Maske des eigenen Spielers fuer die Bewegungsunschaerfe (s. motion_blur.rs): dieselben
+// deckenden Texel wie fs_entity, gegen die Tiefe der Welt -- nur was man von ihm sieht.
+@fragment
+fn fs_entity_mask(in: EntityOutput) -> @location(0) vec4<f32> {
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    if (tex.a < 0.5) {
+        discard;
+    }
+    return vec4<f32>(1.0);
+}
+
 // --- Shader-Pfad: Entities und Hand mit Licht ---------------------------------------------
 //
 // Entities kommen nach dem Licht-Pass und der Tonemap direkt ins fertige Bild (s.
@@ -630,46 +641,12 @@ fn fs_hitbox(in: HitboxOutput) -> @location(0) vec4<f32> {
 }
 
 // Blockumriss im Modus Komplementaer (s. OutlineComplement): dieselben Kanten wie fs_hitbox,
-// die Farbe aber je Pixel die Gegenfarbe des Bildes darunter -- Farbton +180 Grad, Saettigung
-// und Helligkeit voll, wie beim Fadenkreuz (app crosshair.wgsl). `scene_copy` ist eine Kopie
-// des Weltbilds von direkt vor diesem Durchgang; das Ziel selbst laesst sich nicht lesen.
-// Eigene Bindung 2 in Gruppe 1: die Pipeline bindet dort nur diese Kopie, nicht den Atlas.
+// die Farbe aber je Pixel die Gegenfarbe des Bildes darunter (contrast_color, s.
+// contrast_color.wgsl -- wird an diese Datei angehaengt), wie beim Fadenkreuz. `scene_copy`
+// ist eine Kopie des Weltbilds von direkt vor diesem Durchgang; das Ziel selbst laesst sich
+// nicht lesen. Eigene Bindung 2 in Gruppe 1: die Pipeline bindet dort nur diese Kopie, nicht
+// den Atlas.
 @group(1) @binding(2) var scene_copy: texture_2d<f32>;
-
-fn complement_of(c: vec3<f32>) -> vec3<f32> {
-    let maxc = max(c.r, max(c.g, c.b));
-    let d = maxc - min(c.r, min(c.g, c.b));
-    var h = 0.0;
-    if (d > 0.0001) {
-        if (maxc == c.r) {
-            h = (c.g - c.b) / d;
-        } else if (maxc == c.g) {
-            h = (c.b - c.r) / d + 2.0;
-        } else {
-            h = (c.r - c.g) / d + 4.0;
-        }
-    }
-    // Sechstel des Farbkreises, um drei weiter gedreht (= +180 Grad), auf [0,6).
-    var hp = h + 3.0;
-    if (hp < 0.0) {
-        hp = hp + 6.0;
-    }
-    if (hp >= 6.0) {
-        hp = hp - 6.0;
-    }
-    if (hp < 1.0) {
-        return vec3<f32>(1.0, hp, 0.0);
-    } else if (hp < 2.0) {
-        return vec3<f32>(2.0 - hp, 1.0, 0.0);
-    } else if (hp < 3.0) {
-        return vec3<f32>(0.0, 1.0, hp - 2.0);
-    } else if (hp < 4.0) {
-        return vec3<f32>(0.0, 4.0 - hp, 1.0);
-    } else if (hp < 5.0) {
-        return vec3<f32>(hp - 4.0, 0.0, 1.0);
-    }
-    return vec3<f32>(1.0, 0.0, 6.0 - hp);
-}
 
 @fragment
 fn fs_hitbox_complement(in: HitboxOutput) -> @location(0) vec4<f32> {
@@ -678,7 +655,7 @@ fn fs_hitbox_complement(in: HitboxOutput) -> @location(0) vec4<f32> {
     let groesse = vec2<i32>(textureDimensions(scene_copy));
     let pixel = clamp(vec2<i32>(in.clip_position.xy), vec2<i32>(0), groesse - 1);
     let darunter = textureLoad(scene_copy, pixel, 0).rgb;
-    return vec4<f32>(complement_of(darunter), in.color.a * coverage);
+    return vec4<f32>(contrast_color(darunter), in.color.a * coverage);
 }
 
 // Shader-Pfad: Wasser/Glas mit demselben Licht wie das Gelaende. Gezeichnet wird nach dem

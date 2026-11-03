@@ -76,7 +76,10 @@ pub fn kind(name: &str, block: bool, consumable: bool) -> Option<Kind> {
         _ if name.ends_with("_spear") => Kind::Spear,
         _ if name.ends_with("_axe") => Kind::Axe,
         _ if name.ends_with("_pickaxe") || name.ends_with("_shovel") || name.ends_with("_hoe") => Kind::Tool,
-        "potion" | "splash_potion" | "lingering_potion" | "snowball" | "egg" | "blue_egg" | "brown_egg" | "ender_pearl" | "ender_eye" | "experience_bottle" | "wind_charge" => Kind::Throwable,
+        // Traenke und Wurfitems flogen gerade hoch (Kind::Throwable, THROWABLE_TOSS). Abgeschaltet
+        // (gewuenscht): sie werden jetzt wie andere Items ohne Haltbarkeit angesehen. Der Wurf
+        // bleibt erhalten, nur diese Zuordnung ist auskommentiert.
+        // "potion" | "splash_potion" | "lingering_potion" | "snowball" | "egg" | "blue_egg" | "brown_egg" | "ender_pearl" | "ender_eye" | "experience_bottle" | "wind_charge" => Kind::Throwable,
         _ if consumable => Kind::Consumable,
         _ if block => Kind::Block,
         _ => Kind::Other,
@@ -884,9 +887,12 @@ mod tests {
         assert_eq!(kind("golden_apple", false, true), Some(Kind::Consumable));
         assert_eq!(kind("stone", true, false), Some(Kind::Block));
         assert_eq!(kind("stick", false, false), Some(Kind::Other));
-        assert_eq!(kind("splash_potion", false, false), Some(Kind::Throwable));
-        assert_eq!(kind("potion", false, true), Some(Kind::Throwable));
-        assert_eq!(kind("ender_pearl", false, false), Some(Kind::Throwable));
+        // Solange der Wurf abgeschaltet ist (s. kind):
+        // assert_eq!(kind("splash_potion", false, false), Some(Kind::Throwable));
+        // assert_eq!(kind("potion", false, true), Some(Kind::Throwable));
+        // assert_eq!(kind("ender_pearl", false, false), Some(Kind::Throwable));
+        assert_eq!(kind("splash_potion", false, false), Some(Kind::Other));
+        assert_eq!(kind("potion", false, true), Some(Kind::Consumable));
     }
 
     // Die leere Hand lehnt auf dem Bild etwa 10 Grad nach innen; arm_on_screen haelt die

@@ -410,7 +410,8 @@ pub(super) fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) 
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // Lesbar fuer die Bewegungsunschaerfe (s. crate::motion_blur).
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     texture.create_view(&wgpu::TextureViewDescriptor::default())

@@ -92,7 +92,7 @@ impl App {
     // ihr Item los und liegt an der Sehne, mit eigenen Werten je Spannstufe
     // ("bow_pulling_N_sehne", Hand-Debug-Knopf "Sehnenhand"). Ihre Hand und der Name der Werte.
     pub(crate) fn string_hand(&self) -> Option<(i32, String)> {
-        if !self.settings.modified_view_model {
+        if !self.view_model_on() {
             return None;
         }
         let rechts = self.own_using_item_right_arm()?;

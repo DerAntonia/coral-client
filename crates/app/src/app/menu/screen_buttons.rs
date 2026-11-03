@@ -133,6 +133,28 @@ impl App {
                 out.extend(Self::stepper(ButtonAction::LightmapDebugPrev, ButtonAction::LightmapDebugNext, 5, d > 0, (d as usize) + 1 < LIGHTMAP_DEBUG_NAMES.len()));
             }
             MenuScreen::SettingsParticles => self.buttons_settings_particles(&mut out),
+            MenuScreen::SettingsAnimations => {
+                out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
+                for (i, (bit, _)) in world::more_anims::FEATURES.into_iter().enumerate() {
+                    out.push(Self::toggle(ButtonAction::ToggleAnimFlag(bit), i, self.settings.anim_flags & bit != 0));
+                }
+            }
+            // Schliessen: An = der Server darf. Oeffnen: drei Modi, bei Buch und Dialog An/Aus.
+            MenuScreen::SettingsServerScreens => {
+                out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
+                for zeile in 0..SERVER_OPEN_ROW {
+                    out.push(Self::toggle(ButtonAction::ToggleServerClose(zeile), zeile, self.settings.server_close_blocked & (1 << zeile) == 0));
+                }
+                for (i, &modus) in self.settings.server_open.iter().enumerate() {
+                    if i >= SERVER_OPEN_BOOK {
+                        let neu = if modus == SERVER_OPEN_ALLOW { SERVER_OPEN_IGNORE } else { SERVER_OPEN_ALLOW };
+                        out.push(Self::toggle(ButtonAction::ServerOpen(i, neu), SERVER_OPEN_ROW + i, modus == SERVER_OPEN_ALLOW));
+                    } else {
+                        let modi: Vec<_> = SERVER_OPEN_NAMES.iter().map(|&(name, m)| (name, ButtonAction::ServerOpen(i, m), modus == m)).collect();
+                        out.extend(pick_buttons(settings_wide_rect(SERVER_OPEN_ROW + i), &modi, true));
+                    }
+                }
+            }
             MenuScreen::SettingsLightLevels => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
                 let treffer = self.light_search_hits();
@@ -161,14 +183,19 @@ impl App {
                 out.push(Self::toggle(ButtonAction::TogglePotionMarkStrong, 6, self.settings.potion_mark_strong));
                 out.push(Self::toggle(ButtonAction::TogglePotionMarkLong, 7, self.settings.potion_mark_long));
                 out.push(Self::toggle(ButtonAction::TogglePotionMarkWeak, 8, self.settings.potion_mark_weak));
+                let set = &self.settings;
+                out.push(Self::step_slider(ButtonAction::SlotHoverFadeDown, ButtonAction::SlotHoverFadeUp, stepper_value_rect(SLOT_HOVER_FADE_ROW), f64::from(set.slot_hover_fade_ms), 0.0, f64::from(SLOT_HOVER_FADE_MAX), true));
+                out.push(Self::swatch(ColorTarget::SlotHover, settings_ctrl_rect(SLOT_HOVER_COLOR_ROW), set.slot_hover_rgba()));
+                out.push(Self::step_slider(ButtonAction::SwapAnimDown, ButtonAction::SwapAnimUp, stepper_value_rect(SWAP_ANIM_ROW), f64::from(set.swap_anim_ms), 0.0, f64::from(SWAP_ANIM_MAX), true));
             }
             MenuScreen::SettingsMisc => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
-                let modi: Vec<_> = NO_UI_CLOSE_NAMES
-                    .iter()
-                    .map(|&(name, wert)| (name, ButtonAction::NoUiClose(wert), self.settings.no_ui_close == wert))
-                    .collect();
-                out.extend(pick_buttons(settings_wide_rect(0), &modi, true));
+                out.push(Self::nav_button(
+                    ButtonAction::OpenServerScreens,
+                    Rect { x: SETTINGS_CTRL_X, y: settings_row_y(0), w: STEPPER_VALUE_W + 2.0 * (STEPPER_BTN_W + STEPPER_GAP), h: SETTINGS_CTRL_H },
+                    "Bearbeiten",
+                    UI_SCALE_SMALL,
+                ));
                 out.push(Self::toggle(ButtonAction::ToggleNoChatClear, 1, self.settings.no_chat_clear));
                 out.push(Self::toggle(ButtonAction::ToggleSignEditInWorld, 2, self.settings.sign_edit_in_world));
                 for (row, wert, aktion) in [
@@ -274,6 +301,7 @@ impl App {
         out.push(Self::tearfree_button(self.tearfree_state, TEARFREE_ROW));
         out.push(Self::toggle(ButtonAction::ToggleCaveCulling, CAVE_CULLING_ROW, set.cave_culling));
         out.push(Self::toggle(ButtonAction::ToggleMipmapping, MIPMAPPING_ROW, set.mipmapping));
+        out.push(Self::step_slider(ButtonAction::MotionBlurDown, ButtonAction::MotionBlurUp, stepper_value_rect(MOTION_BLUR_ROW), f64::from(set.motion_blur_percent), 0.0, f64::from(MOTION_BLUR_MAX), true));
         // Renderpfad samt Shadereinstellungen vorerst ausgeblendet (der Shader-Pfad ruht).
         // out.push(Self::nav_button(
         //     ButtonAction::CycleRenderPath,
@@ -347,23 +375,26 @@ impl App {
             }
         }
         out.push(Self::step_slider(ButtonAction::SmoothLightingDown, ButtonAction::SmoothLightingUp, stepper_value_rect(SMOOTH_LIGHTING_ROW), f64::from(set.smooth_lighting_percent), 0.0, f64::from(SMOOTH_LIGHTING_MAX), true));
-        out.push(Self::nav_button(
-            ButtonAction::CycleParticles,
-            Rect { x: SETTINGS_CTRL_X, y: settings_row_y(PARTICLES_ROW), w: 220.0, h: SETTINGS_CTRL_H },
-            PARTICLE_MODE_NAMES[set.particles_mode as usize],
-            UI_SCALE_SMALL,
-        ));
-        // Hervorgehoben, sobald eine Art von Vanilla abweicht.
-        let angepasst = set.particle_tuning.iter().any(|t| *t != particles::ParticleTuning::default());
-        out.push(Button {
-            action: ButtonAction::OpenParticleSettings,
-            rect: Rect { x: SETTINGS_CTRL_X + 230.0, y: settings_row_y(PARTICLES_ROW), w: 160.0, h: SETTINGS_CTRL_H },
-            label: "Anpassen".to_string(),
-            enabled: true,
-            color: if angepasst { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::Surface2) },
-            scale: UI_SCALE_SMALL,
-            slider: None,
-        });
+        // Partikel: eine Zeile fuer die eigenen, eine fuer die anderen -- je Stufe und Anpassung.
+        for (own, row, mode) in [(true, PARTICLES_ROW, set.particles_mode_own), (false, PARTICLES_OTHER_ROW, set.particles_mode)] {
+            out.push(Self::nav_button(
+                ButtonAction::CycleParticles(own),
+                Rect { x: SETTINGS_CTRL_X, y: settings_row_y(row), w: 220.0, h: SETTINGS_CTRL_H },
+                PARTICLE_MODE_NAMES[mode as usize],
+                UI_SCALE_SMALL,
+            ));
+            // Hervorgehoben, sobald eine Art von Vanilla abweicht.
+            let angepasst = set.particle_tuning_of(own).iter().any(|t| *t != particles::ParticleTuning::default());
+            out.push(Button {
+                action: ButtonAction::OpenParticleSettings(own),
+                rect: Rect { x: SETTINGS_CTRL_X + 230.0, y: settings_row_y(row), w: 160.0, h: SETTINGS_CTRL_H },
+                label: "Anpassen".to_string(),
+                enabled: true,
+                color: if angepasst { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::Surface2) },
+                scale: UI_SCALE_SMALL,
+                slider: None,
+            });
+        }
         out.push(Self::nav_button(
             ButtonAction::CycleProjection,
             Rect { x: SETTINGS_CTRL_X, y: settings_row_y(PROJECTION_ROW), w: 220.0, h: SETTINGS_CTRL_H },
@@ -409,9 +440,18 @@ impl App {
         out.push(Self::toggle(ButtonAction::ToggleBlockRngRotation, BLOCK_ROTATION_ROW, set.block_rng_rotation));
         out.push(Self::toggle(ButtonAction::ToggleArmorTrims, ARMOR_TRIMS_ROW, set.armor_trims));
         out.push(Self::toggle(ButtonAction::ToggleViewModel, VIEW_MODEL_ROW, set.modified_view_model));
-        for (i, (bit, _)) in world::more_anims::FEATURES.into_iter().enumerate() {
-            out.push(Self::toggle(ButtonAction::ToggleAnimFlag(bit), ANIM_FIRST_ROW + i, set.anim_flags & bit != 0));
-        }
+        // Animationen: Hauptschalter, daneben die Auswahl (hervorgehoben, sobald sie vom
+        // Standard abweicht, wie "Anpassen" bei den Partikeln).
+        out.push(Self::toggle(ButtonAction::ToggleAnims, ANIM_ROW, set.anims_enabled));
+        out.push(Button {
+            action: ButtonAction::OpenAnimSettings,
+            rect: Rect { x: SETTINGS_CTRL_X + TOGGLE_W + 10.0, y: settings_row_y(ANIM_ROW), w: 160.0, h: SETTINGS_CTRL_H },
+            label: "Anpassen".to_string(),
+            enabled: true,
+            color: if set.anim_flags == world::more_anims::DEFAULT { theme::get(theme::Slot::Surface2) } else { theme::get(theme::Slot::AccentSurface) },
+            scale: UI_SCALE_SMALL,
+            slider: None,
+        });
         out.extend(Self::stepper(
             ButtonAction::MaxRenderDistanceDown,
             ButtonAction::MaxRenderDistanceUp,
@@ -527,10 +567,11 @@ impl App {
             scale: UI_SCALE_SMALL,
             slider: None,
         };
-        for (i, y) in header_list_rows(particles::KINDS.len(), self.particle_scroll.stand, self.particle_visible_rows()) {
-            let t = self.settings.particle_tuning[i];
+        let own = self.particle_screen_own;
+        for (i, y) in header_list_rows_smooth(particles::KINDS.len(), self.particle_scroll.stand, self.particle_visible_rows()) {
+            let t = self.settings.particle_tuning_of(own)[i];
             let art = particles::KINDS[i].spawn;
-            out.push(schalter(ButtonAction::ParticleToggle(i), PARTICLE_TOGGLE_X, y, t.enabled));
+            out.push(schalter(ButtonAction::ParticleToggle(own, i), PARTICLE_TOGGLE_X, y, t.enabled));
             let mut regler = vec![
                 (t.lifetime_pct, PARTICLE_LIFETIME_STEPS[0], *PARTICLE_LIFETIME_STEPS.last().unwrap()),
                 (t.opacity_pct, PARTICLE_OPACITY_STEP, 100),
@@ -543,8 +584,8 @@ impl App {
             }
             for (col, (wert, min, max)) in regler.into_iter().enumerate() {
                 let b = Self::step_slider(
-                    ButtonAction::ParticleStep(i, col as u8, false),
-                    ButtonAction::ParticleStep(i, col as u8, true),
+                    ButtonAction::ParticleStep(own, i, col as u8, false),
+                    ButtonAction::ParticleStep(own, i, col as u8, true),
                     Rect { y, ..particle_value_rect(col, 0) },
                     f64::from(wert),
                     f64::from(min),
@@ -554,7 +595,7 @@ impl App {
                 out.push(Self::slider_with_track(b, PARTICLE_TRACK_W));
             }
             if art.has_all_at_once() {
-                out.push(schalter(ButtonAction::ParticleAllAtOnce(i), particle_column_x(PARTICLE_ALL_AT_ONCE_COL), y, t.all_at_once));
+                out.push(schalter(ButtonAction::ParticleAllAtOnce(own, i), particle_column_x(PARTICLE_ALL_AT_ONCE_COL), y, t.all_at_once));
             }
         }
     }

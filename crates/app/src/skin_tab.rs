@@ -25,8 +25,8 @@ pub enum Column {
     Selected,
 }
 
-// Linke Spalte: zuerst die gemerkte Reihenfolge (s. Settings::skin_order), dann was neu dazu
-// kam, alphabetisch. Gewaehltes und nicht mehr Vorhandenes faellt weg.
+// Linke Spalte: zuerst was neu dazu kam (frisch importiert), alphabetisch, dann die gemerkte
+// Reihenfolge (s. Settings::skin_order). Gewaehltes und nicht mehr Vorhandenes faellt weg.
 // Platzhalter im Stapel fuer das, was kein Ordner im Skin-Ordner ist: Vanilla selbst (alles
 // darunter fuellt nur noch, was Vanilla nicht hat) und die Packs, die der Server geschickt hat.
 // Spitze Klammern, weil kein Ordnername unter Windows sie tragen kann.
@@ -56,15 +56,13 @@ pub fn normalize_stack(stack: &mut Vec<String>, server: Option<usize>) {
 
 pub fn available_column(all: &[String], order: &[String], selected: &[String]) -> Vec<String> {
     let frei = |n: &String| all.contains(n) && !selected.contains(n);
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = all.iter().filter(|n| frei(n) && !order.contains(n)).cloned().collect();
+    out.sort();
     for n in order.iter().filter(|n| frei(n)) {
         if !out.contains(n) {
             out.push(n.clone());
         }
     }
-    let mut neu: Vec<String> = all.iter().filter(|n| frei(n) && !out.contains(n)).cloned().collect();
-    neu.sort();
-    out.extend(neu);
     out
 }
 
@@ -386,9 +384,9 @@ mod tests {
     }
 
     #[test]
-    fn links_zuletzt_herausgenommene_oben_neue_alphabetisch_darunter() {
+    fn links_neue_oben_dann_die_gemerkte_reihenfolge() {
         let alle = s(&["A", "B", "C", "D"]);
-        assert_eq!(available_column(&alle, &s(&["C", "X", "A"]), &s(&["B"])), s(&["C", "A", "D"]));
+        assert_eq!(available_column(&alle, &s(&["C", "X", "A"]), &s(&["B"])), s(&["D", "C", "A"]));
     }
 
     #[test]

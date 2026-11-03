@@ -70,9 +70,14 @@ pub(crate) enum MenuScreen {
     // Partikel-Anpassung: je Partikelart an/aus, Dauer, Deckkraft, Tempo. Unterscreen von
     // SettingsVideo (Knopf neben der Partikel-Stufe).
     SettingsParticles,
-    // Sonstiges: was zu keiner anderen Seite passt (bisher: Schliessen durch den Server
-    // ignorieren, s. Settings::no_ui_close).
+    // Animationen: je Animation aus world::more_anims::FEATURES ein Schalter. Unterscreen von
+    // SettingsVideo (Knopf im Abschnitt Animationen).
+    SettingsAnimations,
+    // Sonstiges: was zu keiner anderen Seite passt (Server-Bildschirme, Chat leeren, ...).
     SettingsMisc,
+    // Server-Bildschirme: je Bildschirm, ob der Server ihn schliessen und oeffnen darf (s.
+    // Settings::server_close_blocked). Unterseite von SettingsMisc.
+    SettingsServerScreens,
     // Einrichtung: ganz unten in der Kategorienleiste, erste Seite beim allerersten Oeffnen der
     // Einstellungen. Hier kommt der Tastenbelegungs-Assistent hin.
     SettingsSetup,
@@ -93,7 +98,8 @@ impl MenuScreen {
         match self {
             Self::SettingsSensCalc => Some(Self::SettingsControls),
             Self::SettingsShader | Self::SettingsLightLevels => Some(Self::SettingsGeneral),
-            Self::SettingsParticles => Some(Self::SettingsVideo),
+            Self::SettingsParticles | Self::SettingsAnimations => Some(Self::SettingsVideo),
+            Self::SettingsServerScreens => Some(Self::SettingsMisc),
             Self::SettingsSetup | Self::SettingsSearch => Some(self),
             s if SETTINGS_CATEGORIES.iter().any(|(c, _)| *c == s) => Some(s),
             _ => None,
@@ -122,6 +128,9 @@ impl MenuScreen {
             Self::SettingsConfigs => "configs",
             Self::SettingsMisc => "misc",
             Self::SettingsSearch => "search",
+            // Nur fuer ihren Scrollstand (App::page_scrolls), keine Kategorie.
+            Self::SettingsAnimations => "animations",
+            Self::SettingsServerScreens => "server_screens",
             _ => "setup",
         }
     }
@@ -136,16 +145,18 @@ impl MenuScreen {
         match self {
             Self::SettingsGeneral => Some(SettingsPage {
                 rows: SETTINGS_ROW_COUNT,
-                sections: &[("Bildrate", FPS_LIMIT_ROW), ("Chunks", MESH_BUDGET_ROW), ("Tearing", TEARING_TEST_ROW), ("System", CPU_ROW)],
+                sections: &[("Bildrate", FPS_LIMIT_ROW), ("Chunks", MESH_BUDGET_ROW), ("Effekte", MOTION_BLUR_ROW), ("Tearing", TEARING_TEST_ROW), ("System", CPU_ROW)],
             }),
             Self::SettingsVideo => Some(SettingsPage {
                 rows: VIDEO_ROW_COUNT,
-                sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Schulterkamera", SHOULDER_ROW), ("Feuer", FIRE_MODE_ROW), ("Tod", DEATH_ANIM_ROW), ("Animationen", ANIM_FIRST_ROW)],
+                sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Schulterkamera", SHOULDER_ROW), ("Feuer", FIRE_MODE_ROW), ("Tod", DEATH_ANIM_ROW), ("Animationen", ANIM_ROW), ("Modified View Model", VIEW_MODEL_ROW)],
             }),
             Self::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
             // Zeile 4 = Zusammenfassen bei Hover, Zeilen 5..7 = Trank-Buchstaben.
-            Self::SettingsInventory => Some(SettingsPage { rows: 9, sections: &[("Allgemein", 0), ("Tränke", 6)] }),
+            Self::SettingsInventory => Some(SettingsPage { rows: INVENTORY_ROW_COUNT, sections: &[("Allgemein", 0), ("Tränke", 6), ("Animation", INVENTORY_ANIM_ROW)] }),
             Self::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[] }),
+            Self::SettingsAnimations => Some(SettingsPage { rows: world::more_anims::FEATURES.len(), sections: &[] }),
+            Self::SettingsServerScreens => Some(SettingsPage { rows: SERVER_SCREENS_ROWS, sections: &[("Server schließt", 0), ("Server öffnet", SERVER_OPEN_ROW)] }),
             Self::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
             Self::SettingsAudio => Some(SettingsPage { rows: AUDIO_AUTO_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
@@ -164,6 +175,11 @@ pub(crate) const FREELOOK_VIEW_FIRST: u8 = 1;
 pub(crate) const FREELOOK_VIEW_BACK: u8 = 2;
 pub(crate) const FREELOOK_VIEW_FRONT: u8 = 3;
 pub(crate) const FREELOOK_VIEW_NAMES: [&str; 4] = ["Aktuelle", "Ich-Sicht", "Hinten", "Vorne"];
+
+// So viele Pixel steht ein angesprungener Abschnitt tiefer als die erste Zeile (s.
+// SettingsPage::section_stand). Hoechstens 8: tiefer kaeme seine eigene Trennlinie samt Name
+// unter der Reiterlinie hervor (s. App::build_settings_page_frame).
+pub(crate) const SECTION_TOP_MARGIN: f32 = 7.0;
 
 // Wie lange eine Zeile nach einem Klick auf ihren Suchtreffer aufleuchtet.
 pub(crate) const SEARCH_FLASH_SECS: f32 = 1.6;
@@ -205,6 +221,18 @@ impl SettingsPage {
     // darueber stehen die Reiter.
     pub(crate) fn section_starts(self) -> u128 {
         self.sections.iter().filter(|&&(_, row)| row > 0 && row < 128).fold(0, |m, &(_, row)| m | 1 << row)
+    }
+
+    // Scrollstand (in Zeilen), bei dem die Zeile `row` oben steht -- ein Abschnittsanfang um
+    // SECTION_TOP_MARGIN tiefer, damit sein Aufleuchten (s. App::push_section_flash) unter der
+    // Linie unter den Reitern bleibt, statt sie zu verdecken.
+    pub(crate) fn section_stand(self, row: usize) -> f32 {
+        if row == 0 {
+            return 0.0;
+        }
+        let starts = self.section_starts();
+        let (a, b) = (settings_row_pos(row as f32 - 1.0, starts), settings_row_pos(row as f32, starts));
+        row as f32 - 1.0 + ((b - SECTION_TOP_MARGIN - a) / (b - a)).clamp(0.0, 1.0)
     }
 }
 
@@ -351,6 +379,8 @@ pub(crate) enum ColorTarget {
     SaturationHud,
     // Stueckzahl im Slot: true = Hotbar, false = Inventar.
     StackCount(bool),
+    // Hervorhebung des Slots unter dem Zeiger (Settings::slot_hover_color).
+    SlotHover,
     // Modul Eigenname: 0, 1 = Farben des Verlaufs, 2, 3 = Schatten.
     EgoName(u8),
     // Fadenkreuzfarbe beim Brennen (Feuer-Modus "Fadenkreuz").
@@ -374,7 +404,8 @@ pub(crate) struct ColorPopup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
     Projection,
-    Particles,
+    // Partikel-Stufe: true = die eigenen Partikel.
+    Particles(bool),
     Wallpaper,
     // Zeile im Sprach-Tab (0 = alles zusammen).
     Language(usize),

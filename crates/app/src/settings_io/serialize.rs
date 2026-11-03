@@ -148,6 +148,7 @@ impl Settings {
         kv(&mut body, "module_sky_color_value", self.module_sky_color_value);
         kv(&mut body, "block_rng_rotation", self.block_rng_rotation);
         kv(&mut body, "smooth_lighting_percent", self.smooth_lighting_percent);
+        kv(&mut body, "motion_blur_percent", self.motion_blur_percent);
         kv(&mut body, "jump_cooldown_enabled", self.jump_cooldown_enabled);
         kv(&mut body, "sneak_edge_protection_enabled", self.sneak_edge_protection_enabled);
         kv(&mut body, "snap_tap_enabled", self.snap_tap_enabled);
@@ -268,25 +269,32 @@ impl Settings {
         body.push_str(&format!("shadow_half={}\n", halb.join(",")));
         body.push_str(&format!("topbar_uptime={}\n", self.topbar_uptime));
         // Nur, was von Vanilla abweicht.
-        let partikel: Vec<String> = particles::KINDS
-            .iter()
-            .zip(&self.particle_tuning)
-            .filter(|(_, t)| **t != particles::ParticleTuning::default())
-            .map(|(k, t)| {
-                format!(
-                    "{}:{},{},{},{},{},{},{}",
-                    k.key,
-                    u8::from(t.enabled),
-                    t.lifetime_pct,
-                    t.opacity_pct,
-                    t.speed_pct,
-                    t.amount_pct,
-                    t.interval_pct,
-                    u8::from(t.all_at_once)
-                )
-            })
-            .collect();
-        body.push_str(&format!("particle_tuning={}\n", partikel.join(";")));
+        // Erst die anderen, dann die eigenen: beim Lesen uebernehmen die eigenen zunaechst die
+        // anderen (s. parse), ihr Eintrag muss also danach kommen.
+        let partikel = |tuning: &[particles::ParticleTuning]| -> String {
+            particles::KINDS
+                .iter()
+                .zip(tuning)
+                .filter(|(_, t)| **t != particles::ParticleTuning::default())
+                .map(|(k, t)| {
+                    format!(
+                        "{}:{},{},{},{},{},{},{}",
+                        k.key,
+                        u8::from(t.enabled),
+                        t.lifetime_pct,
+                        t.opacity_pct,
+                        t.speed_pct,
+                        t.amount_pct,
+                        t.interval_pct,
+                        u8::from(t.all_at_once)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(";")
+        };
+        body.push_str(&format!("particle_tuning={}\n", partikel(&self.particle_tuning)));
+        body.push_str(&format!("particles_mode_own={}\n", self.particles_mode_own));
+        body.push_str(&format!("particle_tuning_own={}\n", partikel(&self.particle_tuning_own)));
         body.push_str(&format!("cave_culling={}\n", self.cave_culling));
         body.push_str(&format!("mipmapping={}\n", self.mipmapping));
         body.push_str(&format!("render_path={}\n", self.render_path));
@@ -439,7 +447,7 @@ impl Settings {
             "module_sustainability={}\nsustain_background={}\nsustain_pause={}\n",
             self.module_sustainability, self.sustain_background, self.sustain_pause
         ));
-        body.push_str(&format!("anim_off={}\n", world::more_anims::ALL & !self.anim_flags));
+        body.push_str(&format!("anim_off={}\nanims_enabled={}\n", world::more_anims::ALL & !self.anim_flags, self.anims_enabled));
         body.push_str(&format!(
             "module_chunk_saver={}\nchunk_saver_threads={}\nchunk_saver_render_saved={}\nlod_render_distance={}\nchunk_saver_detail={}\n",
             self.module_chunk_saver,
@@ -451,13 +459,16 @@ impl Settings {
         body.push_str(&format!("sprint_on_start={}\n", self.sprint_on_start));
         body.push_str(&format!("caps_lock_blocked={}\n", self.caps_lock_blocked));
         body.push_str(&format!("creative_op_tab={}\n", self.creative_op_tab));
-        body.push_str(&format!("no_ui_close={}\n", self.no_ui_close));
+        body.push_str(&format!("server_close_blocked={}\n", self.server_close_blocked));
+        body.push_str(&format!("server_open={}\n", self.server_open.iter().map(u8::to_string).collect::<Vec<_>>().join(",")));
         body.push_str(&format!("no_chat_clear={}\n", self.no_chat_clear));
         body.push_str(&format!("audio_auto_optimize={}\n", self.audio_auto_optimize));
         body.push_str(&format!("sign_edit_in_world={}\n", self.sign_edit_in_world));
         body.push_str(&format!("no_slot_set={}\nno_rotate_set={}\n", self.no_slot_set, self.no_rotate_set));
         body.push_str(&format!("skip_third_back={}\nskip_third_front={}\n", self.skip_third_back, self.skip_third_front));
         body.push_str(&format!("inventory_merge_hover={}\n", self.inventory_merge_hover));
+        let [h, s, v, a] = self.slot_hover_color;
+        body.push_str(&format!("slot_hover_fade_ms={}\nslot_hover_color={h}/{s}/{v}/{a}\nswap_anim_ms={}\n", self.slot_hover_fade_ms, self.swap_anim_ms));
         body.push_str(&format!(
             "potion_mark_strong={}\npotion_mark_long={}\npotion_mark_weak={}\n",
             self.potion_mark_strong, self.potion_mark_long, self.potion_mark_weak

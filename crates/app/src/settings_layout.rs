@@ -34,7 +34,7 @@ pub(crate) const TEAR_RESERVE_MIN_US: i32 = 0;
 pub(crate) const TEAR_RESERVE_MAX_US: i32 = 3000;
 pub(crate) const TEAR_RESERVE_STEP_US: i32 = 50;
 pub(crate) const TEAR_RESERVE_DEFAULT_US: i32 = 300;
-pub(crate) const TEAR_RESERVE_ROW: usize = 10;
+pub(crate) const TEAR_RESERVE_ROW: usize = 11;
 // Riss-Timing (Settings::tear_timing_us): Verschiebung des Bildwechsels in Mikrosekunden,
 // negativ = frueher. Ohne Hardware-Flip kopiert der X-Server das Bild erst ~1,5 ms nach dem
 // Present auf den Schirm -- wie lange, haengt an X-Server, Treiber und Monitor und ist von hier
@@ -43,7 +43,7 @@ pub(crate) const TEAR_TIMING_MIN_US: i32 = -8000;
 pub(crate) const TEAR_TIMING_MAX_US: i32 = 8000;
 pub(crate) const TEAR_TIMING_STEP_US: i32 = 50;
 pub(crate) const TEAR_TIMING_DEFAULT_US: i32 = 0;
-pub(crate) const TEAR_TIMING_ROW: usize = 9;
+pub(crate) const TEAR_TIMING_ROW: usize = 10;
 // Scanout-Timing (Settings::tear_position, s. App::tear_target_phase): 0 = aus, 1 = jeden
 // Bildwechsel knapp vor die Austastluecke legen.
 //
@@ -52,7 +52,7 @@ pub(crate) const TEAR_TIMING_ROW: usize = 9;
 // Austastluecke oder kurz danach verlangt wird, erst irgendwo im oberen Viertel um -- und bei
 // weiterem Verschieben unregelmaessig (der Riss sprang wild). Zuverlaessig ist nur der Wechsel
 // knapp VOR der Luecke: er landet unsichtbar darin.
-pub(crate) const TEAR_POSITION_ROW: usize = 8;
+pub(crate) const TEAR_POSITION_ROW: usize = 9;
 // Maus-Empfindlichkeit ist echte Steuerung, keine Performance-Einstellung -- eigene Zeile
 // (Zeile 0) auf dem Steuerung-Screen, s. build_settings_controls_tab.
 pub(crate) const SENSITIVITY_TOOLTIP: &str =
@@ -124,6 +124,18 @@ pub(crate) fn header_list_rows(n: usize, stand: f32, sichtbar: usize) -> Vec<(us
         .filter_map(|i| {
             let platz = 1.0 + i as f32 - stand;
             (platz >= 0.99 && platz <= sichtbar as f32 + 0.01).then(|| (i, settings_row_y(0) + platz * SETTINGS_ROW_H))
+        })
+        .collect()
+}
+
+// Wie header_list_rows, aber gleitend: auch die am Rand nur angeschnittenen Zeilen, die das
+// Zeilenband der Liste beschneidet (s. App::particle_list_band).
+pub(crate) fn header_list_rows_smooth(n: usize, stand: f32, sichtbar: usize) -> Vec<(usize, f32)> {
+    let von = stand.max(0.0).floor() as usize;
+    (von..(von + sichtbar + 2).min(n))
+        .filter_map(|i| {
+            let platz = 1.0 + i as f32 - stand;
+            (platz > 0.0 && platz < sichtbar as f32 + 1.0).then(|| (i, settings_row_y(0) + platz * SETTINGS_ROW_H))
         })
         .collect()
 }
@@ -311,17 +323,16 @@ pub(crate) const SMOOTH_LIGHTING_MAX: u32 = 100;
 pub(crate) const SMOOTH_LIGHTING_STEP: u32 = 10;
 // Zeile 5: die Partikel-Stufe -- ebenfalls vorher ein Platzhalter weiter unten.
 pub(crate) const BLOCK_ROTATION_ROW: usize = SMOOTH_LIGHTING_ROW + 1;
+// Zwei Zeilen: die eigenen Partikel (an der eigenen Figur), darunter die anderen.
 pub(crate) const PARTICLES_ROW: usize = BLOCK_ROTATION_ROW + 1;
+pub(crate) const PARTICLES_OTHER_ROW: usize = PARTICLES_ROW + 1;
 // Glint-Regler (frueher im Tab Barrierefreiheit) stehen in der linken Spalte unter den
 // Partikeln, die Platzhalter danach.
-pub(crate) const GLINT_SPEED_ROW: usize = PARTICLES_ROW + 1;
+pub(crate) const GLINT_SPEED_ROW: usize = PARTICLES_OTHER_ROW + 1;
 pub(crate) const GLINT_STRENGTH_ROW: usize = GLINT_SPEED_ROW + 1;
 // Ruestungsbesatz (Trims) an getragener Ruestung zeigen (Settings::armor_trims).
 pub(crate) const ARMOR_TRIMS_ROW: usize = GLINT_STRENGTH_ROW + 1;
 pub(crate) const ARMOR_TRIMS_TOOLTIP: &str = "Zeigt den Rüstungsbesatz (Trims) auf getragener Rüstung -- bei Spielern, Mobs und Rüstungsständern. Aus: nur die blanke Rüstung, wie ohne Schmiedevorlage. Die Items im Inventar behalten ihr Aussehen.";
-// Eigenes Ego-Modell (Settings::modified_view_model): Arm haelt das Item, je Item eingestellt.
-pub(crate) const VIEW_MODEL_ROW: usize = ARMOR_TRIMS_ROW + 1;
-pub(crate) const VIEW_MODEL_TOOLTIP: &str = "In der Ich-Sicht hält deine Hand das Item, mit den im Hand-Debug je Item eingestellten Werten. Aus: wie in Vanilla, das Item ohne Arm.";
 // Entity-Renderdistanz (Settings::entity_render_distance), in Bloecken.
 pub(crate) const ENTITY_DISTANCE_MIN: u32 = 16;
 // Das Maximum heisst "unbegrenzt".
@@ -344,12 +355,12 @@ pub(crate) const ENTITY_DISTANCE_ROW: usize = RENDER_DISTANCE_ROW + 1;
 pub(crate) const BLOCK_ENTITY_DISTANCE_ROW: usize = ENTITY_DISTANCE_ROW + 1;
 pub(crate) const LOD_DETAIL_ROW: usize = BLOCK_ENTITY_DISTANCE_ROW + 1;
 pub(crate) const VIDEO_CAMERA_ROW: usize = LOD_DETAIL_ROW + 1;
-pub(crate) const VIDEO_ROW_COUNT: usize = ANIM_FIRST_ROW + world::more_anims::FEATURES.len();
+pub(crate) const VIDEO_ROW_COUNT: usize = VIEW_MODEL_ROW + 1;
 pub(crate) const RENDER_DISTANCE_TOOLTIP: &str = "Radius in Chunks um den Spieler, in dem geladene Chunks gezeichnet werden. Weiter draußen bleiben die Blockdaten geladen (kein Loch beim Zurückkommen), sie werden nur nicht gezeichnet. Unabhängig von der Sichtweite des Servers -- wirkt sofort, ohne neu zu verbinden. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 pub(crate) const LOD_DETAIL_TOOLTIP: &str = "Wie fein die Fernsicht unterteilt wird: so groß (in Pixeln²) darf ein Fernsicht-Block auf dem Bildschirm höchstens werden, bevor eine feinere Stufe geladen wird. Kleiner = schärfer, kostet mehr Speicher und GPU-Zeit. Standard 4.";
 pub(crate) const CRIT_COLOR_TOOLTIP: &str = "Eigene Farbe fuers Aufblitzen bei kritischen Treffern (kein Vanilla). AUS: Crits blitzen \
 wie jeder andere Treffer in der Schadens-Faerbung auf. Dauer und \"Nur Skin\" der Schadens-Färbung gelten auch hier.";
-pub(crate) const PARTICLES_TOOLTIP: &str = "Vanillas \"Partikel\": Alle, Verringert (jeder dritte fällt weg) oder Minimal (nur noch, was immer erscheint -- Explosionen, Schwung, Schadensherzen). Blockstaub beim Abbauen und Zerbrechen ist wie in Vanilla von der Stufe unabhängig; die Explosions-Trümmer gibt es nur bei \"Alle\". \"Anpassen\" (kein Vanilla): je Partikelart an/aus, wie lange sie bleibt, wie deckend sie ist und wie schnell sie sich bewegt -- z.B. Explosion aus gegen die weißen Punkte beim Crystallen.";
+pub(crate) const PARTICLES_TOOLTIP: &str = "Vanillas \"Partikel\": Alle, Verringert (jeder dritte fällt weg) oder Minimal (nur noch, was immer erscheint -- Explosionen, Schwung, Schadensherzen). Blockstaub beim Abbauen und Zerbrechen ist wie in Vanilla von der Stufe unabhängig; die Explosions-Trümmer gibt es nur bei \"Alle\". \"Anpassen\" (kein Vanilla): je Partikelart an/aus, wie lange sie bleibt, wie deckend sie ist und wie schnell sie sich bewegt -- z.B. Explosion aus gegen die weißen Punkte beim Crystallen. Eigene Partikel sind die, die an deinem Spieler entstehen (Treffer auf dich, deine Effekte, dein Totem), andere alle übrigen.";
 pub(crate) const SMOOTH_LIGHTING_TOOLTIP: &str = "Vanillas \"Weiche Beleuchtung\": Kanten, Ecken und Nischen werden dort dunkler, wo Blöcke aneinanderstoßen -- das gibt der Welt Tiefe. Nur die Eckabdunklung, keine Lichtwerte (dieser Client rendert bewusst immer fullbright). Die Prozentzahl ist die Stärke der Schatten: 100 % wie Vanilla, 0 % aus. Änderung baut alle geladenen Chunks neu. Im Shader-Pfad ohne Wirkung: dort kommen Schatten nur von echten Lichtquellen.";
 #[allow(dead_code)]
 pub(crate) const CMAA2_TOOLTIP: &str =
@@ -366,7 +377,7 @@ pub(crate) const FOV_THIRD_FRONT_TOOLTIP: &str =
     "Sichtfeld der Frontansicht (F5, zweite Stufe -- Kamera vor dem Spieler, blickt ihn an). Die an den Server gesendete Blickrichtung bleibt dabei die des Spielers, nur die Kamera dreht sich.";
 // Schadens-Faerbung, Abschnitt Treffer des Video-Tabs: eine Zeile mit dem Farbfeld; die
 // Regler stecken im Farbfenster (s. ColorPopup).
-pub(crate) const DAMAGE_TINT_FIRST_ROW: usize = VIEW_MODEL_ROW + 1;
+pub(crate) const DAMAGE_TINT_FIRST_ROW: usize = ARMOR_TRIMS_ROW + 1;
 // Direkt unter dem Farbfeld: nur der Skin oder alles, und wie lange der Blitz haelt.
 pub(crate) const DAMAGE_TINT_SKIN_ONLY_ROW: usize = DAMAGE_TINT_FIRST_ROW + 1;
 pub(crate) const DAMAGE_TINT_TICKS_ROW: usize = DAMAGE_TINT_FIRST_ROW + 2;
@@ -406,8 +417,14 @@ pub(crate) const FIRE_MODE_ROW: usize = SHOULDER_DECOUPLED_ROW + 1;
 pub(crate) const FIRE_DETAIL_ROW: usize = FIRE_MODE_ROW + 1;
 // Abschnitt Tod: die Todesanimation (Settings::death_animation).
 pub(crate) const DEATH_ANIM_ROW: usize = FIRE_DETAIL_ROW + 1;
-// Abschnitt Animationen: je Animation aus world::more_anims::FEATURES ein Schalter.
-pub(crate) const ANIM_FIRST_ROW: usize = DEATH_ANIM_ROW + 1;
+// Abschnitt Animationen: eine Zeile mit Hauptschalter (Settings::anims_enabled) und dem Knopf
+// zur Unterseite MenuScreen::SettingsAnimations, dort je Animation aus
+// world::more_anims::FEATURES ein Schalter (Zeile i = Animation i).
+pub(crate) const ANIM_ROW: usize = DEATH_ANIM_ROW + 1;
+// Letzter Abschnitt, Modified View Model (Settings::modified_view_model): eigenes Ego-Modell,
+// der Arm haelt das Item, je Item eingestellt. Aus gilt es trotzdem beim Item-Ansehen.
+pub(crate) const VIEW_MODEL_ROW: usize = ANIM_ROW + 1;
+pub(crate) const VIEW_MODEL_TOOLTIP: &str = "In der Ich-Sicht hält deine Hand das Item, mit den im Hand-Debug je Item eingestellten Werten. Aus: wie in Vanilla, das Item ohne Arm -- nur beim Ansehen eines Items (Taste \"Item ansehen\") hält die Hand es trotzdem.";
 pub(crate) const ANIMS_TOOLTIP: &str = "Haltungen für Spieler in der dritten Person, die Vanilla nur in der Ich-Sicht oder gar nicht zeigt (wie die Mod Not Enough Animations) -- bei anderen Spielern und bei dir in F5. Schild, Speer und Schläge bleiben wie in Vanilla.";
 // Vanilla: umkippen (LivingEntityRenderer.setupRotations, deathTime) und rot. Aus: Spieler
 // verschwinden sofort. Explosion: Spieler fliegen in ihre Teile auseinander (death_burst.rs).
@@ -426,17 +443,72 @@ pub(crate) const FIRE_MODE_CROSSHAIR: u8 = 1;
 pub(crate) const FIRE_MODE_OFF: u8 = 2;
 pub(crate) const FIRE_MODE_NAMES: [&str; 3] = ["Vanilla", "Fadenkreuz", "Aus"];
 
-// Sonstiges > No UI close (Settings::no_ui_close). Knopf-Reihenfolge wie besprochen,
-// gespeichert wird der Wert.
-pub(crate) const NO_UI_CLOSE_NEVER: u8 = 0;
-pub(crate) const NO_UI_CLOSE_ALWAYS: u8 = 1;
-pub(crate) const NO_UI_CLOSE_INVENTORY: u8 = 2;
+// Inventar > Animation: Hervorhebung unter dem Zeiger (Uebergang, Farbe) und fliegende Items
+// beim Verschieben (s. Settings::slot_hover_fade_ms, swap_anim_ms).
+pub(crate) const INVENTORY_ANIM_ROW: usize = 9;
+pub(crate) const SLOT_HOVER_FADE_ROW: usize = INVENTORY_ANIM_ROW;
+pub(crate) const SLOT_HOVER_COLOR_ROW: usize = INVENTORY_ANIM_ROW + 1;
+pub(crate) const SWAP_ANIM_ROW: usize = INVENTORY_ANIM_ROW + 2;
+pub(crate) const INVENTORY_ROW_COUNT: usize = SWAP_ANIM_ROW + 1;
+pub(crate) const SLOT_HOVER_FADE_MAX: u32 = 500;
+pub(crate) const SLOT_HOVER_FADE_STEP: u32 = 10;
+pub(crate) const SWAP_ANIM_MAX: u32 = 1000;
+pub(crate) const SWAP_ANIM_STEP: u32 = 10;
+pub(crate) const SLOT_HOVER_FADE_TOOLTIP: &str = "Wie lange die Hervorhebung des Slots unter dem Zeiger ein- und ausblendet, wenn du über die Slots fährst. Aus: sie springt sofort wie in Vanilla.";
+pub(crate) const SLOT_HOVER_COLOR_TOOLTIP: &str = "Farbe und Deckkraft der Hervorhebung des Slots unter dem Zeiger. Vanilla: weiß.";
+pub(crate) const SWAP_ANIM_TOOLTIP: &str = "Verschiebst du Items (Shift-Klick, Zifferntaste, Zweithand-Taste, Doppelklick), fliegen sie in dieser Zeit zu ihrem neuen Platz, statt dorthin zu springen. Aus: wie in Vanilla.";
+
+// Sonstiges > Server-Bildschirme (MenuScreen::SettingsServerScreens): je Bildschirm, ob der
+// Server ihn schliessen (Settings::server_close_blocked, Bit = Zeile) und oeffnen
+// (Settings::server_open, ein Modus je Eintrag) darf. Container gehen nach Gruppen
+// (s. inventory::menu_group); Name und Erklaerung der Zeile beim Schliessen und beim Oeffnen.
+macro_rules! container_group {
+    ($name:literal, $inhalt:literal) => {
+        (
+            $name,
+            concat!($inhalt, ". An: der Server darf sie schließen, wie in Vanilla. Aus: sie bleiben offen -- Klicks darin nimmt der Server dann nicht mehr an."),
+            concat!($inhalt, ". Erlaubt: wie in Vanilla. Sofort zu: nicht zeigen und dem Server gleich das Schließen melden, als hättest du direkt Esc gedrückt. Ignorieren: nicht zeigen und nichts melden -- für den Server bleibt es offen, bis du dein Inventar öffnest und schließt."),
+        )
+    };
+}
+pub(crate) const CONTAINER_GROUPS: [(&str, &str, &str); 5] = [
+    container_group!("Truhen & Lager", "Truhen, Fässer, Spender, Werfer, Trichter, Shulkerkisten -- und die Menüs von Plugins, die sind fast immer Truhen"),
+    container_group!("Öfen", "Ofen, Schmelzofen, Räucherofen"),
+    container_group!("Werkbänke", "Werkbank, Crafter, Amboss, Schmiedetisch, Schleifstein, Steinsäge, Webstuhl, Kartentisch, Zaubertisch"),
+    container_group!("Handel", "Dorfbewohner und fahrende Händler"),
+    container_group!("Sonstige Container", "Leuchtfeuer, Braustand, Pult"),
+];
+pub(crate) const SERVER_CLOSE_INVENTORY_TOOLTIP: &str = "Dein eigenes Inventar. An: der Server darf es schließen, wie in Vanilla. Aus: es bleibt offen.";
+pub(crate) const SERVER_CLOSE_SIGN_TOOLTIP: &str = "An: wie in Vanilla, der Editor geht zu und schickt seinen Text. Aus: er bleibt offen und schickt erst etwas, wenn du ihn schließt. Server prüfen damit den Client (Editor auf und sofort wieder zu) und sehen, dass die Antwort ausbleibt.";
+pub(crate) const SERVER_OPEN_SIGN_TOOLTIP: &str = "Erlaubt: wie in Vanilla. Sofort zu: nicht zeigen, aber den Text gleich zurückschicken wie ein sofort geschlossener Editor -- so antwortet auch Vanilla auf die Prüfung von Servern. Ignorieren: nichts zeigen, nichts schicken.";
+pub(crate) const SERVER_OPEN_BOOK_TOOLTIP: &str = "Bücher, die der Server dir aufschlägt (Regeln, Anleitungen). Aus: sie gehen nicht auf.";
+pub(crate) const SERVER_OPEN_DIALOG_TOOLTIP: &str = "Dialog-Fenster des Servers (seit 1.21.6, z. B. Regeln vor dem Spielen). Aus: sie gehen nicht auf. Verlangt ein Server im Dialog eine Bestätigung, bevor du spielen darfst, kommst du dann nicht weiter.";
+pub(crate) const SERVER_SCREENS_TOOLTIP: &str = "Für jeden Bildschirm einzeln, ob der Server ihn schließen und ob er ihn öffnen darf.";
+// Abschnitt Schliessen: das eigene Inventar, die Gruppen, der Schild-Editor.
+pub(crate) const SERVER_CLOSE_INVENTORY_ROW: usize = 0;
+pub(crate) const SERVER_CLOSE_GROUP_ROW: usize = 1;
+pub(crate) const SERVER_CLOSE_SIGN_ROW: usize = SERVER_CLOSE_GROUP_ROW + CONTAINER_GROUPS.len();
+// Abschnitt Oeffnen ab dieser Zeile; Eintrag i in Settings::server_open steht in Zeile
+// SERVER_OPEN_ROW + i. Erst die Gruppen, dann Schild-Editor, Buch, Dialog.
+pub(crate) const SERVER_OPEN_ROW: usize = SERVER_CLOSE_SIGN_ROW + 1;
+pub(crate) const SERVER_OPEN_SIGN: usize = CONTAINER_GROUPS.len();
+pub(crate) const SERVER_OPEN_BOOK: usize = SERVER_OPEN_SIGN + 1;
+pub(crate) const SERVER_OPEN_DIALOG: usize = SERVER_OPEN_BOOK + 1;
+pub(crate) const SERVER_OPEN_COUNT: usize = SERVER_OPEN_DIALOG + 1;
+pub(crate) const SERVER_SCREENS_ROWS: usize = SERVER_OPEN_ROW + SERVER_OPEN_COUNT;
+// Was mit einem gesperrten Oeffnen passiert. Sofort zu: wie geoeffnet und gleich mit Esc
+// geschlossen (Container Close bzw. Sign Update mit dem Text). Ignorieren: nichts zeigen,
+// nichts schicken. Buch und Dialog schicken beim Schliessen nichts, dort nur An/Aus
+// (Aus = Ignorieren).
+pub(crate) const SERVER_OPEN_ALLOW: u8 = 0;
+pub(crate) const SERVER_OPEN_CLOSE: u8 = 1;
+pub(crate) const SERVER_OPEN_IGNORE: u8 = 2;
+pub(crate) const SERVER_OPEN_NAMES: [(&str, u8); 3] = [("Erlaubt", SERVER_OPEN_ALLOW), ("Sofort zu", SERVER_OPEN_CLOSE), ("Ignorieren", SERVER_OPEN_IGNORE)];
 // Sonstiges > No slot set / No rotate set (Settings::no_slot_set, no_rotate_set).
 pub(crate) const SERVER_SET_FOLLOW: u8 = 0;
 pub(crate) const SERVER_SET_IGNORE: u8 = 1;
 pub(crate) const SERVER_SET_RESET: u8 = 2;
 pub(crate) const SERVER_SET_NAMES: [(&str, u8); 3] = [("Aus", SERVER_SET_FOLLOW), ("Ignore", SERVER_SET_IGNORE), ("Reset", SERVER_SET_RESET)];
-pub(crate) const NO_UI_CLOSE_NAMES: [(&str, u8); 3] = [("Immer", NO_UI_CLOSE_ALWAYS), ("Nie", NO_UI_CLOSE_NEVER), ("Nur Inventar", NO_UI_CLOSE_INVENTORY)];
 pub(crate) const PLAYER_LIST_SCALE_TOOLTIP: &str = "Größe der Spielerliste (Tab) in Prozent. 100 % = wie Vanilla, sie folgt dann nur der GUI-Skala wie die Hotbar. Zahl anklicken für einen eigenen Wert.";
 // Vanillas hurtTime: 10 Ticks. Nach oben bis 2 s, darueber verschwimmen Treffer ineinander.
 pub(crate) const DAMAGE_TINT_TICKS_DEFAULT: u32 = 10;
@@ -1099,6 +1171,27 @@ pub(crate) fn fade_marker_rect(r: &UiRect) -> Option<Option<ScrollFade>> {
         return None;
     }
     fade_aus_marker(r.rect.y, r.rect.x, r.color)
+}
+
+// Ab hier wird Text um (x, y) auf `s` verkleinert (Some) bzw. nicht mehr (None) -- erst die
+// fertigen Glyphen-Vierecke, stufenlos: neu gerastert in kleinerer Schrift sprang er von Pixel
+// zu Pixel (gedrueckte Einstellungsknoepfe, s. menu/press.rs). Nur Text, Flaechen werden
+// ohnehin ungerundet gezeichnet.
+pub(crate) fn push_zoom_marker(texts: &mut Vec<UiText>, zoom: Option<(f32, f32, f32)>) {
+    let (x, y, s) = zoom.unwrap_or((0.0, 0.0, 1.0));
+    let code = if zoom.is_some() { -54.0 } else { -55.0 };
+    texts.push(UiText { text: String::new(), x, y, color: [s, 0.0, 0.0, code], scale: 1.0 });
+}
+
+pub(crate) fn zoom_marker_text(t: &UiText) -> Option<Option<(f32, f32, f32)>> {
+    if !t.text.is_empty() {
+        return None;
+    }
+    match t.color[3] {
+        -54.0 => Some(Some((t.x, t.y, t.color[0]))),
+        -55.0 => Some(None),
+        _ => None,
+    }
 }
 
 pub(crate) fn fade_marker_text(t: &UiText) -> Option<Option<ScrollFade>> {

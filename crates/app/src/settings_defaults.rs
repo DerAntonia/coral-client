@@ -149,6 +149,8 @@ impl Settings {
             tear_reserve_us: TEAR_RESERVE_DEFAULT_US,
             particles_mode: 0,  // Alle, wie Vanilla
             particle_tuning: [particles::ParticleTuning::default(); particles::KINDS.len()],
+            particles_mode_own: 0,
+            particle_tuning_own: [particles::ParticleTuning::default(); particles::KINDS.len()],
             cave_culling: true,
             mipmapping: true,
             render_path: 0,
@@ -351,13 +353,15 @@ impl Settings {
             sustain_background: true,
             sustain_pause: true,
             anim_flags: world::more_anims::DEFAULT,
+            anims_enabled: true,
             module_chunk_saver: false,
             chunk_saver_threads: lod::THREADS_DEFAULT,
             lod_render_distance: lod::DISTANCE_OFF,
             chunk_saver_threshold: lod::THRESHOLD_DEFAULT,
             chunk_saver_render_saved: true,
             creative_op_tab: false,
-            no_ui_close: NO_UI_CLOSE_NEVER,
+            server_close_blocked: 0,
+            server_open: [SERVER_OPEN_ALLOW; SERVER_OPEN_COUNT],
             no_chat_clear: false,
             audio_auto_optimize: false,
             sign_edit_in_world: true,
@@ -369,6 +373,9 @@ impl Settings {
             potion_mark_long: true,
             potion_mark_weak: true,
             inventory_merge_hover: true,
+            slot_hover_fade_ms: 100,
+            slot_hover_color: [0, 0, 100, 25],
+            swap_anim_ms: 150,
             color_saturation: 0,
             discord_client_id: String::new(),
             block_outline_hue: 0,
@@ -400,6 +407,7 @@ impl Settings {
             module_sky_color_value: 95,
             block_rng_rotation: true,            // wie Vanilla
             smooth_lighting_percent: SMOOTH_LIGHTING_MAX, // wie Vanilla
+            motion_blur_percent: 0,
             jump_cooldown_enabled: true,         // wie Vanilla
             sprint_on_start: false,
             caps_lock_blocked: false,

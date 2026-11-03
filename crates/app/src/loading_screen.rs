@@ -319,11 +319,16 @@ impl Leinwand<'_> {
             };
             let (cw, ch) = page.cell_size();
             let oben = pos.1 + (base - page.ascent) * s;
-            for gy in 0..ch {
-                for gx in 0..cw {
+            // Auf die Zielhoehe der Seite skaliert (FontPage::scale, z.B. 16er-Zellen eines Packs
+            // auf 8 Font-Pixel) -- wie der Vorschub, sonst ueberlappen die Zeichen.
+            let k = page.scale() * s as f32;
+            let (zw, zh) = ((cw as f32 * k).round() as i32, (ch as f32 * k).round() as i32);
+            for zy in 0..zh {
+                for zx in 0..zw {
+                    let (gx, gy) = (((zx as f32 / k) as u32).min(cw - 1), ((zy as f32 / k) as u32).min(ch - 1));
                     let a = page.texture.rgba[(((row * ch + gy) * page.texture.width + col * cw + gx) * 4 + 3) as usize];
                     if a != 0 {
-                        self.rechteck((x + gx as i32 * s, oben + gy as i32 * s, s, s), farbe);
+                        self.rechteck((x + zx, oben + zy, 1, 1), farbe);
                     }
                 }
             }

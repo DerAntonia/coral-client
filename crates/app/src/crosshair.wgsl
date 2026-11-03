@@ -1,9 +1,5 @@
-// Zeigt die am staerksten unterscheidbare Farbe zum Pixel darunter: Farbton auf die
-// gegenueberliegende Seite des Farbkreises (+180 Grad), Saettigung UND Helligkeit/Value
-// (HSV, nicht HSL) immer maximal -- die kraeftigste, hellste Version der Gegenfarbe, egal
-// wie hell/dunkel/gesaettigt der Untergrund ist. Nur der Farbton haengt vom Untergrund ab.
-// Bewusst ohne den "%"-Operator (reine Additionen/Subtraktionen/Vergleiche) -- unabhaengig
-// vom eigentlichen Bug (s. Git-Historie) eine robuste, leicht nachvollziehbare Umsetzung.
+// Zeigt die am staerksten unterscheidbare Farbe zum Pixel darunter: contrast_color aus
+// render/src/contrast_color.wgsl, das beim Laden an diese Datei angehaengt wird.
 @group(0) @binding(0) var sample_tex: texture_2d<f32>;
 @group(0) @binding(1) var sample_sampler: sampler;
 
@@ -12,8 +8,8 @@
 // eher stoert (z.B. sehr bewegte/bunte Untergruende).
 //
 // `brightness_boost` (0..1) hellt NUR die Komplementaerfarbe auf, s. fs_main. `color` ist
-// RGBA8, R im niedrigsten Byte. Die Struktur ist auf 16 Byte aufgefuellt: Uniform-Bloecke
-// muessen in WGSL ein Vielfaches von 16 gross sein.
+// RGBA8, R im niedrigsten Byte. 80 Byte: Uniform-Bloecke muessen in WGSL ein Vielfaches von
+// 16 gross sein, `areas` liegt dafuer passend ab Byte 16.
 struct CrosshairSettings {
     mode: u32,
     brightness_boost: f32,
@@ -21,8 +17,28 @@ struct CrosshairSettings {
     // Brenn-Farbe (Feuer-Modus "Fadenkreuz"), nur fuer Kreuz (0) und Kreis/Ring (5) -- Zahlen
     // behalten `color`. Alpha-Byte 0 = brennt nicht.
     fire: u32,
+    // Flaechen (uv: links oben xy, rechts unten zw) je Farbplatz (s. FADE_PLAETZE). Im
+    // Komplementaer-Modus bekommt jeder Platz eine Farbe, gewaehlt ueber seine ganze Flaeche
+    // (s. cs_fade). Leer (zw nicht rechts unter xy) = der Platz ist gerade nicht zu sehen.
+    areas: array<vec4<f32>, 3>,
+    // Sekunden seit dem letzten cs_fade.
+    dt: f32,
 };
 @group(0) @binding(2) var<uniform> settings: CrosshairSettings;
+
+// Komplementaer-Farbe ueber mehrere Frames (s. cs_fade): `ziel` 0 = Gelb, 1 = Blau, -1 =
+// gerade nicht zu sehen; `t` die gezeigte Mischung.
+struct CrosshairFade {
+    ziel: f32,
+    t: f32,
+    _pad: vec2<f32>,
+};
+// Farbplaetze: 0 Kreuz und Ring, 1 Schild-Countdown, 2 Pfeilzahl. Die Zahlen stehen woanders
+// als das Kreuz und brauchen die Gegenfarbe zu ihrem eigenen Untergrund.
+const FADE_PLAETZE: u32 = 3u;
+@group(0) @binding(3) var<storage, read_write> fade: array<CrosshairFade, 3>;
+// Wechselt die Farbe, wird in dieser Zeit ueberblendet.
+const FADE_DAUER: f32 = 0.1;
 
 // Font-Atlas fuer HUD-Zahlen (Schild-Countdown, Pfeile), die hier statt im UI-Pass gezeichnet
 // werden, damit sie die Fadenkreuz-Farbe bekommen koennen. Einkanalig: Deckung im Rotanteil.
@@ -41,6 +57,7 @@ struct VertexOutput {
     @location(2) @interpolate(flat) kind: f32,
     @location(3) @interpolate(flat) alpha: f32,
     // Kreise: innerer und aeusserer Radius in Pixeln (glyph_uv ist dann der Abstand zur Mitte).
+    // Glyphen: x = Farbplatz (s. FADE_PLAETZE).
     @location(4) @interpolate(flat) circle: vec2<f32>,
 };
 
@@ -63,75 +80,57 @@ fn vs_main(
     return out;
 }
 
-// Farbton in Grad [0,360).
-fn rgb_to_hue(c: vec3<f32>) -> f32 {
-    let maxc = max(c.r, max(c.g, c.b));
-    let minc = min(c.r, min(c.g, c.b));
-    let d = maxc - minc;
-    if (d <= 0.0001) {
-        return 0.0; // Grau/Schwarz/Weiss -- Farbton undefiniert, 0 (Rot) als fester Fallback.
+// Eine Gegenfarbe fuer die ganze Flaeche eines Platzes: 7x7 Punkte darueber, je Punkt die
+// Abstaende von Gelb und Blau aufsummiert, die Farbe mit der groesseren Summe gewinnt. Je
+// Pixel einzeln waere das Kreuz z.B. auf einem Spinnennetz bunt gescheckt. Laeuft einmal je
+// Frame vor dem Fadenkreuz-Pass (ein Thread je Platz), gezeichnet wird nur mit `fade[i].t`.
+@compute @workgroup_size(1)
+fn cs_fade(@builtin(workgroup_id) id: vec3<u32>) {
+    let platz = id.x;
+    let area = settings.areas[platz];
+    // Nicht zu sehen: beim naechsten Auftauchen gleich die passende Farbe, ohne Ueberblenden.
+    if (area.z <= area.x || area.w <= area.y) {
+        fade[platz].ziel = -1.0;
+        return;
     }
-    var h = 0.0;
-    if (maxc == c.r) {
-        h = (c.g - c.b) / d; // liegt in (-1,1), die Korrektur unten reicht -- kein Modulo noetig.
-    } else if (maxc == c.g) {
-        h = (c.b - c.r) / d + 2.0;
-    } else {
-        h = (c.r - c.g) / d + 4.0;
+    let groesse = vec2<f32>(textureDimensions(sample_tex));
+    let hoechstens = vec2<i32>(groesse) - 1;
+    var summe = vec2<f32>(0.0);
+    for (var j = 0; j < 7; j++) {
+        for (var i = 0; i < 7; i++) {
+            let t = (vec2<f32>(f32(i), f32(j)) + 0.5) / 7.0;
+            let uv = mix(area.xy, area.zw, t);
+            let pixel = clamp(vec2<i32>(uv * groesse), vec2<i32>(0), hoechstens);
+            summe += contrast_scores(textureLoad(sample_tex, pixel, 0).rgb);
+        }
     }
-    h = h * 60.0;
-    if (h < 0.0) {
-        h = h + 360.0;
+    let wahl = select(1.0, 0.0, summe.x >= summe.y);
+    var f = fade[platz];
+    if (f.ziel < 0.0) {
+        f.t = wahl;
     }
-    return h;
+    f.ziel = wahl;
+    let schritt = settings.dt / FADE_DAUER;
+    f.t = clamp(f.t + clamp(f.ziel - f.t, -schritt, schritt), 0.0, 1.0);
+    fade[platz] = f;
 }
 
-// HSV(h, 1, 1) -> RGB: die reine, voll gesaettigte und voll helle Farbe fuer diesen
-// Farbton (Rot, Orange, Gelb, Gruen, Cyan, Blau, Magenta, ... je nach h). `h` muss in
-// [0,360) liegen.
-fn pure_hue_to_rgb(h: f32) -> vec3<f32> {
-    let hp = h / 60.0; // [0,6)
-    if (hp < 1.0) {
-        return vec3<f32>(1.0, hp, 0.0);
-    } else if (hp < 2.0) {
-        return vec3<f32>(2.0 - hp, 1.0, 0.0);
-    } else if (hp < 3.0) {
-        return vec3<f32>(0.0, 1.0, hp - 2.0);
-    } else if (hp < 4.0) {
-        return vec3<f32>(0.0, 4.0 - hp, 1.0);
-    } else if (hp < 5.0) {
-        return vec3<f32>(hp - 4.0, 0.0, 1.0);
-    } else {
-        return vec3<f32>(1.0, 0.0, 6.0 - hp);
-    }
-}
-
-// Die Fadenkreuz-Farbe fuer diesen Pixel, je nach Modus.
-fn crosshair_color(underneath: vec3<f32>) -> vec3<f32> {
+// Die Fadenkreuz-Farbe, je nach Modus; `platz` s. FADE_PLAETZE.
+fn crosshair_color(platz: u32) -> vec3<f32> {
     if (settings.mode == 1u) {
         return unpack4x8unorm(settings.color).rgb;
     }
-    // Modus 0 (Standard): Komplementaerfarbe wie bisher.
-    let h = rgb_to_hue(underneath);
-    var new_h = h + 180.0; // h in [0,360) -> new_h in [180,540)
-    if (new_h >= 360.0) {
-        new_h = new_h - 360.0;
-    }
-    // Aufhellen heisst hier: Richtung Weiss mischen, nicht "Value hochdrehen". HSV-Value ist
-    // schon auf 1 -- pure_hue_to_rgb liefert die hellste Fassung dieses Farbtons. Trotzdem
-    // sind manche reinen Farbtoene von sich aus dunkel (reines Blau hat rund 7 % der
-    // Leuchtdichte von Weiss und verschwindet vor dunklem Untergrund). Weiss beimischen
-    // senkt die Saettigung und hebt die Leuchtdichte -- der Farbton bleibt dabei exakt
-    // erhalten, die Gegenfarbe bleibt also weiterhin die Gegenfarbe.
-    let color = pure_hue_to_rgb(new_h);
+    // Modus 0 (Standard): Gegenfarbe zum Untergrund. Aufhellen heisst hier: Richtung Weiss
+    // mischen -- hebt die Leuchtdichte, wenn die Gegenfarbe von sich aus dunkel ist (reines
+    // Blau hat rund 7 % der Leuchtdichte von Weiss).
+    let color = mix(CONTRAST_GELB, CONTRAST_BLAU, fade[min(platz, FADE_PLAETZE - 1u)].t);
     return mix(color, vec3<f32>(1.0, 1.0, 1.0), clamp(settings.brightness_boost, 0.0, 1.0));
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Beide Texturzugriffe vorab und unbedingt: textureSample darf nur in einheitlichem
+    // Texturzugriff vorab und unbedingt: textureSample darf nur in einheitlichem
     // Kontrollfluss stehen.
-    let underneath = textureSample(sample_tex, sample_sampler, in.uv).rgb;
     let glyph = textureSample(glyph_tex, glyph_sampler, in.glyph_uv).r;
     var coverage = 1.0;
     if (in.kind > 1.5 && in.kind < 4.5) {
@@ -163,5 +162,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (feuer.a > 0.5 && (in.kind < 0.5 || abs(in.kind - 5.0) < 0.5)) {
         return vec4<f32>(feuer.rgb, a);
     }
-    return vec4<f32>(crosshair_color(underneath), a);
+    // Glyphen tragen ihren Farbplatz in circle.x (s. CrosshairVertex::circle).
+    let platz = select(0u, u32(in.circle.x), abs(in.kind - 2.0) < 0.5);
+    return vec4<f32>(crosshair_color(platz), a);
 }

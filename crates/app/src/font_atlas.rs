@@ -650,12 +650,15 @@ fn pick_placed(placed: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32) 
     }
     let quarters = scale * 4.0;
     let exact = quarters.round();
-    if (quarters - exact).abs() < 0.05 {
+    let (lo, hi) = (*DM_SANS_QUARTERS.start(), *DM_SANS_QUARTERS.end());
+    // Nur innerhalb der gerasterten Faktoren: darueber liegen unter denselben Schluesseln die
+    // Subpixel-Fassungen (Faktor mal 4 + SUBPIXEL_KEY * Stufe). Faktor 9 (36) traf so die
+    // Fassung von Faktor 1 bei Stufe 1 -- im Schild-Editor winzige Zeichen in Faktor-9-Abstaenden.
+    if (quarters - exact).abs() < 0.05 && (f32::from(lo)..=f32::from(hi)).contains(&exact) {
         if let Some(p) = placed.get(&(exact as u8, ch)) {
             return Some(*p);
         }
     }
-    let (lo, hi) = (*DM_SANS_QUARTERS.start(), *DM_SANS_QUARTERS.end());
     let first = (quarters.ceil().max(f32::from(lo)) as u8).min(hi);
     let (q, p) = (first..=hi).chain((lo..first).rev()).find_map(|q| placed.get(&(q, ch)).map(|p| (q, p)))?;
     let k = quarters / f32::from(q);
@@ -1328,6 +1331,30 @@ mod tests {
         assert!(atlas.descent_px > 1.5 && atlas.descent_px < 4.0, "Unterlänge {}", atlas.descent_px);
         // Keine Mip-Kette mehr.
         assert_eq!(atlas.levels.len(), 1);
+    }
+
+    // Grosse Faktoren (Schild-Editor: 9) werden aus der groessten Fassung hochgerechnet und
+    // treffen nie die Subpixel-Fassungen, die unter Faktor mal 4 + SUBPIXEL_KEY liegen.
+    #[test]
+    fn grosse_faktoren_zeichnen_gross() {
+        let leer = AtlasPixels {
+            levels: vec![vec![0]],
+            width: 1,
+            height: 1,
+            glyphs: HashMap::default(),
+            placed: HashMap::default(),
+            placed_bold: HashMap::default(),
+            bold_advance: HashMap::default(),
+            vanilla_advance: Arc::default(),
+            cell_height_px: 8.0,
+            ascent_px: 7.0,
+            descent_px: 1.0,
+        };
+        let atlas = build_ttf(&leer, FontKind::DmSans.ttf().unwrap());
+        for scale in [6.0f32, 9.0, 10.0, 12.5, 20.0, 29.0] {
+            let h = pick_placed(&atlas.placed, 'H', scale).unwrap();
+            assert!((h.size[1] - 7.0 * scale).abs() <= 1.5 * scale / 5.0 + 1.5, "H bei Faktor {scale} ist {} hoch", h.size[1]);
+        }
     }
 
     // Derselbe Text soll an jeder Lage auf dem Raster gleich aussehen (s. sharpest_shift):

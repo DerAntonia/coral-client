@@ -541,6 +541,10 @@ impl GpuState {
         if let Some(timer) = self.gpu_timer.as_mut() {
             timer.begin_frame();
         }
+        // Bewegungsunschaerfe nur im PvP-Pfad und mit normaler Projektion: die Warp-Projektionen
+        // verbiegen die Geometrie im Vertex-Shader, eine Matrix rechnet sie nicht zurueck.
+        let motion_blur = self.motion_blur_strength > 0.0 && !self.use_shader_path && camera.projection == 0;
+        self.block_renderer.keep_depth = motion_blur;
         if self.use_shader_path {
             self.render_world_shader_path(&mut encoder, sky, camera);
         } else {
@@ -623,8 +627,8 @@ impl GpuState {
                 }
             });
             // Schildtext gegen die Tiefe der Welt -- danach, damit davor stehende Entities ihn
-            // verdecken (s. world_text_pipeline).
-            if sign_len > 0 {
+            // verdecken (s. world_text_pipeline). Mit Bewegungsunschaerfe erst nach ihr.
+            if sign_len > 0 && !motion_blur {
                 pass.set_pipeline(&self.world_text_pipeline);
                 pass.set_vertex_buffer(0, self.sign_text_buffer.slice(..));
                 pass.set_bind_group(0, &self.hud_font(sign_kind).bind_group, &[]);
@@ -644,6 +648,52 @@ impl GpuState {
             let view = self.offscreen_texture.create_view(&wgpu::TextureViewDescriptor { format: Some(raw), ..Default::default() });
             let size = (self.config.width, self.config.height);
             self.entity_outline.encode(&self.device, &self.queue, &mut encoder, &self.block_renderer, &view, size);
+        }
+
+        // Bewegungsunschaerfe: nach Welt und Umrissen, vor der Hand -- Hand und HUD bleiben scharf.
+        if motion_blur {
+            let timer = &mut self.gpu_timer;
+            let mut reserve = || timer.as_mut().and_then(|t| t.reserve("Motion Blur").map(|(b, e)| (t.query_set(), b, e)));
+            let verwischt = self.motion_blur.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &self.offscreen_texture,
+                &self.offscreen_view,
+                &self.block_renderer,
+                camera,
+                aspect,
+                self.motion_blur_strength,
+                self.motion_blur_interval_s,
+                &mut reserve,
+            );
+            // Was man lesen koennen soll, bleibt scharf: Schilder samt Text und Karten in Rahmen
+            // noch einmal darueber, gegen die Tiefe der Welt. Namensschilder und Text-Displays
+            // kommen ohnehin erst mit dem HUD. Ohne Unschaerfe in diesem Bild nur der
+            // Schildtext, der im Welt-Durchgang ausgelassen wurde. Die Zeit zaehlt zu Motion Blur.
+            let stempel = if verwischt { self.gpu_timer.as_mut().and_then(|t| t.pass("Motion Blur")) } else { None };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sharp after motion blur pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.offscreen_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(self.block_renderer.depth_attachment_load()),
+                timestamp_writes: stempel,
+                occlusion_query_set: None,
+            });
+            if verwischt {
+                self.block_renderer.render_sharp_entities(&mut pass);
+            }
+            if sign_len > 0 {
+                pass.set_pipeline(&self.world_text_pipeline);
+                pass.set_vertex_buffer(0, self.sign_text_buffer.slice(..));
+                pass.set_bind_group(0, &self.hud_font(sign_kind).bind_group, &[]);
+                pass.draw(0..sign_len, 0..1);
+            }
+        } else {
+            self.motion_blur.reset();
         }
 
         // Ego-Hand: EIGENER Durchgang mit geleertem Tiefenpuffer und eigener Projektion --
@@ -903,11 +953,24 @@ impl GpuState {
         // Die Texte nach Schrift gruppiert: je Schrift ein Zeichenaufruf mit ihrer
         // Glyphen-Bindung (Gruppe 1). Kreuz und Kreis davor brauchen keine.
         let main_count = crosshair_data.len() as u32;
+        // Flaeche je Farbplatz fuer die Gegenfarbe (uv links oben, rechts unten); leer = nicht da.
+        let mut flaechen = [([f32::MAX; 2], [f32::MIN; 2]); CROSSHAIR_FADE_SLOTS];
+        let umfassen = |f: &mut ([f32; 2], [f32; 2]), verts: &[CrosshairVertex]| {
+            for v in verts {
+                f.0 = [f.0[0].min(v.uv[0]), f.0[1].min(v.uv[1])];
+                f.1 = [f.1[0].max(v.uv[0]), f.1[1].max(v.uv[1])];
+            }
+        };
+        umfassen(&mut flaechen[0], &crosshair_data);
         let mut schrift_laeufe: Vec<(FontKind, std::ops::Range<u32>)> = Vec::new();
         for kind in FontKind::ALL {
             let von = crosshair_data.len();
             for text in crosshair_extras.texts.iter().filter(|t| t.font == kind) {
-                crosshair_data.extend(self.crosshair_glyph_vertices(self.hud_font(kind), text, crosshair_outline, screen_px));
+                let verts = self.crosshair_glyph_vertices(self.hud_font(kind), text, crosshair_outline, screen_px);
+                if let Some(f) = flaechen.get_mut(text.fade_slot as usize) {
+                    umfassen(f, &verts);
+                }
+                crosshair_data.extend(verts);
             }
             crosshair_data.truncate(CROSSHAIR_MAX_VERTICES);
             if crosshair_data.len() > von {
@@ -921,8 +984,24 @@ impl GpuState {
             let farbe = byte(crosshair_rgb[0]) | byte(crosshair_rgb[1]) << 8 | byte(crosshair_rgb[2]) << 16 | 0xff << 24;
             // Viertes Feld: Brenn-Farbe fuer Kreuz und Ring, Alpha 0 = brennt nicht.
             let feuer = crosshair_extras.fire_rgb.map_or(0, |c| byte(c[0]) | byte(c[1]) << 8 | byte(c[2]) << 16 | 0xff << 24);
-            let crosshair_settings: [u32; 4] = [crosshair_mode, crosshair_boost.to_bits(), farbe, feuer];
+            // Zeit seit dem letzten Komplementaer-Schritt, gedeckelt: nach einer Pause (Kreuz
+            // aus, anderer Modus) steht die passende Farbe dann sofort da.
+            let jetzt = Instant::now();
+            let dt = jetzt.duration_since(self.crosshair_fade_clock).as_secs_f32().min(0.25);
+            let mut crosshair_settings = [0u32; 20];
+            crosshair_settings[..4].copy_from_slice(&[crosshair_mode, crosshair_boost.to_bits(), farbe, feuer]);
+            for (i, (min, max)) in flaechen.iter().enumerate() {
+                crosshair_settings[4 + i * 4..8 + i * 4].copy_from_slice(&[min[0], min[1], max[0], max[1]].map(f32::to_bits));
+            }
+            crosshair_settings[16] = dt.to_bits();
             self.queue.write_buffer(&self.crosshair_mode_buffer, 0, bytemuck::bytes_of(&crosshair_settings));
+            if crosshair_mode == 0 {
+                self.crosshair_fade_clock = jetzt;
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("crosshair fade"), timestamp_writes: None });
+                pass.set_pipeline(&self.crosshair_fade_pipeline);
+                pass.set_bind_group(0, &self.crosshair_bind_group, &[]);
+                pass.dispatch_workgroups(CROSSHAIR_FADE_SLOTS as u32, 1, 1);
+            }
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("crosshair pass"),

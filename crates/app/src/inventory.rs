@@ -121,11 +121,16 @@ pub struct Inventory {
     pub open: Option<OpenContainer>,
     // Ist der Inventar-/Container-Bildschirm sichtbar?
     pub screen_open: bool,
+    // Vom Server geoeffneter Container, den die Einstellungen nicht zeigen (Server-Bildschirme,
+    // Oeffnen gesperrt): sync_id und Slotzahl (0, bis der Inhalt kam). Sein Inhalt legt keinen
+    // offenen Container an, nur der Spielerteil wird gespiegelt -- solange der Server ihn fuer
+    // offen haelt, kommen Inventar-Aenderungen ueber ihn.
+    pub refused: Option<(i32, usize)>,
 }
 
 impl Default for Inventory {
     fn default() -> Self {
-        Self { player: vec![None; PLAYER_SLOT_COUNT], player_revision: 0, held_slot: 0, cursor: None, open: None, screen_open: false }
+        Self { player: vec![None; PLAYER_SLOT_COUNT], player_revision: 0, held_slot: 0, cursor: None, open: None, screen_open: false, refused: None }
     }
 }
 
@@ -188,6 +193,10 @@ impl Inventory {
             }
             return;
         }
+        let abgelehnt = matches!(self.refused, Some((id, _)) if id == sync_id);
+        if abgelehnt {
+            self.refused = Some((sync_id, slots.len()));
+        }
         // Bei jedem Standard-Container sind die letzten 36 Slots das Spielerinventar
         // (27 Haupt + 9 Hotbar) -- von dort in die Hotbar-Anzeige uebernehmen, sonst waere
         // die HUD-Hotbar waehrend einer offenen Kiste veraltet.
@@ -197,6 +206,9 @@ impl Inventory {
             for i in 0..9 {
                 self.player[PLAYER_HOTBAR_START + i] = slots[start + 27 + i].clone();
             }
+        }
+        if abgelehnt {
+            return;
         }
         match &mut self.open {
             Some(container) if container.sync_id == sync_id => {
@@ -222,6 +234,15 @@ impl Inventory {
                 self.player[slot] = stack;
             }
             return;
+        }
+        if let Some((id, anzahl)) = self.refused {
+            if id == sync_id {
+                if let Some(offset) = (slot + 36).checked_sub(anzahl).filter(|&o| o < 36 && anzahl >= 36) {
+                    let target = if offset < 27 { PLAYER_MAIN_START + offset } else { PLAYER_HOTBAR_START + (offset - 27) };
+                    self.player[target] = stack;
+                }
+                return;
+            }
         }
         if let Some(container) = &mut self.open {
             if container.sync_id == sync_id && slot < container.slots.len() {
@@ -252,6 +273,7 @@ impl Inventory {
     }
 
     pub fn open_screen(&mut self, sync_id: i32, screen_type: i32, title: String) {
+        self.refused = None;
         match &mut self.open {
             Some(container) if container.sync_id == sync_id => {
                 container.screen_type = screen_type;
@@ -293,6 +315,9 @@ impl Inventory {
         self.open = None;
         self.screen_open = false;
         self.cursor = None;
+        // Auch ein abgelehnter Container ist danach zu: der Server schliesst bei Container
+        // Close seinen offenen, egal mit welcher ID.
+        self.refused = None;
     }
 }
 
@@ -1009,6 +1034,22 @@ pub const fn container_rows(screen_type: i32) -> Option<usize> {
     }
 }
 
+// Gruppe eines Menue-Typs fuer Sonstiges > Server-Bildschirme (Index in CONTAINER_GROUPS):
+// Lager, Oefen, Werkbaenke, Handel, Sonstige (Leuchtfeuer, Braustand, Pult, Unbekanntes).
+pub const fn menu_group(screen_type: i32) -> usize {
+    match screen_type {
+        // generic_9x1..9x6, generic_3x3, hopper, shulker_box
+        0..=6 | 16 | 20 => 0,
+        // blast_furnace, furnace, smoker
+        10 | 14 | 22 => 1,
+        // crafter_3x3, anvil, crafting, enchantment, grindstone, loom, smithing,
+        // cartography_table, stonecutter
+        7 | 8 | 12 | 13 | 15 | 18 | 21 | 23 | 24 => 2,
+        19 => 3,
+        _ => 4,
+    }
+}
+
 // Menue-Typen mit eigenem Bildschirm (Registry-IDs aus MenuType, s. container_rows).
 pub const MENU_ANVIL: i32 = 8;
 pub const MENU_BLAST_FURNACE: i32 = 10;
@@ -1667,6 +1708,36 @@ mod tests {
         assert_eq!(inv.player[PLAYER_OFFHAND].as_ref().map(|s| s.item_id), Some(2));
         inv.set_player_slot(39, Some(ItemStack::new(3, 1)));
         assert_eq!(inv.player[PLAYER_ARMOR_START].as_ref().map(|s| s.item_id), Some(3));
+    }
+
+    // Abgelehnter Container (Server-Bildschirme): sein Inhalt legt keinen offenen Container
+    // an, der Spielerteil kommt aber an, auch Slot fuer Slot.
+    #[test]
+    fn abgelehnter_container_spiegelt_nur_den_spielerteil() {
+        let mut inv = Inventory::default();
+        inv.refused = Some((7, 0));
+        let mut slots = vec![None; 27 + 36];
+        slots[0] = Some(ItemStack::new(5, 1));
+        slots[27 + 27] = Some(ItemStack::new(6, 1));
+        inv.set_content(7, 1, slots);
+        assert!(inv.open.is_none());
+        assert_eq!(inv.hotbar(0).map(|s| s.item_id), Some(6));
+        inv.set_slot(7, 2, (27 + 27 + 1) as i16, Some(ItemStack::new(8, 1)));
+        assert_eq!(inv.hotbar(1).map(|s| s.item_id), Some(8));
+        inv.set_slot(7, 3, 0, Some(ItemStack::new(9, 1)));
+        assert!(inv.open.is_none());
+        inv.open_screen(8, 2, "Truhe".into());
+        assert_eq!(inv.refused, None);
+    }
+
+    #[test]
+    fn menuearten_landen_in_ihren_gruppen() {
+        assert_eq!(menu_group(2), 0);
+        assert_eq!(menu_group(20), 0);
+        assert_eq!(menu_group(MENU_SMOKER), 1);
+        assert_eq!(menu_group(MENU_ANVIL), 2);
+        assert_eq!(menu_group(MENU_MERCHANT), 3);
+        assert_eq!(menu_group(MENU_LECTERN), 4);
     }
 }
 

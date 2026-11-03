@@ -166,7 +166,7 @@ impl App {
         let up = right.cross(forward).normalize_or_zero();
         let tick_progress = self.tick_progress();
         let mut out = std::mem::take(&mut self.particle_vertices);
-        self.particles.set_tuning(self.settings.particle_tuning);
+        self.particles.set_tuning(self.settings.particle_tuning, self.settings.particle_tuning_own);
         let mut draws = self.particles.build_vertices(self.camera.position, right, up, tick_progress, &mut out);
         // XP-Kugeln ans Ende der durchscheinenden Partikel (gleicher Atlas, gleiche Mischung).
         let kugeln = self.experience_orb_vertices(right, up, tick_progress);
@@ -392,10 +392,11 @@ impl App {
         &mut self,
         f: impl FnOnce(&mut particles::Particles, &particles::SpawnContext, &dyn Fn(i32) -> Option<particles::EmitterBody>),
     ) {
-        self.particles.set_tuning(self.settings.particle_tuning);
+        self.particles.set_tuning(self.settings.particle_tuning, self.settings.particle_tuning_own);
         let ctx = particles::SpawnContext {
             camera: self.camera.view_position(),
             mode: particles::ParticleMode::from_index(self.settings.particles_mode),
+            mode_own: particles::ParticleMode::from_index(self.settings.particles_mode_own),
             world: &self.world,
             shapes: &self.block_shapes,
             biomes: &self.biome_palette,

@@ -194,6 +194,13 @@ impl Settings {
         [r, g, b, 1.0]
     }
 
+    // Hervorhebung des Slots unter dem Zeiger (s. slot_hover_color), linear wie UiRect::color.
+    pub(crate) fn slot_hover_rgba(&self) -> [f32; 4] {
+        let [h, s, v, a] = self.slot_hover_color;
+        let [r, g, b] = hsv_to_rgb(h as f32, s as f32 / 100.0, v as f32 / 100.0).map(world::sky::srgb_to_linear);
+        [r, g, b, a as f32 / 100.0]
+    }
+
     pub(crate) fn saturation_hud_rgb(&self) -> [f32; 3] {
         hsv_to_rgb(self.saturation_hud_hue as f32, self.saturation_hud_saturation as f32 / 100.0, self.saturation_hud_value as f32 / 100.0)
     }

@@ -288,9 +288,16 @@ impl App {
         if self.is_active_account(a) {
             items.push(AccountContextItem::Logout);
         }
+        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+        // // Mit Refresh-Token wird ein neues geholt, ohne zeigt es das gespeicherte.
+        // items.push(AccountContextItem::ExportToken);
+        // if !a.refresh_token.is_empty() {
+        //     items.push(AccountContextItem::ExportRefreshToken);
+        // }
         items.push(AccountContextItem::Forget);
         let (sw, sh) = ui_screen();
         let h = items.len() as f32 * SERVER_CONTEXT_ROW_H + 12.0;
+        // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt. Dann wieder ACCOUNT_CONTEXT_W statt SERVER_CONTEXT_W.
         let x = at.0.min(sw - SERVER_CONTEXT_W - 8.0);
         let y = at.1.min(sh - h - 8.0);
         let p = Rect { x, y, w: SERVER_CONTEXT_W, h };
@@ -321,6 +328,15 @@ impl App {
                 self.play_ui_sound(ui_sound::UiSound::Click);
                 self.logout();
             }
+            // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+            // Some(AccountContextItem::ExportToken) => {
+            //     self.play_ui_sound(ui_sound::UiSound::Open);
+            //     self.start_token_export(i, false);
+            // }
+            // Some(AccountContextItem::ExportRefreshToken) => {
+            //     self.play_ui_sound(ui_sound::UiSound::Open);
+            //     self.start_token_export(i, true);
+            // }
             Some(AccountContextItem::Forget) => {
                 self.play_ui_sound(ui_sound::UiSound::Close);
                 self.forget_account(i);
@@ -328,6 +344,169 @@ impl App {
             None => {}
         }
     }
+
+    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // // Token-Export: ueber das Refresh-Token ein neues Minecraft-Token holen. Das Fenster mit
+    // // der Warnung steht sofort, das Token zeigt es erst auf "Anzeigen". Geht nur mit einer
+    // // Client-ID, die Microsoft annimmt (die eigene erst nach Mojangs Freigabe).
+    // pub(crate) fn start_token_export(&mut self, i: usize, refresh: bool) {
+    //     let Some(a) = self.accounts.list.get(i).cloned() else { return };
+    //     self.account_manager_open = false;
+    //     // Reines Token-Konto: nichts zu erneuern, das gespeicherte Token ist alles, was es gibt.
+    //     if a.refresh_token.is_empty() {
+    //         self.token_export = Some(TokenExport::Ready { name: a.name, refresh: false, token: a.access_token, client_id: None });
+    //         return;
+    //     }
+    //     self.token_export = Some(TokenExport::Busy { name: a.name.clone(), refresh });
+    //     let tx = self.auth_tx.clone();
+    //     let key = accounts::key(&a.uuid);
+    //     self.tokio_rt.spawn(async move {
+    //         let result = async {
+    //             let msa = auth::refresh_msa(&a.client_id, &a.refresh_token).await.map_err(|e| e.to_string())?;
+    //             let c = auth::msa_to_minecraft(&msa.access_token).await.map_err(|e| e.to_string())?;
+    //             Ok((c, (msa.refresh_token, a.client_id.clone())))
+    //         }
+    //         .await;
+    //         let _ = tx.send(AuthEvent::TokenExported { key, result });
+    //     });
+    // }
+
+    // // Fenster des Token-Exports: Rahmen, Zeilen (Text, Farbe, Faktor) und Knoepfe.
+    // pub(crate) fn token_export_layout(&self, gpu: &GpuState) -> Option<(Rect, Vec<(String, [f32; 4], f32)>, Vec<(Rect, TokenExportButton, &'static str, bool)>)> {
+    //     let export = self.token_export.as_ref()?;
+    //     let (sw, sh) = ui_screen();
+    //     let w = 640.0;
+    //     let innen = w - 48.0;
+    //     let mut zeilen: Vec<(String, [f32; 4], f32)> = Vec::new();
+    //     let absatz = |text: &str, farbe: [f32; 4], zeilen: &mut Vec<(String, [f32; 4], f32)>| {
+    //         for z in wrap_text(gpu, text, UI_SCALE_SMALL, innen) {
+    //             zeilen.push((z, farbe, UI_SCALE_SMALL));
+    //         }
+    //     };
+    //     let (name, art) = match export {
+    //         TokenExport::Busy { name, refresh } | TokenExport::Ready { name, refresh, .. } | TokenExport::Shown { name, refresh, .. } => {
+    //             (name, if *refresh { "Refresh-Token" } else { "Token" })
+    //         }
+    //         TokenExport::Failed { name, .. } => (name, "Token"),
+    //     };
+    //     zeilen.push((format!("{art} von {name}"), theme::text(), UI_SCALE_NORMAL));
+    //     let knoepfe: Vec<(TokenExportButton, &'static str, bool)> = match export {
+    //         TokenExport::Busy { .. } | TokenExport::Ready { .. } => {
+    //             absatz(
+    //                 if art == "Refresh-Token" {
+    //                     "Achte darauf, dass niemand sonst auf deinen Bildschirm sieht -- auch kein Stream, keine Aufnahme und kein geteilter Bildschirm. Mit dem Refresh-Token kann sich jeder immer wieder als du anmelden, bis du es bei Microsoft zurückziehst."
+    //                 } else {
+    //                     "Achte darauf, dass niemand sonst auf deinen Bildschirm sieht -- auch kein Stream, keine Aufnahme und kein geteilter Bildschirm. Mit dem Token kann sich jeder als du anmelden, bis es abläuft."
+    //                 },
+    //                 theme::get(theme::Slot::Warning),
+    //                 &mut zeilen,
+    //             );
+    //             let bereit = matches!(export, TokenExport::Ready { .. });
+    //             let stand = match export {
+    //                 TokenExport::Busy { .. } => format!("Neues {art} wird erzeugt ..."),
+    //                 TokenExport::Ready { client_id: None, refresh: false, .. } => "Gespeichertes Token (das Konto hat kein Refresh-Token, ein neues gibt es nicht).".to_string(),
+    //                 _ => format!("Neues {art} ist da."),
+    //             };
+    //             absatz(&stand, theme::text(), &mut zeilen);
+    //             vec![(TokenExportButton::Cancel, "Abbrechen", true), (TokenExportButton::Show, "Anzeigen", bereit)]
+    //         }
+    //         TokenExport::Shown { token, client_id, .. } => {
+    //             absatz(token, theme::text(), &mut zeilen);
+    //             if let Some(exp) = accounts::expiry(token) {
+    //                 absatz(&format!("Gültig: {}", accounts::remaining_text(exp, accounts::now_unix())), theme::text_2(), &mut zeilen);
+    //             }
+    //             // Ein Refresh-Token nimmt Microsoft nur mit der App an, die es ausgestellt hat.
+    //             if let Some(id) = client_id {
+    //                 absatz(&format!("Client-ID: {id}"), theme::text_2(), &mut zeilen);
+    //             }
+    //             vec![(TokenExportButton::Cancel, "Schließen", true), (TokenExportButton::Copy, "Kopieren", true)]
+    //         }
+    //         TokenExport::Failed { error, .. } => {
+    //             absatz(&format!("Kein neues Token: {error}"), theme::get(theme::Slot::Danger), &mut zeilen);
+    //             vec![(TokenExportButton::Cancel, "Schließen", true)]
+    //         }
+    //     };
+    //     let text_h: f32 = zeilen.iter().map(|(_, _, s)| gpu.text_height(*s) + 6.0).sum();
+    //     let h = (24.0 + text_h + 20.0 + 40.0 + 24.0).round();
+    //     let p = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
+    //     let mut x = p.x + p.w - 24.0;
+    //     let mut rects = Vec::new();
+    //     for (knopf, label, an) in knoepfe.into_iter().rev() {
+    //         x -= 140.0;
+    //         rects.push((Rect { x, y: p.y + p.h - 24.0 - 40.0, w: 140.0, h: 40.0 }, knopf, label, an));
+    //         x -= 12.0;
+    //     }
+    //     rects.reverse();
+    //     Some((p, zeilen, rects))
+    // }
+
+    // pub(crate) fn build_token_export(&self, overlay: &mut UiOverlay) {
+    //     let Some(gpu) = self.gpu.as_ref().filter(|_| self.mode == AppMode::Menu) else { return };
+    //     let Some((p, zeilen, knoepfe)) = self.token_export_layout(gpu) else { return };
+    //     use theme::Slot;
+    //     let g = theme::get;
+    //     let (sw, sh) = gpu.size();
+    //     let (cx, cy) = self.cursor_pos;
+    //     let mut rects = vec![
+    //         UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: dialog_dim(), ..UiRect::FLAT },
+    //         UiRect::shadow(p, 8.0, 12.0, 32.0, 0.6),
+    //         UiRect::framed(p, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
+    //     ];
+    //     let mut texts = Vec::new();
+    //     let mut y = p.y + 24.0;
+    //     for (text, farbe, scale) in zeilen {
+    //         let h = gpu.text_height(scale);
+    //         texts.push(UiText { text, x: p.x + 24.0, y: y.round(), color: farbe, scale });
+    //         y += h + 6.0;
+    //     }
+    //     for (r, _, label, an) in knoepfe {
+    //         let b = Button {
+    //             slider: None,
+    //             action: ButtonAction::Nothing,
+    //             rect: r,
+    //             label: String::new(),
+    //             enabled: an,
+    //             color: g(Slot::Surface2),
+    //             scale: UI_SCALE_SMALL,
+    //         };
+    //         let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, an && r.contains(cx, cy)));
+    //         rects.push(flaeche);
+    //         texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
+    //     }
+    //     overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0, clip: None });
+    // }
+
+    // // Linke Taste bei offenem Token-Fenster. Immer verbraucht; daneben schliesst es nicht --
+    // // das Token soll nicht durch einen Fehlklick verschwinden, bevor es kopiert ist.
+    // pub(crate) fn token_export_press(&mut self) {
+    //     let Some(gpu) = self.gpu.as_ref() else { return };
+    //     let Some((_, _, knoepfe)) = self.token_export_layout(gpu) else { return };
+    //     let (cx, cy) = self.cursor_pos;
+    //     let Some((_, knopf, _, _)) = knoepfe.into_iter().find(|(r, _, _, an)| *an && r.contains(cx, cy)) else { return };
+    //     match knopf {
+    //         TokenExportButton::Cancel => {
+    //             self.play_ui_sound(ui_sound::UiSound::Close);
+    //             self.token_export = None;
+    //         }
+    //         TokenExportButton::Show => {
+    //             self.play_ui_sound(ui_sound::UiSound::Open);
+    //             if let Some(TokenExport::Ready { name, refresh, token, client_id }) = self.token_export.take() {
+    //                 self.token_export = Some(TokenExport::Shown { name, refresh, token, client_id });
+    //             }
+    //         }
+    //         TokenExportButton::Copy => {
+    //             self.play_ui_sound(ui_sound::UiSound::Click);
+    //             let token = match &self.token_export {
+    //                 Some(TokenExport::Shown { token, .. }) => token.clone(),
+    //                 _ => return,
+    //             };
+    //             if let Some(cb) = self.clipboard() {
+    //                 let _ = cb.set_text(token);
+    //             }
+    //             self.notify(notifications::Notification::info("Token kopiert", "Liegt jetzt in der Zwischenablage."));
+    //         }
+    //     }
+    // }
 
     pub(crate) fn build_account_context(&self, overlay: &mut UiOverlay) {
         let Some((gpu, (p, zeilen))) = self.gpu.as_ref().zip(self.account_context_layout()).filter(|_| self.account_manager_open && self.mode == AppMode::Menu) else { return };
@@ -339,6 +518,9 @@ impl App {
         for (r, item) in zeilen {
             let (label, farbe) = match item {
                 AccountContextItem::Logout => ("Ausloggen", theme::text()),
+                // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+                // AccountContextItem::ExportToken => ("Token exportieren", theme::text()),
+                // AccountContextItem::ExportRefreshToken => ("Refresh-Token exportieren", theme::text()),
                 AccountContextItem::Forget => ("Account vergessen", g(Slot::Danger)),
             };
             if r.contains(cx, cy) {

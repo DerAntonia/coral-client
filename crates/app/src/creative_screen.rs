@@ -7,7 +7,11 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::creative::{self, ClickKind, Target, TabKind};
 use crate::item_icons::{SpriteAtlas, UiSprite};
-use crate::{inventory, rgb_to_rgba, App, GpuState, Rect, UiRect, UiText, GAME_MODE_CREATIVE, GAME_MODE_SPECTATOR, UI_SCALE_SMALL};
+use crate::{inventory, rgb_to_rgba, App, GpuState, Instant, Rect, UiRect, UiText, GAME_MODE_CREATIVE, GAME_MODE_SPECTATOR, UI_SCALE_SMALL};
+
+// Schluessel der Hervorhebung im Kreativ-Inventar (s. inventory_anim::HoverFade::step): keine
+// sync_id, die der Server vergibt.
+const CREATIVE_HOVER_KEY: i32 = -1;
 
 // Der Text des Kreativ-Dumps aus dem Speicher des Launchers (s. assets::stored_creative_tabs).
 static CREATIVE_DUMP: OnceLock<String> = OnceLock::new();
@@ -136,8 +140,14 @@ impl App {
                 hovered = self.item_hover_tooltip(&stack).map(|zeilen| (zeilen, *slot));
             }
         }
-        if let Some(slot) = layout.slots.iter().find(|s| s.contains(cx, cy)) {
-            rects.push(UiRect { rect: Rect { x: slot.x, y: slot.y, w: slot.size, h: slot.size }, color: [1.0, 1.0, 1.0, 0.25], ..UiRect::FLAT });
+        // Hervorhebung wie im Inventar (Farbe und Uebergang aus Inventar > Animation); eigener
+        // Schluessel, die Kreativ-Slots zaehlen anders.
+        let unter_zeiger = layout.slots.iter().find(|s| s.contains(cx, cy)).map(|s| s.index);
+        let farbe = self.settings.slot_hover_rgba();
+        for (index, anteil) in self.inventory_anim.borrow_mut().hover.step(CREATIVE_HOVER_KEY, unter_zeiger, Instant::now(), self.settings.slot_hover_fade_ms) {
+            if let Some(slot) = layout.slots.iter().find(|s| s.index == index) {
+                rects.push(UiRect { rect: Rect { x: slot.x, y: slot.y, w: slot.size, h: slot.size }, color: [farbe[0], farbe[1], farbe[2], farbe[3] * anteil], ..UiRect::FLAT });
+            }
         }
         // Der Name eines Reiters unter dem Zeiger (checkTabHovering).
         let reiter = self.creative.tabs.iter().filter(|t| self.creative.shows(t)).find(|t| creative::tab_hit(t, o, scale, cx, cy)).map(Self::creative_tab_name);

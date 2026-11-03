@@ -161,6 +161,8 @@ pub(crate) struct App {
     pub(crate) light_scroll: smooth_scroll::SmoothScroll,
     // Erste sichtbare Zeile der Partikel-Anpassung.
     pub(crate) particle_scroll: smooth_scroll::SmoothScroll,
+    // Welche Partikel die Anpassung gerade zeigt: true = die eigenen (s. ButtonAction::OpenParticleSettings).
+    pub(crate) particle_screen_own: bool,
     // Skin-Tab: Scrollstand beider Spalten (links die Liste, "Kein Pack" zaehlt mit; rechts der
     // gewaehlte Stapel), in Kacheln.
     pub(crate) skin_scroll: [smooth_scroll::SmoothScroll; 2],
@@ -317,6 +319,8 @@ pub(crate) struct App {
     pub(crate) account_checks: std::collections::HashMap<String, (accounts::Check, Instant)>,
     // Rechtsklick-Menue im Acc-Manager: Konto (Index in accounts.list) und Klickpunkt.
     pub(crate) account_context: Option<(usize, (f32, f32))>,
+    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // pub(crate) token_export: Option<TokenExport>,
     // Chat (urspruenglich fuers Debugging gedacht: Grim-Meldungen/Server-Antworten
     // direkt im Client sehen, ohne die Server-Konsole zu beobachten). Some(text) waehrend
     // der Eingabe (geoeffnet per T, s. window_event) -- blockiert waehrenddessen
@@ -822,6 +826,16 @@ pub(crate) struct App {
     pub(crate) drag_scroll_no_click: bool,
     // Hinterlegung des aktiven Reiters (Inhaltskoordinaten), gleitet zum neuen Abschnitt.
     pub(crate) section_slide: Option<(MenuScreen, Rect)>,
+    // Gedrueckter Einstellungsknopf (s. menu/press.rs); true = sein Klick wartet dort aufs
+    // Loslassen, nicht in drag_scroll.
+    pub(crate) settings_press: Option<(ButtonAction, bool)>,
+    // Einziehen und Zurueckfedern: Knopf, gedrueckt seit, losgelassen (seit, Groesse dabei).
+    pub(crate) press_anim: Option<(ButtonAction, Instant, Option<(Instant, f32)>)>,
+    // Abschnitt, der nach einem Klick auf seinen Reiter kurz gelb aufleuchtet.
+    pub(crate) section_flash: Option<(MenuScreen, usize, Instant)>,
+    // Beim Verbinden automatisch gewaehlte Server-Config (s. menu/config.rs): die vorher aktive
+    // und die des Servers. Beim Trennen kommt die vorherige zurueck.
+    pub(crate) server_config_return: Option<(String, String)>,
     // Die laufenden Addons (s. addons.rs); None bis zum ersten Durchlauf der Ereignisschleife.
     pub(crate) addons: Option<addons::Addons>,
     // Letztes Tick-Ereignis an die Addons und letzte Chatzeile eines Addons (gedrosselt).
@@ -1197,8 +1211,15 @@ pub(crate) struct App {
     // weich hin statt umzuklappen. Fremde Spieler brauchen dafuer ihre Pose aus den
     // Entity-Metadaten, die dieser Client noch nicht liest (s. build_entity_vertices).
     pub(crate) own_leaning_pitch: f32,
+    // Der Wert vor dem letzten Tick (Vanillas lastLeaningPitch), s. App::own_lean.
+    pub(crate) own_last_leaning_pitch: f32,
     // LivingEntity.glidingTicks des eigenen Spielers (s. world::Glide).
     pub(crate) own_gliding_ticks: u32,
+    // Geschwindigkeit am Ende des letzten und des vorletzten Ticks: der Gleitflug dreht die
+    // Figur nach ihrer zwischen beiden interpolierten Richtung (Vanillas
+    // deltaMovementOnPreviousTick().lerp(getDeltaMovement(), f), s. App::own_glide_velocity).
+    pub(crate) own_tick_vel: DVec3,
+    pub(crate) own_last_tick_vel: DVec3,
     // Vanilla-getreue Bewegungsphysik (Gravitation, Kollision, Sprint/Sprung) -- s.
     // physics.rs. Ersetzt die reine Fly-Kamera, sobald sich der Spieler im World-Modus
     // befindet; Fuessposition, camera.position wird daraus pro Frame abgeleitet.
@@ -1302,6 +1323,9 @@ pub(crate) struct App {
     // &self-Methoden ausgegeben (Arm -> Hand -> Item), und jede davon muesste ihn sonst
     // durchreichen. Der Aufrufer leert sie vor und nimmt sie nach jedem Bau (s. render-Pfad).
     pub(crate) glint_out: std::cell::RefCell<Vec<world::BlockVertex>>,
+    // Inventar > Animation: weiche Hervorhebung und fliegende Items (s. inventory_anim). Eine
+    // Zelle, weil build_inventory_screen sie beim Zeichnen weiterzaehlt.
+    pub(crate) inventory_anim: std::cell::RefCell<crate::inventory_anim::InventoryAnim>,
     // Zitternder Ruestungsslot nach einem gesperrten Klick (Fluch der Bindung, s.
     // predict_inventory_click und inventory::shake_offset): Slot-Index und Startzeit.
     pub(crate) armor_shake: Option<(usize, Instant)>,

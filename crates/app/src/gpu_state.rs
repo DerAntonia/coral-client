@@ -116,6 +116,7 @@ pub(crate) fn create_crosshair_bind_group(
     offscreen_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     mode_buffer: &wgpu::Buffer,
+    fade_buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("crosshair bind group"),
@@ -124,6 +125,7 @@ pub(crate) fn create_crosshair_bind_group(
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(offscreen_view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
             wgpu::BindGroupEntry { binding: 2, resource: mode_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: fade_buffer.as_entire_binding() },
         ],
     })
 }
@@ -161,6 +163,12 @@ pub(crate) struct GpuState {
     pub(crate) crosshair_bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) crosshair_sampler: wgpu::Sampler,
     pub(crate) crosshair_mode_buffer: wgpu::Buffer,
+    // Komplementaer-Farbe: Zustand ueber mehrere Frames und der Compute-Schritt, der sie je
+    // Frame je Farbplatz waehlt und ueberblendet (crosshair.wgsl::cs_fade). Die Uhr misst die Zeit
+    // seit dem letzten Schritt.
+    pub(crate) crosshair_fade_buffer: wgpu::Buffer,
+    pub(crate) crosshair_fade_pipeline: wgpu::ComputePipeline,
+    pub(crate) crosshair_fade_clock: Instant,
     pub(crate) crosshair_bind_group: wgpu::BindGroup,
     // CMAA2 (s. cmaa2.wgsl-Kommentar): Compute-Infrastruktur + gather-basierte,
     // kontrastadaptive Kantenglaettung.
@@ -318,6 +326,11 @@ pub(crate) struct GpuState {
     pub(crate) sky_layers: Vec<render::custom_sky::SkyLayerDraw>,
     // Leucht-Umriss leuchtender Entities (s. render::entity_outline).
     pub(crate) entity_outline: render::entity_outline::EntityOutline,
+    // Bewegungsunschaerfe (Render-Tab, s. render::motion_blur); Staerke dieses Frames (0 = aus)
+    // und wie lange der Monitor ein Bild zeigt, in Sekunden.
+    pub(crate) motion_blur: render::motion_blur::MotionBlur,
+    pub(crate) motion_blur_strength: f32,
+    pub(crate) motion_blur_interval_s: f32,
     // Modul Himmel, Art Verlauf: der Verlaufshimmel dieses Frames (None = Loeschfarbe).
     pub(crate) gradient_sky: render::gradient_sky::GradientSky,
     pub(crate) sky_gradient: Option<render::gradient_sky::GradientFrame>,

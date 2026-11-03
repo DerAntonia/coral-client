@@ -243,6 +243,10 @@ pub(crate) enum AuthEvent {
     // Ein gespeichertes Konto ist geprueft (s. App::check_accounts): Schluessel und entweder
     // die frischen Credentials (bei Erneuerung mit neuem Refresh-Token) oder der Fehler.
     AccountChecked { key: String, result: Result<(auth::Credentials, Option<(String, String)>), auth::AuthError> },
+    // Token-Export auskommentiert, bis Mojang die eigene App-ID freigibt.
+    // // Token-Export (s. App::start_token_export): frische Credentials samt neuem Refresh-Token
+    // // und Client-ID, oder der Fehler.
+    // TokenExported { key: String, result: Result<(auth::Credentials, (String, String)), String> },
     // Fehlgeschlagen -- Meldung fuers Log.
     Failed(String),
     // Reiner Status-/Fortschrittstext fuers Log.
@@ -548,12 +552,16 @@ pub(crate) enum ButtonAction {
     BlockSoftnessNext,
     // Lichtstaerken: Seite oeffnen; Faktor der Quelle Nummer i in light_source_blocks().
     OpenLightLevels,
-    OpenParticleSettings,
-    // Partikel-Anpassung, Index = particles::KINDS.
-    ParticleToggle(usize),
-    ParticleAllAtOnce(usize),
-    // (Art, Spalte 0 Dauer / 1 Deckkraft / 2 Tempo, hoeher?)
-    ParticleStep(usize, u8, bool),
+    // Partikel-Anpassung oeffnen: true = die eigenen Partikel, false = die anderen.
+    OpenParticleSettings(bool),
+    // Unterseite Animationen (MenuScreen::SettingsAnimations) und ihr Hauptschalter.
+    OpenAnimSettings,
+    ToggleAnims,
+    // Partikel-Anpassung (eigene?, Index = particles::KINDS).
+    ParticleToggle(bool, usize),
+    ParticleAllAtOnce(bool, usize),
+    // (eigene?, Art, Spalte 0 Dauer / 1 Deckkraft / 2 Tempo, hoeher?)
+    ParticleStep(bool, usize, u8, bool),
     LightFactorPrev(usize),
     LightFactorNext(usize),
     ApplySensCalc,
@@ -583,7 +591,8 @@ pub(crate) enum ButtonAction {
     TearTimingUp,
     TearReserveDown,
     TearReserveUp,
-    CycleParticles,
+    // Partikel-Stufe der eigenen (true) bzw. der anderen Partikel.
+    CycleParticles(bool),
     ToggleStableNumbers,
     ToggleCapitals,
     // Vanilla-Schatten von Kaestchen i: 1 oder 1/2 Pixel versetzt.
@@ -666,7 +675,11 @@ pub(crate) enum ButtonAction {
     InventoryTransparencyPrev,
     ToggleInventoryCursorToSlot,
     ToggleCreativeOpTab,
-    NoUiClose(u8),
+    // Sonstiges > Server-Bildschirme: Unterseite oeffnen, Schliessen-Schalter einer Zeile,
+    // Oeffnen-Modus von Eintrag i (s. SERVER_OPEN_*).
+    OpenServerScreens,
+    ToggleServerClose(usize),
+    ServerOpen(usize, u8),
     ToggleNoChatClear,
     ToggleSignEditInWorld,
     NoSlotSet(u8),
@@ -930,6 +943,13 @@ pub(crate) enum ButtonAction {
     NoToolBreakReserveNext,
     SmoothLightingDown,
     SmoothLightingUp,
+    MotionBlurDown,
+    MotionBlurUp,
+    // Inventar > Animation (Settings::slot_hover_fade_ms, swap_anim_ms).
+    SlotHoverFadeDown,
+    SlotHoverFadeUp,
+    SwapAnimDown,
+    SwapAnimUp,
     GhostTolerancePrev,
     GhostToleranceNext,
     CycleSkyMode,

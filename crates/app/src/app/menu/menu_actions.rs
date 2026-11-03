@@ -580,7 +580,10 @@ impl App {
                 let delta = if action == ButtonAction::TearReserveDown { -TEAR_RESERVE_STEP_US } else { TEAR_RESERVE_STEP_US };
                 set.tear_reserve_us = (set.tear_reserve_us + delta).clamp(TEAR_RESERVE_MIN_US, TEAR_RESERVE_MAX_US);
             }
-            ButtonAction::CycleParticles => set.particles_mode = (set.particles_mode + 1) % PARTICLE_MODE_NAMES.len() as u8,
+            ButtonAction::CycleParticles(own) => {
+                let m = set.particles_mode_of(own);
+                *m = (*m + 1) % PARTICLE_MODE_NAMES.len() as u8;
+            }
             ButtonAction::CycleDeathAnimation => set.death_animation = (set.death_animation + 1) % DEATH_ANIM_NAMES.len() as u8,
             ButtonAction::ToggleStableNumbers => {
                 set.stable_numbers = !set.stable_numbers;
@@ -688,7 +691,8 @@ impl App {
             ButtonAction::InventoryScaleNext => set.inventory_scale = (set.inventory_scale + 1).min(max_scale),
             ButtonAction::ToggleInventoryCursorToSlot => set.inventory_cursor_to_slot = !set.inventory_cursor_to_slot,
             ButtonAction::ToggleCreativeOpTab => set.creative_op_tab = !set.creative_op_tab,
-            ButtonAction::NoUiClose(m) => set.no_ui_close = m,
+            ButtonAction::ToggleServerClose(zeile) => set.server_close_blocked ^= 1 << zeile,
+            ButtonAction::ServerOpen(i, m) => set.server_open[i] = m,
             ButtonAction::ToggleNoChatClear => set.no_chat_clear = !set.no_chat_clear,
             ButtonAction::ToggleAudioAutoOptimize => set.audio_auto_optimize = !set.audio_auto_optimize,
             ButtonAction::ToggleSignEditInWorld => set.sign_edit_in_world = !set.sign_edit_in_world,
@@ -783,22 +787,31 @@ impl App {
                 }
             }
             ButtonAction::ToggleEffectsHud => set.show_effects_hud = !set.show_effects_hud,
-            ButtonAction::OpenParticleSettings => {
+            ButtonAction::OpenParticleSettings(own) => {
                 self.screen = MenuScreen::SettingsParticles;
+                self.particle_screen_own = own;
                 self.particle_scroll = Default::default();
             }
-            ButtonAction::ParticleToggle(i) => {
-                if let Some(t) = set.particle_tuning.get_mut(i) {
+            ButtonAction::OpenAnimSettings => {
+                self.screen = MenuScreen::SettingsAnimations;
+                *self.page_scroll_mut() = Default::default();
+            }
+            ButtonAction::OpenServerScreens => {
+                self.screen = MenuScreen::SettingsServerScreens;
+                *self.page_scroll_mut() = Default::default();
+            }
+            ButtonAction::ParticleToggle(own, i) => {
+                if let Some(t) = set.particle_tuning_of_mut(own).get_mut(i) {
                     t.enabled = !t.enabled;
                 }
             }
-            ButtonAction::ParticleAllAtOnce(i) => {
-                if let Some(t) = set.particle_tuning.get_mut(i) {
+            ButtonAction::ParticleAllAtOnce(own, i) => {
+                if let Some(t) = set.particle_tuning_of_mut(own).get_mut(i) {
                     t.all_at_once = !t.all_at_once;
                 }
             }
-            ButtonAction::ParticleStep(i, col, hoch) => {
-                if let Some(t) = set.particle_tuning.get_mut(i) {
+            ButtonAction::ParticleStep(own, i, col, hoch) => {
+                if let Some(t) = set.particle_tuning_of_mut(own).get_mut(i) {
                     match col {
                         0 => t.lifetime_pct = step_in(&PARTICLE_LIFETIME_STEPS, t.lifetime_pct, hoch),
                         1 => {
@@ -899,6 +912,7 @@ impl App {
             ButtonAction::ToggleArmorTrims => self.settings.armor_trims = !self.settings.armor_trims,
             ButtonAction::ToggleViewModel => self.settings.modified_view_model = !self.settings.modified_view_model,
             ButtonAction::ToggleAnimFlag(bit) => self.settings.anim_flags ^= bit,
+            ButtonAction::ToggleAnims => self.settings.anims_enabled = !self.settings.anims_enabled,
             ButtonAction::HurtCamStrengthPrev => self.settings.hurt_cam_strength = self.settings.hurt_cam_strength.saturating_sub(5),
             ButtonAction::HurtCamStrengthNext => self.settings.hurt_cam_strength = (self.settings.hurt_cam_strength + 5).min(100),
             ButtonAction::FireMode(m) => self.settings.fire_mode = m,
@@ -973,6 +987,12 @@ impl App {
             ButtonAction::SmoothLightingUp => {
                 set.smooth_lighting_percent = (set.smooth_lighting_percent + SMOOTH_LIGHTING_STEP).min(SMOOTH_LIGHTING_MAX);
             }
+            ButtonAction::SlotHoverFadeDown => set.slot_hover_fade_ms = set.slot_hover_fade_ms.saturating_sub(SLOT_HOVER_FADE_STEP),
+            ButtonAction::SlotHoverFadeUp => set.slot_hover_fade_ms = (set.slot_hover_fade_ms + SLOT_HOVER_FADE_STEP).min(SLOT_HOVER_FADE_MAX),
+            ButtonAction::SwapAnimDown => set.swap_anim_ms = set.swap_anim_ms.saturating_sub(SWAP_ANIM_STEP),
+            ButtonAction::SwapAnimUp => set.swap_anim_ms = (set.swap_anim_ms + SWAP_ANIM_STEP).min(SWAP_ANIM_MAX),
+            ButtonAction::MotionBlurDown => set.motion_blur_percent = set.motion_blur_percent.saturating_sub(MOTION_BLUR_STEP),
+            ButtonAction::MotionBlurUp => set.motion_blur_percent = (set.motion_blur_percent + MOTION_BLUR_STEP).min(MOTION_BLUR_MAX),
             ButtonAction::ToggleJumpCooldown => set.jump_cooldown_enabled = !set.jump_cooldown_enabled,
             ButtonAction::ToggleSprintOnStart => set.sprint_on_start = !set.sprint_on_start,
             ButtonAction::ToggleCapsLockBlocked => set.caps_lock_blocked = !set.caps_lock_blocked,

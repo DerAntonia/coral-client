@@ -104,7 +104,7 @@ impl App {
     // render::entity_outline). Unsichtbare, die leuchten, stehen NUR dort -- in Vanilla sieht
     // man von ihnen den Umriss, aber keinen Koerper.
     #[allow(clippy::type_complexity)]
-    pub(crate) fn build_entity_vertices(&self) -> (Vec<world::BlockVertex>, Vec<[f32; 4]>, Vec<u32>, (usize, usize), (Vec<world::BlockVertex>, Vec<[f32; 4]>)) {
+    pub(crate) fn build_entity_vertices(&self) -> (Vec<world::BlockVertex>, Vec<[f32; 4]>, Vec<u32>, (usize, usize, usize), (Vec<world::BlockVertex>, Vec<[f32; 4]>), Vec<std::ops::Range<u32>>) {
         // Anteil 0 = Textur unveraendert (s. fs_entity).
         const KEINE_FAERBUNG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
         // Shader-Pfad: Licht je Vertex, parallel zu `tints` gefuellt. Ein Wert je Entity (an
@@ -145,6 +145,9 @@ impl App {
         let mut nur_umriss_farbe: Vec<[f32; 4]> = Vec::new();
         // So viele Vertices am Anfang sind der eigene Spieler (fuers Ausblenden, s. unten).
         let mut eigene = 0;
+        // Was man lesen koennen soll (Karten in Rahmen, Schilder): diese Bereiche zeichnet die
+        // Bewegungsunschaerfe danach noch einmal scharf (s. BlockRenderer::render_sharp_entities).
+        let mut scharf: Vec<std::ops::Range<u32>> = Vec::new();
 
         // Eigener Spieler -- NUR in der 3. Person. Im Ego-Modus saesse die Kamera mitten in
         // dieser Box und man saehe sie von innen. Ohne sie waere die 3.-Person-Ansicht
@@ -171,7 +174,7 @@ impl App {
                 ticks: self.own_gliding_ticks as f32 + tick_progress,
                 pitch_deg: pitch,
                 yaw_deg: self.camera.yaw,
-                velocity: [self.physics.vel.x as f32, self.physics.vel.y as f32, self.physics.vel.z as f32],
+                velocity: self.own_glide_velocity(tick_progress),
             });
             // LivingEntityRenderer.updateRenderState: wer sitzt, schwingt keine Beine.
             let reitet = self.own_ride.is_some();
@@ -197,9 +200,9 @@ impl App {
                 amount,
                 world::entity_model::BipedExtras {
                     riding: reitet,
-                    crawl: anim & world::more_anims::CRAWL != 0 && self.own_leaning_pitch > 0.0 && !self.physics.touching_water,
+                    crawl: anim & world::more_anims::CRAWL != 0 && self.own_lean(tick_progress) > 0.0 && !self.physics.touching_water,
                     sneaking: self.physics.crouching && leiter.is_none(),
-                    lean: self.own_leaning_pitch,
+                    lean: self.own_lean(tick_progress),
                     age: self.own_age_ticks + tick_progress,
                     // Der eigene Schwung kommt nicht vom Server zurueck (der schickt ihn an
                     // alle ausser uns), sondern aus dem eigenen Zaehler -- derselbe, der auch
@@ -232,7 +235,7 @@ impl App {
             // Schwimm-/Kriech-Haltung: der ganze Koerper kippt in die Waagerechte (s.
             // world::Lean). Ohne das stand die Figur beim Schwimmen aufrecht im Wasser.
             let lean = world::Lean {
-                amount: self.own_leaning_pitch,
+                amount: self.own_lean(tick_progress),
                 pitch_deg: pitch,
                 in_water: self.physics.touching_water,
                 // AvatarRenderer: isVisuallySwimming, also die POSE -- auch beim Kriechen an
@@ -551,7 +554,11 @@ impl App {
             } else if let Some(art) = world::item_render_kind(e.entity_type) {
                 self.emit_item_entity(*_id, e, art, feet, progress, &mut out);
             } else if world::entity::is_item_frame(e.entity_type) {
+                let start = out.len() as u32;
                 self.emit_item_frame(e, feet, &mut out);
+                if e.item.and_then(|h| h.map_id).is_some() {
+                    scharf.push(start..out.len() as u32);
+                }
             } else {
                 match self.model_for_type(e.entity_type) {
                     Some((model, kind, tex)) => {
@@ -741,7 +748,9 @@ impl App {
         self.emit_chests(eye, &mut out);
         self.emit_skulls(eye, &mut out);
         self.emit_statues(eye, &mut out);
+        let start = out.len() as u32;
         self.emit_signs(eye, &mut out);
+        scharf.push(start..out.len() as u32);
         tints.resize(out.len(), KEINE_FAERBUNG);
         if lit {
             for v in &out[lights.len()..] {
@@ -788,6 +797,6 @@ impl App {
             nur_umriss_farbe.resize(nur_umriss_farbe.len() + bereich.len(), farbe);
             nur_umriss.extend_from_slice(&out[bereich]);
         }
-        (out, tints, lights, (kopf, anzahl), (nur_umriss, nur_umriss_farbe))
+        (out, tints, lights, (kopf, anzahl, eigene), (nur_umriss, nur_umriss_farbe), scharf)
     }
 }

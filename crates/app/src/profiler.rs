@@ -171,10 +171,12 @@ const OVERLAY_REFRESH: Duration = Duration::from_millis(250);
 
 // Die gemessenen Passes (Namen wie in GpuState::render_world vergeben), feste Spalten fuer
 // CSV und Tabelle. Mehrere Passes mit demselben Namen (zwei HUD-Passes) werden addiert.
-// Danach die Abschnitte des Welt-Passes (s. render::BlockRenderer::render).
+// Danach die Abschnitte des Welt-Passes (s. render::BlockRenderer::render), ab
+// GPU_WORLD_SECTIONS.
 // "G-Buffer", "Licht", "Tonemap", "Lichtkarten" gibt es nur im Shader-Pfad (s. render::shader_path).
-pub const GPU_PASSES: [&str; 15] = [
+pub const GPU_PASSES: [&str; 16] = [
     "Welt",
+    "Motion Blur",
     "Hand",
     "HUD",
     "Figur",
@@ -190,6 +192,8 @@ pub const GPU_PASSES: [&str; 15] = [
     "Lichtkarten",
     "Spiegelungen",
 ];
+
+const GPU_WORLD_SECTIONS: usize = 6;
 
 // GPU-Zeit eines Frames: je Pass aus GPU_PASSES, dazu die Gesamtspanne. NaN = nicht gemessen.
 #[derive(Clone, Copy)]
@@ -516,7 +520,7 @@ impl FrameProfiler {
         for (i, pass) in GPU_PASSES.into_iter().enumerate() {
             if let Some((avg, max)) = stat(self.history.iter().map(|r| r.gpu.passes[i]).filter(|x| !x.is_nan()).collect()) {
                 // Abschnitte des Welt-Passes eingerueckt unter "Welt".
-                let name = if i >= 5 { format!("  {pass}") } else { format!("GPU {pass}") };
+                let name = if i >= GPU_WORLD_SECTIONS { format!("  {pass}") } else { format!("GPU {pass}") };
                 rows.push(vec![name, format!("{avg:.2}"), format!("{max:.2}")]);
             }
         }

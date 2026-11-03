@@ -171,7 +171,9 @@ impl BlockRenderer {
     // `translucent`: so viele Vertices am Ende laufen durchscheinend, `head` ebenso viele am
     // Anfang (der eigene Spieler beim Ausblenden, s. block.wgsl::entity_fade).
     // `lights`: Shader-Pfad, je Vertex ein Lichtwert (s. entity_light_buffer); leer im PvP-Pfad.
-    pub fn set_entity_vertices(&mut self, queue: &wgpu::Queue, vertices: &[BlockVertex], tints: &[[f32; 4]], lights: &[u32], (head, translucent): (usize, usize)) {
+    // `own`: so viele Vertices am Anfang sind der eigene Spieler (nur in der 3. Person, s.
+    // render_own_mask).
+    pub fn set_entity_vertices(&mut self, queue: &wgpu::Queue, vertices: &[BlockVertex], tints: &[[f32; 4]], lights: &[u32], (head, translucent, own): (usize, usize, usize)) {
         debug_assert_eq!(vertices.len(), tints.len(), "je Entity-Vertex genau ein Tint-Eintrag");
         let n = vertices.len().min(tints.len()).min(ENTITY_VERTEX_CAPACITY);
         if n > 0 {
@@ -186,6 +188,54 @@ impl BlockRenderer {
         self.entity_vertex_count = n as u32;
         self.entity_translucent_count = translucent.min(n) as u32;
         self.entity_head_translucent = head.min(n - translucent.min(n)) as u32;
+        self.own_vertex_count = own.min(n) as u32;
+    }
+
+    pub const fn has_own_player(&self) -> bool {
+        self.own_vertex_count > 0
+    }
+
+    // Der eigene Spieler in die Maske der Bewegungsunschaerfe (Pass mit der Tiefe der Welt,
+    // nur gelesen; Ziel motion_blur::MASK_FORMAT).
+    pub fn render_own_mask<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        if self.own_vertex_count == 0 {
+            return;
+        }
+        let n = u64::from(self.own_vertex_count);
+        pass.set_pipeline(&self.own_mask_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.entity_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.entity_buffer.slice(..n * std::mem::size_of::<BlockVertex>() as u64));
+        pass.set_vertex_buffer(1, self.entity_tint_buffer.slice(..n * std::mem::size_of::<[f32; 4]>() as u64));
+        pass.draw(0..self.own_vertex_count, 0..1);
+    }
+
+    // Bereiche der Entity-Vertices, die man lesen koennen soll (Karten in Rahmen, Schilder):
+    // nach der Bewegungsunschaerfe scharf darueber (s. render_sharp_entities).
+    pub fn set_sharp_entities(&mut self, ranges: Vec<std::ops::Range<u32>>) {
+        self.sharp_entity_ranges = ranges;
+    }
+
+    // Die lesbaren Bereiche noch einmal mit der Entity-Pipeline, gegen die stehengebliebene
+    // Tiefe der Welt (LessEqual: genau dieselben Pixel wie im Welt-Durchgang). Nur deckende
+    // Vertices -- der eigene Spieler beim Ausblenden und das Durchscheinende am Ende nicht.
+    pub fn render_sharp_entities<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        let deckend = self.entity_head_translucent..self.entity_vertex_count - self.entity_translucent_count;
+        if self.sharp_entity_ranges.is_empty() || deckend.is_empty() {
+            return;
+        }
+        let n = u64::from(self.entity_vertex_count);
+        pass.set_pipeline(&self.entity_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.entity_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.entity_buffer.slice(..n * std::mem::size_of::<BlockVertex>() as u64));
+        pass.set_vertex_buffer(1, self.entity_tint_buffer.slice(..n * std::mem::size_of::<[f32; 4]>() as u64));
+        for r in &self.sharp_entity_ranges {
+            let (a, b) = (r.start.max(deckend.start), r.end.min(deckend.end));
+            if a < b {
+                pass.draw(a..b, 0..1);
+            }
+        }
     }
 
     // Silhouetten leuchtender Entities, je Vertex die Umrissfarbe (rgb, 0..1 wie in Vanilla).
