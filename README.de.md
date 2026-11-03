@@ -2,8 +2,21 @@
 
 [English](README.md) · **Deutsch**
 
-Ein eigener Minecraft-Java-Client, von Grund auf in Rust geschrieben. Er ist für PvP gebaut:
-Zwischen Maus, Bild und Ton soll so wenig Verzögerung wie möglich liegen.
+**Ein Competitive-PvP-Client für Minecraft Java, von Grund auf in Rust geschrieben.** Alles darin
+dient einem Ziel: Zwischen Maus, Bild und Ton soll so wenig Verzögerung wie möglich liegen, damit
+das, was du im Kampf tust, ohne Warten auf deinem Bildschirm und in deinen Ohren ankommt.
+
+### Für Competitive PvP gebaut
+
+- **Latenz zuerst:** rohe Mauseingabe, Steuerung des Risses im Bild, Ton mit wenig Verzögerung
+  und eigene Vorhersage für Bewegung, Essen, Kristalle und gesetzte Blöcke.
+- **Crystal-PvP-Werkzeuge:** Totem-Anzeige, -Warnung und -Vorschau, eigene Pop-Klänge und ein
+  Crystal-Optimizer.
+- **Kampfinfos auf einen Blick:** Hitboxen, Schild-Cooldowns, ein Timer für Essen und Bogen und
+  eine Munitionsanzeige.
+- **Ein schlichter, schneller Renderpfad** für hohe Bildraten.
+- **Fair:** keine Anticheat-Umgehung und keine unfairen Vorteile. Er macht, was Vanilla macht,
+  nur mit weniger Verzögerung.
 
 Er spricht das normale Minecraft-Protokoll und verbindet sich mit ganz normalen Servern. Auf dem
 Server braucht es dafür keinen Mod und kein Plugin. Spielmaterial wie Texturen, Klänge und Modelle
