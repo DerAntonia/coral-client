@@ -2,8 +2,21 @@
 
 **English** · [Deutsch](README.de.md)
 
-A Minecraft Java client of its own, written from scratch in Rust. It is built for PvP: as little
-delay as possible between mouse, picture and sound.
+**A competitive PvP client for Minecraft Java, written from scratch in Rust.** Everything in it
+serves one goal: as little delay as possible between mouse, picture and sound, so that what you
+do in a fight reaches your screen and your ears without waiting.
+
+### Built for competitive PvP
+
+- **Latency first:** raw mouse input, control over tearing, low-latency sound, and client-side
+  prediction for movement, eating, crystals and placed blocks.
+- **Crystal PvP tools:** totem indicator, warning and preview, custom pop sounds and a crystal
+  optimizer.
+- **Fight information at a glance:** hitboxes, shield cooldowns, an eat and bow timer, and an
+  ammo display.
+- **A plain, fast render path** made for high frame rates.
+- **Fair:** no anticheat bypasses and no unfair advantage. It does what Vanilla does, only with
+  less delay.
 
 It speaks the normal Minecraft protocol and connects to ordinary servers. The server needs no mod
 and no plugin for it. It ships no game assets such as textures, sounds or models. It reads them
