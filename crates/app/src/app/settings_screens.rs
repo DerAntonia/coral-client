@@ -188,7 +188,7 @@ impl App {
         // System-Zeilen, nicht grau: graue Texte filtert build_menu_ui auf Einstellungsseiten weg.
         #[cfg(not(target_os = "linux"))]
         {
-            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(crate::TEARFREE_ROW), w: STEPPER_VALUE_W, h: SETTINGS_CTRL_H };
+            let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(crate::TEARFREE_ROW), w: crate::STEPPER_VALUE_W, h: SETTINGS_CTRL_H };
             rects.push(UiRect { rect: feld, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
             texts.push(gpu.centered_text(feld, i18n::tr("nur Linux und AMD").into_owned(), theme::text(), UI_SCALE_SMALL));
         }
