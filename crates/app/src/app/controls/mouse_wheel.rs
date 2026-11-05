@@ -133,7 +133,7 @@ impl App {
                     || (self.screen == MenuScreen::SettingsSkin
                         && (self.skin_files.is_some()
                             || [skin_tab::Column::Available, skin_tab::Column::Selected].into_iter().any(|c| skin_column_rect(c).contains(px, py))))
-                    || matches!(self.screen, MenuScreen::SettingsParticles | MenuScreen::SettingsLightLevels)
+                    || self.screen == MenuScreen::SettingsParticles
             }
             // Chat, Modul-Menue, Inventar. Im Inventar scrollt Vanilla gar nichts -- auch
             // keine Lautstaerke.
@@ -215,8 +215,7 @@ impl App {
             || self.editing_step.is_some()
             || self.awaiting_keybind.is_some()
             || self.input_field.is_some()
-            || self.server_edit.is_some()
-            || (self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsLightLevels);
+            || self.server_edit.is_some();
         let kb = self.settings.keybinds;
         let unten = |a: KeyBindAction| kb.binds(a).any(|b| self.binds_down.contains(&b));
         let richtung = match (unten(KeyBindAction::VolumeUp), unten(KeyBindAction::VolumeDown)) {

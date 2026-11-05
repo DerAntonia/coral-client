@@ -341,6 +341,11 @@ impl LodRenderer {
         self.quads
     }
 
+    // Angelegte Flaechen-Seiten (je PAGE_BYTES), fuer die Speicher-Ausgabe beim Beenden.
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
     // Zeichnet das echte Gelaende diesen Chunk? Dann laesst die Fernsicht ihn aus.
     pub fn set_column_covered(&mut self, cx: i32, cz: i32, covered: bool) {
         let i = ((cz & 255) as u32 * MASK_SIZE + (cx & 255) as u32) as usize;

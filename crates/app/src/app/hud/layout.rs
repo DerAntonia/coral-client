@@ -393,6 +393,7 @@ impl App {
                 self.settings.hotbar_durability_absolute = defaults.hotbar_durability_absolute;
                 self.settings.hotbar_durability_points = defaults.hotbar_durability_points;
                 self.settings.hotbar_air_bar = defaults.hotbar_air_bar;
+                self.settings.hotbar_glide_ms = defaults.hotbar_glide_ms;
             }
             HudElement::Chat => {
                 self.settings.hud_chat_x = defaults.hud_chat_x;

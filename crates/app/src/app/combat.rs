@@ -72,6 +72,7 @@ impl App {
         };
         if let Some(entity_id) = target {
             let _ = tx.send(protocol::packets::attack_entity_payload(entity_id, self.sneak_held));
+            self.last_melee_hit = Some((entity_id, Instant::now()));
         }
         let _ = tx.send(protocol::packets::swing_payload());
         // Session-Info: wer jetzt stirbt, zaehlt als eigener Kill -- der Getroffene selbst bzw.

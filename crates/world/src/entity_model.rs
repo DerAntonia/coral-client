@@ -26,6 +26,7 @@ mod mob_poses;
 #[cfg(test)]
 mod anim_tests;
 mod signs;
+mod skinned;
 pub use geometry::*;
 pub use player_models::*;
 pub use block_models::*;
@@ -34,6 +35,7 @@ pub use model_table::*;
 pub use biped_pose::*;
 pub use mob_poses::*;
 pub use signs::*;
+pub use skinned::*;
 
 #[cfg(test)]
 mod tests;

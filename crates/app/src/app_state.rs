@@ -67,6 +67,10 @@ pub(crate) struct App {
     // Vanillas ParticleManager (s. particles.rs) und der wiederverwendete Vertexpuffer.
     pub(crate) particles: particles::Particles,
     pub(crate) particle_vertices: Vec<render::ParticleVertex>,
+    // Motion Blur der Partikel: ihre Ecken im vorigen Bild (s. build_particle_vertices) und
+    // Auge und Zeit des vorigen Bildes.
+    pub(crate) particle_prev: particles::ParticlePrev,
+    pub(crate) particle_prev_frame: Option<(glam::DVec3, Instant)>,
     // Regen und Schnee (s. precipitation) und ihr wiederverwendeter Vertexpuffer.
     pub(crate) precipitation: precipitation::Precipitation,
     pub(crate) weather_vertices: Vec<render::WeatherVertex>,
@@ -94,6 +98,9 @@ pub(crate) struct App {
     pub(crate) inventory_move_stack_held: bool,
     // Tab-Liste sichtbar (s. KeyBindAction::PlayerList, build_player_list).
     pub(crate) player_list_held: bool,
+    // Flaeche der in diesem Bild gezeichneten Tab-Liste in Bildschirmpixeln, None = nicht
+    // gezeichnet (s. build_player_list). Reicht sie ueber das Fadenkreuz, verschwindet es.
+    pub(crate) player_list_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) entity_models: Vec<(&'static str, world::Model, world::entity_model::ModelKind)>,
     pub(crate) player_wide: world::Model,
     pub(crate) player_slim: world::Model,
@@ -156,9 +163,6 @@ pub(crate) struct App {
     pub(crate) menu_world_frozen: bool,
     // Configs-Seite: "Löschen" einmal geklickt, der zweite Klick loescht wirklich.
     pub(crate) config_delete_armed: bool,
-    // Lichtstaerken-Seite: Suchtext und erste sichtbare Zeile der Trefferliste.
-    pub(crate) light_search: String,
-    pub(crate) light_scroll: smooth_scroll::SmoothScroll,
     // Erste sichtbare Zeile der Partikel-Anpassung.
     pub(crate) particle_scroll: smooth_scroll::SmoothScroll,
     // Welche Partikel die Anpassung gerade zeigt: true = die eigenen (s. ButtonAction::OpenParticleSettings).
@@ -342,10 +346,14 @@ pub(crate) struct App {
     // Deckel-Animation der Shulkerkisten und Truhen, nur fuer die, die gerade auf/zu gehen oder offen
     // stehen (s. tick_block_lids). Geschlossene fehlen hier und werden zu gezeichnet.
     pub(crate) block_lids: std::collections::HashMap<(i32, i32, i32), BlockLid>,
-    // Zaehlt jede Aenderung an chat_messages -- Schluessel des Umbruch-Speichers.
+    // Zaehlt, wie oft chat_messages ganz ausgetauscht wurde (Leeren, Tabwechsel) -- dann setzt
+    // der Umbruch-Speicher neu. Neue Nachrichten zaehlt chat_pushed.
     pub(crate) chat_generation: u64,
+    // Wie viele Nachrichten je in chat_messages kamen: chat_messages[0] ist die Nummer
+    // chat_pushed - len.
+    pub(crate) chat_pushed: u64,
     // Gesetzter Verlauf fuer den offenen Chat (s. chat_wrapped_all).
-    pub(crate) chat_wrap_cache: std::cell::RefCell<Option<((u64, u32, u32, u8), std::rc::Rc<Vec<ChatLine>>)>>,
+    pub(crate) chat_wrap_cache: std::cell::RefCell<Option<ChatWrapCache>>,
     // Wie viele Zeilen der offene Chat vom Ende weg zurueckgeblaettert ist (0 = neueste unten).
     pub(crate) chat_scroll: usize,
     // chat_scroll gleitend nachgezogen (s. tick_ui_anim) -- gezeichnet wird damit.
@@ -475,6 +483,9 @@ pub(crate) struct App {
     // Letzter Versuch, Bogen/Armbrust ohne Munition zu spannen (Pfeil-Modul, s.
     // Settings::arrow_empty_feedback).
     pub(crate) arrow_empty_at: Option<Instant>,
+    // Die laufende Benutzung ist die Wiederholung einer gehaltenen Taste, kein Klick (s.
+    // tick_item_use). Der Loeschen-Klang ohne Munition kommt nur auf einen Klick.
+    pub(crate) use_repeating: bool,
     // Sound-Debug: angezeigter Pegel links/rechts und wann er zuletzt abgelesen wurde --
     // Cell, weil der HUD-Bau nur &self hat. Steigt sofort, faellt langsam (Spitzenanzeige).
     pub(crate) sound_meter: std::cell::Cell<(f32, f32, Option<Instant>)>,
@@ -658,6 +669,12 @@ pub(crate) struct App {
     // (s. apply_attack_slowdown). Startwert hoch genug, dass der allererste Schlag als voll
     // aufgeladen zaehlt, genau wie beim frisch gespawnten Vanilla-Spieler.
     pub(crate) ticks_since_last_attack: i32,
+    // Wen der eigene Spieler zuletzt geschlagen hat und wann: stirbt der kurz danach, ist es
+    // der toedliche Schlag (Todesexplosion fliegt dann vom eigenen Spieler weg, s. entity_died).
+    pub(crate) last_melee_hit: Option<(i32, Instant)>,
+    // Je Entity, woher sein letzter Schaden kam (Weltpunkt) und wann (s. note_damage_source):
+    // stirbt es kurz danach, fliegt die Todesexplosion von dort weg.
+    pub(crate) damage_sources: std::collections::HashMap<i32, (DVec3, Instant)>,
     // Womit zuletzt getickt wurde -- ein Wechsel setzt die Aufladung zurueck (s.o.).
     pub(crate) last_attack_hand_item: Option<&'static str>,
     // Im letzten Tick hat das Item in der Haupthand gewechselt: die Aufladung faellt zu
@@ -899,6 +916,8 @@ pub(crate) struct App {
     pub(crate) tab_heads: std::collections::HashMap<[u8; 16], (usize, Vec<u8>)>,
     // Schildtexte je Blockposition (s. protocol::sign), aus Chunk und Block Entity Data.
     pub(crate) signs: std::collections::HashMap<(i32, i32, i32), protocol::sign::SignText>,
+    // Die gesetzten Schildseiten (s. SignLayout).
+    pub(crate) sign_layouts: std::cell::RefCell<SignLayouts>,
     // Platzierte Spielerkoepfe: Position -> Skin-Schluessel (s. head_skin_key). Koepfe ohne
     // Profil fehlen hier und bekommen den Standard-Skin.
     pub(crate) placed_heads: std::collections::HashMap<(i32, i32, i32), [u8; 16]>,
@@ -1326,6 +1345,14 @@ pub(crate) struct App {
     // Inventar > Animation: weiche Hervorhebung und fliegende Items (s. inventory_anim). Eine
     // Zelle, weil build_inventory_screen sie beim Zeichnen weiterzaehlt.
     pub(crate) inventory_anim: std::cell::RefCell<crate::inventory_anim::InventoryAnim>,
+    // Hotbar > Auswahl gleitet (s. hotbar_glide); Zelle aus demselben Grund.
+    pub(crate) hotbar_glide: std::cell::RefCell<crate::hotbar_glide::HotbarGlide>,
+    // Motion Blur: die Entity-Geometrie des vorigen Bildes (s. entity_motion).
+    pub(crate) entity_motion: crate::entity_motion::EntityMotion,
+    // Dasselbe fuer die bewegten Bloecke im Geisterblock-Puffer (s. display_block_vertices).
+    pub(crate) block_motion: crate::entity_motion::EntityMotion,
+    // Motion Blur der XP-Kugeln: ihre Mitten im vorigen Bild (s. build_particle_vertices).
+    pub(crate) orb_prev_centers: std::collections::HashMap<i32, DVec3>,
     // Zitternder Ruestungsslot nach einem gesperrten Klick (Fluch der Bindung, s.
     // predict_inventory_click und inventory::shake_offset): Slot-Index und Startzeit.
     pub(crate) armor_shake: Option<(usize, Instant)>,
@@ -1355,6 +1382,10 @@ pub(crate) struct App {
     // Um wie viele Pixel die Windkugel-Textur gerade verschoben im Atlas liegt (s.
     // scroll_wind_charge_texture); None = noch nie bzw. nach einem Atlas-Neubau.
     pub(crate) wind_charge_shift: Option<u32>,
+    // Die unverschobene Windkugel-Textur (Atlasposition, Breite, Hoehe, RGBA): einzige
+    // Atlasstelle, die nach dem Hochladen noch auf der CPU gebraucht wird (s.
+    // release_atlas_pixels).
+    pub(crate) wind_charge_pixels: Option<((u32, u32), u32, u32, Vec<u8>)>,
     // Laufende Jukebox-Lieder je Block (Level Event 1010/1011), fuer das gezielte Anhalten.
     pub(crate) jukeboxes: std::collections::HashMap<(i32, i32, i32), u32>,
     // Klangname je Eintrag der jukebox_song-Registry, in Registry-Reihenfolge (s. Level Event
@@ -1413,6 +1444,13 @@ pub(crate) struct App {
     pub(crate) zoom_updated: Option<Instant>,
     // Frame-Profiler (s. profiler.rs), Taste KeyBindAction::ToggleProfiler.
     pub(crate) profiler: profiler::FrameProfiler,
+    // Worker fuer Arbeit innerhalb eines Frames (s. parallel.rs): die Entity-Modelle.
+    pub(crate) frame_pool: crate::parallel::FramePool,
+    // Sichtkegel dieses Frames fuers Entity-Culling (s. render/culling.rs), None = aus.
+    pub(crate) cull_frustum: std::cell::Cell<Option<render::Frustum>>,
+    // GPU-Skinning (s. app/render/skin_frame.rs): Instanzen dieses Frames, Netze je Modell.
+    pub(crate) skin_frame: std::cell::RefCell<crate::app::SkinFrame>,
+    pub(crate) skin_cache: std::cell::RefCell<crate::app::SkinCache>,
     // VBlank-Zeitstempel vom Kernel (s. vblank.rs) -- fuer Profiler und Riss-Steuerung, erst
     // beim ersten Bedarf gestartet (s. ensure_vblank).
     pub(crate) vblank: Option<std::sync::Arc<vblank::VblankMonitor>>,

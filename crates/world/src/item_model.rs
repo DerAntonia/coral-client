@@ -14,7 +14,7 @@
 // dem Nullpunkt in der Modellecke. Das Zentrieren uebernimmt die Halte-Transformation, die
 // mit einer abschliessenden Verschiebung um -0.5 endet (s. assets::ItemDisplay).
 
-use crate::entity_model::{diffuse_shade, Affine};
+use crate::entity_model::{diffuse_shade, Affine, SkinVertex};
 use crate::mesher::BlockVertex;
 
 // Vanillas ItemModelGenerator: die Sprite-Ebene liegt zwischen 7.5/16 und 8.5/16, ist also
@@ -36,6 +36,9 @@ pub struct SpriteMask {
     pub width: u32,
     pub height: u32,
     opaque: Vec<bool>,
+    // Fingerabdruck von Groesse und Silhouette: das feste Netz fuers GPU-Skinning (s.
+    // sprite_item_skin_mesh) haengt nur daran und entsteht neu, wenn er sich aendert.
+    fingerprint: u64,
 }
 
 impl SpriteMask {
@@ -46,7 +49,16 @@ impl SpriteMask {
         for (index, flag) in opaque.iter_mut().enumerate() {
             *flag = rgba.get(index * 4 + 3).is_some_and(|alpha| *alpha > ALPHA_THRESHOLD);
         }
-        Self { width, height, opaque }
+        let mut fingerprint = 0xcbf2_9ce4_8422_2325u64 ^ (u64::from(width) << 32 | u64::from(height));
+        for &o in &opaque {
+            fingerprint = (fingerprint ^ u64::from(o)).wrapping_mul(0x100_0000_01b3);
+        }
+        Self { width, height, opaque, fingerprint }
+    }
+
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
     }
 
     #[must_use] 
@@ -89,6 +101,21 @@ pub type TexRect = [f32; 4];
 // `tex` ist der Platz des Sprites im Atlas, `mask` seine Deckkraft in Pixeln. Beide muessen
 // zum SELBEN Bild gehoeren, sonst sitzt der Rand neben der Silhouette.
 pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightness: f32, out: &mut Vec<BlockVertex>) {
+    sprite_item_quads(mask, tex, &mut |normal, quad| push_quad(out, base, brightness, normal, quad));
+}
+
+// Dasselbe flache Item als festes Netz fuers GPU-Skinning: ein Teil, die UV relativ zum
+// Sprite (0..1, das Atlas-Rechteck kommt mit der Instanz -- wie die lokalen UVs des Glints).
+// Dieselben Vierecke in derselben Reihenfolge wie emit_sprite_item, s. Tests.
+#[must_use]
+pub fn sprite_item_skin_mesh(mask: &SpriteMask) -> Vec<SkinVertex> {
+    let mut out = Vec::new();
+    sprite_item_quads(mask, [0.0, 0.0, 1.0, 1.0], &mut |normal, quad| push_skin_quad(&mut out, normal, quad));
+    out
+}
+
+// Die Vierecke eines flachen Items im Modellraum, in der Reihenfolge von push_quad.
+fn sprite_item_quads(mask: &SpriteMask, tex: TexRect, f: &mut dyn FnMut([f32; 3], [([f32; 3], [f32; 2]); 4])) {
     if mask.width == 0 || mask.height == 0 {
         return;
     }
@@ -104,10 +131,8 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
 
     // Vorderseite (+Z) und Rueckseite (-Z) ueber das ganze Sprite. Durchsichtige Pixel
     // blendet der Shader ohnehin per Alpha aus -- dafuer braucht es keine Geometrie.
-    push_sprite_quad(
-        out,
-        base,
-        brightness,
+    sprite_quad(
+        f,
         [0.0, 0.0, 1.0],
         [
             ([px(0.0), py(h), FRONT_Z], uv(0.0, h)),
@@ -116,10 +141,8 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
             ([px(0.0), py(0.0), FRONT_Z], uv(0.0, 0.0)),
         ],
     );
-    push_sprite_quad(
-        out,
-        base,
-        brightness,
+    sprite_quad(
+        f,
         [0.0, 0.0, -1.0],
         [
             ([px(w), py(h), BACK_Z], uv(w, h)),
@@ -144,10 +167,8 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
             let (fx, fy) = (x as f32, y as f32);
             // Links (-X)
             if !mask.is_opaque(x - 1, y) {
-                push_sprite_quad(
-                    out,
-                    base,
-                    brightness,
+                sprite_quad(
+                    f,
                     [-1.0, 0.0, 0.0],
                     [
                         ([px(fx), py(fy + 1.0), BACK_Z], uv(fx + 0.5, fy + 1.0 - EDGE_UV_INSET)),
@@ -159,10 +180,8 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
             }
             // Rechts (+X)
             if !mask.is_opaque(x + 1, y) {
-                push_sprite_quad(
-                    out,
-                    base,
-                    brightness,
+                sprite_quad(
+                    f,
                     [1.0, 0.0, 0.0],
                     [
                         ([px(fx + 1.0), py(fy + 1.0), FRONT_Z], uv(fx + 0.5, fy + 1.0 - EDGE_UV_INSET)),
@@ -174,10 +193,8 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
             }
             // Oben im BILD ist +Y im Modell (s. py).
             if !mask.is_opaque(x, y - 1) {
-                push_sprite_quad(
-                    out,
-                    base,
-                    brightness,
+                sprite_quad(
+                    f,
                     [0.0, 1.0, 0.0],
                     [
                         ([px(fx), py(fy), BACK_Z], uv(fx + EDGE_UV_INSET, fy + 0.5)),
@@ -189,10 +206,8 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
             }
             // Unten im Bild = -Y im Modell.
             if !mask.is_opaque(x, y + 1) {
-                push_sprite_quad(
-                    out,
-                    base,
-                    brightness,
+                sprite_quad(
+                    f,
                     [0.0, -1.0, 0.0],
                     [
                         ([px(fx + 1.0), py(fy + 1.0), BACK_Z], uv(fx + 1.0 - EDGE_UV_INSET, fy + 0.5)),
@@ -211,14 +226,39 @@ pub fn emit_sprite_item(mask: &SpriteMask, tex: TexRect, base: Affine, brightnes
 // emit_block_item) und dreht sie erst selbst um. Ohne diese Umkehr war jede Flaeche des
 // flachen Items nach innen gewickelt: die Vorderseite wurde verworfen und man sah durch das
 // Item hindurch auf Rueckseite und abgewandte Raender.
-fn push_sprite_quad(out: &mut Vec<BlockVertex>, base: Affine, brightness: f32, normal: [f32; 3], quad: [([f32; 3], [f32; 2]); 4]) {
-    push_quad(out, base, brightness, normal, [quad[0], quad[3], quad[2], quad[1]]);
+fn sprite_quad(f: &mut dyn FnMut([f32; 3], [([f32; 3], [f32; 2]); 4]), normal: [f32; 3], quad: [([f32; 3], [f32; 2]); 4]) {
+    f(normal, [quad[0], quad[3], quad[2], quad[1]]);
+}
+
+// Ein Viereck (Reihenfolge wie push_quad) ins feste Netz: dieselben zwei Dreiecke, Teil 0, die
+// Lichtrichtung als AxisShades-Index der Achse, auf der die Normale liegt (Items haben nur
+// achsparallele Flaechen).
+fn push_skin_quad(out: &mut Vec<SkinVertex>, normal: [f32; 3], quad: [([f32; 3], [f32; 2]); 4]) {
+    let achse = (0..3).max_by(|&a, &b| normal[a].abs().total_cmp(&normal[b].abs())).unwrap_or(0);
+    let shade = (achse * 2 + usize::from(normal[achse] < 0.0)) as u32;
+    for &i in &[0usize, 2, 1, 0, 3, 2] {
+        let (position, uv) = quad[i];
+        out.push(SkinVertex { position, uv, part: 0, shade, _pad: 0 });
+    }
 }
 
 // Ein Blockitem: der volle Wuerfel mit je einer Textur pro Seite. Reihenfolge der Flaechen
 // ist assets::FACE_* (down, up, north, south, west, east) -- dieselbe wie ueberall sonst,
 // damit ein Grasblock auch in der Hand oben gruen ist.
 pub fn emit_block_item(faces: &[TexRect; 6], base: Affine, brightness: f32, out: &mut Vec<BlockVertex>) {
+    block_item_quads(faces, &mut |normal, quad| push_quad(out, base, brightness, normal, quad));
+}
+
+// Das Blockitem als festes Netz fuers GPU-Skinning: die UV schon im Atlas (sechs Texturen,
+// die Instanz zeichnet mit dem Rechteck 0..1).
+#[must_use]
+pub fn block_item_skin_mesh(faces: &[TexRect; 6]) -> Vec<SkinVertex> {
+    let mut out = Vec::new();
+    block_item_quads(faces, &mut |normal, quad| push_skin_quad(&mut out, normal, quad));
+    out
+}
+
+fn block_item_quads(faces: &[TexRect; 6], f: &mut dyn FnMut([f32; 3], [([f32; 3], [f32; 2]); 4])) {
     // Ecken des Einheitswuerfels.
     let c = |x: f32, y: f32, z: f32| [x, y, z];
     // Je Flaeche: Normale, die vier Ecken gegen den Uhrzeigersinn und die UV-Ecken dazu.
@@ -244,13 +284,7 @@ pub fn emit_block_item(faces: &[TexRect; 6], base: Affine, brightness: f32, out:
             let [fu, fv] = full[i];
             [u0 + fu * (u1 - u0), v0 + fv * (v1 - v0)]
         };
-        push_quad(
-            out,
-            base,
-            brightness,
-            normal,
-            [(corners[0], corner_uv(0)), (corners[1], corner_uv(1)), (corners[2], corner_uv(2)), (corners[3], corner_uv(3))],
-        );
+        f(normal, [(corners[0], corner_uv(0)), (corners[1], corner_uv(1)), (corners[2], corner_uv(2)), (corners[3], corner_uv(3))]);
     }
 }
 
@@ -540,5 +574,54 @@ mod grip_tests {
         let soll = (0.5 + 2.0f32.sqrt()) / 16.0;
         assert!((g[0] - soll).abs() < 1e-4 && (g[1] - soll).abs() < 1e-4, "{g:?}");
         assert_eq!(SpriteMask::from_rgba(4, 4, &[0u8; 64]).grip(), None);
+    }
+}
+
+// Das feste Netz fuers GPU-Skinning ergibt mit der Matrix der Hand genau die Ecken, die
+// emit_sprite_item / emit_block_item auf der CPU schreiben -- Bit fuer Bit.
+#[cfg(test)]
+mod skin_tests {
+    use super::*;
+    use crate::entity_model::{skinned_vertices, SkinMesh};
+
+    fn hand() -> Affine {
+        Affine::translation([0.3, -1.1, 0.7])
+            .then(Affine::rotation_xyz_deg(-80.0, 33.0, 12.0))
+            .then(Affine::scale([0.55, 0.55, 0.55]))
+            .then(Affine::translation([-0.5, -0.5, -0.5]))
+    }
+
+    fn gleich(cpu: &[BlockVertex], gpu: &[BlockVertex], wo: &str) {
+        assert_eq!(cpu.len(), gpu.len(), "{wo}: Anzahl");
+        for (i, (a, b)) in cpu.iter().zip(gpu).enumerate() {
+            assert!(bytemuck::bytes_of(a) == bytemuck::bytes_of(b), "{wo}, Ecke {i}: {a:?} != {b:?}");
+        }
+    }
+
+    #[test]
+    fn flaches_item_wie_emit() {
+        // Ein Schwert-artiges Sprite mit Loch und Raendern in alle Richtungen.
+        let zeilen = ["....##", "...##.", "#.##..", ".##...", ".#.#..", "#....."];
+        let mut rgba = Vec::new();
+        for z in zeilen {
+            for c in z.chars() {
+                rgba.extend_from_slice(&[200, 100, 50, if c == '#' { 255 } else { 0 }]);
+            }
+        }
+        let mask = SpriteMask::from_rgba(6, 6, &rgba);
+        let tex = [0.25, 0.5, 0.375, 0.625];
+        let mut cpu = Vec::new();
+        emit_sprite_item(&mask, tex, hand(), 0.8, &mut cpu);
+        let netz = SkinMesh { vertices: sprite_item_skin_mesh(&mask), parts: 1, two_sided: false };
+        gleich(&cpu, &skinned_vertices(&netz, &[Some(hand())], tex, [0.8; 3]), "Sprite");
+    }
+
+    #[test]
+    fn blockitem_wie_emit() {
+        let faces = [[0.0, 0.0, 0.1, 0.1], [0.1, 0.0, 0.2, 0.1], [0.2, 0.0, 0.3, 0.1], [0.3, 0.0, 0.4, 0.1], [0.4, 0.0, 0.5, 0.1], [0.5, 0.0, 0.6, 0.1]];
+        let mut cpu = Vec::new();
+        emit_block_item(&faces, hand(), 0.8, &mut cpu);
+        let netz = SkinMesh { vertices: block_item_skin_mesh(&faces), parts: 1, two_sided: false };
+        gleich(&cpu, &skinned_vertices(&netz, &[Some(hand())], [0.0, 0.0, 1.0, 1.0], [0.8; 3]), "Block");
     }
 }

@@ -213,11 +213,10 @@ impl App {
         self.input_log.set_enabled(self.settings.module_input_log_enabled);
         record::set_enabled(self.settings.module_coral_record);
         self.publish_totem_sound_enabled();
-        self.apply_light_factors();
-        // Renderpfad, Block-Rotation, weiche Beleuchtung, Markierungen: alles steckt im Mesh.
+        // Block-Rotation, weiche Beleuchtung, Markierungen: alles steckt im Mesh.
         self.block_uvs.set_rng_rotation_enabled(self.settings.block_rng_rotation);
-        self.world.light_remesh = self.settings.render_path == 1;
-        world::mesher::set_flat_face_shade(self.settings.render_path == 1);
+        self.world.light_remesh = crate::shader_path_on();
+        world::mesher::set_flat_face_shade(crate::shader_path_on());
         for (cx, cz) in self.world.column_keys().collect::<Vec<_>>() {
             self.world.mark_dirty(cx, cz);
         }
@@ -228,43 +227,11 @@ impl App {
         }
     }
 
-    // Lichtstaerken an die Welt geben: das Blocklicht steckt im Mesh, die Quellen im
-    // Voxel-Abbild -- beides muss neu entstehen.
-    pub(crate) fn apply_light_factors(&mut self) {
-        world::light::set_light_factors(self.settings.light_factor_table());
-        for (cx, cz) in self.world.column_keys().collect::<Vec<_>>() {
-            self.world.mark_dirty(cx, cz);
-        }
-        if let Some(sp) = self.gpu.as_mut().and_then(|g| g.shader_path.as_mut()) {
-            sp.voxels_mut().mark_all_stale();
-        }
-    }
-
-    // Treffer der Lichtstaerken-Suche: Indizes in light_source_blocks().
-    pub(crate) fn light_search_hits(&self) -> Vec<usize> {
-        let suche = self.light_search.trim().to_lowercase();
-        light_source_blocks()
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| suche.is_empty() || id.contains(&suche) || block_display_name(id).to_lowercase().contains(&suche))
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-
     pub(crate) fn particle_max_scroll(&self) -> f32 {
         particles::KINDS.len().saturating_sub(self.particle_visible_rows()) as f32
     }
 
-    pub(crate) fn light_max_scroll(&self) -> f32 {
-        self.light_search_hits().len().saturating_sub(self.light_visible_rows()) as f32
-    }
-
     pub(crate) fn particle_visible_rows(&self) -> usize {
-        self.light_visible_rows()
-    }
-
-    pub(crate) fn light_visible_rows(&self) -> usize {
         let h = self.gpu.as_ref().map_or(1080.0, |g| g.size().1);
         settings_visible_rows(h).saturating_sub(1).max(1)
     }

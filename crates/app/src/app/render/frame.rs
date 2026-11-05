@@ -61,7 +61,17 @@ impl App {
         // (s. held_item::HeldItems::set_vanilla_route).
         let pack_items = self.gpu.as_ref().is_some_and(|g| g.block_renderer.vanilla.has_item_program());
         self.held_items.set_vanilla_route(pack_items);
-        let (entity_verts, entity_tints, entity_lights, entity_translucent, (outline_verts, outline_colors), entity_sharp) = self.build_entity_vertices();
+        self.update_cull_frustum();
+        let (entity_verts, entity_tints, entity_lights, entity_translucent, (outline_verts, outline_colors), entity_sharp, entity_ranges) = self.build_entity_vertices();
+        self.upload_skinning();
+        // Motion Blur: wo die Ecken der Entities im vorigen Bild lagen (s. entity_motion).
+        let entity_prev = if self.settings.motion_blur_entities_percent > 0 {
+            let lagen: Vec<[f32; 3]> = entity_verts.iter().map(|v| v.position).collect();
+            Some(self.entity_motion.step(&lagen, &entity_ranges, self.camera.position))
+        } else {
+            self.entity_motion.reset();
+            None
+        };
         self.entity_vertex_hint = entity_verts.len();
         self.held_items.set_vanilla_route(false);
         let vanilla_items = self.vanilla_item_lights(self.held_items.take_vanilla_vertices());
@@ -74,13 +84,13 @@ impl App {
         // PvP-Pfad -- der Shader-Pfad zeichnet den Umriss wie bisher in seiner Farbe.
         let komplementaer = self.settings.module_block_outline
             && self.settings.block_outline_complementary
-            && self.gpu.as_ref().is_some_and(|g| !g.use_shader_path);
+            && self.gpu.as_ref().is_some() && !crate::shader_path_on();
         let outline_complement = if komplementaer { selection_verts } else { hitbox_verts.extend(selection_verts); Vec::new() };
         self.profiler.add(Phase::Hitboxes, t);
         let t = Instant::now();
         let hand_verts = self.build_hand_vertices();
         // Shader-Pfad: die Hand im Licht an den Augen (s. render::BlockRenderer::hand_light).
-        let hand_light = (self.settings.render_path == 1).then(|| self.light_near(self.camera.position));
+        let hand_light = (crate::shader_path_on()).then(|| self.light_near(self.camera.position));
         let hand_glint = self.glint_out.take();
         self.profiler.add(Phase::Hand, t);
         // Fadenkreuz nur in der Ego-Ansicht -- in der 3. Person saesse es
@@ -130,9 +140,18 @@ impl App {
         // kostet also nichts, was ein Zwischenspeicher wert waere.
         let t = Instant::now();
         self.step_ao_fades();
-        let (ghost_verts, ghost_solid, ghost_translucent) = self.ghost_vertices();
+        let (ghost_verts, ghost_solid, ghost_translucent, ghost_ranges) = self.ghost_vertices();
+        // Motion Blur der bewegten Bloecke darin (fallende Bloecke, TNT, Kolben ...), wie bei
+        // den Entities nur ueber den deckenden Teil.
+        let ghost_prev = if self.settings.motion_blur_entities_percent > 0 {
+            let lagen: Vec<[f32; 3]> = ghost_verts[..ghost_solid].iter().map(|v| v.position).collect();
+            Some(self.block_motion.step(&lagen, &ghost_ranges, self.camera.position))
+        } else {
+            self.block_motion.reset();
+            None
+        };
         // Shader-Pfad: Licht je Vertex fuer den deckenden Teil (s. BlockRenderer::set_ghost_vertices).
-        let ghost_lights: Vec<u32> = if self.settings.render_path == 1 {
+        let ghost_lights: Vec<u32> = if crate::shader_path_on() {
             let eye = self.camera.position;
             ghost_verts[..ghost_solid].iter().map(|v| self.light_near(eye + glam::Vec3::from(v.position).as_dvec3())).collect()
         } else {
@@ -143,6 +162,7 @@ impl App {
         let [regen, schnee] = self.build_weather_vertices();
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.block_renderer.set_particle_vertices(&gpu.queue, &self.particle_vertices, particle_draws);
+            gpu.block_renderer.set_particle_prev_positions(&gpu.queue, &self.particle_prev.positions, self.particle_prev.moving);
             // Texturen neu hochladen, wenn das Modul umschaltet (s. WeatherTexture::chosen).
             let modul = self.settings.module_weather;
             if self.weather_textures_uploaded != Some(modul) {
@@ -165,11 +185,7 @@ impl App {
         // mehr lesbar.
         let sky = self.sky_clear_color();
         let sky_module = self.sky_color_module_active();
-        let scattering = self.settings.shader_scattering_percent as f32 / 100.0;
-        let sun_size_deg = self.settings.shader_sun_size_tenths as f32 / 10.0;
-        let block_shadows = self.settings.shader_block_shadows;
-        let block_softness_deg = self.settings.shader_block_softness_deg as f32;
-        let lightmap_debug = self.settings.shader_lightmap_debug;
+        #[cfg(feature = "shader_path")]
         let atmosphere = !matches!(self.dimension_type_name.as_str(), "minecraft:the_nether" | "minecraft:the_end");
         let cursor_fx = self.cursor_fx_frame();
         // Ebenfalls vor dem &mut-Ausleihen der GPU: build_doll liest das
@@ -195,8 +211,16 @@ impl App {
             .as_mut()
             .and_then(|gpu| {
                 gpu.block_renderer.set_ghost_vertices(&gpu.queue, &ghost_verts, ghost_solid, ghost_translucent, &ghost_lights);
+                match &ghost_prev {
+                    Some((vorher, bewegt)) => gpu.block_renderer.set_ghost_prev_positions(&gpu.queue, vorher, *bewegt),
+                    None => gpu.block_renderer.set_ghost_prev_positions(&gpu.queue, &[], false),
+                }
                 gpu.block_renderer.set_crumbling_vertices(&gpu.queue, &crumbling_verts);
                 gpu.block_renderer.set_entity_vertices(&gpu.queue, &entity_verts, &entity_tints, &entity_lights, entity_translucent);
+                match &entity_prev {
+                    Some((vorher, bewegt)) => gpu.block_renderer.set_entity_prev_positions(&gpu.queue, vorher, *bewegt),
+                    None => gpu.block_renderer.set_entity_prev_positions(&gpu.queue, &[], false),
+                }
                 gpu.block_renderer.set_sharp_entities(entity_sharp);
                 gpu.block_renderer.set_outline_vertices(&gpu.queue, &outline_verts, &outline_colors);
                 gpu.block_renderer.vanilla.set_item_vertices(&gpu.device, &gpu.queue, &vanilla_items);
@@ -236,14 +260,15 @@ impl App {
                     world::sky::daylight_factor(self.world_time_of_day)
                 };
                 gpu.sky_angle = world::sky::sky_angle(self.world_time_of_day);
-                gpu.atmosphere = atmosphere;
-                gpu.scattering = scattering;
-                gpu.sun_size_deg = sun_size_deg;
-                gpu.block_shadows = block_shadows;
-                gpu.block_softness_deg = block_softness_deg;
-                gpu.lightmap_debug = lightmap_debug;
+                #[cfg(feature = "shader_path")]
+                {
+                    gpu.atmosphere = atmosphere;
+                }
                 gpu.motion_blur_strength = self.settings.motion_blur_percent as f32 / 100.0;
+                gpu.motion_blur_entity_strength = self.settings.motion_blur_entities_percent as f32 / 100.0;
                 gpu.motion_blur_interval_s = self.monitor_frame_interval.as_secs_f32();
+                gpu.hand_blur_strength = self.settings.hand_blur_percent as f32 / 100.0;
+                gpu.hand_blur_curve = render::hand_blur::Curve::from_index(self.settings.hand_blur_curve);
                 gpu.render_world(
                     &self.camera,
                     sky,

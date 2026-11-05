@@ -30,11 +30,26 @@ impl App {
 
         // Auswahlrahmen zuletzt, damit er ueber den Icons der Nachbarslots liegt (er ragt
         // einen Pixel darueber hinaus -- genau wie in Vanilla).
+        // Mit "Auswahl gleitet" steht er zwischen den Slots; ueber den Rand hinaus wird er an der
+        // Hotbar abgeschnitten und kommt auf der anderen Seite herein (s. hotbar_glide).
         if let Some(selection) = self.ui_atlas.rect("hud/hotbar_selection") {
-            let x = rect.x + (self.inventory.held_slot as f32 * 20.0 - 1.0) * scale;
+            let lage = self.hotbar_glide.borrow_mut().step(self.inventory.held_slot, Instant::now(), self.settings.hotbar_glide_ms);
             let y = rect.y - scale;
             let size = inventory::HOTBAR_SELECTION * scale;
-            sprites.push(UiSprite::quad(x, y, size, size * (23.0 / 24.0), selection.uv, [1.0, 1.0, 1.0, 1.0], SpriteAtlas::Ui));
+            let (links, rechts) = (rect.x - scale, rect.x + rect.w + scale);
+            let [u0, v0, u1, v1] = selection.uv;
+            // Die zweite Lage nur waehrend des Umlaufs: in 0..8 ragte ihr Rand sonst einen Spalt
+            // weit auf die andere Seite.
+            let umlauf = if lage > 8.0 { Some(lage - 9.0) } else if lage < 0.0 { Some(lage + 9.0) } else { None };
+            for lage in std::iter::once(lage).chain(umlauf) {
+                let x = rect.x + (lage * 20.0 - 1.0) * scale;
+                let (x0, x1) = (x.max(links), (x + size).min(rechts));
+                if x1 <= x0 {
+                    continue;
+                }
+                let u = |px: f32| u0 + (u1 - u0) * (px - x) / size;
+                sprites.push(UiSprite::quad(x0, y, x1 - x0, size * (23.0 / 24.0), [u(x0), v0, u(x1), v1], [1.0, 1.0, 1.0, 1.0], SpriteAtlas::Ui));
+            }
         }
     }
 

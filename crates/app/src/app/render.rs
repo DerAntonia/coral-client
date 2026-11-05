@@ -1,10 +1,12 @@
 // Welt zeichnen: Entities, Ruestung, gehaltene Items, Hitboxen, Himmel, Wetter, Partikel, Schilder.
 
-use crate::{hitbox_kinds, profiler, App, block_anim, Instant, model_definition_id, HAND_MODEL_PRELOAD_MAX, MapSlot, ENTITY_BRIGHTNESS, push_map_quad, blocking_arms, inventory, held_item, SHIELD_BANNER_BASE, dye_rgb, UiSprite, ENTITY_FIRE_TEXTURES, affine_from_mat4, display_billboard_matrix, item_unique_offset, dropped_item_copies, display_affine_matrix, DVec3, block_place, GAME_MODE_SPECTATOR, uuid_hyphenated, team_allows_push, ENTITY_DISTANCE_MAX, physics, is_spear_item, arms_taken, is_player_like, DEATH_ANIM_OFF, DEATH_ANIM_EXPLOSION, arrow_texture, apply_item_arm_poses, ShieldMark, ShieldColor, teams, COLOR_PICK_MAX, hsv_to_rgb, Vec3, HITBOX_DASH_PER_DENSITY, push_hitbox_edge, OUTLINE_PULL, HITBOX_COBWEB_RADIUS, block_rel, BLOCK_ENTITY_DISTANCE_MAX, head_skin_key, is_christmas, SkyMode, SKY_TIME_DAY, custom_sky, precipitation, WeatherMode, ConnStatus, SKY_WORLD_WAIT, SKY_DAY_SRGB, swing_progress_from_ticks, PLAYER_SWING_TICKS, CrosshairTarget, vanilla_block_outline, doll_camera, modules, AppMode, map_tilt, item_model_input, crossbow_pull_progress, TRAIL_WIDTH, consumable_optimizer, experience_orb_icon, eating_crumbs_due, particle_item_name, zufallswert, particles, GpuState, UiRect, UiText, ShadowArea, label_debug_an, WORLD_LABEL_LINE_GAP, NAMETAG_MIN_CLIP_W, WORLD_LABEL_WORLD_SCALE, WORLD_LABEL_MIN_SCALE, WORLD_LABEL_MAX_SCALE, wrap_label_lines, split_label_lines, TEAM_VISIBILITY_ALWAYS, argb_to_rgba, Rect, LabelAlign, COLOR_WHITE, rgb_to_rgba, push_span_shadow, label_debug_log, mat4_from_affine, sign_projector, SignEdit, SignCaret, sign_text_color, caret_alpha, Vertex, pixel_to_ndc, TextShadow, MAX_SIGN_TEXT_VERTICES, VERTS_PER_QUAD, WorldLabel, display_text_frame, player_label_visible, team_allows_name, NAMETAG_SNEAK_DISTANCE, NAMETAG_MAX_DISTANCE, WORLD_LABEL_DEFAULT_LINE_WIDTH, DISPLAY_VIEW_RANGE_BLOCKS, NAMETAG_HEIGHT_ABOVE_HEAD, SIGHT_SAMPLE_STEP, MenuScreen, shared_config_dir, last_view, server_view_last_default, wallpaper, CONNECT_VIEW_FIRST_DELAY, HERO_START_DELAY, hero_scene, HERO_MIN_Y, HERO_SECTIONS, HERO_SETTLE, HERO_GIVE_UP, VOXEL_SECTIONS_PER_FRAME, FrameTiming, zoomed_fov, UiOverlay, FIRE_MODE_CROSSHAIR, GAME_MODE_CREATIVE, CrosshairExtras, weather_texture_part, notifications, WALLPAPER_DESKTOP_RECHECK, FIRE_MODE_VANILLA, SpriteAtlas, HURT_CAM_MAX_DEGREES, SHOULDER_FADE_NEAR, SHOULDER_FADE_FAR, Perspective, KeyBindAction, FREELOOK_VIEW_FIRST, FREELOOK_VIEW_BACK, FREELOOK_VIEW_FRONT, MAX_PITCH};
+use crate::{hitbox_kinds, profiler, App, block_anim, Instant, model_definition_id, HAND_MODEL_PRELOAD_MAX, MapSlot, ENTITY_BRIGHTNESS, push_map_quad, blocking_arms, inventory, held_item, SHIELD_BANNER_BASE, dye_rgb, UiSprite, ENTITY_FIRE_TEXTURES, affine_from_mat4, display_billboard_matrix, item_unique_offset, dropped_item_copies, display_affine_matrix, DVec3, GAME_MODE_SPECTATOR, uuid_hyphenated, team_allows_push, ENTITY_DISTANCE_MAX, physics, is_spear_item, arms_taken, is_player_like, DEATH_ANIM_OFF, DEATH_ANIM_EXPLOSION, DEATH_ANIM_FREEZE, DEATH_FREEZE_TICKS, arrow_texture, apply_item_arm_poses, ShieldMark, ShieldColor, teams, COLOR_PICK_MAX, hsv_to_rgb, Vec3, HITBOX_DASH_PER_DENSITY, push_hitbox_edge, OUTLINE_PULL, HITBOX_COBWEB_RADIUS, block_rel, BLOCK_ENTITY_DISTANCE_MAX, head_skin_key, is_christmas, SkyMode, SKY_TIME_DAY, custom_sky, precipitation, WeatherMode, ConnStatus, SKY_WORLD_WAIT, SKY_DAY_SRGB, swing_progress_from_ticks, PLAYER_SWING_TICKS, CrosshairTarget, vanilla_block_outline, doll_camera, modules, AppMode, map_tilt, item_model_input, crossbow_pull_progress, TRAIL_WIDTH, consumable_optimizer, experience_orb_icon, eating_crumbs_due, particle_item_name, zufallswert, particles, GpuState, UiRect, UiText, ShadowArea, label_debug_an, WORLD_LABEL_LINE_GAP, NAMETAG_MIN_CLIP_W, WORLD_LABEL_WORLD_SCALE, WORLD_LABEL_MIN_SCALE, WORLD_LABEL_MAX_SCALE, wrap_label_lines, split_label_lines, TEAM_VISIBILITY_ALWAYS, argb_to_rgba, Rect, LabelAlign, COLOR_WHITE, rgb_to_rgba, push_span_shadow, label_debug_log, mat4_from_affine, sign_projector, SignEdit, SignCaret, sign_text_color, caret_alpha, Vertex, pixel_to_ndc, WorldLabel, display_text_frame, player_label_visible, team_allows_name, NAMETAG_SNEAK_DISTANCE, NAMETAG_MAX_DISTANCE, WORLD_LABEL_DEFAULT_LINE_WIDTH, DISPLAY_VIEW_RANGE_BLOCKS, NAMETAG_HEIGHT_ABOVE_HEAD, SIGHT_SAMPLE_STEP, MenuScreen, shared_config_dir, last_view, server_view_last_default, wallpaper, CONNECT_VIEW_FIRST_DELAY, HERO_START_DELAY, hero_scene, HERO_MIN_Y, HERO_SECTIONS, HERO_SETTLE, HERO_GIVE_UP, FrameTiming, zoomed_fov, UiOverlay, FIRE_MODE_CROSSHAIR, GAME_MODE_CREATIVE, CrosshairExtras, weather_texture_part, notifications, WALLPAPER_DESKTOP_RECHECK, FIRE_MODE_VANILLA, SpriteAtlas, HURT_CAM_MAX_DEGREES, SHOULDER_FADE_NEAR, SHOULDER_FADE_FAR, Perspective, KeyBindAction, FREELOOK_VIEW_FIRST, FREELOOK_VIEW_BACK, FREELOOK_VIEW_FRONT, MAX_PITCH};
 
 mod equipment;
 mod display_entities;
 mod entity_vertices;
+mod culling;
+pub(crate) mod skin_frame;
 mod teams_hitboxes;
 mod block_entities;
 mod sky_weather;
@@ -14,6 +16,43 @@ mod world_labels;
 mod views;
 mod frame;
 mod camera;
+
+// Ein Entity-Modell, dessen Vertices erst nach der Entity-Schleife entstehen, verteilt auf
+// mehrere Kerne (s. App::run_model_jobs). Der Platz in `out` ist schon reserviert -- alles,
+// was sich Bereiche merkt (Faerbung, Umriss, Motion Blur), sieht dieselben Zahlen wie beim
+// sofortigen Zeichnen. Nur fuer Bereiche, die vor run_model_jobs niemand LIEST (Glint und
+// Elytra lesen ihre eigenen Vertices und bleiben deshalb sofort).
+pub(crate) struct ModelJob<'m> {
+    start: usize,
+    len: usize,
+    model: &'m world::Model,
+    pose: world::Pose,
+    base: world::entity_model::Affine,
+    tex: [f32; 4],
+    // Schon mit der Helligkeit verrechnet, s. world::entity_model::emit_into.
+    color: [f32; 3],
+    two_sided: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn defer_model<'m>(
+    jobs: &mut Vec<ModelJob<'m>>,
+    out: &mut Vec<world::BlockVertex>,
+    model: &'m world::Model,
+    pose: &world::Pose,
+    base: world::entity_model::Affine,
+    tex: [f32; 4],
+    color: [f32; 3],
+    two_sided: bool,
+) {
+    let len = world::entity_model::vertex_count(model, pose, two_sided);
+    if len == 0 {
+        return;
+    }
+    let start = out.len();
+    out.resize(start + len, bytemuck::Zeroable::zeroed());
+    jobs.push(ModelJob { start, len, model, pose: pose.clone(), base, tex, color, two_sided });
+}
 
 impl App {
     // Wasser und alle anderen animierten Blocktexturen weiterschalten und die geaenderten
@@ -199,7 +238,7 @@ impl App {
             let Some(name) = world::item_registry::item_name(stack.item_id) else { continue };
             let Some(def) = self.item_icons.definition(&model_definition_id(stack, name)) else { continue };
             if def.leaves.len() <= HAND_MODEL_PRELOAD_MAX {
-                modelle.extend(def.leaves.iter().filter(|l| l.special.is_none()).map(|l| l.model.clone()));
+                modelle.extend(def.leaves.iter().filter(|l| l.special.is_none() || crate::held_item::special_model(&l.model).is_some()).map(|l| l.model.clone()));
             } else {
                 modelle.extend(self.hand_model_of(hand, false, 0.0));
             }
@@ -207,8 +246,14 @@ impl App {
         // Und was die Hand-Items der Entities (und die eigenen in der 3. Person) gerade zeigen.
         let (own_main, own_off) = self.own_hand_items();
         let haende = self.entities.iter().flat_map(|(_, e)| [(e.main_hand, true), (e.off_hand, false)]).chain([(own_main, true), (own_off, false)]);
-        let zusatz: Vec<String> = haende.filter_map(|(item, rechts)| self.held_model_override(&item?, rechts)).collect();
+        let haende: Vec<(Option<world::HeldItem>, bool)> = haende.collect();
+        let zusatz: Vec<String> = haende.iter().filter_map(|&(item, rechts)| self.held_model_override(&item?, rechts, false)).collect();
         modelle.extend(zusatz);
+        // Der Dreizack wechselt beim Ausholen in die Wurfhaltung (s. held_model_override): beide
+        // Haltungen bereit halten, sobald ihn jemand in der Hand hat.
+        if haende.iter().any(|(item, _)| item.is_some_and(|h| world::item_registry::item_name(h.item_id) == Some("trident"))) {
+            modelle.extend(["item/trident_in_hand", "item/trident_throwing"].map(String::from));
+        }
         modelle.extend(rahmen_modelle);
         modelle.sort_unstable();
         modelle.dedup();

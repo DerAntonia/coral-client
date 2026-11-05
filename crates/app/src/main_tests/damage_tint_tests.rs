@@ -235,19 +235,6 @@ fn chat_blendet_nach_der_anzeigezeit_schnell_aus() {
 }
 
 #[test]
-fn lichtstaerken_werden_gespeichert() {
-    let mut set = Settings::base();
-    set.set_light_factor("torch", 50);
-    set.set_light_factor("glowstone", 200);
-    set.set_light_factor("lantern", 100);
-    let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
-    assert_eq!(geladen.light_factor_of("torch"), 50);
-    assert_eq!(geladen.light_factor_of("glowstone"), 200);
-    assert_eq!(geladen.light_factor_of("lantern"), 100);
-    assert_eq!(geladen.light_factors.len(), 2, "100 % wird nicht gespeichert");
-}
-
-#[test]
 fn zeiger_in_slotmitte_ist_an_und_wird_gespeichert() {
     let mut set = Settings::base();
     assert!(set.inventory_cursor_to_slot);

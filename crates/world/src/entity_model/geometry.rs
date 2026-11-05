@@ -569,6 +569,63 @@ pub fn emit_two_sided(model: &Model, pose: &Pose, base: Affine, tex: TexRect, br
     }
 }
 
+// Wohin emit_part/emit_cuboid schreiben: an eine Liste anhaengen, oder in einen vorab
+// reservierten Abschnitt (s. emit_into) -- so kann ein anderer Thread ein Modell in seinen
+// Teil desselben Puffers schreiben.
+pub(crate) trait VertexSink {
+    fn extend_from_slice(&mut self, v: &[BlockVertex]);
+}
+
+impl VertexSink for Vec<BlockVertex> {
+    fn extend_from_slice(&mut self, v: &[BlockVertex]) {
+        Self::extend_from_slice(self, v);
+    }
+}
+
+// Ein fester Abschnitt, von vorn gefuellt. Mehr, als hineinpasst, faellt weg (das hiesse,
+// vertex_count und emit_part zaehlen verschieden -- s. Test emit_into_wie_emit).
+struct SliceSink<'a> {
+    buf: &'a mut [BlockVertex],
+    pos: usize,
+}
+
+impl VertexSink for SliceSink<'_> {
+    fn extend_from_slice(&mut self, v: &[BlockVertex]) {
+        let ende = self.pos + v.len();
+        debug_assert!(ende <= self.buf.len(), "emit_into: mehr Vertices als vertex_count");
+        if let Some(ziel) = self.buf.get_mut(self.pos..ende) {
+            ziel.copy_from_slice(v);
+        }
+        self.pos = ende;
+    }
+}
+
+// So viele Vertices schreibt emit_part fuer dieses Modell in dieser Pose: je sichtbare Seite
+// ein Viereck aus zwei Dreiecken, beidseitig doppelt. Versteckte Teile samt Kindern zaehlen
+// nicht (wie in emit_part).
+#[must_use]
+pub fn vertex_count(model: &Model, pose: &Pose, two_sided: bool) -> usize {
+    fn teil(part: &Part, pose: &Pose, je_seite: usize) -> usize {
+        if pose.get(part.name).hidden {
+            return 0;
+        }
+        let seiten: usize = part.cuboids.iter().map(|c| (c.faces & 0b11_1111).count_ones() as usize).sum();
+        seiten * je_seite + part.children.iter().map(|c| teil(c, pose, je_seite)).sum::<usize>()
+    }
+    let je_seite = if two_sided { 12 } else { 6 };
+    model.parts.iter().map(|p| teil(p, pose, je_seite)).sum()
+}
+
+// Wie emit_tinted / emit_tinted_two_sided, aber in einen Abschnitt der Laenge vertex_count.
+// `color` ist schon mit der Helligkeit verrechnet (emit: [brightness; 3]).
+pub fn emit_into(model: &Model, pose: &Pose, base: Affine, tex: TexRect, color: [f32; 3], two_sided: bool, out: &mut [BlockVertex]) {
+    let mut sink = SliceSink { buf: out, pos: 0 };
+    for part in &model.parts {
+        emit_part(part, pose, base, model.tex_size, tex, color, two_sided, &mut sink);
+    }
+    debug_assert_eq!(sink.pos, sink.buf.len(), "emit_into: weniger Vertices als vertex_count");
+}
+
 // Wie emit(), aber jeder Kasten in einer eigenen Liste und ohne Toenung -- fuer Inventar-Icons,
 // die je Kasten die Aussenseite ihrer Flaechen bestimmen (s. app::item_icons).
 #[must_use] 
@@ -578,9 +635,10 @@ pub fn emit_boxes(model: &Model, pose: &Pose, base: Affine, tex: TexRect) -> Vec
             return;
         }
         let world = part_world_transform(part, pose, parent);
+        let shades = AxisShades::of(world);
         for cuboid in &part.cuboids {
             let mut kasten = Vec::new();
-            emit_cuboid(cuboid, world, tex_size, tex, [1.0; 3], false, &mut kasten);
+            emit_cuboid(cuboid, world, shades, tex_size, tex, [1.0; 3], false, &mut kasten);
             out.push(kasten);
         }
         for child in &part.children {
@@ -637,14 +695,15 @@ pub(crate) fn part_world_transform(part: &Part, pose: &Pose, parent: Affine) -> 
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_part(part: &Part, pose: &Pose, parent: Affine, tex_size: [f32; 2], tex: TexRect, color: [f32; 3], two_sided: bool, out: &mut Vec<BlockVertex>) {
+pub(crate) fn emit_part(part: &Part, pose: &Pose, parent: Affine, tex_size: [f32; 2], tex: TexRect, color: [f32; 3], two_sided: bool, out: &mut impl VertexSink) {
     if pose.get(part.name).hidden {
         return;
     }
     let world = part_world_transform(part, pose, parent);
+    let shades = AxisShades::of(world);
 
     for cuboid in &part.cuboids {
-        emit_cuboid(cuboid, world, tex_size, tex, color, two_sided, out);
+        emit_cuboid(cuboid, world, shades, tex_size, tex, color, two_sided, out);
     }
     for child in &part.children {
         emit_part(child, pose, world, tex_size, tex, color, two_sided, out);
@@ -655,9 +714,43 @@ pub(crate) fn emit_part(part: &Part, pose: &Pose, parent: Affine, tex_size: [f32
 // eines Kastens. Vertex- und UV-Zuordnung exakt wie in Vanilla -- eine andere Zuordnung
 // dreht oder spiegelt einzelne Seiten, was man bei einem Skin sofort sieht (Gesicht am
 // Hinterkopf).
-pub(crate) fn emit_cuboid(cuboid: &Cuboid, world: Affine, tex_size: [f32; 2], tex: TexRect, base_color: [f32; 3], two_sided: bool, out: &mut Vec<BlockVertex>) {
-    // s. Cuboid::tex_scale -- Vanilla teilt die UVs durch die SKALIERTE Texturgroesse.
-    let tex_size = [tex_size[0] * cuboid.tex_scale[0], tex_size[1] * cuboid.tex_scale[1]];
+// Richtungslicht (s. diffuse_shade) der sechs Achsrichtungen eines Koerperteils, in der
+// Reihenfolge +X, -X, +Y, -Y, +Z, -Z (Modellraum), die Normalen in WELTkoordinaten gedreht.
+//
+// Die Seitennormalen jedes Kastens sind genau diese sechs Richtungen, und alle Kaesten eines
+// Teils teilen seine Transformation. Frueher drehte und normierte emit_cuboid die Normale je
+// Seite neu (Wurzel und drei Divisionen, zweiseitig doppelt) -- im Profil ~40 % der Funktion.
+// Jetzt einmal je Teil, mit denselben Rechenschritten: Ergebnis Bit fuer Bit gleich (s. Test
+// achsen_licht_wie_je_seite).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AxisShades(pub(crate) [f32; 6]);
+
+impl AxisShades {
+    pub(crate) fn of(world: Affine) -> Self {
+        let mut s = [0.0; 6];
+        for achse in 0..3 {
+            let mut d = [0.0f32; 3];
+            d[achse] = 1.0;
+            let n = world.apply_direction(d);
+            s[achse * 2] = diffuse_shade(n);
+            s[achse * 2 + 1] = diffuse_shade([-n[0], -n[1], -n[2]]);
+        }
+        Self(s)
+    }
+}
+
+// Die feste Anordnung eines Kastens, unabhaengig von Pose und Atlas: die acht Ecken (in
+// Modellpixeln), je Seite (unten, oben, West, Nord, Ost, Sued) die vier Ecken mit ihren
+// Modell-UVs in Ausgabereihenfolge, und der AxisShades-Index ihrer Normale. emit_cuboid und
+// das feste Netz fuers Skinning (s. skinned.rs) lesen beide hier -- so koennen sie nicht
+// auseinanderlaufen.
+pub(crate) struct CuboidLayout {
+    pub(crate) corners: [[f32; 3]; 8],
+    pub(crate) faces: [[(usize, f32, f32); 4]; 6],
+    pub(crate) normals: [usize; 6],
+}
+
+pub(crate) fn cuboid_layout(cuboid: &Cuboid) -> CuboidLayout {
     let [sx, sy, sz] = cuboid.size;
     let [dx, dy, dz] = cuboid.dilation;
     // Die undilatierten Kanten bestimmen die UVs, die dilatierten die Geometrie.
@@ -668,7 +761,7 @@ pub(crate) fn emit_cuboid(cuboid: &Cuboid, world: Affine, tex_size: [f32; 2], te
     }
 
     // Vanillas vertex..vertex8, in derselben Reihenfolge.
-    let v = [
+    let corners = [
         [x0, y0, z0], // 1
         [x1, y0, z0], // 2
         [x1, y1, z0], // 3
@@ -678,15 +771,12 @@ pub(crate) fn emit_cuboid(cuboid: &Cuboid, world: Affine, tex_size: [f32; 2], te
         [x1, y1, z1], // 7
         [x0, y1, z1], // 8
     ];
-    // Jede Ecke einmal in die Welt, nicht fuer jeden der 36 Vertices neu -- bei vielen
-    // Entities war das der groesste Posten im Frame (Profiler: emit_part).
-    let welt = v.map(|p| world.apply([p[0] / 16.0, p[1] / 16.0, p[2] / 16.0]));
     let [u, vv] = cuboid.uv;
     let (j, k, l, m, n, o) = (u, u + sz, u + sz + sx, u + sz + sx + sx, u + sz + sx + sz, u + sz + sx + sz + sx);
     let (p, q, r) = (vv, vv + sz, vv + sz + sy);
 
     // (Ecken-Indices, u1, v1, u2, v2) -- Reihenfolge: down, up, west, north, east, south.
-    let faces: [([usize; 4], f32, f32, f32, f32); 6] = [
+    let roh: [([usize; 4], f32, f32, f32, f32); 6] = [
         ([5, 4, 0, 1], k, p, l, q),
         ([2, 3, 7, 6], l, q, m, p),
         ([0, 4, 7, 3], j, q, k, r),
@@ -694,42 +784,57 @@ pub(crate) fn emit_cuboid(cuboid: &Cuboid, world: Affine, tex_size: [f32; 2], te
         ([5, 1, 2, 6], l, q, n, r),
         ([4, 5, 6, 7], n, q, o, r),
     ];
-
-    // Modellraum-Normalen in derselben Reihenfolge wie `faces` (down, up, west, north, east,
-    // south -- Vanillas Direction-Namen im Modellraum, wo Y nach UNTEN zeigt).
-    //
-    // Bei gespiegelten Kaesten (linker Arm, linkes Bein) kippt die X-Normale: dort sind x0 und
-    // x1 vertauscht, die "west"-Flaeche liegt also rechts. Vanilla macht genau das in
-    // ModelPart$Quad.getMirrorDirection -- Achse X wird umgedreht, die anderen bleiben.
-    let mirror_x = if cuboid.mirror { -1.0 } else { 1.0 };
-    let normals: [[f32; 3]; 6] =
-        [[0.0, -1.0, 0.0], [0.0, 1.0, 0.0], [-mirror_x, 0.0, 0.0], [0.0, 0.0, -1.0], [mirror_x, 0.0, 0.0], [0.0, 0.0, 1.0]];
-
-    for (face_index, (corners, u1, v1, u2, v2)) in faces.into_iter().enumerate() {
-        if cuboid.faces & (1 << face_index) == 0 {
-            continue;
-        }
-        // Richtungslicht je Flaeche, in WELTkoordinaten (s. diffuse_shade).
-        let normale = world.apply_direction(normals[face_index]);
-        let shade = diffuse_shade(normale);
-        let color = [base_color[0] * shade, base_color[1] * shade, base_color[2] * shade];
+    let faces = roh.map(|(c, u1, v1, u2, v2)| {
         // ModelPart$Quad: Ecke 0 bekommt (u2,v1), 1 (u1,v1), 2 (u1,v2), 3 (u2,v2).
-        let mut quad = [(corners[0], u2, v1), (corners[1], u1, v1), (corners[2], u1, v2), (corners[3], u2, v2)];
+        let mut quad = [(c[0], u2, v1), (c[1], u1, v1), (c[2], u1, v2), (c[3], u2, v2)];
         // mirror dreht die Eckenreihenfolge NACH der UV-Zuweisung um (s. Quad-Konstruktor).
         if cuboid.mirror {
             quad.reverse();
         }
+        quad
+    });
+
+    // Modellraum-Normalen in derselben Reihenfolge wie `faces` (down, up, west, north, east,
+    // south -- Vanillas Direction-Namen im Modellraum, wo Y nach UNTEN zeigt), als Index in
+    // AxisShades: -Y, +Y, -X, -Z, +X, +Z.
+    //
+    // Bei gespiegelten Kaesten (linker Arm, linkes Bein) kippt die X-Normale: dort sind x0 und
+    // x1 vertauscht, die "west"-Flaeche liegt also rechts. Vanilla macht genau das in
+    // ModelPart$Quad.getMirrorDirection -- Achse X wird umgedreht, die anderen bleiben.
+    let (west, ost) = if cuboid.mirror { (0, 1) } else { (1, 0) };
+    CuboidLayout { corners, faces, normals: [3, 2, west, 5, ost, 4] }
+}
+
+// Die Ecken eines Vierecks als zwei Dreiecke, Vorder- und (zweiseitig) Rueckseite. Die
+// Umlaufrichtung ist NICHT egal: die Pipeline verwirft rueckwaertsgewandte Dreiecke
+// (cull_mode: Face::Back, s. render::BlockRenderer). Diese Reihenfolge hier ist die geeichte --
+// wer neue Geometrie in denselben Zeichenaufruf haengt, muss sich nach ihr richten (s.
+// item_model::push_quad und dessen winding_tests).
+pub(crate) const QUAD_FRONT: [usize; 6] = [0, 1, 2, 0, 2, 3];
+pub(crate) const QUAD_BACK: [usize; 6] = [0, 2, 1, 0, 3, 2];
+
+pub(crate) fn emit_cuboid(cuboid: &Cuboid, world: Affine, shades: AxisShades, tex_size: [f32; 2], tex: TexRect, base_color: [f32; 3], two_sided: bool, out: &mut impl VertexSink) {
+    // s. Cuboid::tex_scale -- Vanilla teilt die UVs durch die SKALIERTE Texturgroesse.
+    let tex_size = [tex_size[0] * cuboid.tex_scale[0], tex_size[1] * cuboid.tex_scale[1]];
+    let layout = cuboid_layout(cuboid);
+    // Jede Ecke einmal in die Welt, nicht fuer jeden der 36 Vertices neu -- bei vielen
+    // Entities war das der groesste Posten im Frame (Profiler: emit_part).
+    let welt = layout.corners.map(|p| world.apply([p[0] / 16.0, p[1] / 16.0, p[2] / 16.0]));
+
+    for (face_index, quad) in layout.faces.into_iter().enumerate() {
+        if cuboid.faces & (1 << face_index) == 0 {
+            continue;
+        }
+        // Richtungslicht je Flaeche, in WELTkoordinaten (s. AxisShades).
+        let shade = shades.0[layout.normals[face_index]];
+        let color = [base_color[0] * shade, base_color[1] * shade, base_color[2] * shade];
         let e = quad.map(|(ecke, u, v)| BlockVertex { position: welt[ecke], color, uv: atlas_uv(u, v, tex_size, tex) });
-        // Zwei Dreiecke pro Viereck. Die Umlaufrichtung ist NICHT egal: die Pipeline
-        // verwirft rueckwaertsgewandte Dreiecke (cull_mode: Face::Back, s.
-        // render::BlockRenderer). Diese Reihenfolge hier ist die geeichte -- wer neue
-        // Geometrie in denselben Zeichenaufruf haengt, muss sich nach ihr richten (s.
-        // item_model::push_quad und dessen winding_tests).
-        out.extend_from_slice(&[e[0], e[1], e[2], e[0], e[2], e[3]]);
+        out.extend_from_slice(&QUAD_FRONT.map(|i| e[i]));
         if two_sided {
-            let hinten = diffuse_shade([-normale[0], -normale[1], -normale[2]]);
+            // Die Rueckseite hat die Gegenrichtung (Index ^ 1).
+            let hinten = shades.0[layout.normals[face_index] ^ 1];
             let b = e.map(|v| BlockVertex { color: [base_color[0] * hinten, base_color[1] * hinten, base_color[2] * hinten], ..v });
-            out.extend_from_slice(&[b[0], b[2], b[1], b[0], b[3], b[2]]);
+            out.extend_from_slice(&QUAD_BACK.map(|i| b[i]));
         }
     }
 }

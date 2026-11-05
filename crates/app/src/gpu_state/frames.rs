@@ -3,6 +3,76 @@
 use super::*;
 
 impl GpuState {
+    // Die verdeckbaren Weltbeschriftungen (s. occluded_label_texts) fuer den Durchgang nach der
+    // Welt: erst die schon projizierten Text-Displays in der Schrift der Weltbeschriftungen,
+    // dann jedes Namensschild einzeln geformt und mit der Tiefe seines Ankers. Hochgeladen in
+    // label_text_buffer und label_quad_buffer. Rueckgabe: Ecken der Hintergruende und die
+    // Glyphen-Abschnitte je Schrift.
+    fn prepare_occluded_labels(&self, screen_px: (f32, f32)) -> (u32, Vec<(std::ops::Range<u32>, FontKind)>) {
+        let grenze = MAX_LABEL_GLYPHS * VERTS_PER_QUAD;
+        let mut glyphen = std::mem::take(&mut *self.occluded_label_glyphs.borrow_mut());
+        glyphen.truncate(grenze);
+        let allgemein = self.font_atlas.kind();
+        let mut abschnitte = Vec::new();
+        if !glyphen.is_empty() {
+            abschnitte.push((0..glyphen.len() as u32, self.label_font.get().unwrap_or(allgemein)));
+        }
+        // Geleert, wie alles hier: wird in einem Bild nichts neu gebaut (HUD aus), bleibt
+        // sonst das alte Schild stehen.
+        //
+        // Alle Schilder in EINEM Aufruf geformt (je Schild einer kostete jedes Mal die Runde um
+        // den Cache und das Lernen der Zahlen), danach je Schild die Tiefe seines Ankers.
+        {
+            let mut texte = self.occluded_label_texts.borrow_mut();
+            let mut enden = self.occluded_label_ends.borrow_mut();
+            if !enden.is_empty() && glyphen.len() < grenze {
+                let anfang = glyphen.len();
+                let grenzen: Vec<usize> = enden.iter().map(|&(bis, _)| bis.min(texte.len())).collect();
+                let bis_text = grenzen.last().copied().unwrap_or(0);
+                let (wechsel, vertex_enden) = self.shape_text_split(&texte[..bis_text], screen_px, &mut glyphen, &grenzen);
+                glyphen.truncate(grenze);
+                let ende = glyphen.len();
+                let mut von = anfang;
+                for (&bis, &(_, tiefe)) in vertex_enden.iter().zip(enden.iter()) {
+                    let bis = (bis as usize).clamp(von, ende);
+                    for v in &mut glyphen[von..bis] {
+                        v.depth = tiefe;
+                    }
+                    von = bis;
+                }
+                // Die Abschnitte je Schrift: es beginnt in der allgemeinen, die Marker am Anfang
+                // jedes Schildes wechseln in die des Bereichs (s. App::build_world_labels).
+                let (mut von, mut art) = (anfang as u32, allgemein);
+                for (ab, naechste) in wechsel {
+                    let ab = (ab as usize).clamp(anfang, ende) as u32;
+                    if ab > von {
+                        abschnitte.push((von..ab, art));
+                        von = ab;
+                    }
+                    art = naechste;
+                }
+                if (ende as u32) > von {
+                    abschnitte.push((von..ende as u32, art));
+                }
+            }
+            texte.clear();
+            enden.clear();
+        }
+        if !glyphen.is_empty() {
+            self.queue.write_buffer(&self.label_text_buffer, 0, bytemuck::cast_slice(&glyphen));
+        }
+        glyphen.clear();
+        *self.occluded_label_glyphs.borrow_mut() = glyphen;
+        let mut quads = self.occluded_label_quads.borrow_mut();
+        quads.truncate(MAX_LABEL_QUADS * VERTS_PER_QUAD);
+        if !quads.is_empty() {
+            self.queue.write_buffer(&self.label_quad_buffer, 0, bytemuck::cast_slice(&quads));
+        }
+        let anzahl = quads.len() as u32;
+        quads.clear();
+        (anzahl, abschnitte)
+    }
+
     // Holt das naechste Swapchain-Bild -- der Punkt, an dem Fifo auf den VBlank wartet.
     // Liefert das Bild und die Wartezeit in ms (s. FrameTiming).
     //
@@ -185,6 +255,7 @@ impl GpuState {
                 color: farbe,
                 bounds: [0.0; 4],
                 mode: [0.0; 4],
+                depth: 0.0,
             };
             sprite_data.extend_from_slice(&[vertex(0), vertex(1), vertex(2), vertex(0), vertex(2), vertex(3)]);
         }
@@ -256,6 +327,7 @@ impl GpuState {
     // Forward-Rest ins fertige Bild. Am Ende steht die Welt wie im PvP-Pfad in offscreen_view
     // und der Tiefenpuffer ist verbraucht -- Hand, HUD und Ausgabe laufen danach unveraendert.
     // Der Shader-Pfad samt Voxel-Abbild entsteht vorher in App::update_voxel_volume.
+    #[cfg(feature = "shader_path")]
     pub(crate) fn render_world_shader_path(&mut self, encoder: &mut wgpu::CommandEncoder, sky: wgpu::Color, camera: &render::Camera) {
         let (width, height) = (self.config.width, self.config.height);
         let Some(sp) = self.shader_path.as_mut() else { return };
@@ -422,6 +494,9 @@ impl GpuState {
         // Puffers -- der HUD-Text darf nie wegen Hologrammen fehlen.
         // Die Overlay-Ebene zuerst (s. overlay_vertices).
         let ov = self.overlay_vertices(overlay, screen_px);
+        // Verdeckbare Weltbeschriftungen VOR dem HUD-Text formen: shape_text merkt sich die
+        // Beschneidungen des letzten Aufrufs, und die gehoeren dem HUD.
+        let (label_quad_len, label_runs) = self.prepare_occluded_labels(screen_px);
         let mut text_data: Vec<TextVertex> = std::mem::take(&mut *self.world_label_glyphs.borrow_mut());
         text_data.truncate(MAX_UI_GLYPHS / 2 * VERTS_PER_QUAD);
         let label_len = text_data.len() as u32;
@@ -431,14 +506,8 @@ impl GpuState {
         if let Some(kind) = self.label_font.get().filter(|_| label_len > 0) {
             schriften.splice(0..0, [(0, kind), (label_len, self.font_atlas.kind())]);
         }
-        // Schildtext fuer den Welt-Durchgang (s. App::build_sign_texts).
-        let sign_len = {
-            let glyphen = self.sign_glyphs.borrow();
-            if !glyphen.is_empty() {
-                self.queue.write_buffer(&self.sign_text_buffer, 0, bytemuck::cast_slice(&glyphen));
-            }
-            glyphen.len() as u32
-        };
+        // Schildtext fuer den Welt-Durchgang, schon im VRAM (s. App::build_sign_texts).
+        let sign_len = self.sign_gpu.borrow().draws.len();
         let sign_kind = self.sign_font.get().unwrap_or(self.font_atlas.kind());
         let text_split = append_overlay(&mut text_data, &ov.text, MAX_UI_GLYPHS * VERTS_PER_QUAD);
         if !text_data.is_empty() {
@@ -543,9 +612,12 @@ impl GpuState {
         }
         // Bewegungsunschaerfe nur im PvP-Pfad und mit normaler Projektion: die Warp-Projektionen
         // verbiegen die Geometrie im Vertex-Shader, eine Matrix rechnet sie nicht zurueck.
-        let motion_blur = self.motion_blur_strength > 0.0 && !self.use_shader_path && camera.projection == 0;
+        let motion_blur = (self.motion_blur_strength > 0.0 || self.motion_blur_entity_strength > 0.0) && !crate::shader_path_on() && camera.projection == 0;
         self.block_renderer.keep_depth = motion_blur;
-        if self.use_shader_path {
+        // Die verdeckbaren Weltbeschriftungen lesen die Tiefe nach Welt und Motion Blur.
+        self.block_renderer.depth_read_later = label_quad_len > 0 || !label_runs.is_empty();
+        if crate::shader_path_on() {
+            #[cfg(feature = "shader_path")]
             self.render_world_shader_path(&mut encoder, sky, camera);
         } else {
             // Himmel aus Resourcepacks: in die Ansicht ohne sRGB (Mischung im Gamma-Raum, s.
@@ -629,16 +701,13 @@ impl GpuState {
             // Schildtext gegen die Tiefe der Welt -- danach, damit davor stehende Entities ihn
             // verdecken (s. world_text_pipeline). Mit Bewegungsunschaerfe erst nach ihr.
             if sign_len > 0 && !motion_blur {
-                pass.set_pipeline(&self.world_text_pipeline);
-                pass.set_vertex_buffer(0, self.sign_text_buffer.slice(..));
-                pass.set_bind_group(0, &self.hud_font(sign_kind).bind_group, &[]);
-                pass.draw(0..sign_len, 0..1);
+                self.sign_gpu.borrow().draw(&mut pass, false, &self.hud_font(sign_kind).bind_group);
             }
         }
 
         // Blockumriss in der Gegenfarbe (Modul Blockumriss, Komplementaer): nach der Welt, vor
         // der Hand, gegen die Tiefe der Welt.
-        if !self.use_shader_path {
+        if !crate::shader_path_on() {
             self.block_renderer.encode_outline_complement(&self.device, &mut encoder, &self.offscreen_texture, &self.offscreen_view);
         }
 
@@ -664,6 +733,7 @@ impl GpuState {
                 camera,
                 aspect,
                 self.motion_blur_strength,
+                self.motion_blur_entity_strength,
                 self.motion_blur_interval_s,
                 &mut reserve,
             );
@@ -687,13 +757,41 @@ impl GpuState {
                 self.block_renderer.render_sharp_entities(&mut pass);
             }
             if sign_len > 0 {
-                pass.set_pipeline(&self.world_text_pipeline);
-                pass.set_vertex_buffer(0, self.sign_text_buffer.slice(..));
-                pass.set_bind_group(0, &self.hud_font(sign_kind).bind_group, &[]);
-                pass.draw(0..sign_len, 0..1);
+                self.sign_gpu.borrow().draw(&mut pass, false, &self.hud_font(sign_kind).bind_group);
             }
+            // Hitboxen und Blockumriss: im Welt-Durchgang ausgelassen, hier scharf darueber.
+            self.block_renderer.render_hitboxes(&mut pass);
         } else {
             self.motion_blur.reset();
+        }
+
+        // Verdeckbare Weltbeschriftungen gegen die Tiefe der Welt (s. prepare_occluded_labels):
+        // nach Welt und Motion Blur -- scharf --, vor der Hand, die wie in Vanilla darueber liegt.
+        if label_quad_len > 0 || !label_runs.is_empty() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("occluded labels pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.offscreen_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(self.block_renderer.depth_attachment_load()),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if label_quad_len > 0 {
+                pass.set_pipeline(&self.label_quad_pipeline);
+                pass.set_vertex_buffer(0, self.label_quad_buffer.slice(..));
+                pass.draw(0..label_quad_len, 0..1);
+            }
+            if !label_runs.is_empty() {
+                pass.set_pipeline(&self.label_text_pipeline);
+                pass.set_vertex_buffer(0, self.label_text_buffer.slice(..));
+                for (bereich, art) in &label_runs {
+                    pass.set_bind_group(0, &self.hud_font(*art).bind_group, &[]);
+                    pass.draw(bereich.clone(), 0..1);
+                }
+            }
         }
 
         // Ego-Hand: EIGENER Durchgang mit geleertem Tiefenpuffer und eigener Projektion --
@@ -704,7 +802,29 @@ impl GpuState {
         // Das Sichtfeld ist bewusst NICHT `camera.fov_degrees`: Vanillas Hand haengt am festen
         // Wert 70 und ist von der Einstellung voellig unabhaengig (s. update_hand_camera).
         self.block_renderer.update_hand_camera(&self.queue, aspect);
-        if hand_debug.is_none() {
+        // Hand Blur: die Hand in vielen Zwischenlagen gemischt; ohne Bewegung (oder im
+        // Shader-Pfad) wie immer scharf.
+        let versucht = hand_debug.is_none() && !crate::shader_path_on() && self.hand_blur_strength > 0.0;
+        let verwischt = versucht
+            && self.block_renderer.render_hand_blurred(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &self.offscreen_view,
+                (self.config.width, self.config.height),
+                aspect,
+                self.hand_blur_strength,
+                self.motion_blur_interval_s,
+                self.hand_blur_curve,
+                self.gpu_timer.as_mut().and_then(|t| t.pass("Hand")),
+            );
+        // Ohne Bewegung zeichnet render_hand_blurred nichts: den reservierten Rahmen freigeben.
+        if versucht && !verwischt {
+            if let Some(t) = self.gpu_timer.as_mut() {
+                t.discard_last("Hand");
+            }
+        }
+        if hand_debug.is_none() && !verwischt {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hand pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -726,7 +846,7 @@ impl GpuState {
         // (render_menu).
         // Der Shader-Pfad hat keinen Welt-Durchgang mit dieser Tiefe: dort liegt der Schildtext
         // ohne Tiefentest unter dem HUD.
-        let schilder_im_hud = self.use_shader_path && sign_len > 0;
+        let schilder_im_hud = crate::shader_path_on() && sign_len > 0;
         // Bei Hand-Debug kommt der Zeiger erst nach der Hand, ins Schwarze (s. draw_hand_debug_ui).
         let cursor_im_hud = cursor.is_some() && hand_debug.is_none();
         if quad_len > 0 || !line_data.is_empty() || text_len > 0 || !sprite_data.is_empty() || cursor_im_hud || schilder_im_hud {
@@ -742,10 +862,7 @@ impl GpuState {
                 occlusion_query_set: None,
             });
             if schilder_im_hud {
-                pass.set_pipeline(&self.text_pipeline);
-                pass.set_vertex_buffer(0, self.sign_text_buffer.slice(..));
-                pass.set_bind_group(0, &self.hud_font(sign_kind).bind_group, &[]);
-                pass.draw(0..sign_len, 0..1);
+                self.sign_gpu.borrow().draw(&mut pass, true, &self.hud_font(sign_kind).bind_group);
             }
             if !unter_runs.is_empty() {
                 pass.set_pipeline(&self.sprite_pipeline);

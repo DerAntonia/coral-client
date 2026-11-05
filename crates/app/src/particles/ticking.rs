@@ -224,8 +224,16 @@ impl Particles {
     // Kamerazugewandte Quads fuer dieses Bild, nach Blatt sortiert (opak, durchscheinend,
     // Blockstaub -- die Reihenfolge von render::ParticleDraws). `eye` ist der Ursprung des
     // augenrelativen Renderraums, `right`/`up` spannen die Bildebene auf.
-    pub fn build_vertices(&self, eye: DVec3, right: Vec3, up: Vec3, tick_progress: f32, out: &mut Vec<ParticleVertex>) -> ParticleDraws {
+    //
+    // `prev` (Motion Blur der Partikel): je Ecke die Lage im vorigen Bild, relativ zum vorigen
+    // Auge. Zurueckgerechnet aus der Bewegung des Partikels in diesem Tick, `prev.ticks` Ticks
+    // zurueck (die Zeit seit dem vorigen Bild); die Drehung des Quads zur Kamera zaehlt nicht.
+    pub fn build_vertices(&self, eye: DVec3, right: Vec3, up: Vec3, tick_progress: f32, out: &mut Vec<ParticleVertex>, mut prev: Option<&mut ParticlePrev>) -> ParticleDraws {
         out.clear();
+        if let Some(p) = prev.as_deref_mut() {
+            p.positions.clear();
+            p.moving = false;
+        }
         let mut draws = ParticleDraws::default();
         for (sheet, count) in [
             (Sheet::Opaque, &mut draws.opaque),
@@ -260,6 +268,13 @@ impl Particles {
                 for i in [0, 1, 2, 0, 2, 3] {
                     let (pos, uv) = corners[i];
                     out.push(ParticleVertex { position: pos.to_array(), color, uv });
+                }
+                if let Some(pv) = prev.as_deref_mut() {
+                    let tempo = if t.speed_pct == 100 { 1.0 } else { t.speed() };
+                    let schritt = (p.pos - p.last).as_vec3() * (pv.ticks * tempo);
+                    pv.moving |= schritt != Vec3::ZERO;
+                    let versatz = pv.eye_step - schritt;
+                    pv.positions.extend([0, 1, 2, 0, 2, 3].map(|i| (corners[i].0 + versatz).to_array()));
                 }
             }
             *count = (out.len() - before) as u32;

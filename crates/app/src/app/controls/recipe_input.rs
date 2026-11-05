@@ -218,6 +218,8 @@ impl App {
             self.creative_swap(hotbar_index);
             return;
         }
+        // Zifferntaste oder Zweithand-Taste: verschoben per Tastatur, das fliegt (s. inventory_anim).
+        self.inventory_anim.get_mut().flights.click_sent(Instant::now());
         // Mit einem Stapel am Zeiger tut Vanilla hier nichts. Bei uns kommt er auf den
         // Hotbar-Platz, und was dort lag, an den Zeiger -- ein gewoehnlicher Klick auf den Platz.
         if self.inventory.cursor.is_some() {

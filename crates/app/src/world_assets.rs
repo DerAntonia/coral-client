@@ -363,6 +363,7 @@ impl WorldAssets {
         entity_textures.push(world::entity_model::WIND_CHARGE_TEXTURE);
         entity_textures.push(world::entity_model::ARROW_TEXTURE);
         entity_textures.push(world::entity_model::SPECTRAL_ARROW_TEXTURE);
+        entity_textures.push(world::entity_model::TRIDENT_TEXTURE);
         // Das Feuer auf brennenden Entities (s. emit_entity_fire) -- animiert, der Atlas legt
         // die Streifen als Raster ab.
         entity_textures.extend(ENTITY_FIRE_TEXTURES);

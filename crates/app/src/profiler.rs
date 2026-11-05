@@ -47,13 +47,15 @@ pub enum Phase {
     Menu,
     // --- Zeichnen (in render_world/render_menu)
     Sort,
+    // Text in Glyphen-Vierecke setzen (GpuState::shape_text), aus Encode herausgerechnet.
+    TextShaping,
     Encode,
     Submit,
     Present,
 }
 
 impl Phase {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::DrainEvents,
         Self::DrainAuth,
         Self::LoopMisc,
@@ -75,6 +77,7 @@ impl Phase {
         Self::Upload,
         Self::Menu,
         Self::Sort,
+        Self::TextShaping,
         Self::Encode,
         Self::Submit,
         Self::Present,
@@ -103,6 +106,7 @@ impl Phase {
             Self::Upload => "GPU-Upload",
             Self::Menu => "Menü-UI",
             Self::Sort => "Sortieren/Offsets",
+            Self::TextShaping => "Textsatz",
             Self::Encode => "Encode",
             Self::Submit => "Submit",
             Self::Present => "Present",

@@ -3,6 +3,10 @@ name = "render"
 edition.workspace = true
 version.workspace = true
 
+[features]
+# Shader-Pfad (veraltet, ruht): Deferred-Renderer samt Voxel-Abbild. Standardmaessig aus.
+shader_path = []
+
 [dependencies]
 world = { path = "../world" }
 chunk_saver = { path = "../chunk_saver" }

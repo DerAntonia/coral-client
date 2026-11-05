@@ -27,7 +27,8 @@ mod crystal_optimizer;
 mod cursor_fx;
 mod transactions;
 mod discord_rpc;
-mod font_atlas;
+// Schrift-Atlas: eigenes Crate (crates/font_atlas), hier unter dem alten Pfad crate::font_atlas.
+use ::font_atlas;
 mod gpu_timer;
 mod held_item;
 mod hitbox_kinds;
@@ -35,6 +36,8 @@ mod teams;
 mod i18n;
 mod inventory;
 mod inventory_anim;
+mod hotbar_glide;
+mod entity_motion;
 mod item_cooldowns;
 mod item_icons;
 mod item_model_input;
@@ -50,6 +53,7 @@ mod monitor_size;
 mod notifications;
 mod physics;
 mod pistons;
+mod parallel;
 mod profiler;
 mod raw_input;
 mod recipe_book;
@@ -177,12 +181,15 @@ fn create_game_window(event_loop: &ActiveEventLoop) -> (Arc<Window>, winit::moni
     // XRandR-Modus-Wechsel das Tearing bei Fifo verursacht -- tat er nicht, beide
     // Modi reissen mit unseren eigenen (verlaesslichen) Tearing-Balken identisch.
     // Zurueckgesetzt auf Exclusive (bewusste Wahl von vorher, unabhaengig davon).
-    // Bleibt auch unter Windows Exclusive -- Borderless kostet genau die Latenz, um
-    // die es dem Projekt geht. Das Alt-Tab/Win+D-Problem dort wird stattdessen bei
-    // Fokusverlust geloest (s. WindowEvent::Focused: set_minimized unter Windows).
-    let window_attrs = Window::default_attributes()
-        .with_title("Coral Client")
-        .with_fullscreen(Some(Fullscreen::Exclusive(video_mode.clone())));
+    // Unter Windows randlos: DXGI lehnt die Swapchain im exklusiven Vollbild ab, sobald
+    // ein Aufnahme- oder Overlay-Programm (Discord-Stream, Medal) mitlaeuft, und Alt-Tab/
+    // Win+D brauchten dort eigens ein Minimieren. Exklusiv wird unter Windows nicht
+    // unterstuetzt.
+    #[cfg(not(target_os = "windows"))]
+    let vollbild = Fullscreen::Exclusive(video_mode.clone());
+    #[cfg(target_os = "windows")]
+    let vollbild = Fullscreen::Borderless(Some(monitor.clone()));
+    let window_attrs = Window::default_attributes().with_title("Coral Client").with_fullscreen(Some(vollbild));
     // Stabile WM_CLASS statt dem vom Fenstermanager erratenen Standardwert --
     // scripts/tearfree-auto.sh erkennt unser Fenster daran zuverlaessig. Nur X11.
     #[cfg(target_os = "linux")]
@@ -235,6 +242,7 @@ impl ApplicationHandler for App {
         font_atlas::set_capitals(self.settings.font_capitals);
         gpu.upload_logos();
         self.gpu = Some(gpu);
+        self.release_atlas_pixels();
         self.sync_text_shadow();
         self.apply_pack_shaders();
         self.connect_block_animations();
@@ -267,6 +275,13 @@ impl ApplicationHandler for App {
             gpu.window.set_visible(false);
         }
         self.restore_original_tearfree();
+        eprintln!("[perf] Sitzung CPU: {}", self.frame_stats.session_cpu.summary());
+        eprintln!("[perf] Sitzung GPU: {}", self.frame_stats.session_gpu.summary());
+        if let Some(gpu) = self.gpu.as_ref() {
+            let (opak, durchsichtig) = gpu.block_renderer.arena_page_counts();
+            let lod = gpu.lod.as_ref().map_or(0, render::lod_renderer::LodRenderer::page_count);
+            eprintln!("[vram] Seiten je 64 MB: Gelaende opak {opak}, durchsichtig {durchsichtig}, Fernsicht {lod}");
+        }
         // Chunk-Saver: Geaendertes noch speichern, dann schreibt er beim Beenden alles weg.
         self.lod_save_dirty();
         self.lod_shutdown();
@@ -343,7 +358,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         // ebenso Kontenliste und Element-Fenster im HUD-Editor (Nutzerwunsch).
         ButtonAction::OpenQuickConnect | ButtonAction::NewServer | ButtonAction::OpenKeybindAdvanced(_) => UiSound::Open,
         ButtonAction::CloseModuleMenu | ButtonAction::CloseKeybindAdvanced => UiSound::Close,
-        ButtonAction::OpenScreen(_) | ButtonAction::OpenLink(_) | ButtonAction::OpenShaderSettings | ButtonAction::OpenLightLevels | ButtonAction::OpenParticleSettings(_) | ButtonAction::OpenAnimSettings | ButtonAction::Back => UiSound::Click,
+        ButtonAction::OpenScreen(_) | ButtonAction::OpenLink(_) | ButtonAction::OpenParticleSettings(_) | ButtonAction::OpenAnimSettings | ButtonAction::OpenMotionBlurSettings | ButtonAction::Back => UiSound::Click,
         // Schrittweise Werte: Stepper, Listen, Auswahl.
         ButtonAction::FrameLatencyDown
         | ButtonAction::FrameLatencyUp
@@ -375,7 +390,6 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CameraYOffsetUp(_)
         | ButtonAction::CycleProjection
         | ButtonAction::CycleTearPosition
-        | ButtonAction::CycleRenderPath
         | ButtonAction::CycleParticles(_)
         | ButtonAction::CycleDeathAnimation
         | ButtonAction::CycleHoldUseRepeat
@@ -397,16 +411,6 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::InventoryScaleNext
         | ButtonAction::HotbarScalePrev
         | ButtonAction::HotbarScaleNext
-        | ButtonAction::ScatteringPrev
-        | ButtonAction::ScatteringNext
-        | ButtonAction::SunSizePrev
-        | ButtonAction::SunSizeNext
-        | ButtonAction::BlockSoftnessPrev
-        | ButtonAction::BlockSoftnessNext
-        | ButtonAction::LightmapDebugPrev
-        | ButtonAction::LightmapDebugNext
-        | ButtonAction::LightFactorPrev(_)
-        | ButtonAction::LightFactorNext(_)
         | ButtonAction::HotbarDurabilityPrev
         | ButtonAction::HotbarDurabilityNext
         | ButtonAction::ToggleHotbarDurabilityMode
@@ -463,16 +467,23 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::SmoothLightingUp
         | ButtonAction::MotionBlurDown
         | ButtonAction::MotionBlurUp
+        | ButtonAction::EntityBlurDown
+        | ButtonAction::EntityBlurUp
+        | ButtonAction::HandBlurDown
+        | ButtonAction::HandBlurUp
+        | ButtonAction::HandBlurCurvePrev
+        | ButtonAction::HandBlurCurveNext
         | ButtonAction::SlotHoverFadeDown
         | ButtonAction::SlotHoverFadeUp
         | ButtonAction::SwapAnimDown
         | ButtonAction::SwapAnimUp
+        | ButtonAction::HotbarGlideDown
+        | ButtonAction::HotbarGlideUp
         | ButtonAction::BlockOutlineWidthPrev
         | ButtonAction::BlockOutlineWidthNext
         | ButtonAction::ToggleKeybindMode(_) => UiSound::Step,
         // Umschalter -- Richtung aus dem Zustand VOR dem Klick.
         ButtonAction::ToggleHud => umschalten(settings.show_hud),
-        ButtonAction::ToggleBlockShadows => umschalten(settings.shader_block_shadows),
         ButtonAction::ToggleCmaa2 => umschalten(settings.cmaa2_enabled),
         ButtonAction::ToggleCrosshairOutline => umschalten(settings.crosshair_outline),
         ButtonAction::ToggleCrosshairRingOutline => umschalten(settings.crosshair_ring_outline),
@@ -502,10 +513,12 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleAudioAutoOptimize => umschalten(settings.audio_auto_optimize),
         ButtonAction::ToggleSignEditInWorld => umschalten(settings.sign_edit_in_world),
         ButtonAction::SkipPerspective(p) => umschalten(settings.perspective_skipped(p)),
-        ButtonAction::ToggleInventoryMergeHover => umschalten(settings.inventory_merge_hover),
         ButtonAction::TogglePotionMarkStrong => umschalten(settings.potion_mark_strong),
         ButtonAction::TogglePotionMarkLong => umschalten(settings.potion_mark_long),
         ButtonAction::TogglePotionMarkWeak => umschalten(settings.potion_mark_weak),
+        ButtonAction::ToggleSwapAnimSkipTotems => umschalten(settings.swap_anim_skip_totems),
+        ButtonAction::ToggleSwapAnimSkipHealing => umschalten(settings.swap_anim_skip_healing),
+        ButtonAction::ToggleDollBackdropClear => umschalten(settings.doll_backdrop_clear),
         ButtonAction::ToggleDamageTintSkinOnly => umschalten(settings.damage_tint_skin_only),
         ButtonAction::ToggleSnapTap => umschalten(settings.snap_tap_enabled),
         ButtonAction::ToggleUseWhileMining => umschalten(settings.use_while_mining),
@@ -520,6 +533,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleHitboxSmoothed => umschalten(settings.module_hitbox_show_smoothed),
         ButtonAction::ToggleModuleHitboxRaw => umschalten(settings.module_hitbox_show_raw),
         ButtonAction::ToggleModuleHitboxDotted => umschalten(settings.module_hitbox_dotted),
+        ButtonAction::ToggleModuleHitboxVisibleEdges => umschalten(settings.module_hitbox_visible_edges),
         ButtonAction::ToggleModuleHitboxItems => umschalten(settings.module_hitbox_items),
         ButtonAction::ToggleModuleHitboxSelf => umschalten(settings.module_hitbox_self),
         ButtonAction::ToggleHitboxKind(art) => umschalten(settings.module_hitbox_styles[art.index()].on),
@@ -611,6 +625,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleArmorHudGreen => umschalten(settings.armor_hud_green),
         ButtonAction::ToggleArmorHudRing => umschalten(settings.armor_hud_ring),
         ButtonAction::ToggleArrowWhite => umschalten(settings.arrow_white),
+        ButtonAction::ToggleArrowEmptySound => umschalten(settings.arrow_empty_sound),
         ButtonAction::ToggleArrowTrail => umschalten(settings.arrow_trail),
         ButtonAction::ToggleShieldCdSelf => umschalten(settings.shield_cd_self),
         ButtonAction::ToggleShieldCdPlayers => umschalten(settings.shield_cd_players),
@@ -626,7 +641,6 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
                 Action::ToggleSounds => umschalten(t.sounds),
                 Action::ToggleVisuals => umschalten(t.visuals),
                 Action::ToggleHideOwnFloating => umschalten(t.hide_own_floating),
-                Action::ToggleHideOwnParticles => umschalten(t.hide_own_particles),
                 Action::ToggleHideOtherParticles => umschalten(t.hide_other_particles),
                 _ => UiSound::Click,
             }
@@ -666,25 +680,63 @@ fn model_face(q: &assets::ModelQuad, rect: assets::UvRect) -> world::ModelFace {
 // nicht angelegt werden kann) nur ueber `log`; ohne Logger fehlte er im client.log.
 struct WgpuLog;
 
+// CORAL_GPUMEM=1: zusaetzlich jede angelegte Textur mit Name, Groesse und Format (wgpu-core
+// meldet das auf Trace-Stufe) -- um den VRAM-Verbrauch den Texturen zuordnen zu koennen.
+fn gpumem_log() -> bool {
+    static AN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AN.get_or_init(|| std::env::var_os("CORAL_GPUMEM").is_some_and(|v| v == "1"))
+}
+
 impl log::Log for WgpuLog {
     fn enabled(&self, meta: &log::Metadata) -> bool {
-        meta.level() <= log::Level::Error && meta.target().starts_with("wgpu")
+        meta.target().starts_with("wgpu") && (meta.level() <= log::Level::Error || (gpumem_log() && meta.target() == "wgpu_core::device::global"))
     }
 
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        if record.level() <= log::Level::Error {
             println!("[{}] {}", record.target(), record.args());
+            return;
+        }
+        let text = record.args().to_string();
+        if text.starts_with("Device::create_texture") || text.starts_with("Texture::drop") {
+            println!("[gpumem] {text}");
         }
     }
 
     fn flush(&self) {}
 }
 
+// Ob der Shader-Pfad zeichnet. Er ist veraltet und ruht: ohne Feature shader_path gar nicht
+// gebaut, mit ihm per Umgebungsvariable CORAL_SHADER_PATH=1 eingeschaltet, sonst der PvP-Pfad.
+// Einstellungen hat er keine mehr, er laeuft mit seinen Vorgaben.
+pub(crate) fn shader_path_on() -> bool {
+    #[cfg(feature = "shader_path")]
+    {
+        static AN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *AN.get_or_init(|| std::env::var_os("CORAL_SHADER_PATH").is_some_and(|v| v == "1"))
+    }
+    #[cfg(not(feature = "shader_path"))]
+    {
+        false
+    }
+}
+
 fn main() {
+    // Vor dem ersten weiteren Thread: glibc legt sonst bis zu 8 Speicherbereiche je Kern an, und
+    // jeder behaelt freigegebenen Speicher (Mesher, Chunk-Decoder geben staendig frei). Gemessen
+    // 2026-11-05 in perfwelt, gleiche Chunkzahl: 654 MB RSS mit 54 Bereichen, 460 MB mit 2.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: mallopt aendert nur eine Einstellung von glibc-malloc; noch laeuft kein zweiter Thread.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+    }
     // Vor allem anderen: alte mc-client-Ordner auf den neuen Namen umziehen (s. assets::source).
     assets::migrate_legacy_dirs();
     if log::set_logger(&WgpuLog).is_ok() {
-        log::set_max_level(log::LevelFilter::Error);
+        log::set_max_level(if gpumem_log() { log::LevelFilter::Trace } else { log::LevelFilter::Error });
     }
 
     // nice -10 nur, wenn ueber scripts/run-with-performance.sh gestartet (das setzt

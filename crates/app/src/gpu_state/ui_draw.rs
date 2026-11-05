@@ -281,7 +281,7 @@ impl GpuState {
     // Weiss wird immer umrandet; in Fadenkreuz-Farbe nur, wenn das Kreuz eine Kontur hat.
     pub(crate) fn crosshair_glyph_vertices(&self, atlas: &FontAtlas, t: &CrosshairText, crosshair_outline: bool, screen_px: (f32, f32)) -> Vec<CrosshairVertex> {
         let scale = t.scale;
-        let breite: f32 = t.text.chars().filter_map(|c| atlas.glyph(c)).map(|g| g.advance_px * scale).sum();
+        let breite: f32 = t.text.chars().filter_map(|c| crosshair_advance(atlas, c, t.stable_digits)).map(|(platz, _)| platz * scale).sum();
         let hoehe = atlas.cell_height_px() * scale;
         let x0 = (t.center_px.0 - breite / 2.0).round();
         let top = (t.center_px.1 - hoehe / 2.0).round();
@@ -290,18 +290,26 @@ impl GpuState {
         let mut quads = Vec::new();
         let mut pen = x0;
         for ch in t.text.chars() {
-            let Some(g) = atlas.glyph(ch) else { continue };
+            let Some((platz, eigen)) = crosshair_advance(atlas, ch, t.stable_digits) else { continue };
+            // Mittig im Platz (ohne stabile Ziffern ist der Platz der eigene Vorschub).
+            let hier = pen + (platz - eigen) * scale / 2.0;
             if let Some(p) = atlas.place(ch, scale).filter(|p| p.size[0] > 0.0 && p.size[1] > 0.0) {
-                let (p, x) = atlas.snap_x(ch, scale, false, p, pen);
-                let (ox, oy) = if p.snap { (x, baseline.round()) } else { (pen, baseline) };
+                let (p, x) = atlas.snap_x(ch, scale, false, p, hier);
+                let (ox, oy) = if p.snap { (x, baseline.round()) } else { (hier, baseline) };
                 quads.push((ox + p.offset[0], oy + p.offset[1], p.size, p.uv_min, p.uv_max));
             }
-            pen += g.advance_px * scale;
+            pen += platz * scale;
         }
-        let konturiert = t.white || crosshair_outline;
+        let konturiert = t.white || t.yellow || crosshair_outline;
         let d = (scale / 2.0).round().max(1.0);
         const RICHTUNGEN: [(f32, f32); 8] = [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)];
-        let fuellung = if t.white { CROSSHAIR_KIND_GLYPH_WHITE } else { CROSSHAIR_KIND_GLYPH };
+        let fuellung = if t.yellow {
+            CROSSHAIR_KIND_GLYPH_YELLOW
+        } else if t.white {
+            CROSSHAIR_KIND_GLYPH_WHITE
+        } else {
+            CROSSHAIR_KIND_GLYPH
+        };
         let lagen = RICHTUNGEN
             .iter()
             .filter(|_| konturiert)

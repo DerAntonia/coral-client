@@ -163,7 +163,7 @@ impl App {
                 color: if primaer { g(Slot::Accent) } else { g(Slot::Surface2) },
                 scale: UI_SCALE_SMALL,
             };
-            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, r.contains(cx, cy)));
+            let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, b.enabled && r.contains(cx, cy)));
             rects.push(flaeche);
             texts.push(gpu.centered_text(r, label.to_string(), farbe, UI_SCALE_SMALL));
         }

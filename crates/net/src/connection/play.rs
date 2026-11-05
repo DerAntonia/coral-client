@@ -301,6 +301,12 @@ pub(super) async fn handle_play_packet(
         return on_player_position(conn, events, payload, rotation).await;
     } else if id == packets::CB_PLAY_PLAYER_ROTATION {
         return on_player_rotation(conn, events, payload, rotation).await;
+    } else if id == packets::CB_PLAY_PLAYER_LOOK_AT {
+        // Anders als Player Rotation ohne eigene Antwort (Vanillas handleLookAt dreht nur
+        // den Spieler): die neue Richtung geht mit dem naechsten Bewegungspaket raus.
+        if let Ok(l) = packets::read_player_look_at(payload) {
+            let _ = events.send(ClientEvent::LookAt { from_eyes: l.from_eyes, target: l.target, entity: l.entity });
+        }
     } else if id == packets::CB_PLAY_FORGET_LEVEL_CHUNK {
         if let Ok((x, z)) = packets::read_forget_level_chunk(payload) {
             let _ = events.send(ClientEvent::ForgetChunk(x, z));
@@ -570,8 +576,8 @@ pub(super) async fn handle_play_packet(
             let _ = events.send(ClientEvent::EntityAnimation { entity_id, animation });
         }
     } else if id == packets::CB_PLAY_DAMAGE_EVENT {
-        if let Ok((entity_id, damage_type)) = packets::read_damage_event(payload) {
-            let _ = events.send(ClientEvent::EntityDamaged { entity_id, damage_type });
+        if let Ok(ev) = packets::read_damage_event(payload) {
+            let _ = events.send(ClientEvent::EntityDamaged { entity_id: ev.entity_id, damage_type: ev.damage_type, cause_id: ev.cause_id, direct_id: ev.direct_id, source_pos: ev.source_pos });
         }
     } else if id == packets::CB_PLAY_SET_EQUIPMENT {
         // Ein unbekannter Component-Typ im Stapel macht den REST des Pakets unlesbar (die

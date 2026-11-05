@@ -140,7 +140,7 @@ impl App {
             let (knoepfe, (lx, ly), _) = self.skin_strip(gpu);
             texts.push(UiText { text: "Zips automatisch entpacken".to_string(), x: lx, y: ly, color: theme::text(), scale: UI_SCALE_SMALL });
             for b in knoepfe {
-                let hover = self.skin_files.is_none() && b.hits(cx, cy);
+                let hover = self.skin_files.is_none() && b.enabled && b.hits(cx, cy);
                 let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, hover));
                 rects.push(flaeche);
                 texts.push(gpu.centered_text(b.rect, b.label, farbe, b.scale));
@@ -446,9 +446,7 @@ impl App {
             MenuScreen::SettingsLanguage => self.build_settings_language_tab(gpu, texts),
             MenuScreen::SettingsModules => self.build_module_menu(gpu, rects, texts),
             MenuScreen::SettingsSensCalc => self.build_sens_calc(gpu, rects, texts),
-            MenuScreen::SettingsShader => self.build_settings_shader(gpu, rects, texts),
             MenuScreen::SettingsConfigs => self.build_settings_configs(gpu, rects, texts),
-            MenuScreen::SettingsLightLevels => self.build_settings_light_levels(gpu, rects, texts),
             MenuScreen::SettingsParticles => self.build_settings_particles(gpu, rects, texts),
             MenuScreen::SettingsServerScreens => {
                 for zeile in 0..SERVER_SCREENS_ROWS {
@@ -465,6 +463,23 @@ impl App {
                     };
                     let y = (settings_row_y(zeile) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                     texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
+            }
+            MenuScreen::SettingsMotionBlur => {
+                let set = &self.settings;
+                let prozent = |p: u32| if p == 0 { "Aus".to_string() } else { format!("{p} %") };
+                let k = (set.hand_blur_curve as usize).min(HAND_BLUR_CURVES.len() - 1);
+                for (zeile, label, wert) in [
+                    (MB_WORLD_ROW, "Motion Blur", prozent(set.motion_blur_percent)),
+                    (MB_ENTITIES_ROW, "Moving Blur", prozent(set.motion_blur_entities_percent)),
+                    (MB_HAND_ROW, "Hand Blur", prozent(set.hand_blur_percent)),
+                    (MB_HAND_CURVE_ROW, "Gewichtung", HAND_BLUR_CURVES[k].to_string()),
+                ] {
+                    let y = (settings_row_y(zeile) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                    let rect = stepper_value_rect(zeile);
+                    rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                    texts.push(gpu.centered_text(rect, wert, theme::text(), UI_SCALE_SMALL));
                 }
             }
             MenuScreen::SettingsAnimations => {

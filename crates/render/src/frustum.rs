@@ -7,6 +7,7 @@ use glam::{Mat4, Vec3, Vec4Swizzles};
 
 // Ebenen als (Normale, Distanz), sodass ein Punkt p genau dann VOR der Ebene liegt,
 // wenn normal.dot(p) + d >= 0. Reihenfolge egal, alle sechs muessen erfuellt sein.
+#[derive(Clone, Copy)]
 pub struct Frustum {
     planes: [(Vec3, f32); 6],
 }

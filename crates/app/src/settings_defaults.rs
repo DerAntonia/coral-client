@@ -90,6 +90,7 @@ impl Settings {
             hotbar_durability_absolute: false,
             hotbar_durability_points: 50,
             hotbar_air_bar: false,
+            hotbar_glide_ms: 0,
             spectator_speed: spectator::DEFAULT_SPEED,
             // Etwa dort, wo der Chat vorher fest sass (kleiner Rand links, knapp ueber der
             // Eingabezeile am unteren Rand).
@@ -110,12 +111,6 @@ impl Settings {
             ui_sound_volume: [100.0; ui_sound::UiSound::ALL.len()],
             inventory_transparency: 50,
             inventory_cursor_to_slot: true,
-            shader_scattering_percent: 100,
-            shader_sun_size_tenths: 20,
-            shader_block_shadows: true,
-            shader_lightmap_debug: 0,
-            shader_block_softness_deg: 6,
-            light_factors: Vec::new(),
             glint_speed: 50,
             glint_strength: 75,
             player_list_scale: 100,
@@ -152,8 +147,9 @@ impl Settings {
             particles_mode_own: 0,
             particle_tuning_own: [particles::ParticleTuning::default(); particles::KINDS.len()],
             cave_culling: true,
+            entity_culling: true,
+            entity_ray_culling: true,
             mipmapping: true,
-            render_path: 0,
             font: 0,            // Minecraft
             text_shadow: true,  // wie Vanilla
             text_shadow_style: 0,
@@ -199,6 +195,7 @@ impl Settings {
             module_hitbox_show_smoothed: true,
             module_hitbox_show_raw: false,
             module_hitbox_dotted: false,
+            module_hitbox_visible_edges: false,
             module_hitbox_items: false,
             module_hitbox_self: true,
             module_hitbox_density_px: 2,
@@ -314,6 +311,7 @@ impl Settings {
             // 2 px -- deutlich sichtbar statt des halbdurchsichtigen Graus von Vanilla.
             module_block_outline: false,
             arrow_empty_feedback: ARROW_EMPTY_FEEDBACK_BLINK,
+            arrow_empty_sound: true,
             module_show_markers: false,
             module_sound_debug: false,
             module_hand_debug: false,
@@ -372,10 +370,12 @@ impl Settings {
             potion_mark_strong: true,
             potion_mark_long: true,
             potion_mark_weak: true,
-            inventory_merge_hover: true,
             slot_hover_fade_ms: 100,
             slot_hover_color: [0, 0, 100, 25],
             swap_anim_ms: 150,
+            swap_anim_skip_totems: false,
+            swap_anim_skip_healing: false,
+            doll_backdrop_clear: true,
             color_saturation: 0,
             discord_client_id: String::new(),
             block_outline_hue: 0,
@@ -408,6 +408,9 @@ impl Settings {
             block_rng_rotation: true,            // wie Vanilla
             smooth_lighting_percent: SMOOTH_LIGHTING_MAX, // wie Vanilla
             motion_blur_percent: 0,
+            motion_blur_entities_percent: 0,
+            hand_blur_percent: 0,
+            hand_blur_curve: 1,
             jump_cooldown_enabled: true,         // wie Vanilla
             sprint_on_start: false,
             caps_lock_blocked: false,

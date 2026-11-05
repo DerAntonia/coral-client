@@ -205,6 +205,27 @@ fn absorption_hinter_partikelliste_und_arm_kommt_an() {
 }
 
 #[test]
+// Lore: eigener Anzeigeblock (optional, StateId + 1), Versatz und Ofen-Brennstoff. Ein leerer
+// Anzeigeblock heisst "Vorgabe der Lore", nicht "stand nicht im Paket".
+fn lore_anzeigeblock_versatz_und_brennstoff() {
+    let mut w = PacketWriter::new();
+    w.write_varint(CB_PLAY_SET_ENTITY_DATA).write_varint(3);
+    w.write_u8(MINECART_INDEX_DISPLAY_BLOCK).write_varint(DATA_TYPE_OPTIONAL_BLOCK_STATE).write_varint(2141);
+    w.write_u8(MINECART_INDEX_DISPLAY_OFFSET).write_varint(DATA_TYPE_INT).write_varint(10);
+    w.write_u8(FURNACE_MINECART_INDEX_FUEL).write_varint(DATA_TYPE_BOOLEAN).write_bool(true);
+    w.write_u8(0xFF);
+    let update = read_set_entity_data(&w.into_bytes()).unwrap();
+    assert_eq!(update.minecart_block, Some(Some(2140)));
+    assert_eq!(update.minecart_offset, Some(10));
+    assert_eq!(update.minecart_fuel, Some(true));
+    let mut w = PacketWriter::new();
+    w.write_varint(CB_PLAY_SET_ENTITY_DATA).write_varint(3);
+    w.write_u8(MINECART_INDEX_DISPLAY_BLOCK).write_varint(DATA_TYPE_OPTIONAL_BLOCK_STATE).write_varint(0);
+    w.write_u8(0xFF);
+    assert_eq!(read_set_entity_data(&w.into_bytes()).unwrap().minecart_block, Some(None));
+}
+
+#[test]
 // Zaubertisch & Co.: Container-ID als VarInt, dann zwei Shorts (auch negativ: -1 heisst
 // beim Zaubertisch "kein Hinweis").
 fn container_daten_und_knoepfe() {
@@ -639,6 +660,27 @@ fn player_rotation_liest_beide_achsen_mit_eigenem_relativ_flag() {
     assert!(rel_yaw, "yaw war als relativ markiert");
     assert_eq!(pitch, -12.25);
     assert!(!rel_pitch, "pitch war als absolut markiert");
+}
+
+// Wire-Format aus ClientboundPlayerLookAtPacket: Anker, drei f64, bool, [VarInt, Anker].
+#[test]
+fn player_look_at_liest_punkt_und_entity() {
+    let mut payload = vec![CB_PLAY_PLAYER_LOOK_AT as u8, 1];
+    for v in [4.0f64, -43.0, 19.5] {
+        payload.extend_from_slice(&v.to_be_bytes());
+    }
+    payload.push(0);
+    let l = read_player_look_at(&payload).unwrap();
+    assert_eq!(l, PlayerLookAt { from_eyes: true, target: (4.0, -43.0, 19.5), entity: None });
+
+    let mut payload = vec![CB_PLAY_PLAYER_LOOK_AT as u8, 0];
+    for v in [1.0f64, 2.0, 3.0] {
+        payload.extend_from_slice(&v.to_be_bytes());
+    }
+    payload.extend_from_slice(&[1, 0xAC, 0x02, 1]); // Entity 300, Augen
+    let l = read_player_look_at(&payload).unwrap();
+    assert_eq!(l.entity, Some((300, true)));
+    assert!(!l.from_eyes);
 }
 
 #[test]

@@ -7,6 +7,11 @@ version.workspace = true
 name = "coral-client"
 path = "src/main.rs"
 
+[features]
+# Shader-Pfad (veraltet, ruht): nur mit diesem Feature gebaut, eingeschaltet dann per
+# CORAL_SHADER_PATH=1 (s. main.rs shader_path_on). Standardmaessig aus.
+shader_path = ["render/shader_path"]
+
 [dependencies]
 protocol = { path = "../protocol" }
 net = { path = "../net" }
@@ -16,6 +21,7 @@ world = { path = "../world" }
 chunk_saver = { path = "../chunk_saver" }
 record = { path = "../record" }
 assets = { path = "../assets" }
+font_atlas = { path = "../font_atlas" }
 audio = { path = "../audio" }
 voice = { path = "../voice" }
 winit.workspace = true
@@ -25,8 +31,6 @@ pollster = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 arboard = "3"
 glam = "0.29"
-# TTF-Rasterung fuer die DM-Sans-Schrift (s. font_atlas.rs).
-ab_glyph = "0.2"
 rustc-hash.workspace = true
 # Hintergrundbild des Startbildschirms (s. wallpaper.rs): Fotos sind meist JPEG oder WebP.
 # Datum/Uhrzeit fuer den Chat-Log (s. chat_log.rs).

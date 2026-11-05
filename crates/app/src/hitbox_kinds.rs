@@ -3,8 +3,9 @@
 // Zwei Gruppen. Die Entities, die im PvP zaehlen (Spieler, Geschosse, Items am Boden), und
 // zwei Bloecke, deren Trefferflaeche man im Kampf kennen will: Spinnennetz (der ganze Block,
 // obwohl das Modell nur ein flaches Kreuz ist) und Wasserquellen in der Form, die ein Eimer
-// trifft. Alles, was hier nicht steht (Mobs, Ruestungsstaender, Boote), bekommt weiter die
-// Farbe der geglaetteten Box und die Deckkraft des Moduls.
+// trifft. Dazu die Mobs in zwei Gruppen, gefaehrlich und passiv (s. ENEMY_NAMES). Alles, was
+// hier nicht steht (Ruestungsstaender, Boote, Loren), bekommt weiter die Farbe der
+// geglaetteten Box und die Deckkraft des Moduls.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HitboxKind {
@@ -20,12 +21,14 @@ pub enum HitboxKind {
     Firework,
     EndCrystal,
     Tnt,
+    DangerousMob,
+    PassiveMob,
     Cobweb,
     Water,
 }
 
 impl HitboxKind {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 16;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Player,
         Self::EnderPearl,
@@ -39,6 +42,8 @@ impl HitboxKind {
         Self::Firework,
         Self::EndCrystal,
         Self::Tnt,
+        Self::DangerousMob,
+        Self::PassiveMob,
         Self::Cobweb,
         Self::Water,
     ];
@@ -56,8 +61,9 @@ impl HitboxKind {
         self as usize
     }
 
-    // Art eines Entities aus seinem Registry-Namen; None = keine eigene Art.
-    pub fn of_entity(name: &str) -> Option<Self> {
+    // Art eines Entities aus seinem Registry-Index; None = keine eigene Art.
+    pub fn of_entity(type_index: i32) -> Option<Self> {
+        let name = world::entity_type_name(type_index)?;
         Some(match name {
             "player" => Self::Player,
             "ender_pearl" => Self::EnderPearl,
@@ -71,6 +77,11 @@ impl HitboxKind {
             "firework_rocket" => Self::Firework,
             "end_crystal" => Self::EndCrystal,
             "tnt" | "tnt_minecart" => Self::Tnt,
+            _ if ENEMY_NAMES.contains(&name) => Self::DangerousMob,
+            // Mob = jedes Lebewesen ausser Spieler, Ruestungsstaender und Puppe (Mannequin),
+            // die in Vanilla keine Mob-Unterklasse sind.
+            "armor_stand" | "mannequin" => return None,
+            _ if world::is_living(type_index) => Self::PassiveMob,
             _ => return None,
         })
     }
@@ -89,6 +100,8 @@ impl HitboxKind {
             Self::Firework => "Feuerwerksrakete",
             Self::EndCrystal => "Endkristall",
             Self::Tnt => "TNT",
+            Self::DangerousMob => "Gefährliche Mobs",
+            Self::PassiveMob => "Passive Mobs",
             Self::Cobweb => "Spinnennetz",
             Self::Water => "Wasserquelle",
         }
@@ -109,6 +122,8 @@ impl HitboxKind {
             Self::Firework => "firework",
             Self::EndCrystal => "end_crystal",
             Self::Tnt => "tnt",
+            Self::DangerousMob => "dangerous_mob",
+            Self::PassiveMob => "passive_mob",
             Self::Cobweb => "cobweb",
             Self::Water => "water",
         }
@@ -144,6 +159,8 @@ impl HitboxKind {
             Self::Firework => (true, 30, 90, 100),
             Self::EndCrystal => (true, 300, 80, 100),
             Self::Tnt => (true, 0, 90, 100),
+            Self::DangerousMob => (true, 15, 80, 95),
+            Self::PassiveMob => (true, 130, 50, 85),
             Self::Cobweb => (false, 0, 0, 100),
             Self::Water => (false, 210, 80, 100),
         };
@@ -205,6 +222,19 @@ pub fn bucket_source(state: u32) -> bool {
     }
 }
 
+// Gefaehrliche Mobs: die Typen, deren Klasse in Vanilla das Interface Enemy traegt (direkt,
+// ueber Monster oder eine andere Oberklasse). Abgeleitet aus EntityType.java und der
+// Klassenhierarchie in decompiled/client-1.21.11, nicht von Hand gewaehlt. Neutrale Tiere
+// (Wolf, Biene, Eisengolem, Eisbaer, Lama) sind in Vanilla kein Enemy und zaehlen als
+// passiv, ebenso die Reittiere der Kategorie MONSTER (Zombiepferd, Kamel-Husk,
+// Zombie-Nautilus).
+const ENEMY_NAMES: [&str; 41] = [
+    "blaze", "bogged", "breeze", "cave_spider", "creaking", "creeper", "drowned", "elder_guardian", "enderman", "endermite",
+    "ender_dragon", "evoker", "ghast", "giant", "guardian", "hoglin", "husk", "illusioner", "magma_cube", "parched", "phantom",
+    "piglin", "piglin_brute", "pillager", "ravager", "shulker", "silverfish", "skeleton", "slime", "spider", "stray", "vex",
+    "vindicator", "warden", "witch", "wither", "wither_skeleton", "zoglin", "zombie", "zombie_villager", "zombified_piglin",
+];
+
 pub fn default_styles() -> [HitboxStyle; HitboxKind::COUNT] {
     HitboxKind::ALL.map(HitboxKind::default_style)
 }
@@ -242,9 +272,27 @@ mod tests {
             "tnt",
             "tnt_minecart",
         ] {
-            assert!(world::entity_types::ENTITY_TYPE_NAMES.contains(&name), "{name} fehlt in der Registry");
-            assert!(HitboxKind::of_entity(name).is_some());
+            assert!(art_von(name).is_some());
         }
+    }
+
+    fn art_von(name: &str) -> Option<HitboxKind> {
+        let i = world::entity_types::ENTITY_TYPE_NAMES.iter().position(|n| *n == name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
+        HitboxKind::of_entity(i32::try_from(i).expect("Index passt"))
+    }
+
+    #[test]
+    fn mobs_gefaehrlich_oder_passiv() {
+        for name in ENEMY_NAMES {
+            assert_eq!(art_von(name), Some(HitboxKind::DangerousMob), "{name}");
+        }
+        for name in ["cow", "wolf", "bee", "iron_golem", "villager", "zombie_horse", "bat", "squid"] {
+            assert_eq!(art_von(name), Some(HitboxKind::PassiveMob), "{name}");
+        }
+        for name in ["armor_stand", "mannequin", "oak_boat", "minecart", "item_frame"] {
+            assert_eq!(art_von(name), None, "{name}");
+        }
+        assert_eq!(art_von("player"), Some(HitboxKind::Player));
     }
 
     #[test]

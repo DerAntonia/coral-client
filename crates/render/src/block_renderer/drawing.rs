@@ -66,6 +66,17 @@ impl BlockRenderer {
     // `viewer` = wo die Kamera WIRKLICH sitzt (Camera::view_position) -- in der 3. Person ein
     // Stueck hinter bzw. vor dem Auge. Davon haengt ab, welche Flaechen ihre Vorderseite
     // zeigen; der Sichtkegel-Test rechnet dagegen augenrelativ wie die Geometrie.
+    // Ist diese Section nach dem Hoehlen-Culling erreichbar (s. occlusion)? Fuer Entities und
+    // Blockentities, wie Vanillas LevelRenderer.isSectionCompiledAndVisible. `index` zaehlt ab
+    // der Unterkante der Welt. Ohne Hoehlen-Culling und ausserhalb der Spalte immer ja.
+    #[must_use]
+    pub fn section_reachable(&self, column: (i32, i32), index: i32) -> bool {
+        if !self.cave_culling || !(0..64).contains(&index) {
+            return true;
+        }
+        self.occlusion.mask(column) >> index & 1 != 0
+    }
+
     pub fn prepare_terrain_draws(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frustum: &Frustum, eye: DVec3, viewer: DVec3) {
         // Opak: von vorn nach hinten, je Seite gesammelt (die Reihenfolge zwischen den Seiten
         // ist fuer den Tiefentest egal, innerhalb einer Seite bleibt sie erhalten).
@@ -200,9 +211,9 @@ impl BlockRenderer {
     }
 
     pub const fn depth_attachment(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
-        // Die Tiefe bleibt nur stehen, wenn der komplementaere Blockumriss oder die
-        // Bewegungsunschaerfe sie danach braucht.
-        let store = if self.outline_complement.count > 0 || self.keep_depth { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard };
+        // Die Tiefe bleibt nur stehen, wenn der komplementaere Blockumriss, die
+        // Bewegungsunschaerfe oder ein spaeterer Durchgang (depth_read_later) sie danach braucht.
+        let store = if self.outline_complement.count > 0 || self.keep_depth || self.depth_read_later { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard };
         wgpu::RenderPassDepthStencilAttachment {
             view: &self.depth_view,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store }),
@@ -210,12 +221,14 @@ impl BlockRenderer {
         }
     }
 
-    // Weiterzeichnen auf der Tiefe des Welt-Durchgangs (nur mit keep_depth), ohne sie danach
-    // noch zu brauchen -- die Hand leert sie ohnehin.
+    // Weiterzeichnen auf der Tiefe des Welt-Durchgangs (nur mit keep_depth oder
+    // depth_read_later). Danach verworfen, ausser ein spaeterer Durchgang liest sie noch --
+    // die Hand leert sie ohnehin.
     pub const fn depth_attachment_load(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+        let store = if self.depth_read_later { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard };
         wgpu::RenderPassDepthStencilAttachment {
             view: &self.depth_view,
-            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store }),
             stencil_ops: None,
         }
     }
@@ -237,6 +250,7 @@ impl BlockRenderer {
         if self.meshes.is_empty()
             && self.translucent_meshes.is_empty()
             && self.entity_vertex_count == 0
+            && !self.skinning.has_draws()
             && self.ghost_vertex_count == 0
             && self.hitbox_vertex_count == 0
             && self.crumbling_vertex_count == 0
@@ -369,7 +383,7 @@ impl BlockRenderer {
             self.translucent_draws.draw(pass, &self.translucent_arena.pages, self.multi_draw);
         }
 
-        if self.entity_vertex_count > 0 {
+        if self.entity_vertex_count > 0 || self.skinning.has_draws() {
             mark(pass, "Entities");
             // NACH dem Wasser: das mischt ohne Tiefe zu schreiben und hat Spieler und Mobs
             // darunter/dahinter blau eingefaerbt (Nutzerwunsch: nicht einfaerben). Die Tiefe der
@@ -382,20 +396,25 @@ impl BlockRenderer {
             // sich deshalb nicht ueber die Vertexfarbe der Block-Pipeline machen
             // (s. block.wgsl::fs_entity).
             // Shader-Pfad mit Licht je Vertex, sofern es fuer alle Vertices vorliegt.
+            // Die festen Modelle per Skinning zuerst: deckend wie der Hauptteil unten, also vor
+            // allem Durchscheinenden. Sie setzen Pipeline, Gruppe 2 und Puffer selbst.
+            self.skinning.draw(pass);
             let beleuchtet = lit && self.entity_light_count == self.entity_vertex_count;
-            pass.set_pipeline(if beleuchtet { &self.lit_entity_pipeline } else { &self.entity_pipeline });
-            let bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<BlockVertex>() as u64;
-            let tint_bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<[f32; 4]>() as u64;
-            pass.set_vertex_buffer(0, self.entity_buffer.slice(..bytes));
-            pass.set_vertex_buffer(1, self.entity_tint_buffer.slice(..tint_bytes));
-            if beleuchtet {
-                let light_bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<u32>() as u64;
-                pass.set_vertex_buffer(2, self.entity_light_buffer.slice(..light_bytes));
-            }
             let deckend = self.entity_vertex_count - self.entity_translucent_count;
             let kopf = self.entity_head_translucent;
-            pass.draw(kopf..deckend, 0..1);
-            if self.entity_translucent_count > 0 || kopf > 0 {
+            if self.entity_vertex_count > 0 {
+                pass.set_pipeline(if beleuchtet { &self.lit_entity_pipeline } else { &self.entity_pipeline });
+                let bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<BlockVertex>() as u64;
+                let tint_bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<[f32; 4]>() as u64;
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..bytes));
+                pass.set_vertex_buffer(1, self.entity_tint_buffer.slice(..tint_bytes));
+                if beleuchtet {
+                    let light_bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<u32>() as u64;
+                    pass.set_vertex_buffer(2, self.entity_light_buffer.slice(..light_bytes));
+                }
+                pass.draw(kopf..deckend, 0..1);
+            }
+            if self.entity_vertex_count > 0 && (self.entity_translucent_count > 0 || kopf > 0) {
                 pass.set_pipeline(if beleuchtet { &self.lit_entity_translucent_pipeline } else { &self.entity_translucent_pipeline });
                 if kopf > 0 {
                     pass.draw(0..kopf, 0..1);
@@ -408,6 +427,7 @@ impl BlockRenderer {
             // Glint verzauberter Items/Ruestung -- gleich danach, solange der Entity-Atlas
             // noch gebunden ist (die Maske sampelt ihn).
             self.draw_glint(pass, &self.entity_glint);
+            self.skinning.draw_glint(pass, &self.glint_bind_group);
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(1, self.atlas_group(), &[]);
         }
@@ -433,7 +453,8 @@ impl BlockRenderer {
         // (s. fs_hitbox). Sie steht hier, weil die Kanten NACH der Projektion auf Pixelbreite
         // gebracht werden und dafuer gegen die fertige Tiefe der Welt testen muessen.
         // Nach dem Wasser, damit es sie nicht blau einfaerbt (wie bei den Entities oben).
-        if self.hitbox_vertex_count > 0 {
+        // Mit Bewegungsunschaerfe erst nach ihr (s. render_hitboxes), damit sie scharf bleiben.
+        if self.hitbox_vertex_count > 0 && !self.keep_depth {
             mark(pass, "Sonstiges");
             pass.set_pipeline(&self.hitbox_pipeline);
             let bytes = u64::from(self.hitbox_vertex_count) * std::mem::size_of::<HitboxVertex>() as u64;

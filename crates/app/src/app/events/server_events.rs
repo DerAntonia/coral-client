@@ -65,6 +65,28 @@ impl App {
         }
     }
 
+    // Der Server laesst uns auf etwas schauen (Player Look At, /tp ... facing). Wie Vanillas
+    // handleLookAt/Entity.lookAt: Ziel ist das Entity (Fuesse oder Augen), wenn wir es kennen,
+    // sonst der mitgeschickte Punkt; die Richtung vom eigenen Anker aus. Keine Bestaetigung
+    // -- die neue Richtung geht mit dem naechsten Bewegungspaket raus.
+    pub(crate) fn on_look_at(&mut self, from_eyes: bool, target: (f64, f64, f64), entity: Option<(i32, bool)>) {
+        let ziel = entity
+            .and_then(|(id, augen)| {
+                let e = self.entities.get(id)?;
+                let (x, y, z) = e.pos;
+                Some(DVec3::new(x, y + if augen { e.eye_height() } else { 0.0 }, z))
+            })
+            .unwrap_or_else(|| DVec3::new(target.0, target.1, target.2));
+        let von = if from_eyes { self.physics.eye_pos() } else { self.physics.pos };
+        let d = ziel - von;
+        let pitch = world::entity_model::wrap_degrees(-d.y.atan2(d.x.hypot(d.z)).to_degrees() as f32);
+        let yaw = world::entity_model::wrap_degrees(d.z.atan2(d.x).to_degrees() as f32 - 90.0);
+        self.apply_server_rotation(yaw, pitch);
+        if self.settings.no_rotate_set == SERVER_SET_FOLLOW {
+            self.shared_rotation.set(yaw, pitch);
+        }
+    }
+
     // Ein Ereignis vom Server ist da: eine stehende "Keine Pakete"-Karte weicht der Meldung,
     // wie lange es still war.
     pub(crate) fn server_event_seen(&mut self) {

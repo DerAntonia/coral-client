@@ -23,6 +23,26 @@ fn vs_main(
     return out;
 }
 
+// Verdeckbare Weltbeschriftungen (Hintergrund eines schleichenden Namensschildes, eines
+// Text-Displays): dieselbe Flaeche, die NDC-Tiefe steht in local.w -- das liest fs_main nicht.
+// Gezeichnet gegen die Tiefe der Welt, s. GpuState::label_quad_pipeline.
+@vertex
+fn vs_label(
+    @location(0) position: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) local: vec4<f32>,
+    @location(3) shape: vec4<f32>,
+    @location(4) border_color: vec4<f32>,
+) -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_position = vec4<f32>(position, local.w, 1.0);
+    out.color = color;
+    out.local = local;
+    out.shape = shape;
+    out.border_color = border_color;
+    return out;
+}
+
 // Abstand zum Rand eines Rechtecks mit runden Ecken (negativ = innen), in Pixeln.
 fn rounded_box(p: vec2<f32>, half: vec2<f32>, radius: f32) -> f32 {
     let q = abs(p) - (half - vec2<f32>(radius));

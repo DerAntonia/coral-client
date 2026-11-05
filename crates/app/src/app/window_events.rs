@@ -28,15 +28,6 @@ impl App {
                     self.drag_scroll = None;
                     // Loslassen ausserhalb des Fensters bekommen wir nicht mit.
                     self.binds_down.clear();
-                    // DXGI-Exclusive-Fullscreen gibt den Bildschirm sonst nicht her: der
-                    // Fokusverlust (Alt-Tab, Win+D) kommt als Event hier an, der eigentliche
-                    // Anzeigewechsel aber nicht von selbst -- erst das explizite Minimieren
-                    // laesst Windows aus dem Exclusive-Modus raus. Unter Linux/X11 macht der
-                    // Fenstermanager das schon selbst (s. owns_mouse), deshalb nur hier.
-                    #[cfg(target_os = "windows")]
-                    if let Some(gpu) = self.gpu.as_ref() {
-                        gpu.window.set_minimized(true);
-                    }
                 }
                 // TearFree soll nur greifen, waehrend der Client laeuft und im Vordergrund
                 // ist -- bei Alt-Tab weg den Desktop-Wert zurueck, bei Rueckkehr den vom
@@ -223,13 +214,19 @@ impl App {
                 if let Some(timing) = timing {
                     self.block_animations.presented(timing.present_ns);
                     let now = Instant::now();
-                    self.frame_stats.record(now, timing.idle_ms);
+                    let cpu_ms = self.frame_stats.record(now, timing.idle_ms);
+                    let in_welt = matches!(self.mode, AppMode::World);
+                    if in_welt {
+                        self.frame_stats.session_cpu.add(cpu_ms);
+                    }
                     let sort_ms = match self.mode {
                         AppMode::World => self.gpu.as_ref().map_or(0.0, |g| g.last_sort_ms),
                         AppMode::Menu => 0.0,
                     };
                     self.profiler.add_ms(Phase::Sort, sort_ms);
-                    self.profiler.add_ms(Phase::Encode, timing.encode_ms - sort_ms);
+                    let text_ms = self.gpu.as_ref().map_or(0.0, |g| g.text_shape_ms.take());
+                    self.profiler.add_ms(Phase::TextShaping, text_ms);
+                    self.profiler.add_ms(Phase::Encode, (timing.encode_ms - sort_ms - text_ms).max(0.0));
                     self.profiler.add_ms(Phase::Submit, timing.submit_ms);
                     self.profiler.add_ms(Phase::Present, timing.present_ms);
                     let ziel = if presented_at.is_some() {
@@ -241,6 +238,9 @@ impl App {
                     if let Some(gpu) = self.gpu.as_mut() {
                         if let Some((passes, total)) = gpu.gpu_timer.as_mut().and_then(|t| t.collect(&gpu.device)) {
                             self.frame_stats.record_gpu(now, total);
+                            if in_welt {
+                                self.frame_stats.session_gpu.add(total);
+                            }
                             self.profiler.set_gpu_passes(&passes, total);
                         }
                     }
@@ -320,12 +320,6 @@ impl App {
             let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
             let max = self.particle_max_scroll();
             self.particle_scroll.push(weg, SETTINGS_SCROLL_ROWS_PER_NOTCH, max);
-        }
-        // Lichtstaerken: durch die Trefferliste.
-        if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsLightLevels {
-            let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
-            let max = self.light_max_scroll();
-            self.light_scroll.push(weg, SETTINGS_SCROLL_ROWS_PER_NOTCH, max);
         }
         // Offener Chat: durch den Verlauf blaettern.
         if self.mode == AppMode::World && self.chat_input.is_some() {
@@ -1296,7 +1290,7 @@ impl App {
     fn settings_typing_opens_search(&self) -> bool {
         self.mode == AppMode::Menu
             && self.screen.settings_category().is_some()
-            && !matches!(self.screen, MenuScreen::SettingsSearch | MenuScreen::SettingsLightLevels)
+            && !matches!(self.screen, MenuScreen::SettingsSearch)
             && self.input_field.is_none()
             && self.awaiting_keybind.is_none()
             && !self.text_field_focused()
@@ -1372,23 +1366,6 @@ impl App {
             }
             return true;
         }
-        // Lichtstaerken-Seite: Tippen geht ins Suchfeld.
-        if self.screen == MenuScreen::SettingsLightLevels {
-            match &key_event.logical_key {
-                Key::Named(NamedKey::Backspace) => {
-                    self.light_search.pop();
-                }
-                _ => {
-                    if !self.modifiers.control_key() {
-                        if let Some(text) = &key_event.text {
-                            self.light_search.extend(text.chars().filter(|c| !c.is_control()));
-                        }
-                    }
-                }
-            }
-            self.light_scroll = Default::default();
-            return true;
-        }
 
         // Enter schliesst im HUD-Editor die offenen Element-Einstellungen (wie Escape).
         // Die Adresse von Quick Connect tippt sich weiter oben (s. active_text_field).
@@ -1448,9 +1425,6 @@ impl App {
         }
         if let Some((_, buf)) = &self.input_field {
             return Some((16, buf.clone()));
-        }
-        if self.screen == MenuScreen::SettingsLightLevels {
-            return Some((17, self.light_search.clone()));
         }
         if self.screen == MenuScreen::SettingsSearch {
             return Some((19, self.settings_search.clone()));

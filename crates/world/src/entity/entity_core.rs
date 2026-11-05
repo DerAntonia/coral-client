@@ -208,6 +208,16 @@ pub struct Entity {
     // PI/8 weiter, ruhend 0). Daran haengen die Ruder des Modells und die Arme des Fahrers.
     pub boat_paddles: [bool; 2],
     pub(crate) paddle_positions: [f32; 2],
+    // Nur bei Loren (AbstractMinecart): der eigene Anzeigeblock (None = die Vorgabe der
+    // Lorenart, s. mob_catalog::minecart_display), sein Versatz in Pixeln (None = Vorgabe) und
+    // bei der Ofenlore, ob sie brennt (MinecartFurnace.DATA_ID_FUEL).
+    pub minecart_block: Option<u32>,
+    pub minecart_offset: Option<i32>,
+    pub minecart_fuel: bool,
+    // Nur bei der TNT-Lore: Ticks bis zur Explosion, -1 = nicht gezuendet. Gezuendet meldet der
+    // Server mit Entity-Ereignis 10 (MinecartTNT.handleEntityEvent -> primeFuse, 80 Ticks),
+    // heruntergezaehlt wird wie dort im Tick des Clients.
+    pub minecart_tnt_fuse: i32,
     // Nur bei Spielern: erkennt den Handtausch fuer Mehr Animationen (s. more_anims).
     pub swap: crate::more_anims::SwapWatch,
     // Nur bei Spielern: das zuletzt gehaltene Schwert (Schwert auf dem Ruecken, s. more_anims).

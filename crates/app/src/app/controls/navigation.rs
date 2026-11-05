@@ -136,9 +136,9 @@ impl App {
                 MenuScreen::SettingsConfigs if self.input_field.is_some() => self.input_field = None,
                 MenuScreen::Settings
                 | MenuScreen::SettingsConfigs
-                | MenuScreen::SettingsLightLevels
                 | MenuScreen::SettingsParticles
                 | MenuScreen::SettingsAnimations
+                | MenuScreen::SettingsMotionBlur
                 | MenuScreen::SettingsServerScreens
                 | MenuScreen::SettingsGeneral
                 | MenuScreen::SettingsControls
@@ -152,7 +152,6 @@ impl App {
                 | MenuScreen::SettingsLanguage
                 | MenuScreen::SettingsModules
                 | MenuScreen::SettingsSensCalc
-                | MenuScreen::SettingsShader
                 | MenuScreen::SettingsSetup
                 | MenuScreen::SettingsSearch
                 | MenuScreen::HudEditor
@@ -210,8 +209,7 @@ impl App {
             | MenuScreen::SettingsSearch
             | MenuScreen::Settings => self.settings_return,
             MenuScreen::SettingsSensCalc => MenuScreen::SettingsControls,
-            MenuScreen::SettingsShader => MenuScreen::SettingsGeneral,
-            MenuScreen::SettingsLightLevels => MenuScreen::SettingsShader,
+            MenuScreen::SettingsMotionBlur => MenuScreen::SettingsGeneral,
             MenuScreen::SettingsParticles | MenuScreen::SettingsAnimations => MenuScreen::SettingsVideo,
             MenuScreen::SettingsServerScreens => MenuScreen::SettingsMisc,
             MenuScreen::HudEditor => self.hud_editor_return,

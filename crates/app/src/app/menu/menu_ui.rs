@@ -106,7 +106,7 @@ impl App {
                 Self::push_slider_visual(&mut rects, sl.track(), t, hover || aktiv, aktiv, button.enabled);
                 continue;
             }
-            let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, hover));
+            let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, button.enabled && hover));
             let (dx, dy) = self.content_offset();
             // Zurueck in Inhaltskoordinaten, die Verschiebung folgt unten fuer alles zusammen.
             let rect = Rect { x: button.rect.x - dx, y: button.rect.y - dy, ..button.rect };
@@ -440,6 +440,10 @@ impl App {
                     None
                 }
             }
+            MenuScreen::SettingsMotionBlur => [(MB_WORLD_ROW, MB_WORLD_TOOLTIP), (MB_ENTITIES_ROW, MB_ENTITIES_TOOLTIP), (MB_HAND_ROW, MB_HAND_TOOLTIP), (MB_HAND_CURVE_ROW, MB_HAND_CURVE_TOOLTIP)]
+                .into_iter()
+                .find(|(z, _)| settings_row_hover_rect(*z).contains(cx, cy))
+                .map(|(_, t)| t),
             MenuScreen::SettingsServerScreens => (0..SERVER_SCREENS_ROWS).find(|&z| settings_row_hover_rect(z).contains(cx, cy)).map(|zeile| match zeile {
                 0 => SERVER_CLOSE_INVENTORY_TOOLTIP,
                 SERVER_CLOSE_SIGN_ROW => SERVER_CLOSE_SIGN_TOOLTIP,
@@ -475,34 +479,14 @@ impl App {
             } else {
                 FONT_DRAG_HINT
             }),
-            MenuScreen::SettingsShader if settings_row_hover_rect(5).contains(cx, cy) => Some(
-                "Zur Fehlersuche, statt des Bildes. Licht: wie viel Licht der Lampen ankommt -- gelb am meisten, blau am wenigsten, schwarz keins, rot die Grenze, wo es aufhört. Abweichung: wie weit die Lichtkarten von echten Strahlen abweichen -- schwarz gleich, rot zu hell, blau zu dunkel (voll bei 25 %).",
-            ),
-            MenuScreen::SettingsShader if settings_row_hover_rect(4).contains(cx, cy) => Some(
-                "Für jede Lichtquelle ein eigener Faktor auf ihre Leuchtstärke (Shader-Pfad): 50 % = halb so hell und halb so weit, 0 % = leuchtet gar nicht. Über 100 % wird es heller und reicht weiter (bis 1000 %, dann bis zu 150 Blöcke).",
-            ),
-            MenuScreen::SettingsShader if settings_row_hover_rect(3).contains(cx, cy) => Some(
-                "Wie weich die Schatten von Fackeln, Laternen und anderen Lichtquellen werden, als scheinbare Größe der Quelle in Grad. Wie bei der Sonne: direkt am Hindernis scharf, mit Abstand immer weicher. 0 = überall scharf.",
-            ),
-            MenuScreen::SettingsShader if settings_row_hover_rect(2).contains(cx, cy) => Some(
-                "Fackeln, Laternen, Glowstone und andere Lichtquellen werfen Schatten: Was zwischen Quelle und Fläche steht, hält ihr Licht ab, Buntglas färbt es. Ein Rest bleibt als zurückgeworfenes Licht. Kostet GPU-Zeit, wo viele Quellen nah beieinander sind.",
-            ),
-            MenuScreen::SettingsShader if settings_row_hover_rect(1).contains(cx, cy) => Some(
-                "Wie weich Schattenkanten werden, als scheinbare Größe der Sonne in Grad. Direkt an einer Wand bleibt der Schatten scharf, mit wachsendem Abstand zum Hindernis wird der Übergang breiter (Halbschatten). Die echte Sonne hat 0,5°, 0 = überall scharf.",
-            ),
-            MenuScreen::SettingsShader => settings_row_hover_rect(0).contains(cx, cy).then_some(
-                "Wie stark die Luft Licht streut (Shader-Pfad, Oberwelt). Physikalisch die Dichte der streuenden Teilchen: 100 % = Erdatmosphäre, 0 % = keine Luft und ein schwarzer Himmel wie im Weltraum, mehr = dichtere, dunstigere Luft mit blasserem Himmel und röteren Sonnenuntergängen. Bestimmt auch das Umgebungslicht vom Himmel: ohne Luft sind Schatten tiefschwarz, mit mehr Luft heller.",
-            ),
             MenuScreen::SettingsInventory => {
                 if settings_row_hover_rect(2).contains(cx, cy) {
                     Some("Legt man ein Item in einen Slot, springt der Mauszeiger in die Mitte dieses Slots. Nicht beim Stapel-Verschieben (Shift). Kein Vanilla-Verhalten.")
                 } else if settings_row_hover_rect(4).contains(cx, cy) {
-                    Some("Hält man einen Stapel über einen Slot mit demselben Item, steht am Zeiger die Summe beider Stapel und die Zahl im Slot wird ausgeblendet, statt dass sich zwei Zahlen überlagern.")
-                } else if settings_row_hover_rect(5).contains(cx, cy) {
                     Some("Farbe der Stückzahl in den Slots von Inventar und Kisten. Die Hotbar hat ihre eigene (HUD-Editor, Hotbar).")
-                } else if settings_row_hover_rect(6).contains(cx, cy) {
+                } else if settings_row_hover_rect(5).contains(cx, cy) {
                     Some("Kleines S neben dem Flaschenhals verstärkter Tränke (Stufe II), z. B. Stärke II oder Schnelligkeit II. Gilt im Inventar, nicht in der Hotbar.")
-                } else if settings_row_hover_rect(7).contains(cx, cy) {
+                } else if settings_row_hover_rect(6).contains(cx, cy) {
                     Some("Kleines L neben dem Flaschenhals verlängerter Tränke (mit Redstone gebraut). Gilt im Inventar, nicht in der Hotbar.")
                 } else if settings_row_hover_rect(SLOT_HOVER_FADE_ROW).contains(cx, cy) {
                     Some(SLOT_HOVER_FADE_TOOLTIP)
@@ -510,7 +494,13 @@ impl App {
                     Some(SLOT_HOVER_COLOR_TOOLTIP)
                 } else if settings_row_hover_rect(SWAP_ANIM_ROW).contains(cx, cy) {
                     Some(SWAP_ANIM_TOOLTIP)
-                } else if settings_row_hover_rect(8).contains(cx, cy) {
+                } else if settings_row_hover_rect(SWAP_ANIM_TOTEM_ROW).contains(cx, cy) {
+                    Some(SWAP_ANIM_TOTEM_TOOLTIP)
+                } else if settings_row_hover_rect(SWAP_ANIM_HEALING_ROW).contains(cx, cy) {
+                    Some(SWAP_ANIM_HEALING_TOOLTIP)
+                } else if settings_row_hover_rect(DOLL_BACKDROP_ROW).contains(cx, cy) {
+                    Some(DOLL_BACKDROP_TOOLTIP)
+                } else if settings_row_hover_rect(7).contains(cx, cy) {
                     Some("Kleines W auf Heil- und Schadenstränken der schwachen Stufe I. Stufe II bekommt keinen Buchstaben, weil sie im PvP der Normalfall ist. Gilt im Inventar, nicht in der Hotbar.")
                 } else {
                     settings_row_hover_rect(0).contains(cx, cy).then_some(

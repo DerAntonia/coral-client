@@ -47,7 +47,7 @@ impl App {
     // Die Art des Moduls Himmel, solange es wirkt (an, und nur im Leistungs-Pfad). Nicht beim
     // Launcher-Bild: das zeigt die Szene bei ihrer eigenen Uhrzeit (Tag), nicht den Himmel der Config.
     pub(crate) fn sky_module_mode(&self) -> Option<SkyMode> {
-        (self.settings.module_sky_color_enabled && self.settings.render_path != 1 && self.hero_fov.is_none()).then_some(self.settings.sky_mode)
+        (self.settings.module_sky_color_enabled && !crate::shader_path_on() && self.hero_fov.is_none()).then_some(self.settings.sky_mode)
     }
 
     // Die Weltzeit, nach der der Himmel aussieht: die echte, oder mit dem Modul (Feste

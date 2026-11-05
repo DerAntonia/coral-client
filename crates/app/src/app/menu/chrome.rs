@@ -91,7 +91,7 @@ impl App {
     }
 
     // Scrollstaende, die beim Verlassen erhalten bleiben (s. Settings::settings_scrolls).
-    pub(crate) const fn scroll_slots(&mut self) -> [(&'static str, &mut smooth_scroll::SmoothScroll); 7] {
+    pub(crate) const fn scroll_slots(&mut self) -> [(&'static str, &mut smooth_scroll::SmoothScroll); 6] {
         let [links, rechts] = &mut self.skin_scroll;
         [
             ("render", &mut self.settings_scroll),
@@ -99,7 +99,6 @@ impl App {
             ("skin", links),
             ("skin_right", rechts),
             ("modules", &mut self.module_menu_scroll),
-            ("light_levels", &mut self.light_scroll),
             ("particles", &mut self.particle_scroll),
         ]
     }

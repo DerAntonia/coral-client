@@ -57,6 +57,9 @@ impl Settings {
         let mut akzent2_gelesen = false;
         let mut akzent2_toene_gelesen = false;
         let mut theme_wahl: Option<String> = None;
+        // Frueher Pop-Optik > "Eigene Partikel aus" -- doppelt mit Video > Eigene Partikel >
+        // Totem, das jetzt allein zustaendig ist (s. unten).
+        let mut alte_eigene_pop_wolke_aus = false;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -210,7 +213,6 @@ impl Settings {
                 "potion_mark_strong" => settings.potion_mark_strong = value != "false",
                 "potion_mark_long" => settings.potion_mark_long = value != "false",
                 "potion_mark_weak" => settings.potion_mark_weak = value != "false",
-                "inventory_merge_hover" => settings.inventory_merge_hover = value == "true",
                 "slot_hover_fade_ms" => settings.slot_hover_fade_ms = value.parse::<u32>().unwrap_or(100).min(SLOT_HOVER_FADE_MAX),
                 "slot_hover_color" => {
                     for (i, (ziel, v)) in settings.slot_hover_color.iter_mut().zip(value.split('/')).enumerate() {
@@ -220,6 +222,9 @@ impl Settings {
                     }
                 }
                 "swap_anim_ms" => settings.swap_anim_ms = value.parse::<u32>().unwrap_or(150).min(SWAP_ANIM_MAX),
+                "swap_anim_skip_totems" => settings.swap_anim_skip_totems = value == "true",
+                "swap_anim_skip_healing" => settings.swap_anim_skip_healing = value == "true",
+                "doll_backdrop_clear" => settings.doll_backdrop_clear = value != "false",
                 "chunk_saver_threads" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.chunk_saver_threads = v.clamp(1, lod::THREADS_MAX);
@@ -280,6 +285,9 @@ impl Settings {
                         settings.smooth_lighting_percent = v;
                     }
                 }
+                "motion_blur_entities_percent" => settings.motion_blur_entities_percent = value.parse::<u32>().unwrap_or(0).min(MOTION_BLUR_MAX),
+                "hand_blur_percent" => settings.hand_blur_percent = value.parse::<u32>().unwrap_or(0).min(HAND_BLUR_MAX),
+                "hand_blur_curve" => settings.hand_blur_curve = value.parse::<u8>().unwrap_or(1).min(HAND_BLUR_CURVES.len() as u8 - 1),
                 "motion_blur_percent" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.motion_blur_percent = v.min(MOTION_BLUR_MAX);
@@ -304,6 +312,7 @@ impl Settings {
                         set_keybind_mode_from_str(&mut settings.keybind_modes, action, value);
                     }
                 }
+                "toteming_hide_own_particles" => alte_eigene_pop_wolke_aus = value == "true",
                 _ if settings.toteming.parse_line(key, value) => {}
                 _ if settings.voice.parse_line(key, value) => {}
                 _ if key.starts_with("keybind_") => {
@@ -313,6 +322,12 @@ impl Settings {
                     }
                 }
                 _ => {}
+            }
+        }
+        // Der alte Schalter wirkte nur mit eingeschalteter Pop-Optik.
+        if alte_eigene_pop_wolke_aus && settings.toteming.visuals {
+            if let Some(totem) = particles::KINDS.iter().position(|k| k.key == "totem") {
+                settings.particle_tuning_own[totem].enabled = false;
             }
         }
         if !lod_neu && settings.module_chunk_saver && alt_zeichnen {
@@ -591,6 +606,7 @@ impl Settings {
                     settings.spectator_speed = spectator::nearest_speed(v);
                 }
             }
+            "hotbar_glide_ms" => settings.hotbar_glide_ms = value.parse::<u32>().unwrap_or(0).min(HOTBAR_GLIDE_MAX),
             "hotbar_durability_points" => {
                 if let Ok(v) = value.parse::<u32>() {
                     settings.hotbar_durability_points = nearest_durability_points(v);
@@ -677,38 +693,6 @@ impl Settings {
     fn parse_keys_shader_crosshair(settings: &mut Self, key: &str, value: &str) -> bool {
         match key {
             "inventory_cursor_to_slot" => settings.inventory_cursor_to_slot = value == "true",
-            "shader_block_shadows" => settings.shader_block_shadows = value == "true",
-            // Frueher ein Schalter: "true" ist die Ansicht der Arten.
-            "shader_lightmap_debug" => settings.shader_lightmap_debug = if value == "true" { 1 } else { value.parse().unwrap_or(0).min(LIGHTMAP_DEBUG_NAMES.len() as u8 - 1) },
-            "light_factors" => {
-                settings.light_factors = value
-                    .split(';')
-                    .filter_map(|e| {
-                        let (name, pct) = e.split_once(':')?;
-                        let pct = pct.trim().parse::<u32>().ok()?;
-                        // Fruehere Versionen fuehrten Wandfackeln einzeln.
-                        let name = world::light::light_source_name(name.trim());
-                        (!name.is_empty() && pct != 100).then(|| (name.to_string(), pct))
-                    })
-                    .collect();
-                settings.light_factors.sort();
-                settings.light_factors.dedup_by(|a, b| a.0 == b.0);
-            }
-            "shader_block_softness_deg" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    settings.shader_block_softness_deg = v;
-                }
-            }
-            "shader_sun_size_tenths" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    settings.shader_sun_size_tenths = v;
-                }
-            }
-            "shader_scattering_percent" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    settings.shader_scattering_percent = v;
-                }
-            }
             "inventory_transparency" => {
                 if let Ok(v) = value.parse::<u32>() {
                     settings.inventory_transparency = v;
@@ -870,12 +854,9 @@ impl Settings {
     fn parse_keys_render_modules(settings: &mut Self, key: &str, value: &str) -> bool {
         match key {
             "cave_culling" => settings.cave_culling = value == "true",
+            "entity_culling" => settings.entity_culling = value == "true",
+            "entity_ray_culling" => settings.entity_ray_culling = value == "true",
             "mipmapping" => settings.mipmapping = value == "true",
-            "render_path" => {
-                if let Ok(v) = value.parse::<u8>() {
-                    settings.render_path = v.min(RENDER_PATH_NAMES.len() as u8 - 1);
-                }
-            }
             "particles_mode" => {
                 if let Ok(v) = value.parse::<u8>() {
                     settings.particles_mode = if (v as usize) < PARTICLE_MODE_NAMES.len() { v } else { 0 };
@@ -994,6 +975,7 @@ impl Settings {
             "module_hitbox_show_smoothed" => settings.module_hitbox_show_smoothed = value == "true",
             "module_hitbox_show_raw" => settings.module_hitbox_show_raw = value == "true",
             "module_hitbox_dotted" => settings.module_hitbox_dotted = value == "true",
+            "module_hitbox_visible_edges" => settings.module_hitbox_visible_edges = value == "true",
             "module_hitbox_items" => settings.module_hitbox_items = value == "true",
             "module_hitbox_self" => settings.module_hitbox_self = value == "true",
             "module_teams" => settings.module_teams = value == "true",
@@ -1174,6 +1156,7 @@ impl Settings {
             "arrow_indicator" => settings.arrow_indicator = value == "true",
             "arrow_number_only" => settings.arrow_number_only = value == "true",
             "arrow_white" => settings.arrow_white = value == "true",
+            "arrow_empty_sound" => settings.arrow_empty_sound = value != "false",
             "arrow_opacity" => {
                 if let Ok(v) = value.parse::<u32>() {
                     settings.arrow_opacity = v;

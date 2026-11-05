@@ -18,7 +18,6 @@ impl App {
         // die Sprache der Oberflaeche, s. apply_language_settings.
         apply_language_settings(&mut installation, &settings);
         let custom_sky = custom_sky::CustomSky::new(custom_sky::load_defs(&mut installation));
-        world::light::set_light_factors(settings.light_factor_table());
 
         let WorldAssets {
             atlas,
@@ -90,6 +89,8 @@ impl App {
             particle_atlas,
             particles,
             particle_vertices: Vec::new(),
+            particle_prev: particles::ParticlePrev::default(),
+            particle_prev_frame: None,
             precipitation: precipitation::Precipitation::new(),
             weather_vertices: Vec::new(),
             weather_textures: load_weather_textures(&mut installation),
@@ -102,6 +103,7 @@ impl App {
             quick_craft_pending: None,
             inventory_move_stack_held: false,
             player_list_held: false,
+            player_list_rect: Default::default(),
             entity_models,
             player_wide,
             player_slim,
@@ -147,6 +149,10 @@ impl App {
             equipment_models: std::collections::HashMap::new(),
             glint_out: std::cell::RefCell::new(Vec::new()),
             inventory_anim: std::cell::RefCell::default(),
+            hotbar_glide: std::cell::RefCell::default(),
+            entity_motion: crate::entity_motion::EntityMotion::default(),
+            block_motion: crate::entity_motion::EntityMotion::default(),
+            orb_prev_centers: std::collections::HashMap::new(),
             armor_shake: None,
             rain_gradient: 0.0,
             thunder_gradient: 0.0,
@@ -163,8 +169,6 @@ impl App {
             tick_deadline: None,
             menu_world_frozen: false,
             config_delete_armed: false,
-            light_search: String::new(),
-            light_scroll: Default::default(),
             particle_scroll: Default::default(),
             particle_screen_own: false,
             skin_scroll: Default::default(),
@@ -253,6 +257,7 @@ impl App {
             chat_times: std::collections::VecDeque::new(),
             block_lids: std::collections::HashMap::new(),
             chat_generation: 0,
+            chat_pushed: 0,
             chat_wrap_cache: Default::default(),
             chat_scroll: 0,
             chat_scroll_glide: Default::default(),
@@ -316,6 +321,7 @@ impl App {
             use_placed_block: false,
             use_detonated_anchor: None,
             arrow_empty_at: None,
+            use_repeating: false,
             sound_meter: std::cell::Cell::new((0.0, 0.0, None)),
             anchor_wait: None,
             bucket_ack_wait: None,
@@ -385,6 +391,8 @@ impl App {
             shown_effects: std::collections::HashMap::new(),
             absorption: 0.0,
             ticks_since_last_attack: 100,
+            last_melee_hit: None,
+            damage_sources: std::collections::HashMap::new(),
             last_attack_hand_item: None,
             attack_hand_changed: false,
             sprint_held: sprint_on_start,
@@ -487,6 +495,7 @@ impl App {
             cape_slot_order: std::collections::VecDeque::new(),
             tab_heads: std::collections::HashMap::new(),
             signs: std::collections::HashMap::new(),
+            sign_layouts: Default::default(),
             placed_heads: std::collections::HashMap::new(),
             sign_edit: None,
             book_view: None,
@@ -647,6 +656,7 @@ impl App {
             orbit_test: None,
             tracked_sounds: Vec::new(),
             wind_charge_shift: None,
+            wind_charge_pixels: None,
             jukeboxes: std::collections::HashMap::new(),
             jukebox_songs: Vec::new(),
             cat_variants: Vec::new(),
@@ -671,6 +681,10 @@ impl App {
             zoom_amount: 0.0,
             zoom_updated: None,
             profiler: profiler::FrameProfiler::new(),
+            frame_pool: crate::parallel::FramePool::with_default_size(),
+            cull_frustum: std::cell::Cell::new(None),
+            skin_frame: std::cell::RefCell::default(),
+            skin_cache: std::cell::RefCell::default(),
             vblank: None,
             vblank_tried: false,
             tear_slot_ns: None,
@@ -1005,6 +1019,7 @@ impl App {
         self.block_uvs = block_uvs;
         self.block_shapes = block_shapes;
         // Die Voxel-Klassen des Shader-Pfads haengen an den Formen: beim naechsten Frame neu.
+        #[cfg(feature = "shader_path")]
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.shader_path = None;
         }
@@ -1055,6 +1070,7 @@ impl App {
             gpu.block_renderer.clear_meshes();
             gpu.set_pack_fonts(fonts);
         }
+        self.release_atlas_pixels();
         self.render_limit_meshed.clear();
         self.lod.mask_changed = true;
         self.column_meshed_at.clear();

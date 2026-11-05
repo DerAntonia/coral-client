@@ -264,8 +264,8 @@ fn column_chunk(job: ColumnJob) -> protocol::chunk::ChunkData {
         .sections
         .iter()
         .map(|s| protocol::chunk::ChunkSectionData {
-            block_count: s.states().iter().filter(|&&v| v != world::STATE_AIR).count() as i16,
-            block_states: s.states().to_vec(),
+            block_count: s.iter_states().filter(|&v| v != world::STATE_AIR).count() as i16,
+            block_states: s.iter_states().collect(),
             biomes: s.biomes().to_vec(),
         })
         .collect();

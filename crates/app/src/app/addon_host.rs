@@ -173,7 +173,7 @@ impl App {
     // Module ist immer an.
     pub(crate) fn addon_active(&self, addon: &addons::Addon) -> bool {
         addon.modules.is_empty()
-            || addon.modules.iter().any(|m| self.settings.addon_values.get(&format!("{}/{}/enabled", addon.id, m.id)).is_some_and(|v| v == "true"))
+            || addon.modules.iter().any(|m| self.settings.addon_values.get(&m.enabled_key).is_some_and(|v| v == "true"))
     }
 
     // Ein Hook an alle Addons, die ihn hoeren, in Ladereihenfolge. Ein Abbruch endet die
@@ -185,13 +185,14 @@ impl App {
         if !self.addons.as_ref().is_some_and(|x| x.any_wants(hook)) {
             return api::Flow::Continue;
         }
-        let aktiv: Vec<bool> = self.addons.iter().flat_map(|x| x.list.iter()).map(|a| self.addon_active(a)).collect();
         let Some(mut x) = self.addons.take() else { return api::Flow::Continue };
         let mut flow = api::Flow::Continue;
         let mut aktionen = Vec::new();
         let mut fehler = Vec::new();
         for (a, addon) in x.list.iter_mut().enumerate() {
-            if !addon.wants(hook) || !aktiv[a] {
+            // An oder aus erst hier, nur fuer die, die den Hook hoeren (vorher fuer alle Addons
+            // in eine eigene Liste, bei jedem Hook). Aktionen wirken erst nach der Schleife.
+            if !addon.wants(hook) || !self.addon_active(addon) {
                 continue;
             }
             let antwort = addon.call(&*self, &event);

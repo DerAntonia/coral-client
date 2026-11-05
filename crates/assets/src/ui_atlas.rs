@@ -458,6 +458,22 @@ fn item_model_ref(
     (model, tints, potion)
 }
 
+// Fehlt das Modell, das ein Item in der Hand zeigen soll, ganz (keine Datei, auch nicht in
+// einem Pack)? Eine Definition vom Typ "empty" zeigt absichtlich nichts und fehlt nicht.
+pub fn item_model_missing(mc: &mut MinecraftInstallation, item: &str) -> bool {
+    if let Ok(bytes) = mc.load_bytes(&crate::blocks::resource_path("items", item, ".json")) {
+        let leer = serde_json::from_slice::<ItemDefinitionJson>(&bytes)
+            .ok()
+            .and_then(|d| d.model)
+            .is_some_and(|m| m.get("type").and_then(|t| t.as_str()).map(strip_ns) == Some("empty"));
+        if leer {
+            return false;
+        }
+    }
+    let (model, _, _) = item_model_ref(mc, item, None, Some(HAND_CONTEXT));
+    crate::blocks::load_model_chain(mc, &model).is_err()
+}
+
 // Die Toenungen einer Item-Definition fuer die Welt (Hand-Kontext), je tintindex: eine feste
 // Farbe (constant, Vorgabewert anderer Quellen), und ob die Lage die Trankfarbe traegt.
 pub fn item_tints(mc: &mut MinecraftInstallation, item: &str) -> Vec<(Option<[f32; 3]>, bool)> {

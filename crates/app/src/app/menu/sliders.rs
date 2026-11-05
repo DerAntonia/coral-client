@@ -517,11 +517,6 @@ impl App {
                 }
                 self.set_addon_value(m, k, addon_number_text(v).replace(',', "."));
             }
-            ButtonAction::LightFactorPrev(i) => {
-                let Some(name) = light_source_blocks().get(i) else { return false };
-                let Some(pct) = num_u32(v) else { return false };
-                self.settings.set_light_factor(name, pct);
-            }
             ButtonAction::Toteming(toteming::Action::Volume(slot, _)) => {
                 let Some(n) = num_u32(v) else { return false };
                 self.settings.toteming.sound[slot.index()].volume = n;
@@ -610,16 +605,16 @@ impl App {
             ButtonAction::TearReserveDown => (&mut set.tear_reserve_us).into(),
             ButtonAction::SmoothLightingDown => (&mut set.smooth_lighting_percent).into(),
             ButtonAction::MotionBlurDown => (&mut set.motion_blur_percent).into(),
+            ButtonAction::EntityBlurDown => (&mut set.motion_blur_entities_percent).into(),
+            ButtonAction::HandBlurDown => (&mut set.hand_blur_percent).into(),
             ButtonAction::SlotHoverFadeDown => (&mut set.slot_hover_fade_ms).into(),
             ButtonAction::SwapAnimDown => (&mut set.swap_anim_ms).into(),
+            ButtonAction::HotbarGlideDown => (&mut set.hotbar_glide_ms).into(),
             ButtonAction::DamageTintTicksPrev => (&mut set.damage_tint_ticks).into(),
             ButtonAction::ChunkSaverThresholdPrev => (&mut set.chunk_saver_threshold).into(),
             ButtonAction::HurtCamStrengthPrev => (&mut set.hurt_cam_strength).into(),
             ButtonAction::ShoulderOffsetPrev => (&mut set.shoulder_offset_cm).into(),
             ButtonAction::FireHeightPrev => (&mut set.fire_height).into(),
-            ButtonAction::ScatteringPrev => (&mut set.shader_scattering_percent).into(),
-            ButtonAction::SunSizePrev => (&mut set.shader_sun_size_tenths).into(),
-            ButtonAction::BlockSoftnessPrev => (&mut set.shader_block_softness_deg).into(),
             ButtonAction::ParticleStep(own, i, col, false) => {
                 let t = set.particle_tuning_of_mut(own).get_mut(i)?;
                 match col {
@@ -677,7 +672,6 @@ impl App {
         match prev {
             ButtonAction::ChunkUpdateThreadsDown => {
                 self.mesh_pool.resize(self.settings.chunk_update_threads);
-                self.light_scroll = Default::default();
             }
             ButtonAction::VoiceStep(VoiceKnob::OutputBuffer, _) => self.audio.sink().set_stream_buffer(self.settings.voice.output_buffer_frames as usize),
             ButtonAction::VoiceStep(VoiceKnob::PacketThreshold, _) => {

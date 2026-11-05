@@ -1,3 +1,6 @@
+// Nur mit Feature shader_path (der Shader-Pfad ist veraltet und ruht).
+#![cfg(feature = "shader_path")]
+
 // Der Shader-Pfad gegen eine echte GPU: Pipelines anlegen und einen Frame mit allen Passes
 // (Schatten, Weichzeichner, Licht, Tonemap) aufnehmen. wgpu prueft Bindungen und Nutzung
 // erst zur Laufzeit -- ein Fehler dort waere sonst erst im Spiel ein Absturz. Ohne GPU

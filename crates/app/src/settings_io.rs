@@ -18,23 +18,6 @@ impl Settings {
         }
     }
 
-    pub(crate) fn light_factor_of(&self, name: &str) -> u32 {
-        self.light_factors.iter().find(|(n, _)| n == name).map_or(100, |&(_, p)| p)
-    }
-
-    pub(crate) fn set_light_factor(&mut self, name: &str, pct: u32) {
-        self.light_factors.retain(|(n, _)| n != name);
-        if pct != 100 {
-            self.light_factors.push((name.to_string(), pct));
-            self.light_factors.sort();
-        }
-    }
-
-    // Fuer world::light::set_light_factors.
-    pub(crate) fn light_factor_table(&self) -> Vec<(String, f32)> {
-        self.light_factors.iter().map(|(n, p)| (n.clone(), *p as f32 / 100.0)).collect()
-    }
-
     // Saettigung fuer den Farb-Durchgang (s. GpuState::render_world): None, solange das Modul
     // aus ist oder nichts veraendert -- dann bleibt es bei der blossen Kopie.
     pub(crate) fn color_saturation(&self) -> Option<f32> {

@@ -143,6 +143,8 @@ pub(crate) struct Settings {
     pub(crate) hotbar_durability_points: u32,
     // Luft als Balken im Stil des Saettigungsbalkens statt als Blasen (s. build_air_bar).
     pub(crate) hotbar_air_bar: bool,
+    // Auswahlrahmen gleitet so viele ms zum neuen Slot, 0 = springt wie Vanilla (s. hotbar_glide).
+    pub(crate) hotbar_glide_ms: u32,
     // Fluggeschwindigkeit als Zuschauer in Bloecken je Sekunde (eine der
     // spectator::SPEED_STEPS), ohne Anlauf und Auslauf.
     pub(crate) spectator_speed: u32,
@@ -198,25 +200,6 @@ pub(crate) struct Settings {
     pub(crate) inventory_transparency: u32,
     // Legt man ein Item in einen Slot, springt der Zeiger in dessen Mitte (s. inventory_click).
     pub(crate) inventory_cursor_to_slot: bool,
-    // Shader-Pfad: wie stark die Luft Licht streut, in Prozent der Erdatmosphaere (skaliert
-    // die Streukoeffizienten, also die Teilchendichte). 0 = keine Luft, schwarzer Himmel.
-    pub(crate) shader_scattering_percent: u32,
-    // Shader-Pfad: scheinbarer Sonnendurchmesser in Zehntelgrad. Je groesser, desto schneller
-    // wird der Halbschatten mit dem Abstand zum Hindernis weich (echte Sonne: 5).
-    pub(crate) shader_sun_size_tenths: u32,
-    // Shader-Pfad: Blocklicht-Quellen werfen Schatten (s. deferred_light.wgsl::
-    // block_light_visibility).
-    pub(crate) shader_block_shadows: bool,
-    // Shader-Pfad: statt des Bildes zeigen, was in den Lichtkarten steht (Fehlersuche): 0 aus,
-    // 1 ankommendes Licht mit Grenze, 2 Abweichung von echten Strahlen, 3 Art der Speicherung (s.
-    // LIGHTMAP_DEBUG_NAMES).
-    pub(crate) shader_lightmap_debug: u8,
-    // Shader-Pfad: scheinbare Groesse der Blocklicht-Quellen in Grad -- wie schnell der
-    // Halbschatten von Fackeln & Co. mit dem Abstand zum Hindernis waechst.
-    pub(crate) shader_block_softness_deg: u32,
-    // Lichtstaerken: Faktor in Prozent je Blockname (nur Eintraege ungleich 100), s.
-    // world::light::set_light_factors.
-    pub(crate) light_factors: Vec<(String, u32)>,
     // GUI-Skalierung des Inventarfensters: 0 = Auto, sonst fest (bis inventory::max_gui_scale).
     pub(crate) inventory_scale: u32,
     // Vanillas Barrierefreiheits-Optionen "Glint Speed" und "Glint Strength" in Prozent
@@ -277,12 +260,12 @@ pub(crate) struct Settings {
     pub(crate) particle_tuning_own: [particles::ParticleTuning; particles::KINDS.len()],
     // Hoehlen-Culling (s. render::occlusion). Nur zum Vergleichen abschaltbar.
     pub(crate) cave_culling: bool,
+    // Entity-Culling (s. app/render/culling.rs). Nur zum Vergleichen abschaltbar.
+    pub(crate) entity_culling: bool,
+    // Stufe 2 davon: Sichtlinien (s. render::sight); wirkt nur mit entity_culling.
+    pub(crate) entity_ray_culling: bool,
     // Mip-Stufen des Block-Atlas (aus = immer volle Aufloesung, s. render::BlockRenderer::mipmapping).
     pub(crate) mipmapping: bool,
-    // Renderpfad: 0 = PvP (Forward-Renderer), 1 = Shader (Effekte fuer Survival, im Aufbau).
-    // Keine automatische Sperre auf PvP-Servern -- die laesst sich nicht erkennen, der
-    // Spieler schaltet selbst um.
-    pub(crate) render_path: u8,
     // Schrift, Index in FontKind::ALL (0 = Minecraft, 1 = DM Sans, 2 = Outfit, 3 = Lexend,
     // 4 = Lexend Exa, 5 = Noto Sans).
     pub(crate) font: u8,
@@ -406,6 +389,8 @@ pub(crate) struct Settings {
     pub(crate) module_hitbox_show_raw: bool,
     // Gestrichelt statt durchgezogen (s. world::wireframe_box_vertices).
     pub(crate) module_hitbox_dotted: bool,
+    // Nur die Kanten, die die Box selbst nicht verdeckt (s. build_hitbox_vertices).
+    pub(crate) module_hitbox_visible_edges: bool,
     // Items am Boden bekommen eine Box (Vorgabe, solange "Item am Boden" unter den eigenen
     // Farben nicht ueberschreibt).
     pub(crate) module_hitbox_items: bool,
@@ -609,6 +594,8 @@ pub(crate) struct Settings {
     // Rueckmeldung, wenn man ohne Munition den Bogen/die Armbrust zu spannen versucht (Vanilla:
     // es passiert schlicht nichts). Index in ARROW_EMPTY_FEEDBACK_NAMES.
     pub(crate) arrow_empty_feedback: u8,
+    // Pfeil-Modul: beim Spannversuch ohne Munition den UI-Klang "Loeschen" spielen.
+    pub(crate) arrow_empty_sound: bool,
     // Debug-Modul "Barrieren anzeigen": Barriere, Lichtblock und Strukturleere als Wuerfel mit
     // ihrer Partikeltextur zeichnen, statt sie wie Vanilla unsichtbar zu lassen.
     pub(crate) module_show_markers: bool,
@@ -686,17 +673,21 @@ pub(crate) struct Settings {
     // eigenen Wert zurueckschicken.
     pub(crate) no_slot_set: u8,
     pub(crate) no_rotate_set: u8,
-    // Haelt man einen Stapel ueber einen gleichartigen, steht nur die Summe am Zeiger und die
-    // Zahl im Slot verschwindet -- zwei Zahlen dicht uebereinander sind unlesbar.
-    pub(crate) inventory_merge_hover: bool,
     // Inventar > Animation: die Hervorhebung des Slots unter dem Zeiger blendet in so vielen ms
-    // ein und aus (0 = sofort, wie Vanilla), in dieser Farbe (Farbton, Saettigung, Helligkeit,
+    // ein und klingt danach aus wie die Menueknoepfe (0 = sofort, wie Vanilla), in dieser Farbe (Farbton, Saettigung, Helligkeit,
     // Deckkraft; Vanilla: weiss, s. slot_hover_rgba).
     pub(crate) slot_hover_fade_ms: u32,
     pub(crate) slot_hover_color: [u32; 4],
     // Inventar > Animation: verschobene Items fliegen in so vielen ms zu ihrem neuen Platz
     // (0 = aus, sie springen wie in Vanilla; s. inventory_flight).
     pub(crate) swap_anim_ms: u32,
+    // Totems fliegen dabei nicht, sie springen wie in Vanilla (s. Flights::step).
+    pub(crate) swap_anim_skip_totems: bool,
+    // Dasselbe fuer Heiltraenke (world::potion::is_healing_potion).
+    pub(crate) swap_anim_skip_healing: bool,
+    // Feld hinter der Spielerfigur im Inventar: true frei (die Welt scheint durch), false
+    // Vanillas schwarzes Feld (s. build_inventory_screen).
+    pub(crate) doll_backdrop_clear: bool,
     // Buchstaben auf Traenken im Inventar (s. world::potion::variant_mark), je einzeln:
     // S = verstaerkt, L = verlaengert, W = schwache Heilung/Schaden.
     pub(crate) potion_mark_strong: bool,
@@ -759,6 +750,13 @@ pub(crate) struct Settings {
     // Bewegungsunschaerfe der Kamera (render::motion_blur) in Prozent: 100 = die Bewegung
     // waehrend eines Monitorbilds, 0 = aus.
     pub(crate) motion_blur_percent: u32,
+    // Dasselbe fuer die eigene Bewegung der Entities (render::motion_blur, entity_motion),
+    // unabhaengig davon; 0 = sie verwischen nur mit der Kamera wie die uebrige Welt.
+    pub(crate) motion_blur_entities_percent: u32,
+    // Unschaerfe der Hand samt Items (render::hand_blur) in Prozent wie motion_blur_percent,
+    // 0 = aus; Gewichtung der Teilbilder als Index in HAND_BLUR_CURVES.
+    pub(crate) hand_blur_percent: u32,
+    pub(crate) hand_blur_curve: u8,
     // physics::PlayerPhysics::jump_cooldown (Vanillas LivingEntity.jumpingCooldown, s.
     // dortigen Kommentar): 10-Tick-Abklingzeit zwischen zwei echten Spruengen, geteilt
     // zwischen Land- und Wassersprung. An Land praktisch unsichtbar, im flachen Wasser

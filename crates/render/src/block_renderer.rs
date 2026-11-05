@@ -403,6 +403,9 @@ pub struct BlockRenderer {
     occlusion: OcclusionCulling,
     pub cave_culling: bool,
     pub cull_radius: i32,
+    // Sichtlinien-Culling fuer Entities und Blockentities (s. sight). Die Spaltendaten kommen
+    // ueber set_column_opacity, Entladen und Leeren raeumt es hier mit auf.
+    pub sight: crate::sight::SightCulling,
     // Fuer die Debug-Anzeige: Sections mit Gelaende, davon gezeichnet (nach Sichtkegel und
     // Hoehlen-Culling), im letzten Frame.
     pub culling_stats: (u32, u32),
@@ -476,6 +479,9 @@ pub struct BlockRenderer {
     // beigemischt wird (s. block.wgsl::fs_entity) -- die Vertexfarbe der Block-Pipeline ist
     // ein Multiplikator und kann nur abdunkeln.
     entity_pipeline: wgpu::RenderPipeline,
+    // GPU-Skinning der festen Entity-Modelle (s. skinning), gezeichnet direkt nach dem
+    // deckenden Teil der CPU-Entities.
+    pub skinning: crate::skinning::Skinning,
     // Vanillas entityTranslucent: Alpha-Blending statt Schnitt bei 0.5 (fs_entity_translucent).
     entity_translucent_pipeline: wgpu::RenderPipeline,
     // Shader-Pfad: Licht je Entity-Vertex (gepackt wie world::light::pack_vertex_light, Bit 31
@@ -496,11 +502,34 @@ pub struct BlockRenderer {
     // Entity-Liste ihm gehoeren.
     own_mask_pipeline: wgpu::RenderPipeline,
     own_vertex_count: u32,
+    // Motion Blur bewegter Entities: je Ecke die Lage im vorigen Bild (s. set_entity_prev_positions)
+    // und die Sicht-Projektion des vorigen Bildes; ob sich ueberhaupt eins bewegt hat.
+    entity_motion_pipeline: wgpu::RenderPipeline,
+    entity_prev_buffer: wgpu::Buffer,
+    entity_motion_params: wgpu::Buffer,
+    entity_motion_bind_group: wgpu::BindGroup,
+    entity_prev_count: u32,
+    entity_moving: bool,
+    // Dasselbe fuer den deckenden Teil des Geisterblock-Puffers (fallende Bloecke, TNT,
+    // Block-Displays, Kolbenbloecke; s. set_ghost_prev_positions).
+    ghost_prev_buffer: wgpu::Buffer,
+    ghost_prev_count: u32,
+    ghost_moving: bool,
+    // Dasselbe fuer die Partikel: je Ecke die Lage im vorigen Bild (s.
+    // set_particle_prev_positions), gezeichnet in dasselbe Bild der Objektbewegung.
+    particle_motion_pipeline: wgpu::RenderPipeline,
+    particle_prev_buffer: wgpu::Buffer,
+    particle_prev_count: u32,
+    particle_moving: bool,
     // Lesbare Entity-Bereiche, s. set_sharp_entities.
     sharp_entity_ranges: Vec<std::ops::Range<u32>>,
     // Die Tiefe des Welt-Durchgangs stehen lassen: die Bewegungsunschaerfe liest sie danach
     // (s. crate::motion_blur, depth_view).
     pub keep_depth: bool,
+    // Die Tiefe wird nach dem Welt-Durchgang (und dem scharfen Durchgang nach der
+    // Bewegungsunschaerfe) noch gelesen -- von den verdeckbaren Weltbeschriftungen der App.
+    // Anders als keep_depth aendert das nichts daran, wo was gezeichnet wird.
+    pub depth_read_later: bool,
     hand_lit_pipeline: wgpu::RenderPipeline,
     // Eigene Kamera + eigener Puffer fuer die Ego-Hand. Vanilla zeichnet die Hand in einem
     // getrennten Durchgang mit geleertem Tiefenpuffer und einer EIGENEN Projektion bei festem
@@ -509,6 +538,8 @@ pub struct BlockRenderer {
     hand_camera_buffer: wgpu::Buffer,
     hand_camera_bind_group: wgpu::BindGroup,
     hand_buffer: wgpu::Buffer,
+    // Unschaerfe der Hand (Motion Blur > Hand Blur, s. crate::hand_blur).
+    hand_blur: crate::hand_blur::HandBlur,
     // Dritte Kamera samt Puffer fuer die Spielerfigur im Inventar (Vanillas
     // InventoryScreen.drawEntity). Eigene statt der Hand-Kamera, weil beide im selben Frame
     // gebraucht werden: die Hand liegt hinter dem geoeffneten Inventar und wird trotzdem

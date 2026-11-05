@@ -3,6 +3,12 @@
 use super::*;
 
 impl BlockRenderer {
+    // Angelegte Seiten der Gelaende-Speicher (opak, durchsichtig), fuer die Speicher-Ausgabe
+    // beim Beenden.
+    pub fn arena_page_counts(&self) -> (usize, usize) {
+        (self.terrain_arena.pages.len(), self.translucent_arena.pages.len())
+    }
+
     // textures/environment/rain.png und snow.png als RGBA8 (Breite, Hoehe). Neu gesetzt auch
     // nach einem Resourcepack-Wechsel. Die Textur wiederholt sich in beide Richtungen: ein
     // Quad ist eine Bildbreite breit und je Block ein Viertel Bildhoehe hoch, und die
@@ -265,6 +271,7 @@ impl BlockRenderer {
             self.translucent_arena.remove(mesh.slot);
         }
         self.occlusion.remove_column(key);
+        self.sight.remove_column(key);
         self.sort_dirty.remove(&key);
         self.order_dirty = true;
     }
@@ -284,6 +291,7 @@ impl BlockRenderer {
         self.translucent_sort_pos = None;
         self.sort_dirty.clear();
         self.occlusion.clear();
+        self.sight.clear();
     }
 
     // Ueberschreibt einen zusammenhaengenden Vertex-Bereich im OPAKEN Mesh einer Spalte ab

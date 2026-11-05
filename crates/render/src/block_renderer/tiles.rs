@@ -28,23 +28,158 @@ pub fn upload_tiles(
     queue.submit(Some(tile_copies(device, buffer, texture, &regions)));
 }
 
-// Wie upload_tiles, aber nur aufgezeichnet: ein fertiger Befehlspuffer mit eigenem Zwischenpuffer,
-// den ein anderer Thread zu einem selbst gewaehlten Zeitpunkt abschickt. So kann der
-// Animations-Thread der App die Arbeit machen, ohne dass seine Kopien irgendwann mitten in einen
-// Frame auf der GPU fallen (s. App::submit_block_animations). Ohne write_buffer: das liefe ueber
-// die Warteschlange und kaeme mit dem naechsten Submit irgendeines Threads.
-#[must_use] 
-pub fn encode_tiles(device: &wgpu::Device, texture: &wgpu::Texture, tiles: &[(&[Vec<u8>], (u32, u32), u32)]) -> Option<wgpu::CommandBuffer> {
-    let (data, regions) = tile_layout(texture, tiles)?;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("atlas animation buffer"),
-        size: data.len() as u64,
-        usage: wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: true,
-    });
-    buffer.slice(..).get_mapped_range_mut().copy_from_slice(&data);
-    buffer.unmap();
-    Some(tile_copies(device, &buffer, texture, &regions))
+// Animierte Kacheln GEZEICHNET statt kopiert, fuer den Animations-Thread der App (s.
+// block_anim.rs): je Mip-Stufe EIN Zeichenaufruf mit einem Viereck je Kachel, das seine Pixel
+// aus einem Puffer liest. Gleiches Ergebnis wie die Kopien, Byte fuer Byte.
+//
+// Warum: je Tick aendern sich ~290 Kacheln, mit allen Mip-Stufen ~1750 Kopierbefehle
+// (gemessen 2026-11-04, Vanilla 1.21.11, 32er-Kacheln). Jeder copy_buffer_to_texture ist im
+// Radeon-Treiber ein eigener kleiner Meta-Durchgang; zusammen 12,8 % aller CPU-Samples des
+// Clients (perf, Release-Build). Zeichnen sind ~6 Durchgaenge je Tick.
+//
+// Aufgezeichnet, nicht abgeschickt: der Thread schickt den Befehlspuffer zu einem selbst
+// gewaehlten Zeitpunkt ab, damit die Arbeit nicht mitten in einen Frame auf der GPU faellt (s.
+// block_anim::submit_window). Ohne write_buffer: das liefe ueber die Warteschlange und kaeme mit
+// dem naechsten Submit irgendeines Threads.
+pub struct TileWriter {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    // Je Mip-Stufe die Rohsicht als Zeichenziel und ihre Kantenlaenge.
+    levels: Vec<(wgpu::TextureView, u32)>,
+}
+
+// Eine Kachel im Zeichenaufruf (s. tile_write.wgsl).
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileInstance {
+    // Ursprung x, y in der Stufe, Kantenlaenge, erstes Pixel im Puffer.
+    ziel: [u32; 4],
+    // Kantenlaenge der ganzen Stufe.
+    stufe: u32,
+}
+
+impl TileWriter {
+    // Fuer genau diesen Atlas (er braucht RENDER_ATTACHMENT, s. buffers.rs) -- nach einem
+    // Atlas-Neubau einen neuen anlegen.
+    #[must_use]
+    pub fn new(device: &wgpu::Device, texture: &wgpu::Texture) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("atlas tile write shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("tile_write.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("atlas tile write layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("atlas tile write pipeline layout"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("atlas tile write pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_tile",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<TileInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![0 => Uint32x4, 1 => Uint32],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_tile",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let size = texture.width();
+        let levels = (0..texture.mip_level_count())
+            .map(|level| {
+                let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("atlas tile write target"),
+                    format: Some(wgpu::TextureFormat::Rgba8Unorm),
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                });
+                (view, (size >> level).max(1))
+            })
+            .collect();
+        Self { pipeline, layout, levels }
+    }
+
+    // Je Kachel ihre Mip-Stufen (`[0]` = volle Groesse), Ursprung und Kantenlaenge wie bei
+    // upload_tiles. None = nichts zu tun.
+    #[must_use]
+    pub fn encode(&self, device: &wgpu::Device, tiles: &[(&[Vec<u8>], (u32, u32), u32)]) -> Option<wgpu::CommandBuffer> {
+        use wgpu::util::DeviceExt;
+        let mut je_stufe: Vec<Vec<TileInstance>> = vec![Vec::new(); self.levels.len()];
+        let mut data: Vec<u8> = Vec::new();
+        for &(mips, origin, tile_size) in tiles {
+            for (level, rgba) in mips.iter().enumerate().take(self.levels.len()) {
+                let size = tile_size >> level;
+                let bytes = (size * size * 4) as usize;
+                if size == 0 || rgba.len() < bytes {
+                    break;
+                }
+                let erstes = (data.len() / 4) as u32;
+                data.extend_from_slice(&rgba[..bytes]);
+                je_stufe[level].push(TileInstance { ziel: [origin.0 >> level, origin.1 >> level, size, erstes], stufe: self.levels[level].1 });
+            }
+        }
+        if data.is_empty() {
+            return None;
+        }
+        let pixel = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("atlas tile write pixels"), contents: &data, usage: wgpu::BufferUsages::STORAGE });
+        let alle: Vec<TileInstance> = je_stufe.iter().flatten().copied().collect();
+        let instanzen = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("atlas tile write tiles"), contents: bytemuck::cast_slice(&alle), usage: wgpu::BufferUsages::VERTEX });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("atlas tile write bind group"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: pixel.as_entire_binding() }],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("atlas tile write") });
+        let stride = std::mem::size_of::<TileInstance>() as u64;
+        let mut start = 0u64;
+        for (liste, (view, _)) in je_stufe.iter().zip(&self.levels) {
+            let n = liste.len() as u64;
+            if n == 0 {
+                continue;
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("atlas tile write pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_vertex_buffer(0, instanzen.slice(start * stride..(start + n) * stride));
+            pass.draw(0..6, 0..n as u32);
+            drop(pass);
+            start += n;
+        }
+        Some(encoder.finish())
+    }
 }
 
 // (Stufe, Ursprung, Kante, Offset, Zeilenlaenge im Puffer)

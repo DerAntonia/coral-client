@@ -372,6 +372,71 @@ fn vs_entity(
     return out;
 }
 
+// --- GPU-Skinning (s. render::skinning, world::entity_model::skinned) ----------------------
+// Feste Netze je Modell: jede Ecke liegt im Raum ihres Teils und kennt den Teil, die
+// Lichtrichtung ihrer Seite und ihre Modell-UV. Je Instanz (ein Modell in einer Pose) eine
+// Matrix je Teil im Storage-Puffer, ab `matrix`. Ergebnis wie vs_entity, dahinter dieselben
+// Fragment-Shader.
+struct SkinMatrix {
+    // Zeile i = (m[i][0], m[i][1], m[i][2], t[i]) der affinen Teil-Transformation.
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+};
+@group(2) @binding(5) var<storage, read> skin_matrices: array<SkinMatrix>;
+// Motion Blur: dieselben Teile im vorigen Bild, relativ zum vorigen Auge (s. vs_entity_skinned_motion).
+@group(2) @binding(6) var<storage, read> skin_prev_matrices: array<SkinMatrix>;
+
+// Ecke mal Teil-Matrix. Eine Funktion fuer beide Vertex-Shader: die Tiefe des
+// Bewegungs-Durchgangs muss Bit fuer Bit die des Welt-Durchgangs treffen.
+fn skin_point(m: SkinMatrix, position: vec3<f32>) -> vec3<f32> {
+    let p = vec4<f32>(position, 1.0);
+    return vec3<f32>(dot(m.r0, p), dot(m.r1, p), dot(m.r2, p));
+}
+
+// Vanillas Richtungslicht fuer Entities, wie world::entity_model::diffuse_shade.
+fn entity_diffuse_shade(n: vec3<f32>) -> f32 {
+    let l0 = vec3<f32>(0.1616902, 0.808451, -0.5659157);
+    let l1 = vec3<f32>(-0.1616902, 0.808451, 0.5659157);
+    return min((max(dot(l0, n), 0.0) + max(dot(l1, n), 0.0)) * 0.6 + 0.4, 1.0);
+}
+
+// AxisShades-Index -> Achse im Teilraum: 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z.
+fn skin_axis(i: u32) -> vec3<f32> {
+    let s = select(1.0, -1.0, (i & 1u) == 1u);
+    let a = i >> 1u;
+    return vec3<f32>(select(0.0, s, a == 0u), select(0.0, s, a == 1u), select(0.0, s, a == 2u));
+}
+
+@vertex
+fn vs_entity_skinned(
+    @location(0) position: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) part: u32,
+    @location(3) shade: u32,
+    @location(4) rect: vec4<f32>,
+    @location(5) color: vec3<f32>,
+    @location(6) tint: vec4<f32>,
+    @location(7) matrix: u32,
+) -> EntityOutput {
+    let m = skin_matrices[matrix + part];
+    let welt = skin_point(m, position);
+    // Normale wie Affine::apply_direction: nur die Drehung, normiert (ausser fast null --
+    // versteckte Teile haben die Nullmatrix und fallen ohnehin auf einen Punkt).
+    let a = skin_axis(shade);
+    var n = vec3<f32>(dot(m.r0.xyz, a), dot(m.r1.xyz, a), dot(m.r2.xyz, a));
+    let len = length(n);
+    if (len > 1e-6) {
+        n = n / len;
+    }
+    var out: EntityOutput;
+    out.clip_position = project(camera.view * vec4<f32>(welt, 1.0));
+    out.color = color * entity_diffuse_shade(n);
+    out.uv = rect.xy + uv * (rect.zw - rect.xy);
+    out.tint = tint;
+    return out;
+}
+
 @fragment
 fn fs_entity(in: EntityOutput) -> @location(0) vec4<f32> {
     let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
@@ -834,6 +899,39 @@ struct GlintParams {
 @group(2) @binding(2) var glint_sampler: sampler;
 @group(2) @binding(3) var<uniform> glint: GlintParams;
 
+// Glint-Zwilling einer Instanz (GPU-Skinning), wie render::glint::glint_vertices ihn aus den
+// Ecken baut: Lage und Atlas-UV wie das Modell, color = (lokale UV * Massstab, Texturwahl *
+// mittlere Helligkeit). tint.x = Massstab, tint.y = Texturwahl (s. GLINT_TEXTURE_*). Die
+// Matrizen liegen hier in Gruppe 3, weil Gruppe 2 die Glint-Texturen haelt.
+@group(3) @binding(5) var<storage, read> skin_matrices_glint: array<SkinMatrix>;
+
+@vertex
+fn vs_entity_skinned_glint(
+    @location(0) position: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) part: u32,
+    @location(3) shade: u32,
+    @location(4) rect: vec4<f32>,
+    @location(5) color: vec3<f32>,
+    @location(6) tint: vec4<f32>,
+    @location(7) matrix: u32,
+) -> VertexOutput {
+    let m = skin_matrices_glint[matrix + part];
+    let a = skin_axis(shade);
+    var n = vec3<f32>(dot(m.r0.xyz, a), dot(m.r1.xyz, a), dot(m.r2.xyz, a));
+    let len = length(n);
+    if (len > 1e-6) {
+        n = n / len;
+    }
+    let c = color * entity_diffuse_shade(n);
+    let schatten = max((c.r + c.g + c.b) / 3.0, 1.0e-3);
+    var out: VertexOutput;
+    out.clip_position = project(camera.view * vec4<f32>(skin_point(m, position), 1.0));
+    out.color = vec3<f32>(uv * tint.x, tint.y * schatten);
+    out.uv = rect.xy + uv * (rect.zw - rect.xy);
+    return out;
+}
+
 @fragment
 fn fs_glint(in: VertexOutput) -> @location(0) vec4<f32> {
     // Alle Texturzugriffe VOR dem ersten discard: textureSample darf nicht in
@@ -855,4 +953,147 @@ fn fs_glint(in: VertexOutput) -> @location(0) vec4<f32> {
     let s = linear_to_srgb(c.rgb) * glint.params.x;
     let d = linear_to_srgb(maske.rgb) * abs(in.color.z);
     return vec4<f32>(srgb_to_linear(min(d + s * s, vec3<f32>(1.0))) - srgb_to_linear(d), 0.0);
+}
+
+// --- Hand-Unschaerfe (s. render::hand_blur) -------------------------------------------------
+// Je Teilbild (Instanz k): wo zwischen voriger (0) und jetziger Lage (1) die Hand steht (x), und
+// in welchen Tiefenbereich es faellt (y = Anteil, z = Versatz). Spaetere Teilbilder liegen
+// davor, so braucht es fuer alle Teilbilder nur ein Leeren der Tiefe.
+struct HandBlurParams {
+    samples: array<vec4<f32>, 64>,
+};
+@group(3) @binding(0) var<uniform> hand_blur: HandBlurParams;
+
+@vertex
+fn vs_hand_blur(
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) prev: vec3<f32>,
+    @builtin(instance_index) k: u32,
+) -> VertexOutput {
+    let s = hand_blur.samples[k];
+    var out: VertexOutput;
+    var clip = project(camera.view * vec4<f32>(mix(prev, position, s.x), 1.0));
+    clip.z = (clip.z / clip.w * s.y + s.z) * clip.w;
+    out.clip_position = clip;
+    out.color = color;
+    out.uv = uv;
+    return out;
+}
+
+// Nur die Tiefe eines Teilbilds, mit derselben Alpha-Schwelle wie fs_main.
+@fragment
+fn fs_hand_blur_depth(in: VertexOutput) {
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    if (tex.a < 0.5) {
+        discard;
+    }
+}
+
+// --- Motion Blur bewegter Entities (s. render::motion_blur) --------------------------------
+// Je Ecke ihre Lage im vorigen Bild (relativ zum vorigen Auge) und dessen Sicht-Projektion: der
+// Pixel bekommt die Strecke zwischen beiden Bildern (NDC, xy) samt Kennzeichen (z = 1).
+struct EntityMotionParams {
+    prev_view_proj: mat4x4<f32>,
+};
+@group(2) @binding(4) var<uniform> entity_motion: EntityMotionParams;
+
+struct EntityMotionOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) cur: vec3<f32>,
+    @location(2) prev: vec3<f32>,
+};
+
+@vertex
+fn vs_entity_motion(
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) prev: vec3<f32>,
+) -> EntityMotionOutput {
+    var out: EntityMotionOutput;
+    // Genau wie vs_entity, damit die Tiefe Bit fuer Bit die des Welt-Durchgangs trifft.
+    let clip = project(camera.view * vec4<f32>(position, 1.0));
+    out.clip_position = clip;
+    out.uv = uv;
+    out.cur = clip.xyw;
+    out.prev = (entity_motion.prev_view_proj * vec4<f32>(prev, 1.0)).xyw;
+    return out;
+}
+
+// Dasselbe fuer Partikel-Ecken (ParticleVertex + Lage im vorigen Bild). Die Deckkraft zaehlt
+// mit, sonst zoege ein ausgeblendeter Partikel noch eine Spur.
+struct ParticleMotionOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) cur: vec3<f32>,
+    @location(2) prev: vec3<f32>,
+    @location(3) alpha: f32,
+};
+
+@vertex
+fn vs_particle_motion(
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) prev: vec3<f32>,
+) -> ParticleMotionOutput {
+    var out: ParticleMotionOutput;
+    // Genau wie vs_particle.
+    let clip = project(camera.view * vec4<f32>(position, 1.0));
+    out.clip_position = clip;
+    out.uv = uv;
+    out.cur = clip.xyw;
+    out.prev = (entity_motion.prev_view_proj * vec4<f32>(prev, 1.0)).xyw;
+    out.alpha = color.a;
+    return out;
+}
+
+@fragment
+fn fs_particle_motion(in: ParticleMotionOutput) -> @location(0) vec4<f32> {
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    if (tex.a * in.alpha < 0.1) {
+        discard;
+    }
+    if (in.prev.z <= 1e-6) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(in.cur.xy / in.cur.z - in.prev.xy / in.prev.z, 1.0, 1.0);
+}
+
+// Dasselbe fuer Instanzen (GPU-Skinning): die Lage im vorigen Bild aus der Vormatrix des Teils.
+@vertex
+fn vs_entity_skinned_motion(
+    @location(0) position: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) part: u32,
+    @location(3) shade: u32,
+    @location(4) rect: vec4<f32>,
+    @location(5) color: vec3<f32>,
+    @location(6) tint: vec4<f32>,
+    @location(7) matrix: u32,
+) -> EntityMotionOutput {
+    var out: EntityMotionOutput;
+    // Genau wie vs_entity_skinned (s. skin_point).
+    let clip = project(camera.view * vec4<f32>(skin_point(skin_matrices[matrix + part], position), 1.0));
+    out.clip_position = clip;
+    out.uv = rect.xy + uv * (rect.zw - rect.xy);
+    out.cur = clip.xyw;
+    out.prev = (entity_motion.prev_view_proj * vec4<f32>(skin_point(skin_prev_matrices[matrix + part], position), 1.0)).xyw;
+    return out;
+}
+
+@fragment
+fn fs_entity_motion(in: EntityMotionOutput) -> @location(0) vec4<f32> {
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    if (tex.a < 0.5) {
+        discard;
+    }
+    // Hinter der vorigen Kamera: keine Strecke, der Pixel verwischt dann nur mit der Kamera.
+    if (in.prev.z <= 1e-6) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(in.cur.xy / in.cur.z - in.prev.xy / in.prev.z, 1.0, 1.0);
 }

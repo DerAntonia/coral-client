@@ -102,6 +102,9 @@ struct Launcher {
     // Prozess-ID des laufenden Clients -- auch eines, den ein frueherer Launcher gestartet hat
     // (s. running_client); alle CLIENT_SCAN neu nachgesehen.
     client: Option<u32>,
+    // Selbst gestartete Clients: beendete muessen abgeholt werden (wait), sonst bleibt jeder
+    // als Zombie-Prozess stehen, bis der Launcher endet.
+    kinder: Vec<std::process::Child>,
     client_scan: Instant,
     // Seit wann SIGTERM geschickt ist -- der Knopf zaehlt mit (s. log_section).
     stopping: Option<Instant>,
@@ -235,6 +238,7 @@ impl Launcher {
             chosen_tag: None,
             client_check: ClientCheck::Unknown,
             client: laeuft,
+            kinder: Vec::new(),
             client_scan: Instant::now(),
             stopping: None,
             status: None,
@@ -473,6 +477,7 @@ impl Launcher {
 
         if self.client_scan.elapsed() >= CLIENT_SCAN {
             self.client_scan = Instant::now();
+            self.kinder.retain_mut(|k| matches!(k.try_wait(), Ok(None)));
             self.client = running_client();
             if self.client.is_none() {
                 self.stopping = None;
@@ -647,6 +652,7 @@ impl Launcher {
         match command.spawn() {
             Ok(child) => {
                 self.client = Some(child.id());
+                self.kinder.push(child);
                 self.status = None;
                 true
             }

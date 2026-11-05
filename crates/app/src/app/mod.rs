@@ -31,3 +31,4 @@ mod window_events;
 pub(crate) use recording::AppRecorder;
 pub(crate) use replay::{RecordingEntry, Replay};
 pub(crate) use tabs::ServerTab;
+pub(crate) use render::skin_frame::{SkinCache, SkinFrame};

@@ -2,6 +2,24 @@
 
 use super::*;
 
+// Die Lore vor ihrem scale(-1, -1, 1) (AbstractMinecartRenderer.oldRender): ueber den Fuessen
+// um 0.375 angehoben und gedreht. Darauf sitzen das Modell und der Anzeigeblock.
+pub(crate) fn minecart_frame(feet: [f32; 3], yaw: f32) -> world::Affine {
+    world::Affine::translation(feet).then(world::Affine::translation([0.0, 0.375, 0.0])).then(world::Affine::rotation_y_deg(180.0 - yaw))
+}
+
+// Der Anzeigeblock einer Lore (getDisplayBlockState: der eigene, sonst die Vorgabe der
+// Lorenart) und seine Blockecke relativ zu minecart_frame: scale 0.75, translate(-0.5,
+// (Versatz - 8) / 16, 0.5), rotateY 90. None ohne Block (Luft).
+pub(crate) fn minecart_content(e: &world::Entity, name: &str) -> Option<(u32, world::Affine)> {
+    use world::Affine;
+    let (vorgabe, versatz) = world::mob_catalog::minecart_default_display(name, e.minecart_fuel);
+    let state = e.minecart_block.or(vorgabe).filter(|s| *s != world::STATE_AIR && !world::block_registry::air_variants().contains(s))?;
+    let versatz = e.minecart_offset.unwrap_or(versatz);
+    let ecke = Affine::scale([0.75; 3]).then(Affine::translation([-0.5, (versatz - 8) as f32 / 16.0, 0.5])).then(Affine::rotation_y_deg(90.0));
+    Some((state, ecke))
+}
+
 impl App {
     // Ein Entity mit Modell aus world::mob_catalog: Geometrie aus den Modelldaten, Grundtextur
     // plus Schichten (Dorfbewohner), gemeinsame Laufanimation. Boote und Loren stehen nicht
@@ -16,6 +34,8 @@ impl App {
         head_rel: f32,
         pitch: f32,
         (swing, amount): (f32, f32),
+        // Per GPU-Skinning (s. skin_frame), mit dem Motion-Blur-Schluessel des Entities.
+        skin: Option<u64>,
         out: &mut Vec<world::BlockVertex>,
     ) {
         use world::entity_model::Affine;
@@ -36,10 +56,7 @@ impl App {
                 .then(Affine::scale([-1.0, -1.0, 1.0]))
                 .then(Affine::rotation_y_deg(90.0))
         } else if katalog::is_minecart(name) {
-            Affine::translation(feet)
-                .then(Affine::translation([0.0, 0.375, 0.0]))
-                .then(Affine::rotation_y_deg(180.0 - body_yaw))
-                .then(Affine::scale([-1.0, -1.0, 1.0]))
+            minecart_frame(feet, body_yaw).then(Affine::scale([-1.0, -1.0, 1.0]))
         } else {
             world::entity_transform(feet, body_yaw, e.scale, 1.0)
         };
@@ -51,12 +68,35 @@ impl App {
         if look.anim == Anim::Walker {
             apply_item_arm_poses(&mut pose, e.arm_items().0.is_some(), e.arm_items().1.is_some());
         }
-        for tex in &texturen {
-            if let Some(rect) = self.entity_atlas.rect(tex) {
-                world::emit_entity_model(model, &pose, base, rect, ENTITY_BRIGHTNESS, out);
+        // Fehlt die Grundtextur, das schwarz-pinke Karo; die Ebenen darueber sind Beiwerk.
+        for (i, tex) in texturen.iter().enumerate() {
+            let rect = if i == 0 { Some(self.entity_atlas.rect_or_missing(tex)) } else { self.entity_atlas.rect(tex) };
+            if let Some(rect) = rect {
+                match skin {
+                    Some(key) => self.push_skinned_body(model, &pose, base, rect, false, key),
+                    None => world::emit_entity_model(model, &pose, base, rect, ENTITY_BRIGHTNESS, out),
+                }
             }
         }
-        self.emit_held_items(e.arm_items(), self.entity_blocking_arms(e), (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, out);
+        // Truhe, Shulkerkiste und Statue in der Lore sind keine Blockmodelle: Vanilla zeichnet
+        // sie ueber ihr Sondermodell (SubmitNodeCollection.submitBlock ->
+        // SpecialBlockModelRenderer), wie das Item in der Hand. Alle anderen Bloecke laufen
+        // ueber den Block-Atlas, s. display_block_vertices.
+        if katalog::is_minecart(name) {
+            let inhalt = minecart_content(e, name).and_then(|(state, ecke)| Some((world::block_name(state).and_then(crate::held_item::special_item)?, ecke)));
+            if let Some(((art, textur), ecke)) = inhalt {
+                let ecke = minecart_frame(feet, body_yaw).then(ecke);
+                let rect = self.entity_atlas.rect_or_missing(&textur);
+                match (art, skin) {
+                    (crate::held_item::SpecialKind::Chest, Some(key)) => {
+                        let em = world::entity_model::chest_model(world::ChestHalf::Single);
+                        self.push_skinned_body(em, &world::entity_model::chest_pose(0.0), ecke, rect, false, key);
+                    }
+                    _ => crate::held_item::emit_special(art, rect, ecke, ENTITY_BRIGHTNESS, out),
+                }
+            }
+        }
+        self.emit_held_items(e.arm_items(), self.entity_blocking_arms(e), e.using_item_right_arm(), (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, skin, out);
     }
 
     // Ein Armorstand (ArmorStandRenderer): der Koerper in seinen sechs Gelenkwinkeln, Ruestung
@@ -67,6 +107,8 @@ impl App {
         e: &world::Entity,
         feet: [f32; 3],
         body_yaw: f32,
+        // Per GPU-Skinning (s. skin_frame), mit dem Motion-Blur-Schluessel des Entities.
+        skin: Option<u64>,
         out: &mut Vec<world::BlockVertex>,
         haut: &mut Vec<std::ops::Range<usize>>,
     ) {
@@ -88,7 +130,7 @@ impl App {
         pose.rotate("base_plate", [0.0, -body_yaw.to_radians(), 0.0]);
         let base = world::entity_transform(feet, body_yaw, e.scale, 1.0);
         let layer = if small { "armor_stand_small#main" } else { "armor_stand#main" };
-        let textur = world::mob_catalog::mob_look("armor_stand").and_then(|look| self.entity_atlas.rect(look.texture));
+        let textur = world::mob_catalog::mob_look("armor_stand").map(|look| self.entity_atlas.rect_or_missing(look.texture));
         if let (false, Some(model), Some(tex)) = (e.invisible, world::model_data::layer_model(layer), textur) {
             let mut koerper = pose.clone();
             let mut verstecken = |teil: &'static str| {
@@ -103,16 +145,20 @@ impl App {
             if flags & ARMOR_STAND_FLAG_NO_BASEPLATE != 0 {
                 verstecken("base_plate");
             }
-            let start = out.len();
-            world::emit_entity_model(model, &koerper, base, tex, ENTITY_BRIGHTNESS, out);
-            haut.push(start..out.len());
+            if let Some(key) = skin {
+                self.push_skinned_body(model, &koerper, base, tex, false, key);
+            } else {
+                let start = out.len();
+                world::emit_entity_model(model, &koerper, base, tex, ENTITY_BRIGHTNESS, out);
+                haut.push(start..out.len());
+            }
         }
         let models = world::entity_model::armor_stand_armor_models(small);
-        self.emit_armor(&e.armor, models, &pose, base, out);
+        self.emit_armor(&e.armor, models, &pose, base, out, None, skin);
         // Items sitzen auch ohne sichtbare Arme in der Hand (ArmorStandModel.translateToHand);
         // die Brust-Ebene hat beide Arme in den Winkeln des Standes.
         let arme = &models[world::armor::ArmorSlot::Chest.index()];
-        self.emit_held_items(e.arm_items(), (false, false), (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), arme, &pose, base, out);
+        self.emit_held_items(e.arm_items(), (false, false), None, (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), arme, &pose, base, skin, out);
     }
 
     // Hinter allen Menues ohne Verbindung, nicht nur auf dem alten Startbildschirm: der Client
@@ -366,8 +412,16 @@ impl App {
     // Weltaenderungen werden auch ohne Shader-Pfad abgeholt, sonst sammeln sie sich an.
     pub(crate) fn update_voxel_volume(&mut self) {
         let (cleared, columns) = self.world.take_voxel_changes();
+        #[cfg(not(feature = "shader_path"))]
+        let _ = (cleared, columns);
+        #[cfg(feature = "shader_path")]
+        self.update_voxel_volume_in(cleared, columns);
+    }
+
+    #[cfg(feature = "shader_path")]
+    fn update_voxel_volume_in(&mut self, cleared: bool, columns: Vec<(i32, i32)>) {
         let Some(gpu) = self.gpu.as_mut() else { return };
-        if !gpu.use_shader_path {
+        if !crate::shader_path_on() {
             if let Some(sp) = gpu.shader_path.as_mut() {
                 sp.voxels_mut().note_changes(cleared, &columns);
             }
@@ -398,7 +452,7 @@ impl App {
                 let i = sy - column.min_y.div_euclid(world::SECTION_SIZE);
                 usize::try_from(i).ok().and_then(|i| column.sections.get(i))
             },
-            VOXEL_SECTIONS_PER_FRAME,
+            crate::VOXEL_SECTIONS_PER_FRAME,
         );
         voxels.update_lights(&gpu.queue, [eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32]);
     }

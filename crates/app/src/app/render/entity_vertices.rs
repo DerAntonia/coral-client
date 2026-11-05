@@ -103,14 +103,48 @@ impl App {
     // Silhouetten leuchtender Entities fuer den Umriss (Vertices und je Vertex die Farbe, s.
     // render::entity_outline). Unsichtbare, die leuchten, stehen NUR dort -- in Vanilla sieht
     // man von ihnen den Umriss, aber keinen Koerper.
+    // Die aufgeschobenen Modelle (s. defer_model) in ihre reservierten Abschnitte, verteilt auf
+    // den Frame-Pool. Wenige auf einmal lohnen das Aufwecken der Worker nicht.
+    pub(crate) fn run_model_jobs(&self, jobs: &[ModelJob<'_>], out: &mut [world::BlockVertex]) {
+        const PARALLEL_AB: usize = 4;
+        let fuellen = |j: &ModelJob<'_>, ziel: &mut [world::BlockVertex]| {
+            world::entity_model::emit_into(j.model, &j.pose, j.base, j.tex, j.color, j.two_sided, ziel);
+        };
+        // Die Abschnitte liegen nacheinander und ueberlappen nicht (defer_model haengt an).
+        let mut abschnitte: Vec<std::sync::Mutex<&mut [world::BlockVertex]>> = Vec::with_capacity(jobs.len());
+        let mut rest = out;
+        let mut bis = 0;
+        for j in jobs {
+            debug_assert!(j.start >= bis, "ModelJob-Abschnitte ueberlappen");
+            let (_, r) = std::mem::take(&mut rest).split_at_mut(j.start - bis);
+            let (eigener, r) = r.split_at_mut(j.len);
+            rest = r;
+            bis = j.start + j.len;
+            abschnitte.push(std::sync::Mutex::new(eigener));
+        }
+        if jobs.len() < PARALLEL_AB {
+            for (j, a) in jobs.iter().zip(&abschnitte) {
+                fuellen(j, &mut a.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+            }
+            return;
+        }
+        self.frame_pool.run(jobs.len(), &|i| {
+            fuellen(&jobs[i], &mut abschnitte[i].lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        });
+    }
+
     #[allow(clippy::type_complexity)]
-    pub(crate) fn build_entity_vertices(&self) -> (Vec<world::BlockVertex>, Vec<[f32; 4]>, Vec<u32>, (usize, usize, usize), (Vec<world::BlockVertex>, Vec<[f32; 4]>), Vec<std::ops::Range<u32>>) {
+    // Letzter Wert: die Vertex-Bereiche je Entity (fuer Motion Blur, s. entity_motion).
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn build_entity_vertices(
+        &self,
+    ) -> (Vec<world::BlockVertex>, Vec<[f32; 4]>, Vec<u32>, (usize, usize, usize), (Vec<world::BlockVertex>, Vec<[f32; 4]>), Vec<std::ops::Range<u32>>, Vec<(u64, std::ops::Range<usize>)>) {
         // Anteil 0 = Textur unveraendert (s. fs_entity).
         const KEINE_FAERBUNG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
         // Shader-Pfad: Licht je Vertex, parallel zu `tints` gefuellt. Ein Wert je Entity (an
         // seinen Augen, wie Vanilla), Blockentities je Vertex, Feuer und Spuren unbeleuchtet.
         const UNBELEUCHTET: u32 = 1 << 31;
-        let lit = self.settings.render_path == 1;
+        let lit = crate::shader_path_on();
         self.prune_anim_smoothing();
         let mut lights: Vec<u32> = Vec::new();
         let tint = self.settings.damage_tint_rgba();
@@ -124,7 +158,8 @@ impl App {
         let mut haut: Vec<std::ops::Range<usize>> = Vec::new();
         // Brennende Entities: (Fuesse, Breite, Hoehe). Das Feuer kommt erst nach der Schleife
         // dran -- Vanilla zeichnet es ohne Schadens-Overlay, es darf also nie mitblitzen.
-        let mut feuer: Vec<([f32; 3], f32, f32)> = Vec::new();
+        // Mit dem Schluessel fuer den Motion Blur (None = eigener Spieler, der verwischt nicht).
+        let mut feuer: Vec<(Option<u64>, [f32; 3], f32, f32)> = Vec::new();
         let eye = self.camera.position;
         // Weltposition -> augenrelative f32-Position fuers Modell.
         let rel = |p: DVec3| -> [f32; 3] {
@@ -139,6 +174,9 @@ impl App {
         // Alpha 127. Im normalen Entity-Pass (Schnitt bei 0.5) verschwand sie damit ganz.
         // Sie kommen ans Ende und laufen durchscheinend.
         let mut durchscheinend: Vec<world::BlockVertex> = Vec::new();
+        // Bereiche in `durchscheinend` mit eigener Deckkraft (als Tint -1 - Deckkraft, s.
+        // block.wgsl::entity_fade): ausblendende Teile der Todesexplosion.
+        let mut ausblenden: Vec<(std::ops::Range<usize>, f32)> = Vec::new();
         // Leuchtende: Bereiche in `out` mit ihrer Umrissfarbe, und was nur als Umriss erscheint.
         let mut umriss: Vec<(std::ops::Range<usize>, [f32; 4])> = Vec::new();
         let mut nur_umriss: Vec<world::BlockVertex> = Vec::new();
@@ -148,6 +186,11 @@ impl App {
         // Was man lesen koennen soll (Karten in Rahmen, Schilder): diese Bereiche zeichnet die
         // Bewegungsunschaerfe danach noch einmal scharf (s. BlockRenderer::render_sharp_entities).
         let mut scharf: Vec<std::ops::Range<u32>> = Vec::new();
+        // Modelle, die nach den Schleifen parallel entstehen (s. defer_model, run_model_jobs).
+        let mut jobs: Vec<ModelJob<'_>> = Vec::new();
+        // GPU-Skinning fuer Koerper fremder Spieler und Mobs (s. skin_frame). Der eigene Spieler,
+        // Leuchtende, Ruestung, Umhang und die Todesexplosion bleiben vorerst auf dem CPU-Weg.
+        let skinning = self.skinning_active();
 
         // Eigener Spieler -- NUR in der 3. Person. Im Ego-Modus saesse die Kamera mitten in
         // dieser Box und man saehe sie von innen. Ohne sie waere die 3.-Person-Ansicht
@@ -259,7 +302,7 @@ impl App {
             // Unsichtbar: wie bei Fremden nur Koerper und Umhang weg (s. dort).
             if !self.own_invisible {
                 let start = out.len();
-                world::emit_entity_model_two_sided(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
+                defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
                 haut.push(start..out.len());
             } else if let Some(farbe) = eigene_umrissfarbe {
                 let vorher = nur_umriss.len();
@@ -267,10 +310,10 @@ impl App {
                 nur_umriss_farbe.resize(nur_umriss_farbe.len() + nur_umriss.len() - vorher, farbe);
             }
             if self.own_on_fire && self.game_mode != GAME_MODE_SPECTATOR {
-                feuer.push((rel(feet), self.physics.width() as f32, self.physics.current_height() as f32));
+                feuer.push((None, rel(feet), self.physics.width() as f32, self.physics.current_height() as f32));
             }
             let own_armor = self.own_armor();
-            self.emit_armor(&own_armor, &self.armor_models, &pose, base, &mut out);
+            self.emit_armor(&own_armor, &self.armor_models, &pose, base, &mut out, Some(&mut jobs), None);
             let stich = if is_spear_item(own_main) { self.own_hand_swing(tick_progress) } else { 0.0 };
             let haende = self.shown_hands(self.own_hand_items(), own_use_pose, self.sleeping_at.is_some());
             // Beim Jonglieren fliegen die Items, in den Haenden liegt keins (s. unten).
@@ -293,7 +336,8 @@ impl App {
                 self.third_person_item_extra(ansehen.0, true, model, &pose, base),
                 self.third_person_item_extra(ansehen.1, false, model, &pose, base),
             );
-            self.emit_held_items(haende, (block_right, block_left), (stich, true), ansehen, model, &pose, base, &mut out);
+            // Der eigene Spieler bleibt auf dem CPU-Weg (s. skinning_active).
+            self.emit_held_items(haende, (block_right, block_left), self.own_using_item_right_arm(), (stich, true), ansehen, model, &pose, base, None, &mut out);
             if let Some(j) = jongliert.filter(|_| !self.own_invisible) {
                 self.emit_juggle_third_person(j, model, &pose, base, &mut out);
             }
@@ -319,7 +363,7 @@ impl App {
                     tick_progress,
                 );
                 let cape_pose = world::cape_pose(&pose, vertical, swing, side);
-                world::emit_entity_model(&self.cape_model, &cape_pose, base, cape_tex, ENTITY_BRIGHTNESS, &mut out);
+                defer_model(&mut jobs, &mut out, &self.cape_model, &cape_pose, base, cape_tex, [ENTITY_BRIGHTNESS; 3], false);
             }
             // Der eigene Spieler blitzt genauso auf -- sichtbar nur in der 3. Person, aber
             // dort waere sein Fehlen sofort auffaellig. Die Quelle ist eine andere als bei
@@ -353,18 +397,26 @@ impl App {
         // weg -- der Glanz wird ADDITIV ueber das fertige Modell gelegt und liess den Spieler
         // sonst trotz 100 % nicht ganz in der Filterfarbe erscheinen.
         let mut schild_glint: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut je_entity: Vec<(u64, std::ops::Range<usize>)> = Vec::with_capacity(self.entities.len());
         for (_id, e) in self.entities.iter() {
+            // Todesanimation Einfrieren: ein sterbender Spieler steht DEATH_FREEZE_TICKS lang nur
+            // als Skin da -- ohne Ruestung, Items, Umhang, Feuer und Faerbung, ohne Umkippen.
+            let gefroren = self.settings.death_animation == DEATH_ANIM_FREEZE && is_player_like(e.entity_type) && self.dying.contains_key(_id);
             if !self.entity_in_render_distance(e) {
                 continue;
             }
             let entity_start = out.len();
             let glint_start = self.glint_out.borrow().len();
+            let skin_start = self.skin_instance_count();
             // Ein einziger Bruchteil fuer ALLES an diesem Entity: Position, Rotation, Schritt,
             // Alter und Umhang muessen mit demselben Wert interpolieren, sonst laufen sie
             // gegeneinander. Seit die Entity-Glaettung dem Vanilla-Modell folgt, ist das der
             // ganz normale Tick-Fortschritt des Clients (s. world::Entity::render_pos).
             let progress = self.tick_progress();
             let (x, y, z) = e.render_pos(progress);
+            if self.entity_culled(*_id, e, (x, y, z)) {
+                continue;
+            }
             let feet = rel(DVec3::new(x, y, z));
             let body_yaw = e.render_yaw(progress);
             let head_rel = e.relative_head_yaw(progress);
@@ -395,7 +447,8 @@ impl App {
             // Koerper (und den Umhang) aus, Ruestung, Elytra und gehaltene Items bleiben
             // sichtbar (die Feature-Renderer pruefen die Unsichtbarkeit nicht).
             else if world::entity_type_name(e.entity_type) == Some("armor_stand") {
-                self.emit_armor_stand(e, feet, body_yaw, &mut out, &mut haut);
+                let skin = skinning.then(|| crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id));
+                self.emit_armor_stand(e, feet, body_yaw, skin, &mut out, &mut haut);
             } else if e.invisible && !is_player_like(e.entity_type) && !world::entity::is_item_frame(e.entity_type) {
                 // nichts zeichnen (ein unsichtbarer Rahmen zeigt seinen Inhalt weiter)
             } else if matches!(world::entity_type_name(e.entity_type), Some("interaction" | "marker" | "area_effect_cloud")) {
@@ -405,7 +458,7 @@ impl App {
                 // Als Bild bei den Partikeln, s. experience_orb_vertices.
             } else if e.falling_block.is_some() || world::entity_type_name(e.entity_type) == Some("tnt") {
                 // Als echter Block im Block-Atlas, s. display_block_vertices.
-            } else if is_player_like(e.entity_type) && self.dying.contains_key(_id) && matches!(self.settings.death_animation, DEATH_ANIM_OFF | DEATH_ANIM_EXPLOSION) {
+            } else if is_player_like(e.entity_type) && self.dying.contains_key(_id) && (matches!(self.settings.death_animation, DEATH_ANIM_OFF | DEATH_ANIM_EXPLOSION) || gefroren && self.dying[_id] >= DEATH_FREEZE_TICKS) {
                 // Todesanimation Aus oder Explosion: die Leiche wird nicht gezeichnet (die
                 // Teile der Explosion zeichnet die Schleife unten).
             } else if is_player_like(e.entity_type) {
@@ -504,42 +557,55 @@ impl App {
                     Some(glide) => world::entity_transform_gliding(feet, body_yaw, e.scale, world::entity_model::PLAYER_MODEL_SCALE, glide),
                     None => world::entity_transform_leaning(feet, body_yaw, e.scale, world::entity_model::PLAYER_MODEL_SCALE, &lean),
                 };
-                if !e.invisible {
+                // Koerper per GPU-Skinning (s. skin_frame); leuchtend zusaetzlich als Silhouette,
+                // unsichtbar und leuchtend NUR als Silhouette.
+                let schluessel = crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id);
+                if !e.invisible && skinning {
+                    self.push_skinned_body(model, &pose, base, tex, true, schluessel);
+                } else if e.invisible && e.glowing && skinning {
+                    self.push_skinned_outline_only(model, &pose, base, tex, true, schluessel, self.entity_glow_color(e));
+                } else if !e.invisible {
                     let start = out.len();
-                    world::emit_entity_model_two_sided(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
+                    defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
                     haut.push(start..out.len());
                 } else if e.glowing {
                     let vorher = nur_umriss.len();
                     world::emit_entity_model_two_sided(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut nur_umriss);
                     nur_umriss_farbe.resize(nur_umriss_farbe.len() + nur_umriss.len() - vorher, self.entity_glow_color(e));
                 }
-                self.emit_armor(&e.armor, &self.armor_models, &pose, base, &mut out);
-                // Gestochen wird mit der Haupthand -- an ihrem Arm.
-                let haupthand_schwingt = swing_right_arm != e.left_handed;
-                let stich = if e.main_hand_spear() && haupthand_schwingt { hand_swing } else { 0.0 };
-                let schlaeft = e.pose == world::entity::POSE_SLEEPING;
-                let haende = self.shown_hands((arm_rechts, arm_links), fremd_use_pose, schlaeft);
-                let schwert = e.last_sword.filter(|_| !e.invisible && !schlaeft && !reitet);
-                let haende = self.emit_hand_extras(
-                    *_id,
-                    haende,
-                    !e.left_handed,
-                    (e.yaw_deg, pitch),
-                    (e.age_ticks(0.0) as i64, progress),
-                    schwert,
-                    &e.armor,
-                    model,
-                    &pose,
-                    base,
-                    &mut out,
-                );
-                self.emit_held_items(haende, (block_right, block_left), (stich, swing_right_arm), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, &mut out);
-                let cape = self.cape_texture(&e.uuid);
-                let elytra = self.emit_elytra(&e.armor, cape, glide.as_ref(), e.sneaking(), base, &mut out);
-                if let Some(cape_tex) = cape.filter(|_| !elytra && !e.invisible) {
-                    let (vertical, swing, side) = e.cape_angles(progress);
-                    let cape_pose = world::cape_pose(&pose, vertical, swing, side);
-                    world::emit_entity_model(&self.cape_model, &cape_pose, base, cape_tex, ENTITY_BRIGHTNESS, &mut out);
+                if !gefroren {
+                    self.emit_armor(&e.armor, &self.armor_models, &pose, base, &mut out, Some(&mut jobs), skinning.then_some(schluessel));
+                    // Gestochen wird mit der Haupthand -- an ihrem Arm.
+                    let haupthand_schwingt = swing_right_arm != e.left_handed;
+                    let stich = if e.main_hand_spear() && haupthand_schwingt { hand_swing } else { 0.0 };
+                    let schlaeft = e.pose == world::entity::POSE_SLEEPING;
+                    let haende = self.shown_hands((arm_rechts, arm_links), fremd_use_pose, schlaeft);
+                    let schwert = e.last_sword.filter(|_| !e.invisible && !schlaeft && !reitet);
+                    let haende = self.emit_hand_extras(
+                        *_id,
+                        haende,
+                        !e.left_handed,
+                        (e.yaw_deg, pitch),
+                        (e.age_ticks(0.0) as i64, progress),
+                        schwert,
+                        &e.armor,
+                        model,
+                        &pose,
+                        base,
+                        &mut out,
+                    );
+                    self.emit_held_items(haende, (block_right, block_left), e.using_item_right_arm(), (stich, swing_right_arm), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, skinning.then_some(schluessel), &mut out);
+                    let cape = self.cape_texture(&e.uuid);
+                    let elytra = self.emit_elytra(&e.armor, cape, glide.as_ref(), e.sneaking(), base, &mut out);
+                    if let Some(cape_tex) = cape.filter(|_| !elytra && !e.invisible) {
+                        let (vertical, swing, side) = e.cape_angles(progress);
+                        let cape_pose = world::cape_pose(&pose, vertical, swing, side);
+                        if skinning {
+                            self.push_skinned(&self.cape_model, &cape_pose, base, cape_tex, [ENTITY_BRIGHTNESS; 3], false, schluessel);
+                        } else {
+                            defer_model(&mut jobs, &mut out, &self.cape_model, &cape_pose, base, cape_tex, [ENTITY_BRIGHTNESS; 3], false);
+                        }
+                    }
                 }
             } else if world::entity_type_name(e.entity_type) == Some("end_crystal") {
                 self.emit_end_crystal(*_id, e, feet, progress, &mut out);
@@ -550,6 +616,10 @@ impl App {
             } else if let Some(pfeil_tex) = arrow_texture(e.entity_type) {
                 if self.projectile_in_render_range(e, feet, 1.0) {
                     self.emit_arrow(e, feet, progress, pfeil_tex, &mut out);
+                }
+            } else if world::entity_type_name(e.entity_type) == Some("trident") {
+                if self.projectile_in_render_range(e, feet, 1.0) {
+                    self.emit_thrown_trident(e, feet, progress, &mut out);
                 }
             } else if let Some(art) = world::item_render_kind(e.entity_type) {
                 self.emit_item_entity(*_id, e, art, feet, progress, &mut out);
@@ -618,14 +688,18 @@ impl App {
                             Some(t) => world::entity_model::entity_transform_dying(feet, body_yaw, e.scale, model_scale, t),
                             None => world::entity_transform(feet, body_yaw, e.scale, model_scale),
                         };
-                        let start = out.len();
-                        world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
-                        haut.push(start..out.len());
+                        if skinning {
+                            self.push_skinned_body(model, &pose, base, tex, false, crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id));
+                        } else {
+                            let start = out.len();
+                            defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], false);
+                            haut.push(start..out.len());
+                        }
                         // Ruestung nur am Biped: die anderen Modelle haben die Teile gar
                         // nicht, die armor_model erwartet -- ein Ruestungshelm ueber einem
                         // Spinnenkopf waere falsch, nicht bloss unschoen.
                         if matches!(kind, ModelKind::Biped) {
-                            self.emit_armor(&e.armor, &self.armor_models, &pose, base, &mut out);
+                            self.emit_armor(&e.armor, &self.armor_models, &pose, base, &mut out, Some(&mut jobs), skinning.then(|| crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id)));
                         }
                         // Auch Mobs tragen etwas (Zombie mit Schaufel, Skelett mit Bogen). Die
                         // Modelle ohne Arme (Spinne, Schleim, ...) haben schlicht kein
@@ -634,45 +708,48 @@ impl App {
                         self.emit_held_items(
                             e.arm_items(),
                             self.entity_blocking_arms(e),
+                            e.using_item_right_arm(),
                             (0.0, true),
                             (world::Affine::IDENTITY, world::Affine::IDENTITY),
                             model,
                             &pose,
                             base,
+                            skinning.then(|| crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id)),
                             &mut out,
                         );
                     }
                     // Modell aus der Datentabelle (Dorfbewohner, Tiere, Boote, Loren, ...).
                     None if world::entity_type_name(e.entity_type).and_then(world::mob_catalog::mob_look).is_some() => {
                         let start = out.len();
-                        self.emit_catalog_entity(e, feet, body_yaw, head_rel, pitch, (swing, amount), &mut out);
+                        let skin = skinning.then(|| crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id));
+                        self.emit_catalog_entity(e, feet, body_yaw, head_rel, pitch, (swing, amount), skin, &mut out);
                         haut.push(start..out.len());
                     }
-                    // Kein Modell fuer diesen Typ (Items, Pfeile, ...) -- Box wie bisher.
-                    // Kleinkram bleibt klein und grau, damit eine spielergrosse Box um ein
-                    // Item nicht so tut, als stuende da ein Gegner.
+                    // Kein Modell fuer diesen Typ: ein schwarz-pink karierter Kasten (wie Vanillas
+                    // Fehltextur), damit sofort auffaellt, was der Client nicht kennt.
+                    // Kleinkram bleibt klein, damit eine spielergrosse Box um ein Item nicht so
+                    // tut, als stuende da ein Gegner.
                     None => {
-                        let (half_w, height, color) = if world::is_attackable(e.entity_type) {
-                            (physics::PLAYER_WIDTH / 2.0, physics::PLAYER_HEIGHT, [1.0, 0.65, 0.15])
+                        let (half_w, height) = if world::is_attackable(e.entity_type) {
+                            (physics::PLAYER_WIDTH / 2.0, physics::PLAYER_HEIGHT)
                         } else {
-                            (0.125f32, 0.25f32, [0.6, 0.6, 0.6])
+                            (0.125f32, 0.25f32)
                         };
                         let (x, y, z) = (feet[0], feet[1], feet[2]);
                         out.extend(world::box_vertices(
                             [x - half_w, y, z - half_w],
                             [x + half_w, y + height, z + half_w],
-                            color,
-                            // Die weisse Kachel des ENTITY-Atlas, nicht die des Block-Atlas:
-                            // dieser Durchgang bindet den Entity-Atlas (s.
-                            // EntityAtlas::white_rect).
-                            self.entity_atlas.white_rect(),
+                            [1.0; 3],
+                            // Aus dem ENTITY-Atlas, nicht dem Block-Atlas: dieser Durchgang
+                            // bindet den Entity-Atlas.
+                            self.entity_atlas.missing_tile(),
                         ));
                     }
                 }
             }
-            if e.on_fire {
+            if e.on_fire && !gefroren {
                 let (breite, hoehe) = e.hit_size();
-                feuer.push((feet, breite as f32, hoehe as f32));
+                feuer.push((Some(crate::entity_motion::key(crate::entity_motion::KIND_FIRE, *_id)), feet, breite as f32, hoehe as f32));
             }
             // Alles, was dieses Entity gerade beigesteuert hat, bekommt seine Faerbung.
             // is_hurt() ist bei Nicht-Lebewesen nie wahr (s. world::Entity::on_damaged), ein
@@ -686,7 +763,7 @@ impl App {
             // Weiss (s. block.wgsl::fs_entity) -- der Pfeil ist dann eine weisse Silhouette.
             let weisser_pfeil = self.settings.module_arrows && self.settings.arrow_white && arrow_texture(e.entity_type).is_some();
             // Sterbend: rot bis zum Ende (LivingEntityRenderer: hasRedOverlay mit deathTime > 0).
-            let faerbung = match (e.damage_flash(blitz_ticks) || self.death_time(*_id).is_some(), crit_tint) {
+            let faerbung = match (!gefroren && (e.damage_flash(blitz_ticks) || self.dying_red(*_id)), crit_tint) {
                 _ if weisser_pfeil => [1.0, 1.0, 1.0, 1.0],
                 (false, _) => KEINE_FAERBUNG,
                 (true, Some(crit)) if e.hurt_by_crit() => crit,
@@ -707,6 +784,7 @@ impl App {
                 haut.push(entity_start..out.len());
             }
             // Schild-Modul, Anzeige "Modell": Cooldown oder gehobenes Schild faerbt den Spieler.
+            let mut schildfilter = None;
             if !e.invisible {
                 if let Some(filter) = self.shield_mark_color(*_id, e, ShieldMark::Model) {
                     schild_bereiche.push((entity_start..out.len(), filter));
@@ -714,11 +792,22 @@ impl App {
                     if filter[3] >= 1.0 {
                         schild_glint.push(glint_start..self.glint_out.borrow().len());
                     }
+                    schildfilter = Some(filter);
                 }
             }
+            // Die Instanzen dieses Entities (GPU-Skinning) wie seine Ecken.
+            if self.skin_instance_count() > skin_start {
+                self.finish_skin_entity(skin_start, faerbung, schildfilter, e.glowing.then(|| self.entity_glow_color(e)));
+            }
+            je_entity.push((crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id), entity_start..out.len()));
         }
-        for (fuesse, breite, hoehe) in feuer {
+        // Das Feuer zieht mit seinem Entity mit, also eigene Bereiche fuer den Motion Blur.
+        for (schluessel, fuesse, breite, hoehe) in feuer {
+            let start = out.len();
             self.emit_entity_fire(fuesse, breite, hoehe, &mut out);
+            if let Some(k) = schluessel {
+                je_entity.push((k, start..out.len()));
+            }
         }
         self.emit_trails(eye, self.tick_progress(), &mut out);
         tints.resize(out.len(), KEINE_FAERBUNG);
@@ -728,12 +817,28 @@ impl App {
         for b in &self.death_bursts {
             let start = out.len();
             let (model, tex) = self.player_model_and_texture(&b.uuid);
-            let pose = b.pose(self.tick_progress());
+            let progress = self.tick_progress();
+            let deckkraft = b.alphas(progress);
+            let alpha = |name: &str| deckkraft.iter().find(|(n, _)| *n == name).map_or(1.0, |(_, a)| *a);
             let feet = DVec3::new(b.feet.0, b.feet.1, b.feet.2);
             let base = world::entity_model::entity_transform(rel(feet), b.yaw, b.scale, world::entity_model::PLAYER_MODEL_SCALE);
-            world::emit_entity_model_two_sided(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
-            self.emit_armor(&b.armor, &self.armor_models, &pose, base, &mut out);
+            // Nur der Skin, keine Ruestung (s. death_burst). Ausblendende Teile einzeln und
+            // durchscheinend, einseitig (sonst schimmerte die Innenseite der hinteren Flaechen
+            // durch).
+            for &(name, a) in &deckkraft {
+                if a <= 0.0 || a >= 1.0 {
+                    continue;
+                }
+                let pose = b.pose_of(progress, &|n| n == name);
+                let von = durchscheinend.len();
+                world::emit_entity_model(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut durchscheinend);
+                ausblenden.push((von..durchscheinend.len(), a));
+            }
+            // Der Rest wie gewohnt deckend.
+            let pose = b.pose_of(progress, &|n| alpha(n) >= 1.0);
+            defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
             haut.push(start..out.len());
+            je_entity.push((crate::entity_motion::key(crate::entity_motion::KIND_DEATH_BURST, b.entity_id), start..out.len()));
             tints.resize(out.len(), KEINE_FAERBUNG);
             if lit {
                 lights.resize(out.len(), self.light_near(feet + DVec3::new(0.0, 0.5, 0.0)));
@@ -742,6 +847,8 @@ impl App {
         if lit {
             lights.resize(out.len(), UNBELEUCHTET);
         }
+        // Ab hier liest wieder jemand Vertices aus `out` (Licht, Umriss): vorher fertig machen.
+        self.run_model_jobs(&jobs, &mut out);
         // Betten sind Blockgeometrie im Entity-Puffer, kein Lebewesen -- nie gefaerbt.
         self.emit_beds(eye, &mut out);
         self.emit_shulker_boxes(eye, &mut out);
@@ -780,8 +887,12 @@ impl App {
             }
         }
         let anzahl = durchscheinend.len();
+        let anfang = out.len();
         out.extend(durchscheinend);
         tints.resize(out.len(), KEINE_FAERBUNG);
+        for (bereich, a) in ausblenden {
+            tints[anfang + bereich.start..anfang + bereich.end].fill([0.0, 0.0, 0.0, -1.0 - a]);
+        }
         // Schulterkamera nah am eigenen Spieler: er laeuft durchscheinend mit seiner Deckkraft
         // im Tint (s. block.wgsl::entity_fade), die Schadens-Faerbung entfaellt dabei.
         let kopf = if self.own_player_alpha < 1.0 { eigene } else { 0 };
@@ -797,6 +908,6 @@ impl App {
             nur_umriss_farbe.resize(nur_umriss_farbe.len() + bereich.len(), farbe);
             nur_umriss.extend_from_slice(&out[bereich]);
         }
-        (out, tints, lights, (kopf, anzahl, eigene), (nur_umriss, nur_umriss_farbe), scharf)
+        (out, tints, lights, (kopf, anzahl, eigene), (nur_umriss, nur_umriss_farbe), scharf, je_entity)
     }
 }

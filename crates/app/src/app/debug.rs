@@ -29,10 +29,10 @@ impl App {
     // Bild aber hell, liegt der Fehler im Shader; trifft er nichts, wirft das, was dort steht,
     // keinen Schatten (Display-Entities, Blockentities, Pflanzen).
     pub(crate) fn sun_ray_debug_lines(&self) -> Vec<String> {
-        if self.settings.render_path != 1 {
+        if !crate::shader_path_on() {
             return Vec::new();
         }
-        let sonne = render::shader_path::celestial_light(world::sky::sky_angle(self.world_time_of_day));
+        let sonne = render::celestial::celestial_light(world::sky::sky_angle(self.world_time_of_day));
         let d = sonne.dir.as_dvec3();
         let kopf = format!(
             "-- Sonne: Tageszeit {} | Richtung {:.2} {:.2} {:.2} --",
@@ -291,7 +291,7 @@ impl App {
             texts.push(UiText { text: line.clone(), x: 6.0, y: 6.0 + row as f32 * line_height, color: COLOR_WHITE, scale: UI_SCALE_SMALL });
         }
 
-        // Graphen unten rechts, von oben: GPU, RAM (mit Swap), CPU. Gruen = Rechner gesamt,
+        // Graphen unten links, von oben: GPU, RAM (mit Swap), CPU. Gruen = Rechner gesamt,
         // pink = Coral (s. sysstats). Hier nur die Kurven; Flaechen und Ueberschriften liegen in
         // der Overlay-Ebene (s. debug_graph_overlay), damit alles ueber dem Scoreboard steht.
         let _ = rects;

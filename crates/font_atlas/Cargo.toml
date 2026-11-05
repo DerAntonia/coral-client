@@ -1,0 +1,20 @@
+[package]
+name = "font_atlas"
+edition.workspace = true
+version.workspace = true
+
+# Schrift-Atlas und Glyphen-Lage (aus app/src/font_atlas.rs). Eigenes Crate, damit es auch im
+# Fast-Build optimiert gebaut wird (s. profile.fast.package."*"): glyph/place/sharpest_shift
+# laufen fuer jedes Zeichen jedes Bild, ohne Optimierung kosteten sie ein Fuenftel der
+# Hauptthread-Zeit.
+
+[dependencies]
+assets = { path = "../assets" }
+protocol = { path = "../protocol" }
+wgpu.workspace = true
+# TTF-Rasterung fuer die DM-Sans-Schrift.
+ab_glyph = "0.2"
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

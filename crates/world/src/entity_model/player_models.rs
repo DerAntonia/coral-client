@@ -580,6 +580,22 @@ pub fn first_person_bow_pose(right: bool, equip_progress: f32, _f: f32, pull: f3
         .then(pull_zoom(right, pull))
 }
 
+// UseAction.TRIDENT: hoch hinter die Schulter geholt und mit der Ausholzeit (voll nach zehn
+// Ticks, `pull` 0..1) weiter zurueckgezogen. Ohne Vanillas Zittern, wie Bogen und Armbrust
+// (s. oben).
+#[must_use]
+pub fn first_person_trident_pose(right: bool, equip_progress: f32, pull: f32) -> Affine {
+    let i = if right { 1.0 } else { -1.0 };
+    first_person_equip_offset(right, equip_progress)
+        .then(Affine::translation([i * -0.5, 0.7, 0.1]))
+        .then(rotation_x_deg(-55.0))
+        .then(Affine::rotation_y_deg(i * 35.3))
+        .then(rotation_z_deg(i * -9.785))
+        .then(Affine::translation([0.0, 0.0, pull * 0.2]))
+        .then(Affine::scale([1.0, 1.0, 1.0 + pull * 0.2]))
+        .then(Affine::rotation_y_deg(-i * 45.0))
+}
+
 // UseAction.EAT / DRINK: das Item wandert zum Mund, wippt dort und kippt kurz vor dem Ende
 // schlagartig zurueck (die 27. Potenz). `f` ist Vanillas VERBLEIBENDE Benutzungszeit in
 // Ticks samt Zwischenbild, `max_use` die ganze Dauer. Auf die Essbewegung folgt nur noch die

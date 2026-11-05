@@ -112,6 +112,10 @@ impl Entities {
                 cloud_waiting: false,
                 boat_paddles: [false; 2],
                 paddle_positions: [0.0; 2],
+                minecart_block: None,
+                minecart_offset: None,
+                minecart_fuel: false,
+                minecart_tnt_fuse: -1,
                 swap: crate::more_anims::SwapWatch::default(),
                 last_sword: None,
                 cloud_particle: protocol::particle::ParticleEffect {
@@ -279,6 +283,18 @@ impl Entities {
                 if let Some(v) = neu {
                     *stand = v;
                 }
+            }
+        }
+        // Dieselben Indizes meinen beim Boot die Ruder -- nur bei Loren uebernehmen.
+        if entity_type_name(e.entity_type).is_some_and(crate::mob_catalog::is_minecart) {
+            if let Some(v) = update.minecart_block {
+                e.minecart_block = v;
+            }
+            if let Some(v) = update.minecart_offset {
+                e.minecart_offset = Some(v);
+            }
+            if let Some(v) = update.minecart_fuel {
+                e.minecart_fuel = v;
             }
         }
         if entity_type_name(e.entity_type) == Some("area_effect_cloud") {

@@ -372,7 +372,7 @@ impl App {
         saver.set_threads(self.settings.chunk_saver_threads as usize);
         let Some(gpu) = self.gpu.as_mut() else { return };
         // Der Shader-Pfad zeichnet die Fernsicht noch nicht; gespeichert wird trotzdem.
-        if radius_chunks == DISTANCE_OFF || gpu.use_shader_path || !saver.has_world() {
+        if radius_chunks == DISTANCE_OFF || crate::shader_path_on() || !saver.has_world() {
             saver.forget_meshes();
             gpu.lod_active = false;
             gpu.lod = None;

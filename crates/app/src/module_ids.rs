@@ -43,6 +43,8 @@ pub(crate) enum ModuleId {
     CoralRecord,
     Autoclicker,
     SaturationHud,
+    // Die Statuseffekte oben rechts (HudElement::Effects), an/aus = Settings::show_effects_hud.
+    Effects,
     EgoName,
     Color,
     Sustainability,
@@ -84,7 +86,7 @@ pub(crate) fn addon_module_info<T>(i: u16, f: impl FnOnce(&AddonModuleInfo) -> T
     ADDON_MODULES.read().ok()?.get(i as usize).map(f)
 }
 
-pub(crate) const MODULE_IDS: [ModuleId; 40] = [
+pub(crate) const MODULE_IDS: [ModuleId; 41] = [
     ModuleId::Totem,
     ModuleId::TotemWarning,
     ModuleId::TotemSlots,
@@ -111,6 +113,7 @@ pub(crate) const MODULE_IDS: [ModuleId; 40] = [
     ModuleId::VoiceChat,
     ModuleId::BlockOutline,
     ModuleId::SaturationHud,
+    ModuleId::Effects,
     ModuleId::EgoName,
     ModuleId::ShowMarkers,
     ModuleId::SoundDebug,
@@ -167,6 +170,7 @@ impl ModuleId {
             Self::CoralRecord => "Coral-Record",
             Self::Autoclicker => "Autoklicker",
             Self::SaturationHud => "Sättigung",
+            Self::Effects => "Effekte",
             Self::EgoName => "Eigenname",
             Self::Color => "Farbe",
             Self::Sustainability => "Nachhaltigkeit",
@@ -215,6 +219,7 @@ impl ModuleId {
             Self::CoralRecord => settings.module_coral_record,
             Self::Autoclicker => settings.module_autoclicker,
             Self::SaturationHud => settings.module_saturation_hud,
+            Self::Effects => settings.show_effects_hud,
             Self::EgoName => settings.module_ego_name,
             Self::Color => settings.module_color,
             Self::Sustainability => settings.module_sustainability,
@@ -261,6 +266,7 @@ impl ModuleId {
             Self::CoralRecord => ButtonAction::ToggleModuleCoralRecord,
             Self::Autoclicker => ButtonAction::ToggleModuleAutoclicker,
             Self::SaturationHud => ButtonAction::ToggleModuleSaturationHud,
+            Self::Effects => ButtonAction::ToggleEffectsHud,
             Self::EgoName => ButtonAction::ToggleModuleEgoName,
             Self::Color => ButtonAction::ToggleModuleColor,
             Self::Sustainability => ButtonAction::ToggleModuleSustainability,
@@ -305,6 +311,7 @@ impl ModuleId {
             Self::FpsDisplay => "Bildrate und Frame-Zeiten -- verschieben im HUD-Editor",
             Self::DiscordStatus => "Zeigt in Discord, dass du Coral Client spielst -- mit Version, Server und Spielzeit",
             Self::SaturationHud => "Balken über der Hungerleiste: wie viel Sättigung noch übrig ist, von rechts nach links",
+            Self::Effects => "Statuseffekte oben rechts -- verschieben und einstellen im HUD-Editor",
             Self::EgoName => "Der eigene Name überall im Text umgeschrieben und eingefärbt, auf Wunsch mit Ton, wenn jemand ihn schreibt",
             Self::Autoclicker => "Klickt beim Halten von Angreifen oder Benutzen von selbst -- nur auf anticheat-test.com und lokalen Servern",
             Self::InputLog => "Schreibt Tasten, Maustasten und Rad (nur im Spiel, nicht Chat) mit Zeitstempel in input_log.txt",
@@ -407,7 +414,8 @@ impl ModuleId {
             | Self::ArmorHud
             | Self::Keystrokes
             | Self::SessionInfo
-            | Self::SaturationHud => ModuleCategory::Display,
+            | Self::SaturationHud
+            | Self::Effects => ModuleCategory::Display,
             Self::PopSounds | Self::VoiceChat => ModuleCategory::Akustik,
             Self::EgoName
             | Self::NoToolBreak

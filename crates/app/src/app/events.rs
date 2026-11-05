@@ -115,7 +115,7 @@ impl App {
                 net::ClientEvent::ResourcePackPush(push) => self.server_pack_offered(push),
                 net::ClientEvent::LightUpdate { x, z, light } => {
                     // Nur der Shader-Pfad zeichnet Licht -- nur dann lohnt das Neu-Meshen.
-                    if self.world.apply_sky_light(x, z, &light) && self.settings.render_path == 1 {
+                    if self.world.apply_sky_light(x, z, &light) && crate::shader_path_on() {
                         for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
                             if self.world.column(x + dx, z + dz).is_some() {
                                 self.world.mark_dirty(x + dx, z + dz);
@@ -172,6 +172,7 @@ impl App {
                     // "zuletzt gesendet"-Position: dieses Paket bewegt uns NICHT, es dreht
                     // uns nur. Die Positionsbuchhaltung bleibt damit gueltig.
                 }
+                net::ClientEvent::LookAt { from_eyes, target, entity } => self.on_look_at(from_eyes, target, entity),
                 net::ClientEvent::ChunkUndecodable(x, z) => {
                     self.column_history.entry((x, z)).or_default().2 = Some(Instant::now());
                     self.push_log(format!("Chunk {x} {z} nicht dekodierbar"));
@@ -365,8 +366,9 @@ impl App {
                 }
                 net::ClientEvent::ExplosionEffects(explosion) => self.on_explosion_effects(explosion),
                 net::ClientEvent::LevelEvent(event) => self.on_level_event(event),
-                net::ClientEvent::EntityDamaged { entity_id, damage_type } => {
+                net::ClientEvent::EntityDamaged { entity_id, damage_type, cause_id, direct_id, source_pos } => {
                     self.entities.damaged(entity_id);
+                    self.note_damage_source(entity_id, cause_id, direct_id, source_pos);
                     // Der eigene Schadenston kommt NICHT als Paket -- der Client spielt ihn
                     // selbst (s. play_own_hurt_sound).
                     if Some(entity_id) == self.own_entity_id {
@@ -400,6 +402,7 @@ impl App {
                 net::ClientEvent::ResetChat => {
                     self.chat_messages.clear();
                     self.chat_times.clear();
+                    self.chat_generation += 1;
                 }
                 net::ClientEvent::NamedRegistry { registry, entries } if registry == "minecraft:painting_variant" => {
                     self.creative_registries.painting_variant = entries.into_iter().map(|(n, _)| n).collect();
@@ -1593,6 +1596,13 @@ impl App {
         if status == ENTITY_STATUS_KINETIC_HIT {
             self.kinetic_hit_sound(entity_id);
         }
+        // MinecartTNT.handleEntityEvent(10): gezuendet, 80 Ticks bis zur Explosion. Dieselbe
+        // Nummer heisst bei Schafen "frisst Gras" -- deshalb nur fuer die TNT-Lore.
+        if status == 10 {
+            if let Some(e) = self.entities.get_mut(entity_id).filter(|e| world::entity_type_name(e.entity_type) == Some("tnt_minecart")) {
+                e.minecart_tnt_fuse = 80;
+            }
+        }
         if status == ENTITY_STATUS_DIED {
             self.session_death(entity_id);
             self.entity_died(entity_id);
@@ -1640,10 +1650,10 @@ impl App {
                 self.play_other_pop_sound(entity_id);
             }
             self.count_pop(entity_id);
-            // Pop-Optik (s. toteming.rs): Partikelwolke je eigener/fremder Pop
-            // abschaltbar.
+            // Pop-Optik (s. toteming.rs): Partikelwolke fremder Pops abschaltbar; die
+            // eigene schaltet Video > Eigene Partikel > Totem ab.
             let t = &self.settings.toteming;
-            let ohne_partikel = t.visuals && if eigener { t.hide_own_particles } else { t.hide_other_particles };
+            let ohne_partikel = t.visuals && !eigener && t.hide_other_particles;
             if !ohne_partikel {
                 self.with_particles(|p, ctx, body| p.add_emitter(entity_id, protocol::particle::PARTICLE_TOTEM_OF_UNDYING, 30, body, ctx));
             }

@@ -39,6 +39,10 @@ impl Entity {
             None if self.orb_physics => self.tick_orb(world, shapes, spieler),
             None => self.tick_interpolation(),
         }
+        // MinecartTNT.tick: die Zuendschnur brennt herunter, bei 0 sprengt der Server.
+        if self.minecart_tnt_fuse > 0 {
+            self.minecart_tnt_fuse -= 1;
+        }
         self.tick_head_yaw();
         self.tick_animations();
         self.tick_paddles();

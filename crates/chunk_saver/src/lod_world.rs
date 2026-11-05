@@ -199,9 +199,8 @@ impl LodWorld {
             let alt = self.get(key);
             let leer = Node::empty();
             let basis = alt.as_deref().unwrap_or(&leer);
-            let s = section.states();
             let wert = |x: usize, y: usize, z: usize| {
-                let st = s[(y * 16 + z) * 16 + x];
+                let st = section.get(x as i32, y as i32, z as i32);
                 let (block, sky) = licht.at(x as i32, by as i32 + y as i32, z as i32);
                 let v = if st == world::chunk::STATE_AIR { 0 } else { voxel(st, section.biome_at(x as i32, y as i32, z as i32)) };
                 with_light(v, world::light::brightest(block), sky)

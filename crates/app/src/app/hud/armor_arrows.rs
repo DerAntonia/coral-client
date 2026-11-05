@@ -181,7 +181,7 @@ impl App {
         if let Some(name) = world::item_registry::item_name(stack.item_id) {
             self.item_icons.push(sprites, item_icon_name(name, stack), world::potion::stack_tint(stack), rect.x, rect.y, rect.w, alpha);
         }
-        if stack.count > 1 && mit_zahl {
+        if mit_zahl {
             texts.push(UiText { text, x: (rect.x + rect.w - w).round(), y: (rect.y + rect.h - h).round(), color: [1.0, 1.0, 1.0, alpha], scale });
         }
     }
@@ -189,14 +189,31 @@ impl App {
     // Die Munition fuer die Waffe in der Hand (PlayerEntity.getProjectileType), mit der
     // Gesamtzahl gleicher Stapel als `count`. None ohne Bogen/Armbrust oder ohne Munition.
     pub(crate) fn arrow_hud_stack(&self) -> Option<protocol::item::ItemStack> {
+        self.projectile_for(self.arrow_hud_weapon()?)
+    }
+
+    // Bogen oder Armbrust in einer Hand ("bow"/"crossbow"); Vanilla fragt die Haupthand zuerst.
+    fn arrow_hud_weapon(&self) -> Option<&'static str> {
         let ist_waffe = |hand: i32| {
             self.own_hand_stack(hand)
                 .and_then(|s| world::item_registry::item_name(s.item_id))
                 .filter(|n| matches!(*n, "bow" | "crossbow"))
         };
-        // Vanilla fragt die Haupthand zuerst.
-        let waffe = ist_waffe(protocol::packets::HAND_MAIN).or_else(|| ist_waffe(protocol::packets::HAND_OFF))?;
-        self.projectile_for(waffe)
+        ist_waffe(protocol::packets::HAND_MAIN).or_else(|| ist_waffe(protocol::packets::HAND_OFF))
+    }
+
+    // Mindestens eine geladene Armbrust irgendwo im Inventar (Hotbar, Reihen, Zweithand): die
+    // Pfeil-Zahl wird gelb.
+    pub(crate) fn has_loaded_crossbow(&self) -> bool {
+        (inventory::PLAYER_MAIN_START..=inventory::PLAYER_OFFHAND).filter_map(|i| self.inventory.player.get(i).and_then(|s| s.as_ref())).any(|s| {
+            world::item_registry::item_name(s.item_id) == Some("crossbow") && s.is_charged()
+        })
+    }
+
+    // Waffe in der Hand, aber keine Munition: die Anzeige zeigt eine 0 (mit Icon ein rot
+    // getoenter Pfeil). Im Kreativmodus schiesst der Bogen auch so, da zaehlt das nicht.
+    pub(crate) fn arrow_hud_empty(&self) -> bool {
+        self.game_mode != GAME_MODE_CREATIVE && self.arrow_hud_weapon().is_some_and(|w| self.projectile_for(w).is_none())
     }
 
     // PlayerEntity.getProjectileType fuer diese Waffe ("bow"/"crossbow"), ohne den

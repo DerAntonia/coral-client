@@ -191,6 +191,14 @@ impl GlintBuffer {
         self.count = n as u32;
     }
 
+    pub const fn buffer(&self) -> &wgpu::Buffer {
+        &self.buffer
+    }
+
+    pub const fn count(&self) -> u32 {
+        self.count
+    }
+
     // Zeichnet die Twins. Pipeline und Bindgroups 0..2 setzt der Aufrufer; Slot 1 braucht
     // den Null-Versatz, weil der Glint durch vs_main laeuft (s. block.wgsl).
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, zero_offset: &'a wgpu::Buffer) {

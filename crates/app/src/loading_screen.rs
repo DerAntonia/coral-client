@@ -172,6 +172,12 @@ impl Laden {
             // oft noch die vorlaeufige, und das Bild wuerde auf sie heruntergerechnet.
             let groesse = fenster.1.size();
             self.schirm = Schirm::new(fenster.0.clone());
+            // Wie GpuState::configure_surface: lehnt DXGI die Swapchain im exklusiven Vollbild
+            // ab, randlos versuchen; die neue Groesse kommt per Resized (-> groesse).
+            if self.schirm.as_ref().is_some_and(|s| !s.ok) && matches!(fenster.0.fullscreen(), Some(winit::window::Fullscreen::Exclusive(_))) {
+                println!("[ladebildschirm] Rueckfall auf randloses Vollbild");
+                fenster.0.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+            }
             let modus = wallpaper::WallpaperMode::from_index(self.settings.wallpaper);
             let gespeichert = crate::shared_config_dir().map(|d| wallpaper::stored_path(&d));
             self.wallpaper.request(modus, gespeichert, crate::hero_scene::path(), (groesse.width, groesse.height), true);
@@ -346,6 +352,9 @@ struct Schirm {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     zwischen: wgpu::Texture,
+    // Swapchain eingerichtet? DXGI kann das ablehnen (s. konfigurieren); dann bleibt das Bild
+    // aus, bis ein Resized es erneut versucht.
+    ok: bool,
 }
 
 impl Schirm {
@@ -375,20 +384,35 @@ impl Schirm {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
         let zwischen = zwischen_textur(&device, &config);
-        Some(Self { surface, device, queue, config, zwischen })
+        let mut schirm = Self { surface, device, queue, config, zwischen, ok: false };
+        schirm.konfigurieren();
+        Some(schirm)
+    }
+
+    // surface.configure ohne Absturz. wgpu 22 macht aus jedem Fehler einen Panic; unter Windows
+    // lehnt DXGI die Swapchain teils ab (DXGI_ERROR_INVALID_CALL), etwa bei exklusivem Vollbild
+    // zusammen mit Aufnahme- oder Overlay-Programmen (wie GpuState::configure_surface).
+    fn konfigurieren(&mut self) {
+        let (surface, device, config) = (&self.surface, &self.device, &self.config);
+        self.ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| surface.configure(device, config))).is_ok();
+        if !self.ok {
+            println!("[ladebildschirm] Swapchain liess sich nicht einrichten, Ladebild aus");
+        }
     }
 
     fn groesse(&mut self, w: u32, h: u32) {
         self.config.width = w.max(1);
         self.config.height = h.max(1);
-        self.surface.configure(&self.device, &self.config);
+        self.konfigurieren();
         self.zwischen = zwischen_textur(&self.device, &self.config);
     }
 
     // `rgba`: ein Bild in Schirmgroesse, sRGB.
     fn zeigen(&mut self, rgba: &[u8]) {
+        if !self.ok {
+            return;
+        }
         let Ok(frame) = self.surface.get_current_texture() else { return };
         let (w, h) = (self.config.width, self.config.height);
         if frame.texture.width() != w || frame.texture.height() != h || rgba.len() != (w * h * 4) as usize {

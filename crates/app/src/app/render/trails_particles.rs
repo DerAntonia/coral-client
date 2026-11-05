@@ -167,13 +167,46 @@ impl App {
         let tick_progress = self.tick_progress();
         let mut out = std::mem::take(&mut self.particle_vertices);
         self.particles.set_tuning(self.settings.particle_tuning, self.settings.particle_tuning_own);
-        let mut draws = self.particles.build_vertices(self.camera.position, right, up, tick_progress, &mut out);
+        // Motion Blur bewegter Entities gilt auch fuer Partikel: dafuer je Ecke die Lage im
+        // vorigen Bild. Nach einer Pause (Menue, Ladebild) nicht ueber die Luecke.
+        let jetzt = Instant::now();
+        let blur = self.settings.motion_blur_entities_percent > 0;
+        let vorher = std::mem::replace(&mut self.particle_prev_frame, blur.then_some((self.camera.position, jetzt)));
+        let mut pv = std::mem::take(&mut self.particle_prev);
+        let mit = match vorher.filter(|_| blur) {
+            Some((auge, zeit)) => {
+                let dt = jetzt.saturating_duration_since(zeit).as_secs_f32();
+                pv.ticks = dt / physics::TICK_DT;
+                pv.eye_step = (self.camera.position - auge).as_vec3();
+                dt < 0.25
+            }
+            None => false,
+        };
+        let mut draws = self.particles.build_vertices(self.camera.position, right, up, tick_progress, &mut out, mit.then_some(&mut pv));
+        if !mit {
+            pv.positions.clear();
+            pv.moving = false;
+        }
         // XP-Kugeln ans Ende der durchscheinenden Partikel (gleicher Atlas, gleiche Mischung).
-        let kugeln = self.experience_orb_vertices(right, up, tick_progress);
+        // Fuer den Motion Blur verschiebt sich jede Ecke um den Weg ihrer Kugel seit dem
+        // vorigen Bild, das Viereck bleibt dabei zur Kamera gedreht wie die Partikel.
+        let (kugeln, mitten) = self.experience_orb_vertices(right, up, tick_progress);
         let an = (draws.opaque + draws.translucent) as usize;
         draws.translucent += kugeln.len() as u32;
+        if mit {
+            let schritt = pv.eye_step;
+            let alt = &self.orb_prev_centers;
+            let weg: Vec<Vec3> = mitten
+                .iter()
+                .map(|(id, jetzt)| alt.get(id).map(|vorher| (*jetzt - *vorher).as_vec3()).filter(|w| w.length() <= 4.0).unwrap_or(Vec3::ZERO))
+                .collect();
+            pv.moving |= weg.iter().any(|w| *w != Vec3::ZERO);
+            pv.positions.splice(an..an, kugeln.iter().enumerate().map(|(i, v)| (Vec3::from(v.position) + schritt - weg[i / 6]).to_array()));
+        }
+        self.orb_prev_centers = if blur { mitten.into_iter().collect() } else { std::collections::HashMap::new() };
         out.splice(an..an, kugeln);
         self.particle_vertices = out;
+        self.particle_prev = pv;
         draws
     }
 
@@ -181,10 +214,12 @@ impl App {
     // der Kugelposition und nach oben versetzt (das Bild reicht von -0,25 bis 0,75). Welches
     // der 16 Bilder, sagt der Wert der Kugel (ExperienceOrb.getIcon); die Farbe pulsiert mit
     // dem Alter zwischen Gruen und Gelb, halb durchsichtig.
-    pub(crate) fn experience_orb_vertices(&self, right: Vec3, up: Vec3, tick_progress: f32) -> Vec<render::ParticleVertex> {
-        let Some(&[u0, v0, u1, v1]) = self.particle_atlas.sprites("experience_orb").first() else { return Vec::new() };
+    // Dazu je Kugel (je sechs Ecken) ihre ID und Mitte in Weltkoordinaten fuer den Motion Blur.
+    pub(crate) fn experience_orb_vertices(&self, right: Vec3, up: Vec3, tick_progress: f32) -> (Vec<render::ParticleVertex>, Vec<(i32, DVec3)>) {
+        let Some(&[u0, v0, u1, v1]) = self.particle_atlas.sprites("experience_orb").first() else { return (Vec::new(), Vec::new()) };
         let mut out = Vec::new();
-        for (_, e) in self.entities.iter() {
+        let mut mitten = Vec::new();
+        for (id, e) in self.entities.iter() {
             if world::entity_type_name(e.entity_type) != Some("experience_orb") || e.invisible {
                 continue;
             }
@@ -192,6 +227,7 @@ impl App {
             let (du, dv) = ((u1 - u0) / 4.0, (v1 - v0) / 4.0);
             let (a, b) = (u0 + du * (bild % 4) as f32, v0 + dv * (bild / 4) as f32);
             let (x, y, z) = e.render_pos(tick_progress);
+            mitten.push((*id, DVec3::new(x, y, z)));
             let mitte = (DVec3::new(x, y + 0.1, z) - self.camera.position).as_vec3() + up * 0.075;
             let f = e.age_ticks(tick_progress) / 2.0;
             let farbe = [(f.sin() + 1.0) * 0.5, 1.0, ((f + 4.188_790_3).sin() + 1.0) * 0.1, 128.0 / 255.0];
@@ -202,7 +238,7 @@ impl App {
                 out.push(render::ParticleVertex { position: pos.to_array(), color: farbe, uv });
             }
         }
-        out
+        (out, mitten)
     }
 
     // Die Partikel zusammen mit allem, was sie aus der Welt lesen: Kamera, Stufe, Bloecke und

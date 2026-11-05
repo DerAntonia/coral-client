@@ -235,6 +235,17 @@ pub fn arrow_transform(feet: [f32; 3], yaw_deg: f32, pitch_deg: f32) -> Affine {
     Affine::translation(feet).then(Affine::rotation_y_deg(yaw_deg - 90.0)).then(rotation_z_deg(pitch_deg))
 }
 
+// Der Dreizack (TridentModel, Layer "trident#main" aus den Spieldaten) geworfen und als Item in
+// der Hand: dieselbe Entity-Textur.
+pub const TRIDENT_TEXTURE: &str = "entity/trident";
+
+// ThrownTridentRenderer.submit: wie der Pfeil ohne Spiegelung, um Y um (yRot - 90), um Z um
+// (xRot + 90) -- das Modell liegt laengs seiner Y-Achse, die Zacken bei negativem y.
+#[must_use]
+pub fn thrown_trident_transform(feet: [f32; 3], yaw_deg: f32, pitch_deg: f32) -> Affine {
+    Affine::translation(feet).then(Affine::rotation_y_deg(yaw_deg - 90.0)).then(rotation_z_deg(pitch_deg + 90.0))
+}
+
 #[must_use] 
 pub fn model_table() -> Vec<(&'static str, Model, ModelKind)> {
     let biped = |name: &'static str, texture: &'static str| (name, biped_model(texture, 0.0), ModelKind::Biped);

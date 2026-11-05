@@ -113,26 +113,16 @@ impl App {
                     }
                 }
             }
-            MenuScreen::SettingsShader => {
-                out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
-                let p = self.settings.shader_scattering_percent;
-                out.push(Self::step_slider(ButtonAction::ScatteringPrev, ButtonAction::ScatteringNext, stepper_value_rect(0), f64::from(p), 0.0, f64::from(SCATTERING_MAX), true));
-                let g = self.settings.shader_sun_size_tenths;
-                out.push(Self::step_slider(ButtonAction::SunSizePrev, ButtonAction::SunSizeNext, stepper_value_rect(1), f64::from(g), 0.0, f64::from(SUN_SIZE_MAX_TENTHS), true));
-                out.push(Self::toggle(ButtonAction::ToggleBlockShadows, 2, self.settings.shader_block_shadows));
-                let b = self.settings.shader_block_softness_deg;
-                let an = self.settings.shader_block_shadows;
-                out.push(Self::step_slider(ButtonAction::BlockSoftnessPrev, ButtonAction::BlockSoftnessNext, stepper_value_rect(3), f64::from(b), 0.0, f64::from(BLOCK_SOFTNESS_MAX_DEG), an));
-                out.push(Self::nav_button(
-                    ButtonAction::OpenLightLevels,
-                    Rect { x: SETTINGS_CTRL_X, y: settings_row_y(4), w: STEPPER_VALUE_W + 2.0 * (STEPPER_BTN_W + STEPPER_GAP), h: SETTINGS_CTRL_H },
-                    "Bearbeiten",
-                    UI_SCALE_SMALL,
-                ));
-                let d = self.settings.shader_lightmap_debug;
-                out.extend(Self::stepper(ButtonAction::LightmapDebugPrev, ButtonAction::LightmapDebugNext, 5, d > 0, (d as usize) + 1 < LIGHTMAP_DEBUG_NAMES.len()));
-            }
             MenuScreen::SettingsParticles => self.buttons_settings_particles(&mut out),
+            MenuScreen::SettingsMotionBlur => {
+                out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
+                let set = &self.settings;
+                out.push(Self::step_slider(ButtonAction::MotionBlurDown, ButtonAction::MotionBlurUp, stepper_value_rect(MB_WORLD_ROW), f64::from(set.motion_blur_percent), 0.0, f64::from(MOTION_BLUR_MAX), true));
+                out.push(Self::step_slider(ButtonAction::EntityBlurDown, ButtonAction::EntityBlurUp, stepper_value_rect(MB_ENTITIES_ROW), f64::from(set.motion_blur_entities_percent), 0.0, f64::from(MOTION_BLUR_MAX), true));
+                out.push(Self::step_slider(ButtonAction::HandBlurDown, ButtonAction::HandBlurUp, stepper_value_rect(MB_HAND_ROW), f64::from(set.hand_blur_percent), 0.0, f64::from(HAND_BLUR_MAX), true));
+                let k = set.hand_blur_curve as usize;
+                out.extend(Self::stepper(ButtonAction::HandBlurCurvePrev, ButtonAction::HandBlurCurveNext, MB_HAND_CURVE_ROW, k > 0, k + 1 < HAND_BLUR_CURVES.len()));
+            }
             MenuScreen::SettingsAnimations => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
                 for (i, (bit, _)) in world::more_anims::FEATURES.into_iter().enumerate() {
@@ -155,15 +145,6 @@ impl App {
                     }
                 }
             }
-            MenuScreen::SettingsLightLevels => {
-                out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
-                let treffer = self.light_search_hits();
-                for (k, y) in header_list_rows(treffer.len(), self.light_scroll.stand, self.light_visible_rows()) {
-                    let i = treffer[k];
-                    let p = self.settings.light_factor_of(light_source_blocks()[i]);
-                    out.push(Self::soft_end(Self::step_slider(ButtonAction::LightFactorPrev(i), ButtonAction::LightFactorNext(i), Rect { y, ..stepper_value_rect(0) }, f64::from(p), 0.0, f64::from(LIGHT_FACTOR_MAX), true), 200.0));
-                }
-            }
             MenuScreen::SettingsInventory => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
                 let value = self.settings.inventory_transparency;
@@ -178,15 +159,17 @@ impl App {
                 out.extend(Self::stepper(ButtonAction::InventoryScalePrev, ButtonAction::InventoryScaleNext, 1, scale > 0, scale < self.max_gui_scale_setting()));
                 out.push(Self::toggle(ButtonAction::ToggleInventoryCursorToSlot, 2, self.settings.inventory_cursor_to_slot));
                 out.push(Self::toggle(ButtonAction::ToggleCreativeOpTab, 3, self.settings.creative_op_tab));
-                out.push(Self::toggle(ButtonAction::ToggleInventoryMergeHover, 4, self.settings.inventory_merge_hover));
-                out.push(Self::swatch(ColorTarget::StackCount(false), settings_ctrl_rect(5), self.settings.stack_count_swatch(false)));
-                out.push(Self::toggle(ButtonAction::TogglePotionMarkStrong, 6, self.settings.potion_mark_strong));
-                out.push(Self::toggle(ButtonAction::TogglePotionMarkLong, 7, self.settings.potion_mark_long));
-                out.push(Self::toggle(ButtonAction::TogglePotionMarkWeak, 8, self.settings.potion_mark_weak));
+                out.push(Self::swatch(ColorTarget::StackCount(false), settings_ctrl_rect(4), self.settings.stack_count_swatch(false)));
+                out.push(Self::toggle(ButtonAction::TogglePotionMarkStrong, 5, self.settings.potion_mark_strong));
+                out.push(Self::toggle(ButtonAction::TogglePotionMarkLong, 6, self.settings.potion_mark_long));
+                out.push(Self::toggle(ButtonAction::TogglePotionMarkWeak, 7, self.settings.potion_mark_weak));
                 let set = &self.settings;
                 out.push(Self::step_slider(ButtonAction::SlotHoverFadeDown, ButtonAction::SlotHoverFadeUp, stepper_value_rect(SLOT_HOVER_FADE_ROW), f64::from(set.slot_hover_fade_ms), 0.0, f64::from(SLOT_HOVER_FADE_MAX), true));
                 out.push(Self::swatch(ColorTarget::SlotHover, settings_ctrl_rect(SLOT_HOVER_COLOR_ROW), set.slot_hover_rgba()));
                 out.push(Self::step_slider(ButtonAction::SwapAnimDown, ButtonAction::SwapAnimUp, stepper_value_rect(SWAP_ANIM_ROW), f64::from(set.swap_anim_ms), 0.0, f64::from(SWAP_ANIM_MAX), true));
+                out.push(Self::toggle(ButtonAction::ToggleSwapAnimSkipTotems, SWAP_ANIM_TOTEM_ROW, set.swap_anim_skip_totems));
+                out.push(Self::toggle(ButtonAction::ToggleSwapAnimSkipHealing, SWAP_ANIM_HEALING_ROW, set.swap_anim_skip_healing));
+                out.push(Self::toggle(ButtonAction::ToggleDollBackdropClear, DOLL_BACKDROP_ROW, set.doll_backdrop_clear));
             }
             MenuScreen::SettingsMisc => {
                 out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
@@ -300,21 +283,24 @@ impl App {
         #[cfg(target_os = "linux")]
         out.push(Self::tearfree_button(self.tearfree_state, TEARFREE_ROW));
         out.push(Self::toggle(ButtonAction::ToggleCaveCulling, CAVE_CULLING_ROW, set.cave_culling));
+        let stufe = match (set.entity_culling, set.entity_ray_culling) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => 2,
+        };
+        let modi: Vec<_> = ENTITY_CULLING_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::SetEntityCulling(i as u8), stufe == i)).collect();
+        out.extend(pick_buttons(settings_wide_rect(ENTITY_CULLING_ROW), &modi, true));
         out.push(Self::toggle(ButtonAction::ToggleMipmapping, MIPMAPPING_ROW, set.mipmapping));
-        out.push(Self::step_slider(ButtonAction::MotionBlurDown, ButtonAction::MotionBlurUp, stepper_value_rect(MOTION_BLUR_ROW), f64::from(set.motion_blur_percent), 0.0, f64::from(MOTION_BLUR_MAX), true));
-        // Renderpfad samt Shadereinstellungen vorerst ausgeblendet (der Shader-Pfad ruht).
-        // out.push(Self::nav_button(
-        //     ButtonAction::CycleRenderPath,
-        //     Rect { x: SETTINGS_CTRL_X, y: settings_row_y(RENDER_PATH_ROW), w: 220.0, h: SETTINGS_CTRL_H },
-        //     RENDER_PATH_NAMES[set.render_path as usize],
-        //     UI_SCALE_SMALL,
-        // ));
-        // out.push(Self::nav_button(
-        //     ButtonAction::OpenShaderSettings,
-        //     Rect { x: SETTINGS_CTRL_X + 230.0, y: settings_row_y(RENDER_PATH_ROW), w: 220.0, h: SETTINGS_CTRL_H },
-        //     "Shadereinstellungen",
-        //     UI_SCALE_SMALL,
-        // ));
+        // Motion Blur: Welt, Entities und Hand auf der Unterseite (hervorgehoben, sobald eins an ist).
+        out.push(Button {
+            action: ButtonAction::OpenMotionBlurSettings,
+            rect: Rect { x: SETTINGS_CTRL_X, y: settings_row_y(MOTION_BLUR_ROW), w: 160.0, h: SETTINGS_CTRL_H },
+            label: "Anpassen".to_string(),
+            enabled: true,
+            color: if set.motion_blur_percent == 0 && set.motion_blur_entities_percent == 0 && set.hand_blur_percent == 0 { theme::get(theme::Slot::Surface2) } else { theme::get(theme::Slot::AccentSurface) },
+            scale: UI_SCALE_SMALL,
+            slider: None,
+        });
         out.push(Self::toggle(ButtonAction::CycleTearPosition, TEAR_POSITION_ROW, set.tear_position != 0));
         out.push(Self::step_slider(ButtonAction::TearTimingDown, ButtonAction::TearTimingUp, stepper_value_rect(TEAR_TIMING_ROW), f64::from(set.tear_timing_us), f64::from(TEAR_TIMING_MIN_US), f64::from(TEAR_TIMING_MAX_US), true));
         out.push(Self::step_slider(ButtonAction::TearReserveDown, ButtonAction::TearReserveUp, stepper_value_rect(TEAR_RESERVE_ROW), f64::from(set.tear_reserve_us), f64::from(TEAR_RESERVE_MIN_US), f64::from(TEAR_RESERVE_MAX_US), true));
@@ -921,6 +907,8 @@ impl App {
                         let luft = ButtonAction::ToggleHotbarAirBar;
                         out.extend(pick_buttons(settings_wide_rect(3), &[("Blasen", luft, !balken), ("Balken", luft, balken)], true));
                         out.push(Self::swatch(ColorTarget::StackCount(true), settings_ctrl_rect(4), self.settings.stack_count_swatch(true)));
+                        let ms = self.settings.hotbar_glide_ms;
+                        out.push(Self::step_slider(ButtonAction::HotbarGlideDown, ButtonAction::HotbarGlideUp, stepper_value_rect(HOTBAR_GLIDE_ROW), f64::from(ms), 0.0, f64::from(HOTBAR_GLIDE_MAX), true));
                     }
                     HudElement::Chat => {
                         let set = &self.settings;
@@ -960,8 +948,8 @@ impl App {
                             pct > HUD_SCALE_PCT_MIN,
                             pct < HUD_SCALE_PCT_MAX,
                         ));
-                        out.push(Self::toggle(ButtonAction::ToggleEffectsHud, 1, self.settings.show_effects_hud));
-                        out.push(Self::toggle(ButtonAction::ToggleEffectsInventory, 2, self.settings.show_effects_inventory));
+                        // An/aus im HUD ist das Modul "Effekte" (Display), hier nur noch das Inventar.
+                        out.push(Self::toggle(ButtonAction::ToggleEffectsInventory, 1, self.settings.show_effects_inventory));
                         let set = &self.settings;
                         out.push(Self::toggle(ButtonAction::ToggleEffectsHideAmbient, EFFECTS_HIDE_AMBIENT_ROW, set.effects_hide_ambient));
                         let detailliert = set.effects_detailed;

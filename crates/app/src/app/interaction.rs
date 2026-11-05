@@ -803,6 +803,7 @@ impl App {
             self.use_placed_block = false;
             self.use_detonated_anchor = None;
             self.use_emptied_bucket = None;
+            self.use_repeating = wiederholung;
             self.do_item_use(wiederholung && modus == HoldUseRepeat::ExceptBlocks, treffer, entity_ziel);
             // ABWEICHUNG VON VANILLA, bewusst: hat dieser Klick einen Block gesetzt, warten die
             // uebrigen Klicks des Ticks auf den naechsten. Vanilla arbeitet sie alle gegen DEN
@@ -1200,6 +1201,9 @@ impl App {
             let spannt = item == "bow" || (item == "crossbow" && !stack.as_ref().is_some_and(protocol::item::ItemStack::is_charged));
             if spannt && self.game_mode != GAME_MODE_CREATIVE && self.projectile_for(item).is_none() {
                 self.arrow_empty_at = Some(Instant::now());
+                if self.settings.module_arrows && self.settings.arrow_empty_sound && !self.use_repeating {
+                    self.play_ui_sound(crate::ui_sound::UiSound::Erase);
+                }
                 continue;
             }
             // Consumable.canConsume: Essen mit FoodComponent nur, wenn der Hungerbalken nicht
@@ -1878,7 +1882,9 @@ impl App {
     // f32 zerfallen, bevor sie im Puffer landet (derselbe Grund wie bei ColumnOrigin).
     // Rueckgabe: Vertices, davon deckend gezeichnet die ersten `.1`, danach `.2` durchscheinende
     // (Wasser, Glas -- s. render::BlockRenderer::ghost_translucent_count), der Rest halbdurchsichtig.
-    pub(crate) fn ghost_vertices(&self) -> (Vec<world::mesher::BlockVertex>, usize, usize) {
+    // `.3`: Bereiche der bewegten Bloecke im deckenden Teil fuer den Motion Blur (s.
+    // display_block_vertices).
+    pub(crate) fn ghost_vertices(&self) -> (Vec<world::mesher::BlockVertex>, usize, usize, Vec<(u64, std::ops::Range<usize>)>) {
         let mut deckend = Vec::new();
         let mut durchscheinend = Vec::new();
         let mut durchsichtig = Vec::new();
@@ -1942,12 +1948,13 @@ impl App {
                 ));
             }
         }
-        self.display_block_vertices(&mut deckend);
+        let mut bewegt = Vec::new();
+        self.display_block_vertices(&mut deckend, &mut bewegt);
         let solid_count = deckend.len();
         let translucent_count = durchscheinend.len();
         deckend.append(&mut durchscheinend);
         deckend.append(&mut durchsichtig);
-        (deckend, solid_count, translucent_count)
+        (deckend, solid_count, translucent_count, bewegt)
     }
 
     // Wird dieser Geisterblock wie ein ECHTER Block gezeichnet?

@@ -323,7 +323,7 @@ fn sprintschwimmen_verschiebt_zusaetzlich() {
 fn kopf_uv_trifft_das_gesichtsfeld() {
     let cuboid = Cuboid::new([0.0, 0.0], [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
     let mut out = Vec::new();
-    emit_cuboid(&cuboid, Affine::IDENTITY, [64.0, 64.0], [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0], false, &mut out);
+    emit_cuboid(&cuboid, Affine::IDENTITY, AxisShades::of(Affine::IDENTITY), [64.0, 64.0], [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0], false, &mut out);
     // Nordseite ist die vierte der sechs Seiten, je 6 Vertices.
     let north = &out[18..24];
     let us: Vec<f32> = north.iter().map(|v| v.uv[0] * 64.0).collect();
@@ -389,4 +389,81 @@ fn pose_addiert_auf_die_grunddrehung() {
     let punkt_mit = mit.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
     let punkt_ohne = ohne.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
     assert!(punkt_mit < punkt_ohne, "zwei mal 90 Grad muss weiter drehen als einmal");
+}
+
+// AxisShades (Licht einmal je Teil) gegen die fruehere Rechnung (Normale je Seite gedreht,
+// normiert, beleuchtet): Bit fuer Bit gleiche Farben, auch gespiegelt, zweiseitig, mit
+// Schraeglagen, Skalierung und Spiegelung durch eine negative Skala.
+#[test]
+fn achsen_licht_wie_je_seite() {
+    let alt = |cuboid: &Cuboid, world: Affine, two_sided: bool| -> Vec<[f32; 3]> {
+        let m = if cuboid.mirror { -1.0 } else { 1.0 };
+        let normals: [[f32; 3]; 6] = [[0.0, -1.0, 0.0], [0.0, 1.0, 0.0], [-m, 0.0, 0.0], [0.0, 0.0, -1.0], [m, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut farben = Vec::new();
+        for (i, n) in normals.iter().enumerate() {
+            if cuboid.faces & (1 << i) == 0 {
+                continue;
+            }
+            let normale = world.apply_direction(*n);
+            let shade = diffuse_shade(normale);
+            farben.extend([[0.8 * shade, 0.9 * shade, shade]; 6]);
+            if two_sided {
+                let hinten = diffuse_shade([-normale[0], -normale[1], -normale[2]]);
+                farben.extend([[0.8 * hinten, 0.9 * hinten, hinten]; 6]);
+            }
+        }
+        farben
+    };
+    let welten = [
+        Affine::IDENTITY,
+        Affine::rotation_xyz_deg(20.0, -35.0, 70.0),
+        Affine::rotation_zyx(1.3, -2.9, 0.4).then(Affine::scale([0.4, 1.7, 0.9])),
+        Affine::translation([3.0, -1.0, 2.0]).then(Affine::rotation_xyz_deg(-90.0, 180.0, 45.0)).then(Affine::scale([-1.0, 1.0, 1.0])),
+        Affine::rotation_xyz_deg(0.0, 90.0, 0.0),
+    ];
+    let mut kasten = Cuboid::new([0.0, 0.0], [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
+    let mut geprueft = 0;
+    for world in welten {
+        for mirror in [false, true] {
+            for faces in [0b11_1111u8, 0b10_1101] {
+                for two_sided in [false, true] {
+                    kasten.mirror = mirror;
+                    kasten.faces = faces;
+                    let mut out = Vec::new();
+                    emit_cuboid(&kasten, world, AxisShades::of(world), [64.0, 64.0], [0.0, 0.0, 1.0, 1.0], [0.8, 0.9, 1.0], two_sided, &mut out);
+                    let neu: Vec<[u32; 3]> = out.iter().map(|v| v.color.map(f32::to_bits)).collect();
+                    let erwartet: Vec<[u32; 3]> = alt(&kasten, world, two_sided).iter().map(|c| c.map(f32::to_bits)).collect();
+                    assert_eq!(neu, erwartet, "mirror {mirror}, faces {faces:#b}, two_sided {two_sided}, {world:?}");
+                    geprueft += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(geprueft, 40);
+}
+
+// emit_into schreibt genau vertex_count Vertices, und dieselben wie emit/emit_two_sided --
+// auch mit versteckten Teilen (samt Kindern) und gedrehten Gliedern.
+#[test]
+fn emit_into_wie_emit() {
+    let tex = [0.1, 0.2, 0.6, 0.9];
+    let base = Affine::translation([0.5, -1.0, 2.0]).then(Affine::rotation_xyz_deg(10.0, 40.0, -5.0));
+    let mut gedreht = biped_pose(0.4, -0.3, 1.2, 0.8, true, 7.0);
+    gedreht.set("head", PartPose { rotation: [0.3, 0.0, 0.0], pivot_offset: [0.0; 3], rotation_matrix: None, hidden: true });
+    for model in [player_model(false), player_model(true), biped_model("x", 0.5)] {
+        for pose in [Pose::new(), gedreht.clone()] {
+            for two_sided in [false, true] {
+                let mut erwartet = Vec::new();
+                if two_sided {
+                    emit_two_sided(&model, &pose, base, tex, 0.8, &mut erwartet);
+                } else {
+                    emit(&model, &pose, base, tex, 0.8, &mut erwartet);
+                }
+                assert_eq!(vertex_count(&model, &pose, two_sided), erwartet.len());
+                let mut abschnitt = vec![bytemuck::Zeroable::zeroed(); erwartet.len()];
+                emit_into(&model, &pose, base, tex, [0.8; 3], two_sided, &mut abschnitt);
+                assert!(bytemuck::cast_slice::<_, u8>(&abschnitt) == bytemuck::cast_slice::<_, u8>(&erwartet));
+            }
+        }
+    }
 }

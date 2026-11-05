@@ -238,6 +238,7 @@ impl App {
             | ButtonAction::ToggleModuleHitboxSmoothed
             | ButtonAction::ToggleModuleHitboxRaw
             | ButtonAction::ToggleModuleHitboxDotted
+            | ButtonAction::ToggleModuleHitboxVisibleEdges
             | ButtonAction::ToggleModuleHitboxItems
             | ButtonAction::ToggleModuleHitboxSelf
             | ButtonAction::HitboxDensityPrev
@@ -326,6 +327,7 @@ impl App {
             | ButtonAction::ResetSession
             | ButtonAction::ToggleArrowIndicator
             | ButtonAction::ToggleArrowWhite
+            | ButtonAction::ToggleArrowEmptySound
             | ButtonAction::ToggleArrowTrail
             | ButtonAction::TrailHoldPrev
             | ButtonAction::TrailHoldNext
@@ -534,7 +536,6 @@ impl App {
                 }
             }
             ButtonAction::OpenSensCalc => self.screen = MenuScreen::SettingsSensCalc,
-            ButtonAction::OpenShaderSettings => self.screen = MenuScreen::SettingsShader,
             ButtonAction::ApplySensCalc => {
                 set.mouse_sensitivity = minecraft_sens_to_client(set.sens_calc_mc_percent).clamp(SENSITIVITY_MIN, SENSITIVITY_MAX);
                 set.couple_sensitivity(false);
@@ -571,7 +572,6 @@ impl App {
             ButtonAction::CameraYOffsetUp(p) => set.set_camera_y_offset_of(p, set.camera_y_offset_of(p) + CAMERA_Y_OFFSET_STEP),
             ButtonAction::CycleProjection => set.projection_mode = (set.projection_mode + 1) % PROJECTION_NAMES.len() as u8,
             ButtonAction::CycleTearPosition => set.tear_position = u8::from(set.tear_position == 0),
-            ButtonAction::CycleRenderPath => set.render_path = (set.render_path + 1) % RENDER_PATH_NAMES.len() as u8,
             ButtonAction::TearTimingDown | ButtonAction::TearTimingUp => {
                 let delta = if action == ButtonAction::TearTimingDown { -TEAR_TIMING_STEP_US } else { TEAR_TIMING_STEP_US };
                 set.tear_timing_us = (set.tear_timing_us + delta).clamp(TEAR_TIMING_MIN_US, TEAR_TIMING_MAX_US);
@@ -698,37 +698,12 @@ impl App {
             ButtonAction::ToggleSignEditInWorld => set.sign_edit_in_world = !set.sign_edit_in_world,
             ButtonAction::NoSlotSet(m) => set.no_slot_set = m,
             ButtonAction::NoRotateSet(m) => set.no_rotate_set = m,
-            ButtonAction::ToggleInventoryMergeHover => set.inventory_merge_hover = !set.inventory_merge_hover,
             ButtonAction::TogglePotionMarkStrong => set.potion_mark_strong = !set.potion_mark_strong,
             ButtonAction::TogglePotionMarkLong => set.potion_mark_long = !set.potion_mark_long,
             ButtonAction::TogglePotionMarkWeak => set.potion_mark_weak = !set.potion_mark_weak,
-            ButtonAction::ScatteringPrev => set.shader_scattering_percent = set.shader_scattering_percent.saturating_sub(SCATTERING_STEP),
-            ButtonAction::ScatteringNext => set.shader_scattering_percent = (set.shader_scattering_percent + SCATTERING_STEP).min(SCATTERING_MAX),
-            ButtonAction::SunSizePrev => set.shader_sun_size_tenths = set.shader_sun_size_tenths.saturating_sub(SUN_SIZE_STEP_TENTHS),
-            ButtonAction::SunSizeNext => set.shader_sun_size_tenths = (set.shader_sun_size_tenths + SUN_SIZE_STEP_TENTHS).min(SUN_SIZE_MAX_TENTHS),
-            ButtonAction::ToggleBlockShadows => set.shader_block_shadows = !set.shader_block_shadows,
-            ButtonAction::LightmapDebugPrev => set.shader_lightmap_debug = set.shader_lightmap_debug.saturating_sub(1),
-            ButtonAction::LightmapDebugNext => set.shader_lightmap_debug = (set.shader_lightmap_debug + 1).min(LIGHTMAP_DEBUG_NAMES.len() as u8 - 1),
-            ButtonAction::OpenLightLevels => {
-                self.screen = MenuScreen::SettingsLightLevels;
-                self.light_search.clear();
-                self.light_scroll = Default::default();
-            }
-            ButtonAction::LightFactorPrev(i) | ButtonAction::LightFactorNext(i) => {
-                if let Some(name) = light_source_blocks().get(i) {
-                    let jetzt = set.light_factor_of(name);
-                    let neu = if matches!(action, ButtonAction::LightFactorNext(_)) {
-                        (jetzt + light_factor_step(jetzt, true)).min(LIGHT_FACTOR_MAX)
-                    } else {
-                        jetzt.saturating_sub(light_factor_step(jetzt, false))
-                    };
-                    set.set_light_factor(name, neu);
-                }
-            }
-            ButtonAction::BlockSoftnessPrev => set.shader_block_softness_deg = set.shader_block_softness_deg.saturating_sub(BLOCK_SOFTNESS_STEP_DEG),
-            ButtonAction::BlockSoftnessNext => {
-                set.shader_block_softness_deg = (set.shader_block_softness_deg + BLOCK_SOFTNESS_STEP_DEG).min(BLOCK_SOFTNESS_MAX_DEG);
-            }
+            ButtonAction::ToggleSwapAnimSkipTotems => set.swap_anim_skip_totems = !set.swap_anim_skip_totems,
+            ButtonAction::ToggleSwapAnimSkipHealing => set.swap_anim_skip_healing = !set.swap_anim_skip_healing,
+            ButtonAction::ToggleDollBackdropClear => set.doll_backdrop_clear = !set.doll_backdrop_clear,
             ButtonAction::HotbarScalePrev => set.hud_hotbar_scale = set.hud_hotbar_scale.saturating_sub(1),
             ButtonAction::HotbarScaleNext => set.hud_hotbar_scale = (set.hud_hotbar_scale + 1).min(max_scale),
             ButtonAction::HotbarDurabilityPrev if set.hotbar_durability_absolute => {
@@ -796,6 +771,10 @@ impl App {
                 self.screen = MenuScreen::SettingsAnimations;
                 *self.page_scroll_mut() = Default::default();
             }
+            ButtonAction::OpenMotionBlurSettings => {
+                self.screen = MenuScreen::SettingsMotionBlur;
+                *self.page_scroll_mut() = Default::default();
+            }
             ButtonAction::OpenServerScreens => {
                 self.screen = MenuScreen::SettingsServerScreens;
                 *self.page_scroll_mut() = Default::default();
@@ -826,6 +805,7 @@ impl App {
                 }
             }
             ButtonAction::ToggleCaveCulling => set.cave_culling = !set.cave_culling,
+            ButtonAction::SetEntityCulling(m) => (set.entity_culling, set.entity_ray_culling) = (m >= 1, m >= 2),
             ButtonAction::ToggleMipmapping => set.mipmapping = !set.mipmapping,
             ButtonAction::ToggleLatinMacrons => set.latin_macrons = !set.latin_macrons,
             ButtonAction::ToggleLoanwords => set.english_loanwords = !set.english_loanwords,
@@ -991,8 +971,16 @@ impl App {
             ButtonAction::SlotHoverFadeUp => set.slot_hover_fade_ms = (set.slot_hover_fade_ms + SLOT_HOVER_FADE_STEP).min(SLOT_HOVER_FADE_MAX),
             ButtonAction::SwapAnimDown => set.swap_anim_ms = set.swap_anim_ms.saturating_sub(SWAP_ANIM_STEP),
             ButtonAction::SwapAnimUp => set.swap_anim_ms = (set.swap_anim_ms + SWAP_ANIM_STEP).min(SWAP_ANIM_MAX),
+            ButtonAction::HotbarGlideDown => set.hotbar_glide_ms = set.hotbar_glide_ms.saturating_sub(HOTBAR_GLIDE_STEP),
+            ButtonAction::HotbarGlideUp => set.hotbar_glide_ms = (set.hotbar_glide_ms + HOTBAR_GLIDE_STEP).min(HOTBAR_GLIDE_MAX),
             ButtonAction::MotionBlurDown => set.motion_blur_percent = set.motion_blur_percent.saturating_sub(MOTION_BLUR_STEP),
             ButtonAction::MotionBlurUp => set.motion_blur_percent = (set.motion_blur_percent + MOTION_BLUR_STEP).min(MOTION_BLUR_MAX),
+            ButtonAction::EntityBlurDown => set.motion_blur_entities_percent = set.motion_blur_entities_percent.saturating_sub(MOTION_BLUR_STEP),
+            ButtonAction::EntityBlurUp => set.motion_blur_entities_percent = (set.motion_blur_entities_percent + MOTION_BLUR_STEP).min(MOTION_BLUR_MAX),
+            ButtonAction::HandBlurDown => set.hand_blur_percent = set.hand_blur_percent.saturating_sub(HAND_BLUR_STEP),
+            ButtonAction::HandBlurUp => set.hand_blur_percent = (set.hand_blur_percent + HAND_BLUR_STEP).min(HAND_BLUR_MAX),
+            ButtonAction::HandBlurCurvePrev => set.hand_blur_curve = set.hand_blur_curve.saturating_sub(1),
+            ButtonAction::HandBlurCurveNext => set.hand_blur_curve = (set.hand_blur_curve + 1).min(HAND_BLUR_CURVES.len() as u8 - 1),
             ButtonAction::ToggleJumpCooldown => set.jump_cooldown_enabled = !set.jump_cooldown_enabled,
             ButtonAction::ToggleSprintOnStart => set.sprint_on_start = !set.sprint_on_start,
             ButtonAction::ToggleCapsLockBlocked => set.caps_lock_blocked = !set.caps_lock_blocked,
@@ -1048,22 +1036,6 @@ impl App {
         }
         if action == ButtonAction::CycleWallpaper {
             self.request_wallpaper(true);
-        }
-        // Der Shader-Pfad meshet mit Licht, der PvP-Pfad ohne: alles neu.
-        if action == ButtonAction::CycleRenderPath {
-            self.world.light_remesh = self.settings.render_path == 1;
-            world::mesher::set_flat_face_shade(self.settings.render_path == 1);
-            for (cx, cz) in self.world.column_keys().collect::<Vec<_>>() {
-                self.world.mark_dirty(cx, cz);
-            }
-        }
-        if let ButtonAction::LightFactorPrev(i) | ButtonAction::LightFactorNext(i) = action {
-            // Sonnenlicht liest der Shader-Pfad je Frame, dafuer muss nichts neu entstehen.
-            if light_source_blocks().get(i) == Some(&world::light::SUNLIGHT) {
-                world::light::set_light_factors(self.settings.light_factor_table());
-            } else {
-                self.apply_light_factors();
-            }
         }
         if matches!(action, ButtonAction::CycleLanguage(_) | ButtonAction::ToggleLatinMacrons | ButtonAction::ToggleLoanwords) {
             apply_language_settings(&mut self.installation, &self.settings);

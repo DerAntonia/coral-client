@@ -128,6 +128,14 @@ impl App {
         let (cx, cy) = self.cursor_pos;
         // Vorschau eines laufenden Verteilens: so saehe es nach dem Loslassen aus.
         let vorschau = self.creative.drag.as_ref().filter(|d| d.distributes()).map(|d| d.result(&self.inventory.player));
+        // Hervorhebung wie im Inventar (Farbe und Uebergang aus Inventar > Animation), unter den
+        // Items; eigener Schluessel, die Kreativ-Slots zaehlen anders.
+        let unter_zeiger = layout.slots.iter().find(|s| s.contains(cx, cy)).map(|s| s.index);
+        for (index, anteil) in self.inventory_anim.borrow_mut().hover.step(CREATIVE_HOVER_KEY, unter_zeiger, Instant::now(), self.settings.slot_hover_fade_ms) {
+            if let Some(slot) = layout.slots.iter().find(|s| s.index == index) {
+                self.push_slot_highlight(sprites, slot, anteil);
+            }
+        }
         let mut hovered = None;
         for slot in &layout.slots {
             let ersatz = vorschau.as_ref().and_then(|(neu, _)| neu.iter().find(|(i, _)| *i == slot.index)).map(|(_, s)| s.clone());
@@ -138,15 +146,6 @@ impl App {
             self.push_item(sprites, texts, &stack, slot.x, slot.y, slot.size);
             if slot.contains(cx, cy) {
                 hovered = self.item_hover_tooltip(&stack).map(|zeilen| (zeilen, *slot));
-            }
-        }
-        // Hervorhebung wie im Inventar (Farbe und Uebergang aus Inventar > Animation); eigener
-        // Schluessel, die Kreativ-Slots zaehlen anders.
-        let unter_zeiger = layout.slots.iter().find(|s| s.contains(cx, cy)).map(|s| s.index);
-        let farbe = self.settings.slot_hover_rgba();
-        for (index, anteil) in self.inventory_anim.borrow_mut().hover.step(CREATIVE_HOVER_KEY, unter_zeiger, Instant::now(), self.settings.slot_hover_fade_ms) {
-            if let Some(slot) = layout.slots.iter().find(|s| s.index == index) {
-                rects.push(UiRect { rect: Rect { x: slot.x, y: slot.y, w: slot.size, h: slot.size }, color: [farbe[0], farbe[1], farbe[2], farbe[3] * anteil], ..UiRect::FLAT });
             }
         }
         // Der Name eines Reiters unter dem Zeiger (checkTabHovering).

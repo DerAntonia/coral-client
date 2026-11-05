@@ -44,9 +44,16 @@ impl GpuState {
                         | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
                         | wgpu::Features::MULTI_DRAW_INDIRECT
                         | wgpu::Features::INDIRECT_FIRST_INSTANCE),
-                // Groessere Speicher-Puffer fuer die Lichtkarten des Shader-Pfads.
+                // Groessere Speicher-Puffer nur fuer die Lichtkarten des Shader-Pfads.
+                #[cfg(feature = "shader_path")]
                 required_limits: render::voxel_volume::VoxelVolume::required_limits(&adapter),
-                memory_hints: wgpu::MemoryHints::Performance,
+                #[cfg(not(feature = "shader_path"))]
+                required_limits: wgpu::Limits::default(),
+                // Kleine Bloecke (8 -> 64 MB statt 128 -> 512 MB). Gemessen 2026-11-05 in
+                // perfwelt: GTT 254 MB (beim Laden bis 1,46 GB) -> 74 MB, VRAM 969 -> 940 MB;
+                // CPU-/GPU-Zeit pro Frame gleich wie Performance und Manual 16-64 MB (das braucht
+                // 1045 MB VRAM und 146 MB GTT).
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
             },
             None,
         ))
@@ -152,6 +159,39 @@ impl GpuState {
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
+        });
+        // Hintergruende verdeckbarer Weltbeschriftungen gegen die Tiefe der Welt (s.
+        // quad.wgsl::vs_label, App::build_world_labels): ohne Tiefe zu schreiben.
+        let label_quad_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("label quad pipeline"),
+            layout: Some(&quad_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_label",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: surface_format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(label_depth_state()),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let label_quad_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("label quad vertex buffer"),
+            size: (std::mem::size_of::<Vertex>() * VERTS_PER_QUAD * MAX_LABEL_QUADS) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let quad_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("quad vertex buffer"),
@@ -636,20 +676,27 @@ impl GpuState {
             multiview: None,
             cache: None,
         });
-        // Dieselbe Schrift mit Tiefentest gegen die Welt (Schilder, s. font.wgsl::vs_world):
-        // verdeckt von allem, was davor steht, auch von Entities. Tiefe des Welt-Durchgangs
-        // (render::block_renderer::DEPTH_FORMAT), selbst ohne Tiefe zu schreiben.
-        let world_text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("world text pipeline"),
+        // Verdeckbare Weltbeschriftungen (s. font.wgsl::vs_label): wie text_pipeline, dazu
+        // TextVertex::depth an Stelle 5.
+        let label_text_attributes = {
+            let mut a = [text_attributes[0]; 6];
+            a[..5].copy_from_slice(&text_attributes);
+            a[5] = wgpu::VertexAttribute { offset: std::mem::size_of::<[f32; 16]>() as wgpu::BufferAddress, shader_location: 5, format: wgpu::VertexFormat::Float32 };
+            a
+        };
+        // Schildtext mit Tiefentest gegen die Welt (s. SignGpu, font.wgsl::vs_sign).
+        let sign_gpu = SignGpu::new(&device, &font_atlas.bind_group_layout, &text_shader, surface_format);
+        let label_text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("label text pipeline"),
             layout: Some(&text_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &text_shader,
-                entry_point: "vs_world",
+                entry_point: "vs_label",
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<TextVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &text_attributes,
+                    attributes: &label_text_attributes,
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -659,20 +706,14 @@ impl GpuState {
                 targets: &[Some(wgpu::ColorTargetState { format: surface_format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            depth_stencil: Some(label_depth_state()),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
-        let sign_text_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sign text vertex buffer"),
-            size: (std::mem::size_of::<TextVertex>() * MAX_SIGN_TEXT_VERTICES) as wgpu::BufferAddress,
+        let label_text_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("label text vertex buffer"),
+            size: (std::mem::size_of::<TextVertex>() * VERTS_PER_QUAD * MAX_LABEL_GLYPHS) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -956,9 +997,15 @@ impl GpuState {
             color_bind_group,
             text_pipeline,
             text_vertex_buffer,
-            world_text_pipeline,
-            sign_text_buffer,
-            sign_glyphs: Default::default(),
+            label_text_pipeline,
+            label_text_buffer,
+            label_quad_pipeline,
+            label_quad_buffer,
+            occluded_label_texts: Default::default(),
+            occluded_label_ends: Default::default(),
+            occluded_label_quads: Default::default(),
+            occluded_label_glyphs: Default::default(),
+            sign_gpu: std::cell::RefCell::new(sign_gpu),
             sign_font: Default::default(),
             label_font: Default::default(),
             font_atlas,
@@ -1005,9 +1052,11 @@ impl GpuState {
             screenshot_requested: false,
             fence_wait_zero: false,
             last_sort_ms: 0.0,
+            text_shape_ms: std::cell::Cell::new(0.0),
+            shaped_cache: std::cell::RefCell::default(),
             measure_gpu_done: false,
             gpu_timer,
-            use_shader_path: false,
+            #[cfg(feature = "shader_path")]
             shader_path: None,
             lod: None,
             lod_active: false,
@@ -1016,15 +1065,24 @@ impl GpuState {
             entity_outline,
             motion_blur,
             motion_blur_strength: 0.0,
+            motion_blur_entity_strength: 0.0,
             motion_blur_interval_s: 1.0 / 60.0,
+            hand_blur_strength: 0.0,
+            hand_blur_curve: render::hand_blur::Curve::Ascending,
             sky_layers: Vec::new(),
             gradient_sky,
             sky_gradient: None,
+            #[cfg(feature = "shader_path")]
             atmosphere: true,
+            #[cfg(feature = "shader_path")]
             scattering: 1.0,
+            #[cfg(feature = "shader_path")]
             sun_size_deg: 2.0,
+            #[cfg(feature = "shader_path")]
             block_shadows: true,
+            #[cfg(feature = "shader_path")]
             block_softness_deg: 6.0,
+            #[cfg(feature = "shader_path")]
             lightmap_debug: 0,
             present_at_ns: None,
         };

@@ -459,6 +459,50 @@ impl SignCaret {
     }
 }
 
+// Eine Schildseite, fertig gesetzt in Schriftpixeln ihrer Textebene (s. App::push_sign_side):
+// Glyphen-Vierecke samt Atlas-UV, Farbe und Rand, die Zeilen schon mittig, je Farbabschnitt
+// erst die Raender, dann die Glyphen. Liegt im VRAM (s. GpuState::upload_signs); je Bild kommt
+// nur die Matrix der Seite dazu -- Glyphen nachschlagen, setzen, Zeilen messen und projizieren
+// kostete in jedem Bild bei vielen Schildern ein Drittel des Hauptthreads.
+pub(crate) struct SignLayout {
+    // Wofuer gesetzt wurde (s. SignLayout::gilt).
+    pub(crate) seite: protocol::sign::SignSide,
+    pub(crate) generation: u64,
+    pub(crate) font: FontKind,
+    // FontAtlas::linear_raster, Err = genau dieser Faktor (dort rasten Zeichen ein).
+    pub(crate) raster: Result<u8, u32>,
+    pub(crate) lauf: ShadowRun,
+    pub(crate) zeile_h: f32,
+    pub(crate) instanzen: Vec<SignInstance>,
+    // Platz der Matrix (SignInstance::seite) und Bereich im Instanzpuffer, None = noch nicht
+    // hochgeladen.
+    pub(crate) slot: u32,
+    pub(crate) gpu: Option<std::ops::Range<u32>>,
+    // Zuletzt gezeichnet in dieser Runde (s. SignLayouts::runde).
+    pub(crate) runde: u64,
+}
+
+impl SignLayout {
+    pub(crate) fn gilt(&self, seite: &protocol::sign::SignSide, generation: u64, font: FontKind, raster: Result<u8, u32>, lauf: ShadowRun, zeile_h: f32) -> bool {
+        self.generation == generation && self.font == font && self.raster == raster && self.lauf == lauf && self.zeile_h == zeile_h && self.seite == *seite
+    }
+}
+
+// Die gesetzten Schildseiten je (Position, vorn). `runde` zaehlt build_sign_texts mit; eine
+// Seite, die SIGN_LAYOUT_KEEP Runden nicht gezeichnet wurde, faellt raus. `sichtbar`: die
+// Seiten dieses Bildes mit ihrer Matrix in den Clip-Raum.
+#[derive(Default)]
+pub(crate) struct SignLayouts {
+    pub(crate) seiten: rustc_hash::FxHashMap<((i32, i32, i32), bool), SignLayout>,
+    pub(crate) runde: u64,
+    pub(crate) sichtbar: Vec<(((i32, i32, i32), bool), glam::Mat4)>,
+    // Matrix-Plaetze: vergeben bis `slots`, frei gewordene zum Wiederverwenden.
+    pub(crate) slots: u32,
+    pub(crate) freie_slots: Vec<u32>,
+}
+
+pub(crate) const SIGN_LAYOUT_KEEP: u64 = 600;
+
 // Punkt der Schild-Textebene (Schriftpixel) auf den Bildschirm; None hinter der Kamera.
 pub(crate) fn sign_projector(clip: glam::Mat4, screen: (f32, f32)) -> impl Fn(f32, f32) -> Option<(f32, f32)> {
     let (sw, sh) = screen;

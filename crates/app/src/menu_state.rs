@@ -59,20 +59,18 @@ pub(crate) enum MenuScreen {
     // Sens-Rechner (Knopf "Rechner" neben der Kamera-Empfindlichkeit): Minecraft-Sens in
     // unsere umrechnen, und cm/360 aus DPI und Sens. Unterscreen von SettingsControls.
     SettingsSensCalc,
-    // Shadereinstellungen (Knopf neben dem Renderpfad im Render-Tab): Werte, die nur den
-    // Shader-Pfad betreffen. Unterscreen von SettingsGeneral.
-    SettingsShader,
     // Configs: zwischen den benannten Einstellungs-Dateien wechseln, neue anlegen, umbenennen,
     // loeschen -- wie im Launcher, aber im laufenden Spiel (s. App::switch_config).
     SettingsConfigs,
-    // Lichtstaerken: je Lichtquelle ein Faktor, mit Suche. Unterscreen von SettingsShader.
-    SettingsLightLevels,
     // Partikel-Anpassung: je Partikelart an/aus, Dauer, Deckkraft, Tempo. Unterscreen von
     // SettingsVideo (Knopf neben der Partikel-Stufe).
     SettingsParticles,
     // Animationen: je Animation aus world::more_anims::FEATURES ein Schalter. Unterscreen von
     // SettingsVideo (Knopf im Abschnitt Animationen).
     SettingsAnimations,
+    // Motion Blur: Welt und Hand. Unterscreen von SettingsGeneral (Knopf "Anpassen" im
+    // Abschnitt Effekte).
+    SettingsMotionBlur,
     // Sonstiges: was zu keiner anderen Seite passt (Server-Bildschirme, Chat leeren, ...).
     SettingsMisc,
     // Server-Bildschirme: je Bildschirm, ob der Server ihn schliessen und oeffnen darf (s.
@@ -97,7 +95,7 @@ impl MenuScreen {
     pub(crate) fn settings_category(self) -> Option<Self> {
         match self {
             Self::SettingsSensCalc => Some(Self::SettingsControls),
-            Self::SettingsShader | Self::SettingsLightLevels => Some(Self::SettingsGeneral),
+            Self::SettingsMotionBlur => Some(Self::SettingsGeneral),
             Self::SettingsParticles | Self::SettingsAnimations => Some(Self::SettingsVideo),
             Self::SettingsServerScreens => Some(Self::SettingsMisc),
             Self::SettingsSetup | Self::SettingsSearch => Some(self),
@@ -130,6 +128,7 @@ impl MenuScreen {
             Self::SettingsSearch => "search",
             // Nur fuer ihren Scrollstand (App::page_scrolls), keine Kategorie.
             Self::SettingsAnimations => "animations",
+            Self::SettingsMotionBlur => "motion_blur",
             Self::SettingsServerScreens => "server_screens",
             _ => "setup",
         }
@@ -152,11 +151,12 @@ impl MenuScreen {
                 sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Schulterkamera", SHOULDER_ROW), ("Feuer", FIRE_MODE_ROW), ("Tod", DEATH_ANIM_ROW), ("Animationen", ANIM_ROW), ("Modified View Model", VIEW_MODEL_ROW)],
             }),
             Self::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
-            // Zeile 4 = Zusammenfassen bei Hover, Zeilen 5..7 = Trank-Buchstaben.
-            Self::SettingsInventory => Some(SettingsPage { rows: INVENTORY_ROW_COUNT, sections: &[("Allgemein", 0), ("Tränke", 6), ("Animation", INVENTORY_ANIM_ROW)] }),
+            // Zeile 4 = Farbe der Anzahl, Zeilen 5..7 = Trank-Buchstaben.
+            Self::SettingsInventory => Some(SettingsPage { rows: INVENTORY_ROW_COUNT, sections: &[("Allgemein", 0), ("Tränke", 5), ("Animation", INVENTORY_ANIM_ROW)] }),
             Self::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[] }),
             Self::SettingsAnimations => Some(SettingsPage { rows: world::more_anims::FEATURES.len(), sections: &[] }),
-            Self::SettingsServerScreens => Some(SettingsPage { rows: SERVER_SCREENS_ROWS, sections: &[("Server schließt", 0), ("Server öffnet", SERVER_OPEN_ROW)] }),
+            Self::SettingsMotionBlur => Some(SettingsPage { rows: MB_ROW_COUNT, sections: &[] }),
+            Self::SettingsServerScreens => Some(SettingsPage { rows: SERVER_SCREENS_ROWS, sections: &[] }),
             Self::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
             Self::SettingsAudio => Some(SettingsPage { rows: AUDIO_AUTO_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
@@ -443,7 +443,6 @@ pub(crate) struct Dropdown {
 pub(crate) enum ScrollList {
     SettingsPage(MenuScreen),
     Particles,
-    LightLevels,
     ModuleMenu,
     Dropdown,
     Dialog,

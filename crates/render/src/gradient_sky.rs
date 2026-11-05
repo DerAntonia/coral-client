@@ -89,8 +89,8 @@ impl GradientSky {
 
     // `view_proj`: Projektion mal reine Blickdrehung (ohne Verschiebung).
     pub fn draw<'a>(&'a self, queue: &wgpu::Queue, pass: &mut wgpu::RenderPass<'a>, view_proj: Mat4, frame: &GradientFrame) {
-        let sonne = crate::shader_path::celestial_light(frame.sky_angle).sun;
-        let achse: Vec3 = crate::shader_path::sun_path_axis();
+        let sonne = crate::celestial::celestial_light(frame.sky_angle).sun;
+        let achse: Vec3 = crate::celestial::sun_path_axis();
         let params = Params {
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             sky: [frame.sky[0], frame.sky[1], frame.sky[2], frame.clear],

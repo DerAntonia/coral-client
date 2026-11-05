@@ -243,6 +243,31 @@ pub const CB_PLAY_FORGET_LEVEL_CHUNK: i32 = 0x25;
 // im eigenen Log als Login-Position meldete.
 pub const CB_PLAY_PLAYER_POSITION: i32 = 0x46;
 
+// Player Look At (S2C): der Server laesst uns auf einen Punkt schauen (/tp ... facing,
+// /rotate ... facing). ID 0x45: in GameProtocols direkt vor PLAYER_POSITION (0x46), dieselbe
+// Zaehlung trifft 0x46 und 0x47. Wire-Format nach ClientboundPlayerLookAtPacket: eigener
+// Anker (VarInt-Enum: 0 Fuesse, 1 Augen), Ziel x/y/z (f64), auf ein Entity (bool), dann
+// dessen ID (VarInt) und Anker.
+pub const CB_PLAY_PLAYER_LOOK_AT: i32 = 0x45;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerLookAt {
+    pub from_eyes: bool,
+    pub target: (f64, f64, f64),
+    // Entity-ID und ob auf seine Augen (sonst Fuesse); das Ziel oben gilt, wenn wir es
+    // nicht kennen.
+    pub entity: Option<(i32, bool)>,
+}
+
+pub fn read_player_look_at(payload: &[u8]) -> Result<PlayerLookAt, ReadError> {
+    let mut r = PacketReader::new(payload);
+    let _id = r.read_varint()?;
+    let from_eyes = r.read_varint()? == 1;
+    let target = (r.read_f64()?, r.read_f64()?, r.read_f64()?);
+    let entity = if r.read_bool()? { Some((r.read_varint()?, r.read_varint()? == 1)) } else { None };
+    Ok(PlayerLookAt { from_eyes, target, entity })
+}
+
 // Player Rotation (S2C): der Server dreht NUR unsere Blickrichtung, ohne uns zu bewegen.
 // Eigenes Paket seit 1.21.2, unabhaengig vom Teleport oben.
 //

@@ -49,7 +49,7 @@ pub struct PlacedGlyph {
 }
 
 // Welche Schrift gezeichnet wird. Index = Settings::font.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FontKind {
     Minecraft,
     DmSans,
@@ -156,7 +156,7 @@ const fn is_small_capital(ch: char) -> bool {
 // Schrift-Tab, Stil: ohne Grossbuchstaben wird aller Text klein gezeichnet (und gemessen).
 static NO_CAPITALS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub(crate) fn set_capitals(an: bool) {
+pub fn set_capitals(an: bool) {
     NO_CAPITALS.store(!an, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -186,7 +186,7 @@ fn lowercase_same_length(text: &str) -> std::borrow::Cow<'_, str> {
     )
 }
 
-pub(crate) fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
+pub fn small_caps_s(text: &str) -> std::borrow::Cow<'_, str> {
     let ist_s = |c: char| c == 's' || c == '\u{0455}';
     if !text.contains(ist_s) || !text.chars().any(is_small_capital) {
         return std::borrow::Cow::Borrowed(text);
@@ -272,6 +272,33 @@ pub struct FontAtlas {
     coverage_view: wgpu::TextureView,
     sampler: wgpu::Sampler,
     pack: Option<Arc<PackGlyphCache>>,
+    // Die schaerfste Lage je Text (s. sharpest_shift): haengt nur an Text, Zeichenlagen und
+    // Faktor, das HUD setzt aber jeden Frame dieselben Texte neu. Geleert, wenn sich die
+    // Glyphen aendern (switch, set_pack).
+    shift_cache: std::sync::Mutex<ShiftCache>,
+}
+
+// Schluessel: Hash aus Faktor, Text und Zeichenlagen; der Eintrag haelt alle drei zum
+// Nachpruefen (ein Hash-Treffer allein koennte ein anderer Text sein).
+#[derive(Default)]
+struct ShiftCache {
+    eintraege: HashMap<u64, (u32, Box<str>, Box<[u32]>, Option<f32>)>,
+}
+
+// Mehr Texte stehen nie gleichzeitig im Bild; danach wird von vorn gesammelt.
+const SHIFT_CACHE_MAX: usize = 4096;
+
+// Zaehlt jede Aenderung an irgendeinem Atlas (neu gebaut, Schrift gewechselt, Pack-Glyphen):
+// wer fertig gesetzten Text zwischenspeichert, verwirft ihn, sobald sich der Wert aendert.
+static GLYPH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[must_use]
+pub fn glyph_generation() -> u64 {
+    GLYPH_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn glyphs_changed() {
+    GLYPH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 // Der CPU-Teil eines Atlas: Deckungsbild und Glyphen.
@@ -345,6 +372,7 @@ impl FontAtlas {
     fn from_pixels(device: &wgpu::Device, queue: &wgpu::Queue, pixels: AtlasPixels, kind: FontKind, bind_group_layout: Arc<wgpu::BindGroupLayout>) -> Self {
         let (coverage_view, sampler) = upload_atlas(device, queue, &pixels, kind);
         let bind_group = make_bind_group(device, &bind_group_layout, &coverage_view, &sampler, None);
+        glyphs_changed();
         Self {
             bind_group,
             bind_group_layout,
@@ -360,6 +388,7 @@ impl FontAtlas {
             coverage_view,
             sampler,
             pack: None,
+            shift_cache: std::sync::Mutex::default(),
         }
     }
 
@@ -367,6 +396,12 @@ impl FontAtlas {
     pub fn set_pack(&mut self, device: &wgpu::Device, pack: Option<Arc<PackGlyphCache>>) {
         self.bind_group = make_bind_group(device, &self.bind_group_layout, &self.coverage_view, &self.sampler, pack.as_deref());
         self.pack = pack;
+        self.clear_shift_cache();
+    }
+
+    fn clear_shift_cache(&self) {
+        glyphs_changed();
+        self.shift_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).eintraege.clear();
     }
 
     // Schrift zur Laufzeit wechseln. Das Layout bleibt DASSELBE Objekt -- die Text-Pipeline
@@ -395,6 +430,7 @@ impl FontAtlas {
         self.bold_advance = pixels.bold_advance;
         self.vanilla_advance = pixels.vanilla_advance;
         self.kind = kind;
+        self.clear_shift_cache();
         Ok(())
     }
 
@@ -516,10 +552,48 @@ impl FontAtlas {
     // ein schmaler Strich (das l) zwischen zwei Pixel und wird links blass, rechts kraeftig --
     // derselbe Name sah so an einer Stelle sauber und an der anderen schief aus.
     // Die Lage mit der kleinsten Unschaerfe-Summe haengt nur am Text, nicht an der Stelle
-    // (s. sharpest_shift_in). Hoechstens einen halben Pixel, die Abstaende im Text bleiben.
+    // (s. sharpest_phase_in). Hoechstens einen halben Pixel, die Abstaende im Text bleiben.
     // `positionen`: wie aus char_positions, je Zeichen von `text`.
     pub fn sharpest_shift(&self, text: &str, positionen: &[f32], x: f32, scale: f32) -> f32 {
-        sharpest_shift_in(&self.placed, text, positionen, x, scale, |ch| self.place(ch, scale))
+        use std::hash::{Hash, Hasher};
+        let lagen = || positionen.iter().map(|p| p.to_bits());
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        scale.to_bits().hash(&mut h);
+        text.hash(&mut h);
+        lagen().for_each(|b| b.hash(&mut h));
+        let schluessel = h.finish();
+        let mut cache = self.shift_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let phase = match cache.eintraege.get(&schluessel) {
+            Some((f, t, l, phase)) if *f == scale.to_bits() && **t == *text && l.iter().copied().eq(lagen()) => *phase,
+            treffer => {
+                let phase = sharpest_phase_in(&self.placed, text, positionen, scale, |ch| self.place(ch, scale));
+                // Hash-Kollision mit einem anderen Text: nicht ueberschreiben, nur rechnen.
+                if treffer.is_none() {
+                    if cache.eintraege.len() >= SHIFT_CACHE_MAX {
+                        cache.eintraege.clear();
+                    }
+                    cache.eintraege.insert(schluessel, (scale.to_bits(), text.into(), lagen().collect(), phase));
+                }
+                phase
+            }
+        };
+        phase.map_or(0.0, |beste| shift_to_phase(beste, x))
+    }
+
+    // Rastet bei Faktor `scale` kein Zeichen aufs Pixelraster ein, ist alles, was place und
+    // place_bold liefern, linear im Faktor, solange dieselbe Rasterstufe gilt (s. pick_placed):
+    // dann diese Stufe, 0 fuer Schriften ohne gerasterte Fassungen (Minecraft). None, wo genau
+    // gerasterte Zeichen einrasten koennen (snap, sharpest_shift).
+    pub fn linear_raster(&self, scale: f32) -> Option<u8> {
+        linear_raster_in(&self.placed, &self.placed_bold, scale)
+    }
+
+    // Fuer stufenlos skalierten Text, der nie einrasten soll: die Rasterstufe wie
+    // linear_raster, an den genau gerasterten Faktoren aber deren Stufe -- dieselbe, die knapp
+    // darunter gilt. Zweiter Wert: ein Faktor, bei dem place/place_bold diese Stufe linear
+    // liefern; Lage und Groesse durch ihn geteilt sind die Schriftpixel der Stufe.
+    pub fn smooth_raster(&self, scale: f32) -> Option<(u8, f32)> {
+        smooth_raster_in(&self.placed, &self.placed_bold, scale)
     }
 
     // Wo und wie gross ein Zeichen bei Faktor `scale` gezeichnet wird.
@@ -593,7 +667,18 @@ fn snap_in(karte: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32, p: Pl
 // alle diese Stuecke, je Wechsel aendert sich nur der Beitrag eines Zeichens. Genommen wird
 // das schaerfste Stueck, bei Gleichstand das erste -- beides haengt nicht an `x`, derselbe
 // Text sieht also an jeder Stelle gleich aus. Verschoben wird um hoechstens einen halben Pixel.
+#[cfg(test)]
 fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, positionen: &[f32], x: f32, scale: f32, place: impl Fn(char) -> Option<PlacedGlyph>) -> f32 {
+    sharpest_phase_in(placed, text, positionen, scale, place).map_or(0.0, |beste| shift_to_phase(beste, x))
+}
+
+// Von der jetzigen Lage `x` zur besten Phase, auf kuerzestem Weg.
+fn shift_to_phase(beste: f32, x: f32) -> f32 {
+    (beste.rem_euclid(1.0) - x.rem_euclid(1.0) + 0.5).rem_euclid(1.0) - 0.5
+}
+
+// Die schaerfste Phase (Nachkomma-Anteil des Textanfangs), None ohne genau gerasterte Zeichen.
+fn sharpest_phase_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, positionen: &[f32], scale: f32, place: impl Fn(char) -> Option<PlacedGlyph>) -> Option<f32> {
     let viertel = (scale * 4.0).round() as u8;
     let steps = SUBPIXEL_STEPS as usize;
     // Je Zeichen: Nachkomma-Anteil seiner Lage und die Unschaerfe seiner vier Fassungen.
@@ -609,7 +694,7 @@ fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, posi
         zeichen.push((rel.rem_euclid(1.0), u));
     }
     if zeichen.is_empty() {
-        return 0.0;
+        return None;
     }
     let fassung = |anteil: f32| ((anteil * f32::from(SUBPIXEL_STEPS)).round() as usize) % steps;
     // Wechsel: bei u + f = (k + 1/2) / 4 springt das Zeichen eine Fassung weiter.
@@ -633,8 +718,7 @@ fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, posi
             (beste, beste_summe) = (f32::midpoint(ab, bis), summe);
         }
     }
-    // Von der jetzigen Lage zur besten, auf kuerzestem Weg.
-    (beste.rem_euclid(1.0) - x.rem_euclid(1.0) + 0.5).rem_euclid(1.0) - 0.5
+    Some(beste)
 }
 
 // Die fuer Faktor `scale` gerasterte Fassung, sonst die naechstgroessere (verkleinern ist
@@ -642,6 +726,33 @@ fn sharpest_shift_in(placed: &HashMap<(u8, char), PlacedGlyph>, text: &str, posi
 // Ein gesetzter Glyph `dy` Font-Pixel tiefer (s. Resolved::Shifted).
 fn shifted(p: PlacedGlyph, dy: f32, scale: f32) -> PlacedGlyph {
     PlacedGlyph { offset: [p.offset[0], p.offset[1] + dy * scale], ..p }
+}
+
+// Kern von FontAtlas::linear_raster; dieselben Grenzen wie pick_placed.
+fn linear_raster_in(placed: &HashMap<(u8, char), PlacedGlyph>, placed_bold: &HashMap<(u8, char), PlacedGlyph>, scale: f32) -> Option<u8> {
+    if placed.is_empty() && placed_bold.is_empty() {
+        return Some(0);
+    }
+    let quarters = scale * 4.0;
+    let exact = quarters.round();
+    let (lo, hi) = (*DM_SANS_QUARTERS.start(), *DM_SANS_QUARTERS.end());
+    if !quarters.is_finite() || ((quarters - exact).abs() < 0.05 && (f32::from(lo)..=f32::from(hi)).contains(&exact)) {
+        return None;
+    }
+    Some((quarters.ceil().max(f32::from(lo)) as u8).min(hi))
+}
+
+// Kern von FontAtlas::smooth_raster. Ein halbes Viertel unter dem genauen Faktor waehlt
+// pick_placed dieselbe Fassung, nur linear skaliert.
+fn smooth_raster_in(placed: &HashMap<(u8, char), PlacedGlyph>, placed_bold: &HashMap<(u8, char), PlacedGlyph>, scale: f32) -> Option<(u8, f32)> {
+    match linear_raster_in(placed, placed_bold, scale) {
+        Some(stufe) => Some((stufe, scale)),
+        None if scale.is_finite() => {
+            let exact = (scale * 4.0).round();
+            Some((exact as u8, (exact - 0.5) / 4.0))
+        }
+        None => None,
+    }
 }
 
 fn pick_placed(placed: &HashMap<(u8, char), PlacedGlyph>, ch: char, scale: f32) -> Option<PlacedGlyph> {
@@ -755,6 +866,8 @@ impl PackGlyphCache {
             if sheet.y + h + 1 > SHEET_SIZE {
                 eprintln!("[font] Pack-Glyphenblatt voll -- wird neu befuellt");
                 *sheet = Sheet::default();
+                // Die alten Plaetze gelten nicht mehr: zwischengespeicherter Text muss neu.
+                glyphs_changed();
             }
             let p = [sheet.x, sheet.y];
             sheet.x += w + 1;
@@ -1354,6 +1467,69 @@ mod tests {
         for scale in [6.0f32, 9.0, 10.0, 12.5, 20.0, 29.0] {
             let h = pick_placed(&atlas.placed, 'H', scale).unwrap();
             assert!((h.size[1] - 7.0 * scale).abs() <= 1.5 * scale / 5.0 + 1.5, "H bei Faktor {scale} ist {} hoch", h.size[1]);
+        }
+    }
+
+    // Wo linear_raster eine Stufe nennt, rastet nichts ein, und Lage und Groesse jedes Zeichens
+    // sind innerhalb der Stufe Faktor mal dasselbe -- darauf baut der Lagen-Cache der
+    // Textformung (stufenlose Weltbeschriftungen).
+    #[test]
+    fn linear_innerhalb_der_rasterstufe() {
+        let leer = AtlasPixels {
+            levels: vec![vec![0]],
+            width: 1,
+            height: 1,
+            glyphs: HashMap::default(),
+            placed: HashMap::default(),
+            placed_bold: HashMap::default(),
+            bold_advance: HashMap::default(),
+            vanilla_advance: Arc::default(),
+            cell_height_px: 8.0,
+            ascent_px: 7.0,
+            descent_px: 1.0,
+        };
+        let atlas = build_ttf(&leer, FontKind::DmSans.ttf().unwrap());
+        assert_eq!(linear_raster_in(&HashMap::default(), &HashMap::default(), 2.37), Some(0));
+        let mut je_stufe: HashMap<(u8, bool, char), PlacedGlyph> = HashMap::default();
+        let (mut linear, mut gerastert) = (0, 0);
+        for i in 0..2400 {
+            let scale = 0.3 + i as f32 * 0.0029;
+            let Some(stufe) = linear_raster_in(&atlas.placed, &atlas.placed_bold, scale) else {
+                gerastert += 1;
+                continue;
+            };
+            linear += 1;
+            for (fett, karte) in [(false, &atlas.placed), (true, &atlas.placed_bold)] {
+                for ch in ['H', 'l', 'g', 'e', '1', '?'] {
+                    let Some(p) = pick_placed(karte, ch, scale) else { continue };
+                    assert!(!p.snap, "{ch} rastet bei Faktor {scale} ein");
+                    let einheit = PlacedGlyph { offset: p.offset.map(|v| v / scale), size: p.size.map(|v| v / scale), ..p };
+                    let erste = *je_stufe.entry((stufe, fett, ch)).or_insert(einheit);
+                    assert_eq!((erste.uv_min, erste.uv_max), (einheit.uv_min, einheit.uv_max), "{ch}: andere Fassung in Stufe {stufe}");
+                    for (a, b) in erste.offset.iter().chain(&erste.size).zip(einheit.offset.iter().chain(&einheit.size)) {
+                        assert!((a - b).abs() <= 1e-4 * a.abs().max(1.0), "{ch} bei Faktor {scale}: {a} gegen {b}");
+                    }
+                }
+            }
+        }
+        assert!(linear > 1500 && gerastert > 100, "{linear} linear, {gerastert} gerastert");
+        // smooth_raster: auch an den genauen Faktoren nichts eingerastet, und dort dieselben
+        // Schriftpixel wie knapp darunter in derselben Stufe -- sonst sprang es dort.
+        for i in 0..2400 {
+            let scale = 0.3 + i as f32 * 0.0029;
+            let (stufe, faktor) = smooth_raster_in(&atlas.placed, &atlas.placed_bold, scale).unwrap();
+            for (fett, karte) in [(false, &atlas.placed), (true, &atlas.placed_bold)] {
+                for ch in ['H', 'l', 'g', 'e', '1', '?'] {
+                    let Some(p) = pick_placed(karte, ch, faktor) else { continue };
+                    assert!(!p.snap, "{ch} rastet bei Faktor {scale} ein");
+                    let einheit = PlacedGlyph { offset: p.offset.map(|v| v / faktor), size: p.size.map(|v| v / faktor), ..p };
+                    let erste = *je_stufe.entry((stufe, fett, ch)).or_insert(einheit);
+                    assert_eq!((erste.uv_min, erste.uv_max), (einheit.uv_min, einheit.uv_max), "{ch}: andere Fassung in Stufe {stufe} bei {scale}");
+                    for (a, b) in erste.offset.iter().chain(&erste.size).zip(einheit.offset.iter().chain(&einheit.size)) {
+                        assert!((a - b).abs() <= 1e-4 * a.abs().max(1.0), "{ch} bei Faktor {scale}: {a} gegen {b}");
+                    }
+                }
+            }
         }
     }
 

@@ -67,6 +67,8 @@ impl App {
             self.build_debug_overlay(gpu, &mut rects, &mut hud_lines, &mut texts);
         }
         if self.mode == AppMode::World {
+            // Erst build_player_list traegt sie wieder ein, falls sie in diesem Bild steht.
+            self.player_list_rect.set(None);
             // Bei offenem Inventar zeigt Vanilla die HUD-Hotbar nicht mehr -- sie steckt
             // dann als eigene Slot-Reihe im Bildschirm selbst.
             if !beschriftungen_verdeckt {
@@ -199,6 +201,20 @@ impl App {
             && self.chat_input.is_none()
             && !self.hud_hidden
             && !self.connecting_view()
+            && !self.player_list_over_crosshair()
+    }
+
+    // Reicht die Tab-Liste ueber das Fadenkreuz (Mitte bzw. Zielpunkt der Schulterkamera,
+    // samt halber Groesse der Form)? Dann verschwindet es, statt durch die Namen zu stechen.
+    // Die Flaeche stammt aus dem HUD-Bau dieses Bildes (build_hud laeuft vor dem
+    // Fadenkreuz-Pass); was davor im selben Bau fragt, sieht die des letzten Bildes.
+    fn player_list_over_crosshair(&self) -> bool {
+        let (Some(liste), Some(gpu)) = (self.player_list_rect.get(), self.gpu.as_ref()) else { return false };
+        let (sw, sh) = gpu.size();
+        let (fx, fy) = self.shoulder_crosshair_pos().unwrap_or((0.5, 0.5));
+        let halb = self.settings.crosshair_size() as f32 / 2.0;
+        let (cx, cy) = (fx * sw, fy * sh);
+        cx + halb > liste.x && cx - halb < liste.x + liste.w && cy + halb > liste.y && cy - halb < liste.y + liste.h
     }
 
     // Verbindungsbildschirm: im Spiel, aber noch ohne einen Chunk vom Server. Dahinter steht

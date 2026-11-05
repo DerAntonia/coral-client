@@ -51,11 +51,13 @@ impl App {
     // Alle block_displays als echte Blockgeometrie im Block-Atlas (augenrelativ, s.
     // world::mesher::block_display_vertices). Sie reisen im Puffer der Geisterbloecke mit, in
     // dessen deckendem Teil -- derselbe Atlas, dieselbe Pipeline, und der wird ohnehin jedes
-    // Bild neu gebaut.
-    pub(crate) fn display_block_vertices(&self, out: &mut Vec<world::mesher::BlockVertex>) {
+    // Bild neu gebaut. `ranges`: je bewegtem Ding sein Bereich in `out` fuer den Motion Blur
+    // (s. entity_motion), auch fuer fallende Bloecke, TNT und Kolbenbloecke unten.
+    pub(crate) fn display_block_vertices(&self, out: &mut Vec<world::mesher::BlockVertex>, ranges: &mut Vec<(u64, std::ops::Range<usize>)>) {
+        use crate::entity_motion::{key, KIND_BLOCK, KIND_PISTON};
         let eye = self.camera.position;
         let progress = self.tick_progress();
-        for (_, e) in self.entities.iter() {
+        for (id, e) in self.entities.iter() {
             if !self.entity_in_render_distance(e) {
                 continue;
             }
@@ -72,12 +74,13 @@ impl App {
             for vert in &mut out[start..] {
                 vert.position = m.transform_point3(glam::Vec3::from(vert.position)).into();
             }
+            ranges.push((key(KIND_BLOCK, *id), start..out.len()));
         }
         // Fallende Bloecke (FallingBlockRenderer): das Blockmodell um einen halben Block nach
         // -x/-z versetzt, denn das Entity steht in der Mitte der Zelle. Steht an seiner Stelle
         // schon derselbe Block (gerade gelandet, das Entfernen ist noch unterwegs), wird er
         // nicht doppelt gezeichnet -- so macht es auch Vanilla.
-        for (_, e) in self.entities.iter() {
+        for (id, e) in self.entities.iter() {
             if !self.entity_in_render_distance(e) {
                 continue;
             }
@@ -95,12 +98,52 @@ impl App {
             for vert in &mut out[start..] {
                 vert.position = [vert.position[0] + v.x, vert.position[1] + v.y, vert.position[2] + v.z];
             }
+            ranges.push((key(KIND_BLOCK, *id), start..out.len()));
+        }
+        // Der Anzeigeblock einer Lore (TNT, Ofen, Trichter, ... oder ein eigener), in ihrer
+        // Drehung (s. minecart_content). Truhen und andere Sondermodelle zeichnet
+        // emit_catalog_entity mit dem Lorenmodell, sie haben kein Blockmodell.
+        for (id, e) in self.entities.iter() {
+            let Some(name) = world::entity_type_name(e.entity_type).filter(|n| world::mob_catalog::is_minecart(n)) else { continue };
+            if !self.entity_in_render_distance(e) {
+                continue;
+            }
+            let Some((state, ecke)) = super::views::minecart_content(e, name) else { continue };
+            if world::block_name(state).and_then(crate::held_item::special_item).is_some() {
+                continue;
+            }
+            // Gezuendete TNT-Lore (TntMinecartRenderer.submitMinecartContents): in den letzten
+            // zehn Ticks blaeht sich der Block um seine Ecke bis auf 130 % auf, und je fuenf
+            // Ticks blitzt er weiss -- welcher Block auch immer darin steht.
+            let rest = if e.minecart_tnt_fuse > -1 { e.minecart_tnt_fuse as f32 - progress + 1.0 } else { -1.0 };
+            let ecke = if rest > -1.0 && rest < 10.0 {
+                let f = (1.0 - rest / 10.0).clamp(0.0, 1.0);
+                ecke.then(world::Affine::scale([1.0 + f * f * f * f * 0.3; 3]))
+            } else {
+                ecke
+            };
+            let blitz = rest > -1.0 && (rest as i32 / 5) % 2 == 0;
+            let (x, y, z) = e.render_pos(progress);
+            let v = (DVec3::new(x, y, z) - eye).as_vec3();
+            let m = super::views::minecart_frame([v.x, v.y, v.z], e.render_yaw(progress)).then(ecke);
+            let start = out.len();
+            out.extend(world::mesher::block_display_vertices(state, &self.block_uvs, &self.block_shapes, &self.cross_blocks));
+            for vert in &mut out[start..] {
+                vert.position = m.apply(vert.position);
+                if blitz {
+                    *vert = vert.with_white_flash();
+                }
+            }
+            ranges.push((key(KIND_BLOCK, *id), start..out.len()));
         }
         // Gezuendetes TNT (TntRenderer): der Block um seine Mitte, eine halbe Hoehe ueber den
         // Fuessen. In den letzten zehn Ticks blaeht er sich bis auf 130 % auf, und alle fuenf
         // Ticks blitzt er weiss (TntMinecartRenderer.renderWhiteSolidBlock).
-        let tnt_vorgabe = block_place::default_state_for_item("tnt");
-        for (_, e) in self.entities.iter() {
+        // Ohne eigenen Blockzustand (Vanilla schickt nur Abweichungen) der gewoehnliche TNT-Block,
+        // unstable=false. Nicht ueber block_place::default_state_for_item: das raet bei Bloecken
+        // mit mehreren Zustaenden absichtlich nicht -- gezuendetes TNT war so unsichtbar.
+        let tnt_vorgabe = world::mob_catalog::minecart_default_display("tnt_minecart", false).0;
+        for (id, e) in self.entities.iter() {
             if world::entity_type_name(e.entity_type) != Some("tnt") || !self.entity_in_render_distance(e) {
                 continue;
             }
@@ -124,12 +167,13 @@ impl App {
                     *vert = vert.with_white_flash();
                 }
             }
+            ranges.push((key(KIND_BLOCK, *id), start..out.len()));
         }
         // Vom Kolben bewegte Bloecke (PistonHeadRenderer): ihre Zelle zeigt moving_piston, also
         // nichts; der Block selbst faehrt hier zwischen Start- und Zielzelle.
         for m in &self.pistons.moving {
             let versatz = m.offset(progress);
-            for (state, faehrt) in m.render_states(progress) {
+            for (i, (state, faehrt)) in m.render_states(progress).into_iter().enumerate() {
                 let zelle = DVec3::new(f64::from(m.pos.0), f64::from(m.pos.1), f64::from(m.pos.2));
                 let v = (zelle + if faehrt { versatz } else { DVec3::ZERO } - eye).as_vec3();
                 let start = out.len();
@@ -137,6 +181,10 @@ impl App {
                 for vert in &mut out[start..] {
                     vert.position = [vert.position[0] + v.x, vert.position[1] + v.y, vert.position[2] + v.z];
                 }
+                // Kein Entity, also ein Schluessel aus Zelle und Platz in render_states.
+                let (px, py, pz) = m.pos;
+                let zelle = px.wrapping_mul(73_856_093) ^ py.wrapping_mul(19_349_663) ^ pz.wrapping_mul(83_492_791);
+                ranges.push((key(KIND_PISTON, zelle.wrapping_add(i as i32)), start..out.len()));
             }
         }
     }

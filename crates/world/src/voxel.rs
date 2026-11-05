@@ -258,7 +258,7 @@ impl VoxelClasses {
             return false;
         };
         let mut belegt = 0u16;
-        for (o, &s) in out.iter_mut().zip(section.states()) {
+        for (o, s) in out.iter_mut().zip(section.iter_states()) {
             *o = self.class(s);
             belegt |= *o;
         }
@@ -270,7 +270,7 @@ impl VoxelClasses {
     pub fn fill_states(section: Option<&ChunkSection>, out: &mut [u16; SECTION_VOLUME]) {
         match section {
             Some(section) => {
-                for (o, &s) in out.iter_mut().zip(section.states()) {
+                for (o, s) in out.iter_mut().zip(section.iter_states()) {
                     *o = s.min(u32::from(u16::MAX)) as u16;
                 }
             }

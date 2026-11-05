@@ -222,6 +222,12 @@ pub(crate) const CLOUD_INDEX_WAITING: u8 = 9;
 // gerade bewegt.
 pub(crate) const BOAT_INDEX_PADDLE_LEFT: u8 = 11;
 pub(crate) const BOAT_INDEX_PADDLE_RIGHT: u8 = 12;
+// AbstractMinecart: ebenfalls nach VehicleEntity DATA_ID_CUSTOM_DISPLAY_BLOCK (11, optionaler
+// BlockState) und DATA_ID_DISPLAY_OFFSET (12, Int); dahinter MinecartFurnace.DATA_ID_FUEL (13,
+// Boolean) -- ob der Ofen brennt.
+pub(crate) const MINECART_INDEX_DISPLAY_BLOCK: u8 = 11;
+pub(crate) const MINECART_INDEX_DISPLAY_OFFSET: u8 = 12;
+pub(crate) const FURNACE_MINECART_INDEX_FUEL: u8 = 13;
 pub(crate) const CLOUD_INDEX_PARTICLE: u8 = 10;
 pub(crate) const DATA_TYPE_PARTICLE_LIST: i32 = 17;
 // PlayerLikeEntity.MAIN_ARM (Index 15), PacketCodecs.indexed = VarInt: 0 links, 1 rechts.
@@ -376,6 +382,12 @@ pub struct EntityDataUpdate {
     // Nur bei Booten und Floessen gemeint: linkes, rechtes Ruder in Bewegung (s.
     // BOAT_INDEX_PADDLE_LEFT).
     pub boat_paddles: [Option<bool>; 2],
+    // Nur bei Loren gemeint (s. MINECART_INDEX_DISPLAY_BLOCK): der eigene Anzeigeblock, doppelt
+    // wie custom_name (aussen "stand nicht im Paket", innen "keiner, die Vorgabe der Lore"),
+    // sein Versatz in Pixeln und bei der Ofenlore, ob sie brennt.
+    pub minecart_block: Option<Option<u32>>,
+    pub minecart_offset: Option<i32>,
+    pub minecart_fuel: Option<bool>,
 }
 
 // Sicherheitsdeckel gegen einen Strom ohne Endmarke.
@@ -447,6 +459,7 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                     }
                     TEXT_DISPLAY_INDEX_LINE_WIDTH => out.text_line_width = Some(v),
                     TEXT_DISPLAY_INDEX_BACKGROUND => out.text_background = Some(v),
+                    MINECART_INDEX_DISPLAY_OFFSET => out.minecart_offset = Some(v),
                     _ => {}
                 }
             }
@@ -498,6 +511,9 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                 if index == BOAT_INDEX_PADDLE_RIGHT {
                     out.boat_paddles[1] = Some(v);
                 }
+                if index == FURNACE_MINECART_INDEX_FUEL {
+                    out.minecart_fuel = Some(v);
+                }
             }
             DATA_TYPE_VECTOR_3F => {
                 let v = [r.read_f32()?, r.read_f32()?, r.read_f32()?];
@@ -527,7 +543,10 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
             }
             // PacketCodecs.optional(BLOCK_STATE): 0 = leer, sonst StateId + 1.
             DATA_TYPE_OPTIONAL_BLOCK_STATE => {
-                r.read_varint()?;
+                let v = r.read_varint()?;
+                if index == MINECART_INDEX_DISPLAY_BLOCK {
+                    out.minecart_block = Some((v > 0).then(|| (v - 1) as u32));
+                }
             }
             // PacketCodecs.OPTIONAL_INT: 0 = leer, sonst Wert + 1.
             DATA_TYPE_OPTIONAL_INT => {

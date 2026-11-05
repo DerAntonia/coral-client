@@ -173,13 +173,20 @@ impl App {
     // Vanillas Reihenfolge (ArmorFeatureRenderer.render) ist Brust, Hose, Schuhe, Kopf. Sie
     // ist hier nicht bloss Geschmack: Brustpanzer und Hose ueberlappen sich am Rumpf, und
     // wer die Hose zuletzt zeichnete, saehe ihren Guertel ueber dem Panzer liegen.
-    pub(crate) fn emit_armor(
-        &self,
+    //
+    // `jobs`: wenn gesetzt, entstehen die Ebenen ohne Glint spaeter parallel (s. defer_model).
+    // `skin`: wenn gesetzt (Motion-Blur-Schluessel des Entities), werden die Ebenen
+    // GPU-Instanzen (s. skin_frame), verzauberte samt Glint-Instanz.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn emit_armor<'m>(
+        &'m self,
         armor: &[Option<world::HeldItem>; 4],
-        models: &[world::Model; 4],
+        models: &'m [world::Model; 4],
         pose: &world::Pose,
         base: world::entity_model::Affine,
         out: &mut Vec<world::BlockVertex>,
+        mut jobs: Option<&mut Vec<ModelJob<'m>>>,
+        skin: Option<u64>,
     ) {
         for slot in world::armor::ArmorSlot::ALL {
             let Some(item) = armor[slot.index()] else { continue };
@@ -219,6 +226,19 @@ impl App {
                     }
                 };
                 let Some(tex) = self.equipment_texture(&ebene.texture) else { continue };
+                // Der Glint liest die Vertices sofort (s. push_glint), also dann nicht aufschieben.
+                let farbe = [tint[0] * ENTITY_BRIGHTNESS, tint[1] * ENTITY_BRIGHTNESS, tint[2] * ENTITY_BRIGHTNESS];
+                if let Some(key) = skin {
+                    let i = self.push_skinned(model, pose, base, tex, farbe, true, key);
+                    if item.enchanted {
+                        self.skin_glint(i, render::glint::GLINT_SCALE_ARMOR, render::glint::GLINT_TEXTURE_ARMOR);
+                    }
+                    continue;
+                }
+                if let Some(jobs) = jobs.as_deref_mut().filter(|_| !item.enchanted) {
+                    defer_model(jobs, out, model, pose, base, tex, farbe, true);
+                    continue;
+                }
                 let start = out.len();
                 world::entity_model::emit_tinted_two_sided(model, pose, base, tex, tint, ENTITY_BRIGHTNESS, out);
                 self.push_armor_glint(item, model, pose, base, out, start);
@@ -231,6 +251,17 @@ impl App {
                 .and_then(|k| self.trim_textures.get(&k).copied().flatten())
                 .and_then(|platz| self.entity_atlas.trim_slot_rect(platz))
             {
+                if let Some(key) = skin {
+                    let i = self.push_skinned(model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], true, key);
+                    if item.enchanted {
+                        self.skin_glint(i, render::glint::GLINT_SCALE_ARMOR, render::glint::GLINT_TEXTURE_ARMOR);
+                    }
+                    continue;
+                }
+                if let Some(jobs) = jobs.as_deref_mut().filter(|_| !item.enchanted) {
+                    defer_model(jobs, out, model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
+                    continue;
+                }
                 let start = out.len();
                 world::entity_model::emit_two_sided(model, pose, base, tex, ENTITY_BRIGHTNESS, out);
                 self.push_armor_glint(item, model, pose, base, out, start);
@@ -256,6 +287,35 @@ impl App {
 
     // Die Trim-Texturen aller sichtbaren Ruestungen erzeugen und hochladen, soweit noch nicht
     // geschehen. Sind alle Plaetze belegt, wird der aelteste verdraengt.
+    // Entity-, Block- und UI-Atlas liegen nach dem Hochladen im VRAM; ihre CPU-Kopien (zusammen
+    // rund 100 MB) werden freigegeben. Nur die Windkugel-Textur wird danach noch gelesen (s.
+    // scroll_wind_charge_texture), von ihr bleibt der Ausschnitt. Ohne GPU bleibt alles, das
+    // Hochladen kommt dann erst (s. resumed).
+    pub(crate) fn release_atlas_pixels(&mut self) {
+        if self.gpu.is_none() || self.entity_atlas.rgba.is_empty() {
+            return;
+        }
+        let atlas = &self.entity_atlas;
+        self.wind_charge_pixels = atlas.rect(world::entity_model::WIND_CHARGE_TEXTURE).and_then(|rect| {
+            let groesse = atlas.size as f32;
+            let (x0, y0) = ((rect[0] * groesse).round() as u32, (rect[1] * groesse).round() as u32);
+            let (w, h) = (((rect[2] - rect[0]) * groesse).round() as u32, ((rect[3] - rect[1]) * groesse).round() as u32);
+            if w == 0 || h == 0 {
+                return None;
+            }
+            let stride = atlas.size as usize * 4;
+            let mut pixel = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h as usize {
+                let anfang = (y0 as usize + y) * stride + x0 as usize * 4;
+                pixel.extend_from_slice(&atlas.rgba[anfang..anfang + w as usize * 4]);
+            }
+            Some(((x0, y0), w, h, pixel))
+        });
+        self.entity_atlas.rgba = Vec::new();
+        self.atlas_mips = Vec::new();
+        self.ui_atlas.rgba = Vec::new();
+    }
+
     // Die Windkugel-Textur laeuft in Vanilla durch: RenderTypes.breezeWind verschiebt sie um
     // ageInTicks * 0.03 in u (WindChargeRenderer.xOffset), mit wiederholter Textur. Im Atlas
     // gibt es kein Wiederholen -- deshalb wird die Textur an ihrem Platz selbst verschoben,
@@ -266,27 +326,21 @@ impl App {
         if !fliegt {
             return;
         }
-        let Some(rect) = self.entity_atlas.rect(world::entity_model::WIND_CHARGE_TEXTURE) else { return };
-        let groesse = self.entity_atlas.size as f32;
-        let (x0, y0) = ((rect[0] * groesse).round() as u32, (rect[1] * groesse).round() as u32);
-        let (w, h) = (((rect[2] - rect[0]) * groesse).round() as u32, ((rect[3] - rect[1]) * groesse).round() as u32);
-        if w == 0 || h == 0 {
-            return;
-        }
+        let Some(((x0, y0), w, h, quelle)) = self.wind_charge_pixels.as_ref() else { return };
+        let (x0, y0, w, h) = (*x0, *y0, *w, *h);
         let alter = self.own_age_ticks + self.tick_progress();
         let versatz = (((alter * 0.03) % 1.0) * w as f32) as u32 % w;
         if self.wind_charge_shift == Some(versatz) {
             return;
         }
         let Some(gpu) = self.gpu.as_ref() else { return };
-        let stride = self.entity_atlas.size as usize * 4;
         let mut pixel = vec![0u8; (w * h * 4) as usize];
         for y in 0..h as usize {
             for x in 0..w as usize {
                 // uv' = uv + versatz: an Stelle x steht, was vorher bei x + versatz stand.
-                let quelle = (y0 as usize + y) * stride + (x0 as usize + (x + versatz as usize) % w as usize) * 4;
+                let von = (y * w as usize + (x + versatz as usize) % w as usize) * 4;
                 let ziel = (y * w as usize + x) * 4;
-                pixel[ziel..ziel + 4].copy_from_slice(&self.entity_atlas.rgba[quelle..quelle + 4]);
+                pixel[ziel..ziel + 4].copy_from_slice(&quelle[von..von + 4]);
             }
         }
         gpu.block_renderer.upload_item(&gpu.queue, (x0, y0), w, h, &pixel);
@@ -461,6 +515,8 @@ impl App {
         // (rechter Arm, linker Arm) -- bei Linkshaendern ist die Haupthand links.
         hands: (Option<world::HeldItem>, Option<world::HeldItem>),
         blocking: (bool, bool),
+        // Welcher Arm gerade ein Item benutzt (rechts?), s. Entity::using_item_right_arm.
+        benutzt: Option<bool>,
         // Schwungfortschritt eines Speerstichs der Haupthand (sonst 0) und ob sie der rechte
         // Arm ist (s. world::entity_model::third_person_stab_item_offset).
         stich: (f32, bool),
@@ -469,6 +525,9 @@ impl App {
         model: &world::entity_model::Model,
         pose: &world::Pose,
         base: world::entity_model::Affine,
+        // Per GPU-Skinning (s. skin_frame), mit dem Motion-Blur-Schluessel des Entities: flache
+        // Items und Bloecke als starres Netz (s. HeldItems::rigid_pre), der Rest wie bisher.
+        skin: Option<u64>,
         out: &mut Vec<world::BlockVertex>,
     ) {
         for (item, right, blockt, extra) in [(hands.0, true, blocking.0, ansehen.0), (hands.1, false, blocking.1, ansehen.1)] {
@@ -485,7 +544,7 @@ impl App {
             let versatz = if right == stich.1 && stich.0 > 0.0 { world::entity_model::third_person_stab_item_offset(stich.0) } else { world::Affine::IDENTITY };
             let pre = held_item::hand_pre_transform(arm, right).then(versatz).then(extra);
             // Pack-Modelle je Stapel (Verzauberung, custom_model_data ...), sobald geladen.
-            if let Some(modell) = self.held_model_override(&item, right).filter(|m| self.held_items.has_model(m)) {
+            if let Some(modell) = self.held_model_override(&item, right, benutzt == Some(right)).filter(|m| self.held_items.has_model(m)) {
                 self.held_items.emit_model_pre(&modell, pre, right, ENTITY_BRIGHTNESS, false, out);
                 if item.enchanted {
                     self.push_glint(out, start, render::glint::GLINT_SCALE_ITEM, render::glint::GLINT_TEXTURE_ITEM, |l| {
@@ -493,6 +552,17 @@ impl App {
                     });
                 }
                 continue;
+            }
+            // Starres Netz statt Ecken je Bild: der Glint kommt dabei als Instanz mit, nur ein
+            // verzauberter Block (UV schon im Atlas) bleibt auf dem normalen Weg.
+            if let Some(key) = skin {
+                if let Some(r) = self.held_items.rigid_pre(item.model_id, item.potion_color, pre, right).filter(|r| r.glint || !item.enchanted) {
+                    let i = self.push_skinned_rigid(r.key, r.abdruck, || r.source.mesh(), r.base, r.rect, [ENTITY_BRIGHTNESS; 3], key);
+                    if item.enchanted {
+                        self.skin_glint(i, render::glint::GLINT_SCALE_ITEM, render::glint::GLINT_TEXTURE_ITEM);
+                    }
+                    continue;
+                }
             }
             self.held_items.set_skull(self.held_skull_texture(&item));
             self.held_items.emit_pre(item.model_id, item.potion_color, pre, right, ENTITY_BRIGHTNESS, false, out);
@@ -536,7 +606,7 @@ impl App {
         out: &mut Vec<world::BlockVertex>,
     ) {
         use world::entity_model::Affine;
-        let Some(tex) = self.entity_atlas.rect(self.shield.model.texture) else { return };
+        let tex = self.entity_atlas.rect_or_missing(self.shield.model.texture);
         let platte_tex = match banner {
             Some(_) => self.entity_atlas.rect(SHIELD_BANNER_BASE).unwrap_or(tex),
             None => tex,
@@ -590,7 +660,7 @@ impl App {
             world::emit_entity_model(part, &world::Pose::new(), base, tex, 1.0, &mut v);
             v
         };
-        let (Some(holz), Some(grund)) = (self.entity_atlas.rect(self.shield.model.texture), self.entity_atlas.rect(SHIELD_BANNER_BASE)) else { return };
+        let (holz, grund) = (self.entity_atlas.rect_or_missing(self.shield.model.texture), self.entity_atlas.rect_or_missing(SHIELD_BANNER_BASE));
         let mut lagen = vec![(vec![boxen(&self.shield.plate, grund), boxen(&self.shield.handle, holz)], [1.0; 3])];
         let muster = std::iter::once(("base", banner.base))
             .chain(banner.layers().iter().filter_map(|(id, farbe)| Some((self.trim_registries.banners.get(*id as usize)?.as_str(), *farbe))));

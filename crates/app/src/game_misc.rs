@@ -27,16 +27,35 @@ pub(crate) fn tick_deadline(last_update: Instant, accum: f32) -> Instant {
 // Zusaetzliche Wachphasen kosten fast nichts: gezeichnet wird weiterhin nur, wenn der
 // FRAME-Termin erreicht ist (s. about_to_wait), ein Tick-Aufwachen macht also Physik und
 // Pakete, aber kein Bild.
-// Bis `at_ns` (MONOTONIC) warten: grob schlafen, die letzte Millisekunde aktiv -- ein Schlaf
-// wacht auf ~0,1 ms ungenau auf, fuer die Riss-Steuerung zu grob.
+// Bis `at_ns` (MONOTONIC) warten: grob schlafen, den Rest aktiv -- fuer die Riss-Steuerung muss
+// der Zeitpunkt genauer sitzen, als ein Schlaf aufwacht.
+//
+// Linux: Der Grossteil der Schlaf-Verspaetung ist der Timer-Slack des Threads (Standard 50 us,
+// der Kernel buendelt damit Weckzeiten). Mit Slack 1 ns gemessen (2026-11-04, Kernel 7.0,
+// HZ=1000, Client lief daneben): p50 2 us, p99 12 us, p99.9 <= 31 us zu spaet. Darum nur 100 us
+// aktiv statt 1 ms -- das aktive Warten haelt den Kern wach und kostete im Profil 13 % der Samples.
+// Der Slack gilt fuer den ganzen Thread, also auch fuer die uebrigen Schlafphasen der
+// Hauptschleife (die wachen dadurch ebenfalls puenktlicher auf).
 pub(crate) fn wait_until_ns(at_ns: i64) {
+    #[cfg(target_os = "linux")]
+    const SPIN_NS: i64 = 100_000;
+    #[cfg(not(target_os = "linux"))]
+    const SPIN_NS: i64 = 1_000_000;
+    #[cfg(target_os = "linux")]
+    {
+        thread_local!(static SLACK_SET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+        if !SLACK_SET.get() {
+            SLACK_SET.set(true);
+            unsafe { libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong, 0, 0, 0) };
+        }
+    }
     loop {
         let rest = at_ns - vblank::monotonic_ns();
         if rest <= 0 {
             return;
         }
-        if rest > 1_000_000 {
-            std::thread::sleep(Duration::from_nanos((rest - 1_000_000) as u64));
+        if rest > SPIN_NS {
+            std::thread::sleep(Duration::from_nanos((rest - SPIN_NS) as u64));
         } else {
             std::hint::spin_loop();
         }
@@ -240,7 +259,7 @@ pub(crate) fn blocking_arms(using_item_right_arm: Option<bool>, hands: (Option<w
 // Platte und Griff getrennt, weil ItemIcons die Aussennormalen je Kasten bestimmt.
 pub(crate) fn set_shield_icon(icons: &mut ItemIcons, shield: &ShieldRender, entity_atlas: &assets::EntityAtlas) {
     use world::entity_model::Affine;
-    let Some(tex) = entity_atlas.rect(shield.model.texture) else { return };
+    let tex = entity_atlas.rect_or_missing(shield.model.texture);
     let base = Affine::translation([-0.5, -0.5, -0.5]).then(Affine::scale([1.0, -1.0, -1.0]));
     let boxes = [&shield.plate, &shield.handle].map(|part| {
         let mut out = Vec::new();
@@ -260,7 +279,7 @@ pub(crate) fn set_special_icons(icons: &mut ItemIcons, entity_atlas: &assets::En
     for id in 0..world::item_registry::item_count() as u32 {
         let Some(name) = world::item_registry::item_name(id) else { continue };
         let Some((kind, texture)) = held_item::special_item(name) else { continue };
-        let Some(tex) = entity_atlas.rect(&texture) else { continue };
+        let tex = entity_atlas.rect_or_missing(&texture);
         let (boxes, gui) = match kind {
             held_item::SpecialKind::Chest => {
                 (em::emit_boxes(em::chest_model(world::ChestHalf::Single), &em::chest_pose(0.0), base, tex), assets::item_named_display(installation, name, "gui"))
@@ -273,6 +292,8 @@ pub(crate) fn set_special_icons(icons: &mut ItemIcons, entity_atlas: &assets::En
             // dann die Statuen-Haltung. Ohne beides zeigte das Icon den Ruecken und sass gut 3
             // Pixel zu hoch (s. Test kupfergolem_statue_steht_aufrecht). Gezeigt wird die
             // Grundpose (Stehen); die anderen haengen am Blockzustand des Stapels.
+            // Im Inventar das flache Bild (items/trident.json, Fall "gui").
+            held_item::SpecialKind::Trident => continue,
             held_item::SpecialKind::CopperGolemStatue => {
                 let Some(model) = world::model_data::layer_model("copper_golem#main") else { continue };
                 let gui = assets::model_hand_display(installation, held_item::STATUE_TEMPLATE, "gui");
@@ -354,6 +375,8 @@ pub(crate) const ARROW_EMPTY_FEEDBACK_SHAKE: u8 = 2;
 // So lange blinkt die 0 bzw. wackelt das Fadenkreuz nach dem letzten Versuch.
 pub(crate) const ARROW_EMPTY_BLINK_SECS: f32 = 0.8;
 pub(crate) const ARROW_EMPTY_SHAKE_SECS: f32 = 0.3;
+// Toenung des Pfeil-Icons ohne Munition, linear (sRGB #FF5555 wie EFFECTS_BLINK_RED).
+pub(crate) const ARROW_EMPTY_TINT: [f32; 3] = [1.0, 0.0908, 0.0908];
 
 // Autoklicker (Debug): Klicks je Sekunde, Grenzen des Reglers (s. Settings::autoclicker_cps).
 pub(crate) const AUTOCLICKER_CPS_DEFAULT: u32 = 12;
@@ -403,6 +426,8 @@ pub(crate) struct MeshResult {
     pub(crate) runs: Vec<world::SectionRun>,
     // Je Section die Sichtverbindungen ihrer Seiten (s. world::visibility).
     pub(crate) visibility: Vec<world::visibility::SectionVis>,
+    // Je Section die sichtdichten Zellen, fuers Sichtlinien-Culling (s. render::sight).
+    pub(crate) opacity: std::sync::Arc<[world::visibility::SectionOpacity]>,
     pub(crate) min_y: i32,
     pub(crate) translucent: Vec<world::TerrainVertex>,
     pub(crate) fade_quads: Vec<world::TerrainFadeQuad>,

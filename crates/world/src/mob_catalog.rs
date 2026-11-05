@@ -210,6 +210,47 @@ pub fn is_minecart(name: &str) -> bool {
     name == "minecart" || name.ends_with("_minecart")
 }
 
+// Was eine Lore ohne eigenen Anzeigeblock zeigt, und wie hoch: getDefaultDisplayBlockState und
+// getDefaultDisplayOffset der Lorenarten. Truhe, Ofen und Befehlsblock schauen nach Norden, der
+// Ofen brennt mit Brennstoff, der Trichter zeigt nach unten. Versatz in Pixeln (Vorgabe 6, die
+// Truhe 8, der Trichter 1). Die leere Lore zeigt nichts (Luft).
+pub fn minecart_default_display(name: &str, fuel: bool) -> (Option<u32>, i32) {
+    type Vorgabe = (&'static str, &'static [(&'static str, &'static str)]);
+    const VORGABEN: [Vorgabe; 7] = [
+        ("chest", &[("facing", "north"), ("type", "single"), ("waterlogged", "false")]),
+        ("furnace", &[("facing", "north"), ("lit", "false")]),
+        ("furnace", &[("facing", "north"), ("lit", "true")]),
+        ("hopper", &[("enabled", "true"), ("facing", "down")]),
+        ("spawner", &[]),
+        ("tnt", &[("unstable", "false")]),
+        ("command_block", &[("conditional", "false"), ("facing", "north")]),
+    ];
+    // Einmal durch alle Zustaende statt je Lore und Bild.
+    static ZUSTAENDE: std::sync::OnceLock<[Option<u32>; 7]> = std::sync::OnceLock::new();
+    let zustaende = ZUSTAENDE.get_or_init(|| {
+        let mut out = [None; 7];
+        for state in 0..crate::block_registry::state_count() as u32 {
+            let Some(block) = crate::block_registry::block_name(state) else { continue };
+            for (i, (name, props)) in VORGABEN.iter().enumerate() {
+                if out[i].is_none() && block == *name && props.iter().all(|(k, v)| crate::state_props::property(state, k) == Some(*v)) {
+                    out[i] = Some(state);
+                }
+            }
+        }
+        out
+    });
+    let (i, versatz) = match name {
+        "chest_minecart" => (0, 8),
+        "furnace_minecart" => (if fuel { 2 } else { 1 }, 6),
+        "hopper_minecart" => (3, 1),
+        "spawner_minecart" => (4, 6),
+        "tnt_minecart" => (5, 6),
+        "command_block_minecart" => (6, 6),
+        _ => return (None, 6),
+    };
+    (zustaende[i], versatz)
+}
+
 // Dorfbewohner-Daten (VillagerData): Biom-Typ und Beruf als Registry-IDs, Stufe 1..5. Die
 // Namen in Registry-Reihenfolge (villager_type, villager_profession).
 pub const VILLAGER_TYPES: [&str; 7] = ["desert", "jungle", "plains", "savanna", "snow", "swamp", "taiga"];
@@ -381,5 +422,27 @@ mod tests {
         // Nitwit ohne Abzeichen, Baby ohne Beruf.
         assert_eq!(villager_layers(false, Some((2, 11, 1)), false).len(), 2);
         assert_eq!(villager_layers(true, Some((0, 5, 2)), true), ["entity/zombie_villager/type/desert"]);
+    }
+
+    // Jede Lorenart findet ihren Vorgabe-Zustand; die Ofenlore brennt nur mit Brennstoff.
+    #[test]
+    fn loren_vorgaben() {
+        use crate::state_props::property;
+        for (lore, block, versatz) in [
+            ("chest_minecart", "chest", 8),
+            ("furnace_minecart", "furnace", 6),
+            ("hopper_minecart", "hopper", 1),
+            ("spawner_minecart", "spawner", 6),
+            ("tnt_minecart", "tnt", 6),
+            ("command_block_minecart", "command_block", 6),
+        ] {
+            let (state, v) = minecart_default_display(lore, false);
+            assert_eq!(state.and_then(crate::block_registry::block_name), Some(block), "{lore}");
+            assert_eq!(v, versatz, "{lore}");
+        }
+        assert_eq!(minecart_default_display("minecart", false).0, None);
+        let brennt = |fuel| minecart_default_display("furnace_minecart", fuel).0.and_then(|s| property(s, "lit"));
+        assert_eq!((brennt(false), brennt(true)), (Some("false"), Some("true")));
+        assert_eq!(minecart_default_display("hopper_minecart", false).0.and_then(|s| property(s, "facing")), Some("down"));
     }
 }

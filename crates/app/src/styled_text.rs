@@ -237,17 +237,25 @@ pub(crate) fn hard_break(measure: impl Fn(&str) -> f32, word: &str, max_width: f
 // passt -- so bleibt beim Tippen/Einfuegen das Ende samt Caret sichtbar, statt aus dem Feld
 // zu laufen.
 pub(crate) fn token_display(gpu: &GpuState, token: &str, max_width: f32) -> String {
-    if gpu.measure_text(token, UI_SCALE_SMALL) <= max_width {
-        return token.to_string();
-    }
-    let chars: Vec<char> = token.chars().collect();
-    for start in 0..chars.len() {
-        let suffix: String = chars[start..].iter().collect();
-        if gpu.measure_text(&suffix, UI_SCALE_SMALL) <= max_width {
-            return suffix;
+    fitting_suffix(|t| gpu.measure_text(t, UI_SCALE_SMALL), token, max_width).to_string()
+}
+
+// Dieselbe Regel mit einer Messfunktion (s. wrap_measured). Der Rest wird schmaler, je weiter
+// vorn abgeschnitten wird -- also binaer suchen statt jeden Anfang zu messen: ein Token hat
+// tausende Zeichen, und jedes Bild jeden Rest zu messen kostete bis auf einstellige FPS.
+pub(crate) fn fitting_suffix(measure: impl Fn(&str) -> f32, text: &str, max_width: f32) -> &str {
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).chain(std::iter::once(text.len())).collect();
+    // Kleinster Anfang, ab dem der Rest passt; der leere Rest am Ende passt immer.
+    let (mut lo, mut hi) = (0, starts.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if measure(&text[starts[mid]..]) <= max_width {
+            hi = mid;
+        } else {
+            lo = mid + 1;
         }
     }
-    String::new()
+    &text[starts[lo]..]
 }
 
 // Zu langen Text auf `max_width` kuerzen und mit "..." markieren -- anders als
@@ -345,6 +353,7 @@ pub(crate) const SETTINGS_LABELS: [&str; SETTINGS_ROW_COUNT] = [
     "Mesh-Budget",
     "Chunk-Update-Threads",
     "Höhlen-Culling",
+    "Entity-Culling",
     "Mipmapping",
     "Motion Blur",
     "Tearing-Test",
@@ -364,8 +373,9 @@ pub(crate) const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Chunk-Spalten, die pro Frame als Mesh-Job an den Worker-Pool geschickt werden. Meshen selbst kostet keine Frame-Zeit mehr -- das begrenzt nur, wie viele Jobs auf einmal losgeschickt werden. Zahl anklicken für einen eigenen Wert.",
     "Größe des dedizierten Worker-Pools fürs Chunk-Meshing (nicht das Netzwerk, das läuft getrennt). Mehr Threads bauen Chunks parallel schneller auf, konkurrieren dabei aber mit allem anderen auf der CPU (Physik, Netzwerk-Decoding, Spiel selbst).",
     "Zeichnet nur die 16er-Abschnitte der Welt, die von der Kamera aus durch Luft, Wasser oder Glas überhaupt zu sehen sein können -- Höhlen unter der Oberfläche, und von unten die Oberfläche, fallen weg. Spart GPU-Zeit, ohne dass sich etwas Sichtbares ändert. AUS zum Vergleichen.",
+    "Baut Spieler, Mobs und Block-Entities (Truhen, Köpfe, Schilder, ...) nur, wenn man sie sehen kann. Vanilla: nur im Sichtfeld und wenn ihr 16er-Abschnitt nicht vom Höhlen-Culling verdeckt ist, wie in Vanilla. Sichtlinien: zusätzlich wie die Mod EntityCulling -- von der Kamera aus laufen Sichtlinien durch die Blöcke, was hinter Wänden steht, fällt weg (Glas, Laub und Wasser sind durchsichtig; gerechnet auf einem eigenen Thread). Namensschilder bleiben, leuchtende Entities bleiben auch hinter Wänden. Aus zum Vergleichen.",
     "Verkleinerte Fassungen der Blocktexturen für entfernte Blöcke, wie in Vanilla. AUS nimmt immer die volle Auflösung: in der Ferne flimmert es dann stärker.",
-    "Bewegungsunschärfe: verwischt die Welt entlang der Kamerabewegung, wie das Auge schnelle Bewegung sieht -- Hand und HUD bleiben scharf. 100 % = die Bewegung während eines Monitorbilds; läuft das Spiel schneller als der Monitor, gleicht die Stärke das aus. Ein Durchgang auf der Grafikkarte ohne gespeicherte alte Bilder, also keine zusätzliche Verzögerung; steht die Kamera still, fällt er ganz weg. Nur mit normaler Projektion.",
+    "Bewegungsunschärfe der Welt (bewegte Entities eingeschlossen) und der Hand, je mit eigener Stärke -- „Anpassen“ öffnet die Einstellungen. Ohne gespeicherte alte Bilder, also keine zusätzliche Verzögerung; steht alles still, fällt sie ganz weg. Nur mit normaler Projektion.",
     "Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um TearFree und die Riss-Steuerung zu testen. Läuft im Menü und im Spiel.",
     "Globale Anzeigeeinstellung des Grafiktreibers (xrandr) gegen Tearing bei fehlendem Hardware-Flip -- nur bedienbar, wenn der Treiber sie hat (amdgpu, radeon, neuere modesetting; nicht Nvidia).  Gilt nur, während Coral Client im Vordergrund läuft -- danach automatisch zurück auf den Wert von vor dem Start.",
     "Legt bei Immediate (mit FPS-Limit) jeden Bildwechsel knapp vor die Austastlücke des Monitors -- dort ist er unsichtbar, es gibt keinen Riss mehr im Bild. Misst dafür die VBlanks des Monitors (Linux, /dev/dri) und präsentiert jeden Frame auf die Mikrosekunde zu einem daraus berechneten Zeitpunkt; die Bildrate folgt dann exakt dem Monitor (bzw. jedem n-ten Bild bei niedrigerem FPS-Limit). Kostet etwas Latenz (der Frame wird mit Vorlauf fertig gebaut). Bei Fifo wirkungslos -- dort gibt es keinen Riss. Im Frame-Profiler (F6) sieht man, wo er landet.",
@@ -385,42 +395,45 @@ pub(crate) const MESH_BUDGET_ROW: usize = 2;
 pub(crate) const CHUNK_THREADS_ROW: usize = 3;
 // Hoehlen-Culling an/aus (Settings::cave_culling), s. render::occlusion.
 pub(crate) const CAVE_CULLING_ROW: usize = 4;
-pub(crate) const MIPMAPPING_ROW: usize = 5;
+// Entity-Culling an/aus (Settings::entity_culling), s. app/render/culling.rs.
+// Drei Stufen: Aus, Vanilla (Sichtkegel + Hoehlen-Culling), Sichtlinien (Settings::entity_ray_culling).
+pub(crate) const ENTITY_CULLING_ROW: usize = 5;
+pub(crate) const ENTITY_CULLING_NAMES: [&str; 3] = ["Aus", "Vanilla", "Sichtlinien"];
+pub(crate) const MIPMAPPING_ROW: usize = 6;
 // Abschnitt Effekte: Bewegungsunschaerfe (Settings::motion_blur_percent).
-pub(crate) const MOTION_BLUR_ROW: usize = 6;
+pub(crate) const MOTION_BLUR_ROW: usize = 7;
 pub(crate) const MOTION_BLUR_MAX: u32 = 300;
 pub(crate) const MOTION_BLUR_STEP: u32 = 10;
-pub(crate) const TEARING_TEST_ROW: usize = 7;
-pub(crate) const TEARFREE_ROW: usize = 8;
+// Unterseite Motion Blur (MenuScreen::SettingsMotionBlur, Knopf "Anpassen" in MOTION_BLUR_ROW):
+// erst die Welt mit der Kamera, die Entities mit ihrer eigenen Bewegung
+// (Settings::motion_blur_entities_percent), dann die Hand
+// (Settings::hand_blur_percent, hand_blur_curve).
+pub(crate) const MB_WORLD_ROW: usize = 0;
+pub(crate) const MB_ENTITIES_ROW: usize = 1;
+pub(crate) const MB_HAND_ROW: usize = 2;
+pub(crate) const MB_HAND_CURVE_ROW: usize = 3;
+pub(crate) const MB_ROW_COUNT: usize = 4;
+pub(crate) const HAND_BLUR_MAX: u32 = 300;
+pub(crate) const HAND_BLUR_STEP: u32 = 10;
+// Gewichtung der Teilbilder ueber die Zeit (s. render::hand_blur::Curve), wie in smoothie.
+pub(crate) const HAND_BLUR_CURVES: [&str; 3] = ["Gleich", "Aufsteigend", "Gauß"];
+pub(crate) const MB_WORLD_TOOLTIP: &str = "Verwischt die Welt entlang der Bewegung auf dem Schirm, die mit der Kamera. 100 % = die Bewegung während eines Monitorbilds; läuft das Spiel schneller als der Monitor, gleicht die Stärke das aus. 0 = aus.";
+pub(crate) const MB_ENTITIES_TOOLTIP: &str = "Alles, was sich bewegt (Spieler, Mobs, Pfeile, Perlen, Partikel, XP-Kugeln, fallende Blöcke, TNT, Kolbenblöcke, die Teile der Todesexplosion), verwischt auch mit seiner eigenen Bewegung, wenn du stillstehst -- seine Spur zieht über den Hintergrund. Unabhängig von Motion Blur, 100 % = die Bewegung während eines Monitorbilds. 0 = aus: alles verwischt nur mit der Kamera wie die übrige Welt.";
+pub(crate) const MB_HAND_TOOLTIP: &str = "Verwischt beide Hände samt der Items darin entlang ihrer eigenen Bewegung (Schlag, Wackeln, Wechseln). Die Hand wird dafür in mehreren Zwischenlagen zwischen dem letzten und diesem Bild gezeichnet und gemischt, ohne alte Bilder zu speichern. 100 % = die Bewegung während eines Monitorbilds, 0 = aus.";
+pub(crate) const MB_HAND_CURVE_TOOLTIP: &str = "Wie die Zwischenlagen gewichtet werden, wie in smoothie. Aufsteigend: die jüngsten zählen am meisten, die Hand wirkt am wenigsten verzögert. Gleich: alle gleich, die Spur ist am längsten, die Hand hängt etwas nach. Gauß: die Mitte zählt am meisten, weich, hängt am meisten nach. In die Zukunft kann keine rechnen.";
+pub(crate) const TEARING_TEST_ROW: usize = 8;
+pub(crate) const TEARFREE_ROW: usize = 9;
 // Abschnitt System: reine Anzeige (s. system_info).
-pub(crate) const CPU_ROW: usize = 12;
-pub(crate) const GPU_ROW: usize = 13;
-pub(crate) const RAM_ROW: usize = 14;
-pub(crate) const SWAP_ROW: usize = 15;
-pub(crate) const COMPOSITING_ROW: usize = 16;
+pub(crate) const CPU_ROW: usize = 13;
+pub(crate) const GPU_ROW: usize = 14;
+pub(crate) const RAM_ROW: usize = 15;
+pub(crate) const SWAP_ROW: usize = 16;
+pub(crate) const COMPOSITING_ROW: usize = 17;
 pub(crate) const BLOCK_ROTATION_TOOLTIP: &str = "Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.";
 pub(crate) const ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 pub(crate) const BLOCK_ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Block-Entities gezeichnet werden (Truhen, Betten, Shulkerkisten, Köpfe, Statuen, Schilder), in Blöcken. Außerhalb der Render-Distance nie. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
-// Renderpfad: vorerst aus den Einstellungen genommen (der Shader-Pfad ruht), Zeile samt Knopf
-// zu den Shadereinstellungen stehen auskommentiert in buttons().
-#[allow(dead_code)]
-pub(crate) const RENDER_PATH_TOOLTIP: &str = "PvP: der schnelle Forward-Renderer, gebaut für niedrige Frametime und Latenz. Shader: der Renderer mit Effekten für Survival (Licht, Schatten, Nebel, ...) -- noch im Aufbau, bis dahin zeichnet er wie PvP. Auf PvP-Servern PvP wählen.";
 // Shader-Pfad: so viele Sections schreibt das Voxel-Abbild hoechstens je Frame (je 8 KB). Ein
 // Sectionwechsel der Kamera bringt bis zu 256 neue, davon meist die Haelfte Luft.
+#[cfg(feature = "shader_path")]
 pub(crate) const VOXEL_SECTIONS_PER_FRAME: usize = 96;
 
-// Shadereinstellungen: Lichtstreuung in Prozent (s. Settings::shader_scattering_percent).
-pub(crate) const SCATTERING_MAX: u32 = 400;
-pub(crate) const SCATTERING_STEP: u32 = 10;
-// Schattenweichheit (Sonnendurchmesser) in Zehntelgrad.
-pub(crate) const SUN_SIZE_MAX_TENTHS: u32 = 80;
-pub(crate) const SUN_SIZE_STEP_TENTHS: u32 = 5;
-// Lichtstaerken je Lichtquelle (Settings::light_factors) in Prozent. Ueber Stufe 15 hinaus
-// wird eine Quelle zum Fernlicht (s. world::light::emission_level): Glowstone auf 1000 %
-// leuchtet 150 Bloecke weit. Bis 200 % in kleinen Schritten, darueber in grossen.
-pub(crate) const LIGHT_FACTOR_MAX: u32 = 1000;
-
-pub(crate) const fn light_factor_step(pct: u32, up: bool) -> u32 {
-    let gross = if up { pct >= 200 } else { pct > 200 };
-    if gross { 50 } else { 10 }
-}

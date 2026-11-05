@@ -600,10 +600,9 @@ impl VoxelVolume {
             self.slot_hash[i] = hash;
             let quellen: Vec<(u16, u32)> = sec
                 .map(|sec| {
-                    sec.states()
-                        .iter()
+                    sec.iter_states()
                         .enumerate()
-                        .filter_map(|(j, &st)| {
+                        .filter_map(|(j, st)| {
                             let e = world::light::emission(st);
                             (e != 0).then(|| (j as u16, u32::from(e) | u32::from(world::light::emission_level(st)) << 12))
                         })

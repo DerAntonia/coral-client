@@ -44,9 +44,11 @@ impl App {
                     center_px: (set.hud_shield_cd_x * sw, set.hud_shield_cd_y * sh),
                     scale: SHIELD_CD_TEXT_SCALE,
                     white: set.shield_cd_text_style == 1,
+                    yellow: false,
                     font,
                     alpha: 1.0,
                     fade_slot: crate::CROSSHAIR_FADE_SHIELD,
+                    stable_digits: false,
                 });
             }
         }
@@ -65,9 +67,11 @@ impl App {
                 center_px: (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0),
                 scale,
                 white: set.arrow_text_style == 1,
+                yellow: self.has_loaded_crossbow(),
                 font: set.effective_font(ShadowArea::ArrowNumber),
                 alpha: set.arrow_opacity as f32 / 100.0,
                 fade_slot: crate::CROSSHAIR_FADE_ARROWS,
+                stable_digits: set.stable_numbers,
             });
         }
         extras

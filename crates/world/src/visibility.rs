@@ -169,6 +169,58 @@ pub fn column_visibility(sections: &[ChunkSection], shapes: &BlockShapes) -> Vec
     sections.iter().map(|s| if s.is_empty() { VIS_ALL } else { section_visibility(s, &blocks) }).collect()
 }
 
+// Welche Zellen einer Section die Sicht versperren (s. blocks_view), fuer die Sichtstrahlen
+// des Entity-Cullings (render::sight). Bit (y * 16 + z) * 16 + x.
+pub enum SectionOpacity {
+    Empty,
+    Full,
+    Bits(Box<[u64; VOLUME / 64]>),
+}
+
+impl SectionOpacity {
+    #[must_use]
+    pub fn blocks(&self, x: usize, y: usize, z: usize) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Full => true,
+            Self::Bits(b) => {
+                let i = (y * N + z) * N + x;
+                b[i / 64] >> (i % 64) & 1 != 0
+            }
+        }
+    }
+}
+
+// Alle Sections einer Spalte, von unten nach oben.
+pub fn column_opacity(sections: &[ChunkSection], shapes: &BlockShapes) -> Vec<SectionOpacity> {
+    sections
+        .iter()
+        .map(|s| {
+            if s.is_empty() {
+                return SectionOpacity::Empty;
+            }
+            let mut bits = Box::new([0u64; VOLUME / 64]);
+            let mut dicht = 0;
+            for y in 0..N {
+                for z in 0..N {
+                    for x in 0..N {
+                        if shapes.blocks_view(s.get(x as i32, y as i32, z as i32)) {
+                            let i = (y * N + z) * N + x;
+                            bits[i / 64] |= 1 << (i % 64);
+                            dicht += 1;
+                        }
+                    }
+                }
+            }
+            match dicht {
+                0 => SectionOpacity::Empty,
+                VOLUME => SectionOpacity::Full,
+                _ => SectionOpacity::Bits(bits),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

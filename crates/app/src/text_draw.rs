@@ -12,6 +12,9 @@ pub(crate) struct TextVertex {
     // UV je Bildschirmpixel. Alles 0 = gewoehnlicher Glyph bzw. Sprite.
     pub(crate) bounds: [f32; 4],
     pub(crate) mode: [f32; 4],
+    // NDC-Tiefe fuer verdeckbare Weltbeschriftungen (font.wgsl::vs_label); alle anderen
+    // Pipelines lesen sie nicht.
+    pub(crate) depth: f32,
 }
 
 // Wie Text einen Rand bekommt. Kontur = duenne schwarze Linie rundherum (eigene Vorgabe),
@@ -67,8 +70,24 @@ pub(crate) enum ShadowArea {
 
 pub(crate) const TEXT_AREA_COUNT: usize = 14;
 
-// Schildtext je Bild hoechstens (Vertices, mit Kontur 9 Vierecke je Zeichen).
-pub(crate) const MAX_SIGN_TEXT_VERTICES: usize = 65_536;
+
+// Verdeckbare Weltbeschriftungen je Bild hoechstens (Vierecke): Glyphen samt Schatten, und
+// Hintergruende -- dieselben Anteile, die das HUD den Weltbeschriftungen laesst.
+pub(crate) const MAX_LABEL_GLYPHS: usize = MAX_UI_GLYPHS / 2;
+pub(crate) const MAX_LABEL_QUADS: usize = MAX_UI_RECTS / 4;
+
+// Tiefentest der verdeckbaren Weltbeschriftungen gegen die Welt (DEPTH_FORMAT des
+// Welt-Durchgangs): verdeckt von allem davor, ohne selbst Tiefe zu schreiben -- wie der
+// Schildtext (world_text_pipeline).
+pub(crate) fn label_depth_state() -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth32Float,
+        depth_write_enabled: false,
+        depth_compare: wgpu::CompareFunction::LessEqual,
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
 
 impl ShadowArea {
     // Reihenfolge = Index in Settings::area_shadow/area_font und Zeile im Schrift-Tab -- neue
@@ -311,6 +330,8 @@ pub(crate) const TEXT_MODE_SHADOW: f32 = 2.0;
 pub(crate) const SOFT_SHADOW_FULL_PERCENT: f32 = 40.0;
 pub(crate) const TEXT_MODE_BELOW: f32 = 3.0;
 pub(crate) const TEXT_MODE_AROUND: f32 = 4.0;
+// Kontur der Weltschrift (Schilder, Text-Displays): die Nachbarn gestapelt, s. font.wgsl.
+pub(crate) const TEXT_MODE_OUTLINE_WORLD: f32 = 5.0;
 // Auf die Art addiert: farbiges Bild aus dem Pack-Glyphenblatt (s. font.wgsl).
 pub(crate) const TEXT_MODE_PACK: f32 = 8.0;
 
@@ -350,7 +371,7 @@ pub(crate) fn text_quad_fx(
     screen_px: (f32, f32),
 ) -> [TextVertex; 6] {
     let (w, h) = screen_px;
-    let to_ndc = |px: f32, py: f32, u: f32, v: f32| TextVertex { position: [(px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0], uv: [u, v], color, bounds, mode };
+    let to_ndc = |px: f32, py: f32, u: f32, v: f32| TextVertex { position: [(px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0], uv: [u, v], color, bounds, mode, depth: 0.0 };
     [
         to_ndc(x0, y0, uv_min[0], uv_min[1]),
         to_ndc(x1, y0, uv_max[0], uv_min[1]),

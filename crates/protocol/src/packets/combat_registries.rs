@@ -37,15 +37,40 @@ pub const CB_PLAY_DAMAGE_EVENT: i32 = 0x19;
 /// (s. `App::play_own_hurt_sound`), der Client muss ihn selbst spielen -- und welcher es ist,
 /// haengt an der Schadensart.
 ///
-/// Danach folgen noch Verursacher- und Quell-ID (beide als VarInt+1, damit -1 kodierbar
-/// bleibt) und optional eine Position. Die zaehlen erst fuer Todesnachrichten und
-/// Knockback-Richtung und werden weiterhin nicht gelesen.
-pub fn read_damage_event(payload: &[u8]) -> Result<(i32, i32), ReadError> {
+/// Danach folgen Verursacher- und direkte Quell-ID (beide als VarInt+1, damit -1 = keine
+/// kodierbar bleibt) und optional eine Position (Bool, dann drei Doubles) -- so steht es in
+/// `ClientboundDamageEventPacket.write`. Gebraucht fuer die Richtung, aus der ein Kill kam
+/// (Todesexplosion). Fehlen sie (abgeschnittenes Paket), bleiben sie leer; Entity und
+/// Schadensart zaehlen trotzdem.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DamageEvent {
+    pub entity_id: i32,
+    pub damage_type: i32,
+    // DamageSource.getEntity: wer den Schaden verursacht hat (Schuetze, Schlagender).
+    pub cause_id: Option<i32>,
+    // DamageSource.getDirectEntity: was direkt getroffen hat (Pfeil, Kristall, der Schlagende).
+    pub direct_id: Option<i32>,
+    // DamageSource.sourcePositionRaw: feste Quelle ohne Entity (etwa ein Bett, ein Anker).
+    pub source_pos: Option<[f64; 3]>,
+}
+
+pub fn read_damage_event(payload: &[u8]) -> Result<DamageEvent, ReadError> {
     let mut r = PacketReader::new(payload);
     let _id = r.read_varint()?;
     let entity_id = r.read_varint()?;
     let damage_type = r.read_varint()?;
-    Ok((entity_id, damage_type))
+    let mut ev = DamageEvent { entity_id, damage_type, cause_id: None, direct_id: None, source_pos: None };
+    let id = |v: i32| (v > 0).then_some(v - 1);
+    if let (Ok(cause), Ok(direct)) = (r.read_varint(), r.read_varint()) {
+        ev.cause_id = id(cause);
+        ev.direct_id = id(direct);
+        if r.read_bool().unwrap_or(false) {
+            if let (Ok(x), Ok(y), Ok(z)) = (r.read_f64(), r.read_f64(), r.read_f64()) {
+                ev.source_pos = Some([x, y, z]);
+            }
+        }
+    }
+    Ok(ev)
 }
 
 /// Welchen Klang eine Schadensart ausloest -- Vanillas `DamageEffects`.
@@ -210,7 +235,27 @@ mod damage_event_tests {
         w.write_varint(CB_PLAY_DAMAGE_EVENT);
         w.write_varint(300);
         w.write_varint(7); // Schadensart
-        assert_eq!(read_damage_event(&w.into_bytes()).expect("lesbar"), (300, 7));
+        let ev = read_damage_event(&w.into_bytes()).expect("lesbar");
+        assert_eq!((ev.entity_id, ev.damage_type, ev.cause_id, ev.direct_id, ev.source_pos), (300, 7, None, None, None));
+    }
+
+    // Wie ClientboundDamageEventPacket.write: IDs als VarInt+1 (0 = keine), Position optional.
+    #[test]
+    fn liest_quelle_und_position() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_DAMAGE_EVENT);
+        w.write_varint(300);
+        w.write_varint(7);
+        w.write_varint(42 + 1);
+        w.write_varint(0);
+        w.write_bool(true);
+        w.write_f64(1.5);
+        w.write_f64(64.0);
+        w.write_f64(-3.25);
+        let ev = read_damage_event(&w.into_bytes()).expect("lesbar");
+        assert_eq!(ev.cause_id, Some(42));
+        assert_eq!(ev.direct_id, None);
+        assert_eq!(ev.source_pos, Some([1.5, 64.0, -3.25]));
     }
 
     #[test]

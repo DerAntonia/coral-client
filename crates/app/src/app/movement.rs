@@ -434,7 +434,11 @@ impl App {
             // Vanillas Schrittweite von hoechstens 0.4 pro Tick.
             self.own_last_equip_progress = self.own_equip_progress;
             let tempo = self.attack_speed_attribute();
-            let ziel = equip_target(self.ticks_since_last_attack, tempo);
+            // Ist der Itemwechsel bemerkt, aber die Aufladung erst im naechsten Tick zurueckgesetzt
+            // (s. attack_hand_changed), zielt die Hand ganz nach unten wie Vanillas
+            // `mainHandItem != itemStack ? 0`. Sonst stieg sie mit der alten Aufladung einen Tick
+            // lang hoch und fiel danach wieder: ein Hopser bei jedem Wechsel.
+            let ziel = if self.attack_hand_changed { 1.0 } else { equip_target(self.ticks_since_last_attack, tempo) };
             self.own_equip_progress = equip_step(self.own_equip_progress, ziel);
             // PlayerEntity.isBlocking: Schild schon laenger als seine Block-Verzoegerung (5 Ticks)
             // oben -- dann darf der Kopf nur 15 statt 50 Grad gegen den Koerper verdreht sein.

@@ -71,6 +71,8 @@ impl App {
         if !zweithand_frei || self.inventory_room_for(&stapel) {
             return;
         }
+        // Per Taste in die Zweithand: das fliegt (s. inventory_anim).
+        self.inventory_anim.get_mut().flights.click_sent(Instant::now());
         use protocol::packets::{CLICK_MODE_PICKUP, CLICK_MODE_SWAP};
         let Some(anzahl) = self.inventory.open.as_ref().map(|c| c.slots.len()) else {
             self.send_container_click(inventory::PLAYER_OFFHAND as i16, 0, CLICK_MODE_PICKUP);
@@ -86,7 +88,6 @@ impl App {
         let vorhersage = inventory::Prediction { modified: vec![(platz as i16, None)], cursor: self.inventory.cursor.clone(), hashable: true };
         let (sync_id, revision, _) = self.inventory.active();
         if let Some(tx) = &self.outgoing_tx {
-            self.inventory_anim.get_mut().flights.click_sent(Instant::now());
             let _ = tx.send(protocol::packets::click_container_payload(
                 sync_id,
                 revision,
@@ -225,7 +226,9 @@ impl App {
         }
         self.slot_queue.clear();
         let current = self.inventory.held_slot as i32;
-        let next = (current + if up { -1 } else { 1 }).rem_euclid(9) as usize;
+        let schritt = if up { -1 } else { 1 };
+        let next = (current + schritt).rem_euclid(9) as usize;
+        self.hotbar_glide.get_mut().scrolled(schritt);
         self.select_hotbar_slot(next);
     }
 
@@ -415,8 +418,11 @@ impl App {
             // zufaellig, die Korrektur blieb aus und das Item klebte lokal am Zeiger fest.
             None => (Vec::new(), self.inventory.cursor.clone()),
         };
-        if let Some(tx) = &self.outgoing_tx {
+        // Shift-Klick: verschoben per Tastatur, das fliegt (s. inventory_anim).
+        if mode == protocol::packets::CLICK_MODE_QUICK_MOVE {
             self.inventory_anim.get_mut().flights.click_sent(Instant::now());
+        }
+        if let Some(tx) = &self.outgoing_tx {
             let _ = tx.send(protocol::packets::click_container_payload(sync_id, revision, slot, button, mode, &modified, cursor.as_ref()));
         }
         if let Some(prediction) = prediction {
@@ -603,7 +609,6 @@ impl App {
     pub(crate) fn send_quick_craft_click(&mut self, slot: i16, button: i8, cursor: Option<&protocol::item::ItemStack>) {
         let (sync_id, revision, _) = self.inventory.active();
         if let Some(tx) = &self.outgoing_tx {
-            self.inventory_anim.get_mut().flights.click_sent(Instant::now());
             let _ = tx.send(protocol::packets::click_container_payload(
                 sync_id,
                 revision,
@@ -651,8 +656,11 @@ impl App {
             Some(p) => (p.modified.clone(), p.cursor.clone()),
             None => (Vec::new(), self.inventory.cursor.clone()),
         };
-        if let Some(tx) = &self.outgoing_tx {
+        // Shift-Klick: verschoben per Tastatur, das fliegt (s. inventory_anim).
+        if mode == protocol::packets::CLICK_MODE_QUICK_MOVE {
             self.inventory_anim.get_mut().flights.click_sent(Instant::now());
+        }
+        if let Some(tx) = &self.outgoing_tx {
             let _ = tx.send(protocol::packets::click_container_payload(sync_id, revision, slot, button, mode, &modified, cursor.as_ref()));
         }
         if let Some(prediction) = prediction {

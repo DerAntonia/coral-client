@@ -188,9 +188,13 @@ impl App {
 
         let mut out = Vec::with_capacity(512);
         world::emit_entity_model_two_sided(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
-        self.emit_armor(&self.own_armor(), &self.armor_models, &pose, base, &mut out);
-        self.emit_held_items((main, off), blocking_arms(self.own_using_item_right_arm(), (main, off)), (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, &mut out);
-        if let Some(cape_tex) = self.own_uuid.and_then(|uuid| self.cape_texture(&uuid)) {
+        self.emit_armor(&self.own_armor(), &self.armor_models, &pose, base, &mut out, None, None);
+        self.emit_held_items((main, off), blocking_arms(self.own_using_item_right_arm(), (main, off)), self.own_using_item_right_arm(), (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, None, &mut out);
+        let own_cape = self.own_uuid.and_then(|uuid| self.cape_texture(&uuid));
+        // Fluegel wie in der 3. Person, in Ruhe angelegt; mit ihnen haengt der Umhang als Bild
+        // darauf statt am Rumpf (s. emit_elytra).
+        let elytra = self.emit_elytra(&self.own_armor(), own_cape, None, false, base, &mut out);
+        if let Some(cape_tex) = own_cape.filter(|_| !elytra) {
             // Der Umhang haengt in Ruhe gerade nach unten -- alle drei Winkel null.
             let cape_pose = world::cape_pose(&pose, 0.0, 0.0, 0.0);
             world::emit_entity_model(&self.cape_model, &cape_pose, base, cape_tex, ENTITY_BRIGHTNESS, &mut out);
@@ -527,13 +531,18 @@ impl App {
             return None;
         }
         let blatt = def.leaves.get(*zweige.first()? as usize)?;
-        blatt.special.is_none().then(|| blatt.model.clone())
+        (blatt.special.is_none() || crate::held_item::special_model(&blatt.model).is_some()).then(|| blatt.model.clone())
     }
 
-    // Dasselbe fuer ein Item in der Hand eines Entities (3. Person).
-    pub(crate) fn held_model_override(&self, item: &world::HeldItem, right: bool) -> Option<String> {
+    // Dasselbe fuer ein Item in der Hand eines Entities (3. Person). `benutzt`: diese Hand
+    // benutzt das Item gerade -- nur beim Dreizack weitergegeben (items/trident.json waehlt
+    // damit die Wurfhaltung trident_throwing). Bogen und Armbrust fragen dazu die Spanndauer,
+    // die der Client bei Fremden nicht kennt; sie bleiben beim Ruhemodell.
+    pub(crate) fn held_model_override(&self, item: &world::HeldItem, right: bool, benutzt: bool) -> Option<String> {
         let stack = world::item_components::resolve(item.stack)?;
-        self.model_override(&stack, if right { "thirdperson_righthand" } else { "thirdperson_lefthand" }, None)
+        let wurf = benutzt && world::entity::held_use_animation(item) == world::item_behavior::USE_ANIM_TRIDENT;
+        let benutzung = wurf.then_some(item_model_input::UseState { ticks: 0.0, duration: 72_000.0, pull_ticks: 0.0 });
+        self.model_override(&stack, if right { "thirdperson_righthand" } else { "thirdperson_lefthand" }, benutzung)
     }
 
     // Wie das Item dieser Hand in der Ego-Ansicht liegt. Ohne laufende Benutzung ist das
@@ -587,6 +596,7 @@ impl App {
                     basis
                 }
             }
+            "trident" if benutzt => world::entity_model::first_person_trident_pose(right_hand, equip_progress, (use_ticks / 10.0).min(1.0)),
             "bow" if benutzt => {
                 // Vanillas Spannkurve: g = (g*g + 2g) / 3 auf f/20.
                 let t = use_ticks / 20.0;

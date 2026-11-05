@@ -199,7 +199,8 @@ pub(super) fn create_atlas_texture_and_bind_group(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        // RENDER_ATTACHMENT: animierte Kacheln werden hineingezeichnet (s. tiles.rs, TileWriter).
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
         // Die Gamma-Sicht (Rgba8Unorm) brauchen Vanillas Core-Shader aus Resourcepacks: sie
         // rechnen mit den Texeln, wie sie in der Datei stehen (s. vanilla_draw).
         view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
@@ -348,6 +349,8 @@ impl OutlineComplement {
         color_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         camera: &wgpu::BindGroup,
+        // Liest danach noch jemand die Tiefe (Bewegungsunschaerfe, Weltbeschriftungen)?
+        depth_later: bool,
     ) {
         if self.count == 0 {
             return;
@@ -387,7 +390,7 @@ impl OutlineComplement {
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: if depth_later { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard } }),
                 stencil_ops: None,
             }),
             timestamp_writes: None,

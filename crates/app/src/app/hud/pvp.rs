@@ -118,7 +118,15 @@ impl App {
         {
             return;
         }
-        let Some(anzeige) = self.arrow_hud_stack() else { return };
+        let Some(anzeige) = self.arrow_hud_stack() else {
+            // Ohne Munition ein rot getoenter Pfeil, die 0 dazu zeichnet arrow_number.
+            if !self.settings.arrow_number_only && self.arrow_hud_empty() {
+                let rect = self.hud_arrows_rect(gpu);
+                let alpha = self.settings.arrow_opacity as f32 / 100.0;
+                self.item_icons.push_tinted(sprites, "arrow", rect.x, rect.y, rect.w, rect.h, ARROW_EMPTY_TINT, alpha);
+            }
+            return;
+        };
         // Die Zahl zeichnet im Spiel der Fadenkreuz-Pass (s. arrow_number), hier nur das Icon.
         self.push_arrow_indicator(gpu, &anzeige, sprites, texts, false);
     }
@@ -131,26 +139,47 @@ impl App {
         }
         let rect = self.hud_arrows_rect(gpu);
         let scale = (rect.w / 16.0).round().max(1.0);
-        let Some(stack) = self.arrow_hud_stack() else {
-            // Keine Munition: nach einem Spannversuch blinkt eine 0 (Pfeil-Modul, "0 blinkt").
-            let seit = self.arrow_empty_at?.elapsed().as_secs_f32();
-            if self.settings.arrow_empty_feedback != ARROW_EMPTY_FEEDBACK_BLINK || seit >= ARROW_EMPTY_BLINK_SECS || (seit * 8.0) as u32 % 2 == 1 {
-                return None;
+        let anzahl = match self.arrow_hud_stack() {
+            // Auch ein einzelner Pfeil zeigt seine 1 (Vanilla laesst sie am Slot weg).
+            Some(stack) => stack.count,
+            None => {
+                // Keine Munition: eine 0, solange Bogen/Armbrust in der Hand ist. Mit "0 blinkt"
+                // blinkt sie nach einem Spannversuch.
+                if !self.arrow_hud_empty() {
+                    return None;
+                }
+                let blinkt = self.settings.arrow_empty_feedback == ARROW_EMPTY_FEEDBACK_BLINK
+                    && self.arrow_empty_at.is_some_and(|t| {
+                        let seit = t.elapsed().as_secs_f32();
+                        seit < ARROW_EMPTY_BLINK_SECS && (seit * 8.0) as u32 % 2 == 1
+                    });
+                if blinkt {
+                    return None;
+                }
+                0
             }
-            let atlas = gpu.hud_font(self.settings.effective_font(ShadowArea::ArrowNumber));
-            let w = atlas.glyph('0').map_or(0.0, |g| g.advance_px * scale);
-            let h = atlas.cell_height_px() * scale;
-            return Some(("0".to_string(), Rect { x: rect.x + (rect.w - w) / 2.0, y: rect.y + (rect.h - h) / 2.0, w, h }, scale));
         };
-        let text = stack.count.to_string();
+        let mut text = anzahl.to_string();
         // Mit der Schrift vermessen, in der die Zahl auch gezeichnet wird.
         let atlas = gpu.hud_font(self.settings.effective_font(ShadowArea::ArrowNumber));
-        let w: f32 = text.chars().filter_map(|c| atlas.glyph(c)).map(|g| g.advance_px * scale).sum();
+        // Mit stabilen Ziffern wie beim Zeichnen (s. CrosshairText::stable_digits).
+        let stabil = self.settings.stable_numbers;
+        let breite = |t: &str| -> f32 { t.chars().filter_map(|c| crate::crosshair_advance(atlas, c, stabil)).map(|(platz, _)| platz * scale).sum() };
+        let w = breite(&text);
         let h = atlas.cell_height_px() * scale;
-        if self.settings.arrow_number_only {
-            return Some((text, Rect { x: rect.x + (rect.w - w) / 2.0, y: rect.y + (rect.h - h) / 2.0, w, h }, scale));
+        let (x, y) = if self.settings.arrow_number_only {
+            (rect.x + (rect.w - w) / 2.0, rect.y + (rect.h - h) / 2.0)
+        } else {
+            (rect.x + rect.w - w, rect.y + rect.h - h)
+        };
+        // Mit geladener Armbrust im Inventar ein + rechts neben der Zahl (dazu gelb, s.
+        // has_loaded_crossbow). Die Zahl bleibt, wo sie ohne + stuende; das Rechteck waechst
+        // nur nach rechts.
+        let plus = if self.has_loaded_crossbow() { breite("+") } else { 0.0 };
+        if plus > 0.0 {
+            text.push('+');
         }
-        (stack.count > 1).then_some((text, Rect { x: rect.x + rect.w - w, y: rect.y + rect.h - h, w, h }, scale))
+        Some((text, Rect { x, y, w: w + plus, h }, scale))
     }
 
     // Pfeil-Modul, "Wackeln": waagerechter Versatz des Fadenkreuzes in Bildschirmpixeln nach
@@ -173,6 +202,9 @@ impl App {
     // dazu eine Explosionswolke wie bei TNT. Wurfgeschosse schicken dasselbe Event beim
     // Aufprall -- sie haben kein Modell und zaehlen nicht.
     pub(crate) fn entity_died(&mut self, entity_id: i32) {
+        // So lange nach dem eigenen Schlag gilt ein Tod als von ihm (Rundreise zum Server und
+        // zurueck, dazu ein Servertick).
+        const KILL_HIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(1000);
         if self.own_entity_id == Some(entity_id) || self.dying.contains_key(&entity_id) {
             return;
         }
@@ -186,16 +218,16 @@ impl App {
         }
         let progress = self.tick_progress();
         let feet = e.render_pos(progress);
-        // Starb er in der Luft, fallen die Teile bis zum Boden darunter (hoechstens 8 Bloecke).
-        let (bx, bz) = (feet.0.floor() as i32, feet.2.floor() as i32);
-        let fuss = feet.1.floor() as i32;
-        let drop = (0..8)
-            .map(|d| fuss - d)
-            .find(|&y| self.world.block_at(bx, y, bz) != world::STATE_AIR)
-            .map_or(0.0, |y| (feet.1 - f64::from(y + 1)).max(0.0) as f32);
-        let model_scale = e.scale * world::entity_model::PLAYER_MODEL_SCALE;
+        // Nur der Skin fliegt (samt Aussenlage), die Ruestung nicht.
+        let (modell, _) = self.player_model_and_texture(&e.uuid);
+        let teile = death_burst::part_boxes(&[modell]);
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64) ^ entity_id as u64;
-        let burst = death_burst::Burst::new(e.uuid, feet, e.render_yaw(progress), e.scale, model_scale, e.armor, drop, seed);
+        // Hat der Kill eine Richtung, fliegt nichts dorthin zurueck (s. Burst::new,
+        // `away_from`): die Quelle des letzten Schadens laut Server, sonst der eigene Schlag.
+        let quelle = self.damage_sources.remove(&entity_id).filter(|(_, t)| t.elapsed() < KILL_HIT_WINDOW).map(|(p, _)| p);
+        let selbst = self.last_melee_hit.is_some_and(|(id, t)| id == entity_id && t.elapsed() < KILL_HIT_WINDOW);
+        let weg_von = quelle.or_else(|| selbst.then(|| self.physics.pos));
+        let burst = death_burst::Burst::new(entity_id, e.uuid, feet, e.render_yaw(progress), e.scale, &teile, weg_von.map(|p| (p.x, p.z)), seed);
         let (breite, hoehe) = e.hit_size();
         let mitte = DVec3::new(feet.0, feet.1 + hoehe * 0.5, feet.2);
         self.death_bursts.push(burst);
@@ -206,11 +238,54 @@ impl App {
         });
     }
 
+    // Damage-Event: woher der Schaden kam, als Weltpunkt fuer die Richtung des Kills (s.
+    // entity_died). Wie Vanillas DamageSource.getSourcePosition die feste Position, sonst ein
+    // Entity -- bei Explosionen das Explodierende (Kristall, TNT, Feuerball), sonst der
+    // Verursacher (Schuetze statt Pfeil: der steckt beim Treffer schon im Ziel und zeigt keine
+    // Richtung), zuletzt das direkt treffende. Ohne Quelle (Fall, Feuer, Leere) keine Richtung.
+    pub(crate) fn note_damage_source(&mut self, entity_id: i32, cause_id: Option<i32>, direct_id: Option<i32>, source_pos: Option<[f64; 3]>) {
+        const EXPLODIEREND: [&str; 9] = ["end_crystal", "tnt", "tnt_minecart", "fireball", "small_fireball", "dragon_fireball", "wither_skull", "wind_charge", "breeze_wind_charge"];
+        let progress = self.tick_progress();
+        let lage = |id: i32| -> Option<DVec3> {
+            if id == entity_id {
+                return None;
+            }
+            if Some(id) == self.own_entity_id {
+                return Some(self.physics.pos);
+            }
+            let (x, y, z) = self.entities.get(id)?.render_pos(progress);
+            Some(DVec3::new(x, y, z))
+        };
+        let explodiert = direct_id.and_then(|id| self.entities.get(id)).is_some_and(|e| world::entity_type_name(e.entity_type).is_some_and(|n| EXPLODIEREND.contains(&n)));
+        let punkt = source_pos
+            .map(DVec3::from)
+            .or_else(|| direct_id.filter(|_| explodiert).and_then(lage))
+            .or_else(|| cause_id.and_then(lage))
+            .or_else(|| direct_id.and_then(lage));
+        match punkt {
+            Some(p) => {
+                self.damage_sources.insert(entity_id, (p, Instant::now()));
+            }
+            None => {
+                self.damage_sources.remove(&entity_id);
+            }
+        }
+    }
+
     pub(crate) fn tick_death_bursts(&mut self) {
-        self.death_bursts.retain_mut(death_burst::Burst::tick);
+        // Die Teile stossen gegen die echten Kollisionsformen der Welt.
+        let (welt, formen) = (&self.world, &*self.block_shapes);
+        let boxen = |min: [f64; 3], max: [f64; 3]| -> Vec<([f64; 3], [f64; 3])> {
+            crate::physics::collect_collision_boxes(DVec3::from(min), DVec3::from(max), welt, formen, world::ShapeContext::ABSENT)
+                .into_iter()
+                .map(|b| (b.min.to_array(), b.max.to_array()))
+                .collect()
+        };
+        self.death_bursts.retain_mut(|b| b.tick(&boxen));
         // Entfernte Leichen vergessen (Entity-IDs werden nicht so bald neu vergeben).
         let entities = &self.entities;
         self.dying.retain(|id, _| entities.get(*id).is_some());
+        self.damage_sources.retain(|_, (_, t)| t.elapsed() < std::time::Duration::from_secs(2));
         for t in self.dying.values_mut() {
             *t += 1;
         }
@@ -221,6 +296,11 @@ impl App {
     pub(crate) fn death_time(&self, entity_id: i32) -> Option<f32> {
         let t = *self.dying.get(&entity_id)?;
         (self.settings.death_animation == DEATH_ANIM_VANILLA).then(|| t as f32 + 1.0 + self.tick_progress())
+    }
+
+    // Sterbend und rot wie in Vanilla (hasRedOverlay mit deathTime > 0), nur bei Vanilla.
+    pub(crate) fn dying_red(&self, entity_id: i32) -> bool {
+        self.dying.contains_key(&entity_id) && self.settings.death_animation == DEATH_ANIM_VANILLA
     }
 
     // Session-Info: alle anderen Spieler im Umkreis gelten als gerade getroffen.

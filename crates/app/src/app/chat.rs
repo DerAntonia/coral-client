@@ -82,15 +82,35 @@ impl App {
     pub(crate) fn chat_wrapped_all(&self, gpu: &GpuState, width: f32, scale: f32) -> std::rc::Rc<Vec<ChatLine>> {
         let schrift = FontKind::ALL.iter().position(|&k| k == gpu.layout_atlas().kind()).unwrap_or(0) as u8;
         let key = (self.chat_generation, width.to_bits(), scale.to_bits(), schrift);
-        if let Some((k, lines)) = self.chat_wrap_cache.borrow().as_ref() {
-            if *k == key {
-                return lines.clone();
-            }
-        }
         let messwerk = |t: &str| gpu.measure_text(t, scale);
-        let lines: Vec<ChatLine> = self.chat_messages.iter().flat_map(|msg| wrap_chat_message(msg, width, messwerk)).collect();
+        let erste = self.chat_pushed - self.chat_messages.len() as u64;
+        let mut speicher = self.chat_wrap_cache.borrow_mut();
+        // Gleicher Schluessel: nur nachziehen, was sich seitdem geaendert hat -- vorne die
+        // weggefallenen Nachrichten abschneiden, hinten die neuen setzen. Vorher setzte jede
+        // neue Nachricht den ganzen Verlauf neu, auf vollen Servern mehrmals je Sekunde.
+        if let Some(c) = speicher.as_mut().filter(|c| c.key == key && c.first <= erste) {
+            let zeilen = std::rc::Rc::make_mut(&mut c.lines);
+            while c.first < erste {
+                let n = c.counts.pop_front().unwrap_or(0);
+                zeilen.drain(..n.min(zeilen.len()));
+                c.first += 1;
+            }
+            for nummer in c.first + c.counts.len() as u64..self.chat_pushed {
+                let neu = wrap_chat_message(&self.chat_messages[(nummer - erste) as usize], width, messwerk);
+                c.counts.push_back(neu.len());
+                zeilen.extend(neu);
+            }
+            return c.lines.clone();
+        }
+        let mut counts = std::collections::VecDeque::with_capacity(self.chat_messages.len());
+        let mut lines = Vec::new();
+        for msg in &self.chat_messages {
+            let neu = wrap_chat_message(msg, width, messwerk);
+            counts.push_back(neu.len());
+            lines.extend(neu);
+        }
         let lines = std::rc::Rc::new(lines);
-        *self.chat_wrap_cache.borrow_mut() = Some((key, lines.clone()));
+        *speicher = Some(crate::ChatWrapCache { key, first: erste, counts, lines: lines.clone() });
         lines
     }
 
@@ -954,6 +974,7 @@ impl App {
             self.chat_rise_open = (self.chat_rise_open + n as f32).min(self.settings.chat_lines_open as f32);
         }
         self.chat_messages.push_back(spans);
+        self.chat_pushed += 1;
         self.chat_times.push_back(Instant::now());
         if self.chat_messages.len() > CHAT_MAX_MESSAGES {
             self.chat_times.pop_front();
@@ -968,7 +989,6 @@ impl App {
                 }
             }
         }
-        self.chat_generation += 1;
         // Beim Zurueckblaettern bleibt die Ansicht stehen, statt von neuen Nachrichten
         // weggeschoben zu werden (Vanilla: ChatHud.addVisibleMessage).
         if self.chat_scroll > 0 {
@@ -1412,18 +1432,13 @@ impl App {
             self.settings_search.extend(text.chars().filter(|c| !c.is_control()));
             return true;
         }
-        if self.screen == MenuScreen::SettingsLightLevels {
-            self.light_search.extend(text.chars().filter(|c| !c.is_control()));
-            self.light_scroll = Default::default();
-            return true;
-        }
         false
     }
 
     // Mausrad im offenen Chat: `lines` > 0 blaettert zurueck in die Vergangenheit.
     pub(crate) fn scroll_chat(&mut self, lines: f32) {
         let schritte = lines.round() as i64;
-        let gesamt = self.chat_wrap_cache.borrow().as_ref().map_or(0, |(_, l)| l.len());
+        let gesamt = self.chat_wrap_cache.borrow().as_ref().map_or(0, |c| c.lines.len());
         // Das GRUNDrechteck, wie in build_chat_overlay_body: das Wachsen nach unten kostet
         // keine eigenen Raststufen, es verbraucht dieselben (s. dortigen Kommentar).
         let sichtbar = self

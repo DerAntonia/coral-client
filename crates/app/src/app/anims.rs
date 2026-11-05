@@ -209,7 +209,7 @@ impl App {
             ladder_free: (ladder.is_some() && e.sneaking() && e.last_drop() == 0.0).then_some(!e.left_handed),
             vanilla_only: (lean.amount > 0.0 && lean.in_water)
                 || e.living_flags & protocol::packets::LIVING_FLAG_USING_RIPTIDE != 0
-                || self.death_time(id).is_some(),
+                || self.dying_red(id),
         }
     }
 

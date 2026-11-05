@@ -2,7 +2,25 @@
 
 use super::*;
 
+// Motion-Blur-Schluessel eines Block-Entities: kein Entity, also aus der Zelle (wie die
+// Kolbenbloecke in display_block_vertices).
+fn block_entity_key(pos: (i32, i32, i32)) -> u64 {
+    let (x, y, z) = pos;
+    crate::entity_motion::key(crate::entity_motion::KIND_BLOCK_ENTITY, x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663) ^ z.wrapping_mul(83_492_791))
+}
+
 impl App {
+    // Ein Block-Entity-Modell: per GPU-Skinning (s. skin_frame), sonst als Ecken in `out`.
+    // Block-Entities werden nie gefaerbt und haben keinen Umriss.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_block_entity_model(&self, skinning: bool, pos: (i32, i32, i32), model: &world::Model, pose: &world::Pose, base: world::Affine, tex: [f32; 4], out: &mut Vec<world::BlockVertex>) {
+        if skinning {
+            self.push_skinned(model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], false, block_entity_key(pos));
+        } else {
+            world::emit_entity_model(model, pose, base, tex, ENTITY_BRIGHTNESS, out);
+        }
+    }
+
     // Betten. Sie sind BLOECKE, werden hier aber wie Entities gezeichnet -- ihr Blockmodell ist
     // leer (models/block/bed.json hat nur ein "particle"-Feld), Vanilla zeichnet sie mit einem
     // eigenen BlockEntity-Renderer und einer Entity-Textur. Ohne das bleibt ein Bett komplett
@@ -14,18 +32,19 @@ impl App {
     // `eye`: der Bezugspunkt des Entity-Puffers -- alles darin ist augenrelativ (s.
     // build_entity_vertices), die Blockposition wird also davon abgezogen.
     pub(crate) fn emit_beds(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
+        let skinning = self.skinning_active();
         for (pos, state) in self.world.model_blocks() {
             if !self.block_entity_shown(pos) {
                 continue;
             }
             let Some(bett) = world::bed_instance(pos, state) else { continue };
-            let Some(tex) = self.entity_atlas.rect(bett.texture) else { continue };
+            let tex = self.entity_atlas.rect_or_missing(bett.texture);
             let model = if bett.head { &self.bed_head_model } else { &self.bed_foot_model };
             // isFoot ist im WELT-Renderer immer false: der -1-Versatz gehoert allein zum
             // Item-Modell (renderAsItem zeichnet beide Haelften aus EINEM Ursprung). In der
             // Welt hat jede Haelfte ihr eigenes BlockEntity und damit ihren eigenen Ursprung.
             let base = world::entity_model::bed_transform(block_rel(pos, eye), bett.facing_deg, false);
-            world::emit_entity_model(model, &world::Pose::new(), base, tex, ENTITY_BRIGHTNESS, out);
+            self.emit_block_entity_model(skinning, pos, model, &world::Pose::new(), base, tex, out);
         }
     }
 
@@ -34,15 +53,16 @@ impl App {
     pub(crate) fn emit_shulker_boxes(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
         let t = self.tick_progress();
         let model = world::entity_model::shulker_box_model();
+        let skinning = self.skinning_active();
         for (pos, state) in self.world.model_blocks() {
             let Some(kiste) = world::shulker_instance(pos, state) else { continue };
             if !self.block_entity_shown(pos) {
                 continue;
             }
-            let Some(tex) = self.entity_atlas.rect(kiste.texture) else { continue };
+            let tex = self.entity_atlas.rect_or_missing(kiste.texture);
             let offen = self.block_lids.get(&pos).map_or(0.0, |d| d.last + (d.progress - d.last) * t);
             let base = world::entity_model::shulker_box_transform(block_rel(pos, eye), kiste.facing);
-            world::emit_entity_model(model, &world::entity_model::shulker_box_pose(offen), base, tex, ENTITY_BRIGHTNESS, out);
+            self.emit_block_entity_model(skinning, pos, model, &world::entity_model::shulker_box_pose(offen), base, tex, out);
         }
     }
 
@@ -79,7 +99,7 @@ impl App {
     // Gezeichneter Chunk und innerhalb der Block-Entity-Renderdistanz (vom Auge aus).
     pub(crate) fn block_entity_shown(&self, pos: (i32, i32, i32)) -> bool {
         let d = self.settings.block_entity_render_distance;
-        self.block_column_drawn(pos) && (d >= BLOCK_ENTITY_DISTANCE_MAX || self.near_eye(pos, f64::from(d)))
+        self.block_column_drawn(pos) && (d >= BLOCK_ENTITY_DISTANCE_MAX || self.near_eye(pos, f64::from(d))) && !self.block_entity_culled(pos)
     }
 
     pub(crate) fn near_eye(&self, pos: (i32, i32, i32), abstand: f64) -> bool {
@@ -102,6 +122,7 @@ impl App {
     // Platzierte Koepfe (SkullBlockEntityRenderer.render): am Boden auf der Blockmitte, an der
     // Wand ein Viertel Block von der Wand weg und 4 Pixel hoch, gedreht in 22.5-Grad-Stufen.
     pub(crate) fn emit_skulls(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
+        let skinning = self.skinning_active();
         for (pos, state) in self.world.model_blocks() {
             let Some(kopf) = world::skull_instance(pos, state) else { continue };
             if !self.block_entity_shown(pos) {
@@ -114,7 +135,8 @@ impl App {
                 Some((dx, dz)) => [0.5 - dx as f32 * 0.25, 0.25, 0.5 - dz as f32 * 0.25],
             };
             let base = world::Affine::translation([b[0] + versatz[0], b[1] + versatz[1], b[2] + versatz[2]]);
-            held_item::emit_skull_at(tex, hut, base, kopf.yaw_deg, ENTITY_BRIGHTNESS, out);
+            let base = held_item::skull_transform(base, kopf.yaw_deg);
+            self.emit_block_entity_model(skinning, pos, held_item::skull_model(hut), &world::Pose::new(), base, tex, out);
         }
     }
 
@@ -123,15 +145,17 @@ impl App {
     // y = 0, um Z halb gedreht). Frueher als Lebewesen eingebettet -- das stimmte nur fuer
     // den Stehend-Layer, die anderen Haltungen schwebten 1,5 Bloecke hoch.
     pub(crate) fn emit_statues(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
+        let skinning = self.skinning_active();
         for (pos, state) in self.world.model_blocks() {
             let Some(statue) = world::statue_instance(pos, state) else { continue };
             if !self.block_entity_shown(pos) {
                 continue;
             }
-            let (Some(model), Some(tex)) = (world::model_data::layer_model(statue.layer), self.entity_atlas.rect(statue.texture)) else { continue };
+            let Some(model) = world::model_data::layer_model(statue.layer) else { continue };
+            let tex = self.entity_atlas.rect_or_missing(statue.texture);
             let b = block_rel(pos, eye);
             let base = world::entity_model::copper_golem_statue_transform(b, statue.yaw_deg);
-            world::emit_entity_model(model, &world::entity_model::copper_golem_statue_pose(model), base, tex, ENTITY_BRIGHTNESS, out);
+            self.emit_block_entity_model(skinning, pos, model, &world::entity_model::copper_golem_statue_pose(model), base, tex, out);
         }
     }
 
@@ -141,16 +165,17 @@ impl App {
     pub(crate) fn emit_chests(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
         let t = self.tick_progress();
         let weihnachten = is_christmas();
+        let skinning = self.skinning_active();
         let deckel = |pos: &(i32, i32, i32)| self.block_lids.get(pos).map_or(0.0, |d| d.last + (d.progress - d.last) * t);
         for (pos, state) in self.world.model_blocks() {
             let Some(truhe) = world::chest_instance(pos, state, weihnachten) else { continue };
             if !self.block_entity_shown(pos) {
                 continue;
             }
-            let Some(tex) = self.entity_atlas.rect(truhe.texture) else { continue };
+            let tex = self.entity_atlas.rect_or_missing(truhe.texture);
             let offen = truhe.partner.map_or(0.0, |p| deckel(&p)).max(deckel(&pos));
             let base = world::entity_model::chest_transform(block_rel(pos, eye), truhe.yaw_deg);
-            world::emit_entity_model(world::entity_model::chest_model(truhe.half), &world::entity_model::chest_pose(offen), base, tex, ENTITY_BRIGHTNESS, out);
+            self.emit_block_entity_model(skinning, pos, world::entity_model::chest_model(truhe.half), &world::entity_model::chest_pose(offen), base, tex, out);
         }
     }
 
@@ -182,7 +207,7 @@ impl App {
                 }
                 _ => (world::entity_model::SIGN_TEXTURES[holz], world::entity_model::sign_model(art == world::entity_model::SignKind::Standing)),
             };
-            let Some(tex) = self.entity_atlas.rect(textur) else { continue };
+            let tex = self.entity_atlas.rect_or_missing(textur);
             let base = world::entity_model::sign_base(block_rel(pos, eye), art, grad);
             let base = world::entity_model::sign_model_transform(base, art);
             world::emit_entity_model(&modell, &world::Pose::new(), base, tex, ENTITY_BRIGHTNESS, out);
@@ -230,7 +255,7 @@ HangingAttachment::CeilingMiddle) => {
     // sich waehrend des Fluges staendig (s. world::entity::tick_projectile), und die
     // Tickstufen waeren bei seiner Geschwindigkeit deutlich sichtbar.
     pub(crate) fn emit_arrow(&self, e: &world::Entity, feet: [f32; 3], progress: f32, texture: &'static str, out: &mut Vec<world::BlockVertex>) {
-        let Some(tex) = self.entity_atlas.rect(texture) else { return };
+        let tex = self.entity_atlas.rect_or_missing(texture);
         let (yaw, pitch) = (e.render_yaw(progress), e.render_pitch(progress));
         let model = world::entity_model::arrow_model(texture);
         let pose = world::entity_model::Pose::new();
@@ -242,8 +267,20 @@ HangingAttachment::CeilingMiddle) => {
         world::emit_entity_model(&model, &pose, base, tex, ENTITY_BRIGHTNESS, out);
     }
 
+    // Geworfener Dreizack (ThrownTridentRenderer): das Modell aus den Spieldaten, gedreht wie
+    // ein Pfeil (s. world::entity_model::thrown_trident_transform). Ohne Modell stand dort der
+    // schwarz-pinke Platzhalter.
+    pub(crate) fn emit_thrown_trident(&self, e: &world::Entity, feet: [f32; 3], progress: f32, out: &mut Vec<world::BlockVertex>) {
+        let Some(model) = world::model_data::layer_model("trident#main") else { return };
+        let tex = self.entity_atlas.rect_or_missing(world::entity_model::TRIDENT_TEXTURE);
+        let versatz = e.launch_render_offset(progress);
+        let sichtbar = [feet[0] + versatz[0], feet[1] + versatz[1], feet[2] + versatz[2]];
+        let base = world::entity_model::thrown_trident_transform(sichtbar, e.render_yaw(progress), e.render_pitch(progress));
+        world::emit_entity_model(model, &world::entity_model::Pose::new(), base, tex, ENTITY_BRIGHTNESS, out);
+    }
+
     pub(crate) fn emit_end_crystal(&self, id: i32, e: &world::Entity, feet: [f32; 3], progress: f32, out: &mut Vec<world::BlockVertex>) {
-        let Some(tex) = self.entity_atlas.rect(world::entity_model::END_CRYSTAL_TEXTURE) else { return };
+        let tex = self.entity_atlas.rect_or_missing(world::entity_model::END_CRYSTAL_TEXTURE);
         // Klein genug, um es je Bild neu zu bauen (vier Teile).
         let model = world::entity_model::end_crystal_model(e.end_crystal_show_bottom);
         let start = (id as u32).wrapping_mul(2_654_435_761) % 100_000;
@@ -272,7 +309,7 @@ HangingAttachment::CeilingMiddle) => {
     // Platzhalter-Kasten. Beidseitig wie der Kristall: die durchsichtigen Stellen des
     // Wirbels zeigen in Vanilla die Innenseiten.
     pub(crate) fn emit_wind_charge(&self, e: &world::Entity, feet: [f32; 3], progress: f32, out: &mut Vec<world::BlockVertex>) {
-        let Some(tex) = self.entity_atlas.rect(world::entity_model::WIND_CHARGE_TEXTURE) else { return };
+        let tex = self.entity_atlas.rect_or_missing(world::entity_model::WIND_CHARGE_TEXTURE);
         let model = world::entity_model::wind_charge_model();
         let pose = world::entity_model::wind_charge_pose(e.age_ticks(progress));
         let anfang = out.len();
@@ -284,7 +321,7 @@ HangingAttachment::CeilingMiddle) => {
     pub(crate) fn model_for_type(&self, entity_type: i32) -> Option<(&world::Model, world::entity_model::ModelKind, [f32; 4])> {
         let name = world::entity_type_name(entity_type)?;
         let (_, model, kind) = self.entity_models.iter().find(|(n, _, _)| *n == name)?;
-        let tex = self.entity_atlas.rect(model.texture)?;
+        let tex = self.entity_atlas.rect_or_missing(model.texture);
         Some((model, *kind, tex))
     }
 }

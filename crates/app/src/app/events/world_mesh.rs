@@ -63,7 +63,7 @@ impl App {
             // Frame verursachen -- verbleibende Ergebnisse bleiben einfach im Kanal und
             // kommen naechsten Frame dran, nichts geht dabei verloren.
             for _ in 0..self.settings.mesh_columns_per_frame {
-                let Ok(MeshResult { key, opaque, groups, runs, visibility, min_y, translucent: translucent_vertices, fade_quads, block_light }) =
+                let Ok(MeshResult { key, opaque, groups, runs, visibility, opacity, min_y, translucent: translucent_vertices, fade_quads, block_light }) =
                     self.mesh_results_rx.try_recv()
                 else {
                     break;
@@ -90,6 +90,7 @@ impl App {
                     }
                 }
                 gpu.block_renderer.set_column_mesh(&gpu.device, &gpu.queue, key, &opaque, groups, runs, visibility, min_y, &translucent_vertices);
+                gpu.block_renderer.sight.set_column(key, min_y, opacity);
                 // Ein laufendes Einblenden dieser Spalte gehoert zum ALTEN Puffer. Das neue
                 // beginnt mit den Vertices "wie vorher" (s. AoFade) -- im selben Frame, bevor
                 // gezeichnet wird.
@@ -162,11 +163,11 @@ impl App {
             let cross_extra_shapes = self.cross_extra_shapes.clone();
             // Im Shader-Pfad keine Eckenabdunklung im Mesh: dort kommen Schatten nur von
             // echten Lichtquellen (s. deferred_light.wgsl, fs_light).
-            let ao_strength = if self.settings.render_path == 1 { 0.0 } else { self.settings.smooth_lighting_percent as f32 / 100.0 };
+            let ao_strength = if crate::shader_path_on() { 0.0 } else { self.settings.smooth_lighting_percent as f32 / 100.0 };
             let show_markers = self.settings.module_show_markers;
             // Licht je Vertex nur fuer den Shader-Pfad (s. world::light) -- der PvP-Pfad meshet
             // wie bisher, ohne einen einzigen Lichtwert zu berechnen.
-            let mit_licht = self.settings.render_path == 1;
+            let mit_licht = crate::shader_path_on();
             // Gerade bestaetigte eigene Platzierungen in Reichweite dieser Spalte: ihr Schatten
             // blendet im neuen Mesh ein (s. AoFade).
             let (x0, z0) = (key.0 * world::SECTION_SIZE, key.1 * world::SECTION_SIZE);
@@ -210,6 +211,7 @@ impl App {
                 let (opaque, groups, runs) = world::group_by_direction(&packed, &mut starts);
                 // Sichtverbindungen je Section fuers Hoehlen-Culling (s. render::occlusion).
                 let visibility = world::visibility::column_visibility(&neighbors.target.sections, &shapes);
+                let opacity = world::visibility::column_opacity(&neighbors.target.sections, &shapes).into();
                 let fade_quads: Vec<world::TerrainFadeQuad> = fade_quads
                     .iter()
                     .zip(starts)
@@ -223,7 +225,7 @@ impl App {
                 // Wasser/Glas ebenso kompakt (ohne Richtungsgruppen, s. render::TranslucentMesh).
                 let translucent_vertices = world::pack_terrain_lit(&translucent_vertices, &mut [], min_y, licht);
                 let block_light = feld.as_ref().and_then(world::light::LightField::column_block_light);
-                let _ = tx.send(MeshResult { key, opaque, groups, runs, visibility, min_y, translucent: translucent_vertices, fade_quads, block_light });
+                let _ = tx.send(MeshResult { key, opaque, groups, runs, visibility, opacity, min_y, translucent: translucent_vertices, fade_quads, block_light });
             });
         }
     }
@@ -240,8 +242,8 @@ impl App {
     }
 
     pub(crate) fn enforce_render_limits(&mut self) {
-        self.world.light_remesh = self.settings.render_path == 1;
-        world::mesher::set_flat_face_shade(self.settings.render_path == 1);
+        self.world.light_remesh = crate::shader_path_on();
+        world::mesher::set_flat_face_shade(crate::shader_path_on());
         // Vor der ersten Positions-Synchronisierung (s. ClientEvent::PlayerPosition) gibt es
         // keine verlaessliche Spielerposition -- dann lieber gar nicht limitieren, als mit
         // (0,0) zu rechnen und den Startchunk faelschlich zu bevorzugen.
@@ -255,7 +257,6 @@ impl App {
         gpu.block_renderer.cave_culling = self.settings.cave_culling && self.game_mode != GAME_MODE_SPECTATOR;
         gpu.block_renderer.mipmapping = self.settings.mipmapping;
         gpu.block_renderer.cull_radius = self.hero_render_distance.unwrap_or(self.settings.max_render_distance) as i32 + 1;
-        gpu.use_shader_path = self.settings.render_path == 1;
 
         let player_cx = (self.physics.pos.x / f64::from(world::SECTION_SIZE)).floor() as i32;
         let player_cz = (self.physics.pos.z / f64::from(world::SECTION_SIZE)).floor() as i32;
@@ -298,28 +299,42 @@ impl App {
         // loest das ohne jede Allokation -- der Puffer selbst bleibt ueber Frames erhalten.
         let columns = std::mem::take(&mut self.render_limit_order);
 
-        // clear_dirty() laeuft JEDEN Frame fuer jede Spalte ausserhalb des Limits, nicht nur
-        // fuer schon fertig gemeshte -- sonst koennte eine gerade erst dirty markierte
-        // Spalte (Job eingereiht, aber noch nicht fertig) aus dem Limit fallen und ihr Job
-        // liefe trotzdem noch durch (render_limit_meshed weiss ja erst NACH dem Job davon).
-        // mark_dirty() dagegen NUR fuer noch nicht gemeshte Spalten -- sonst wuerde eine
-        // bereits fertige, im Limit liegende Spalte JEDEN Frame erneut als dirty markiert und
-        // liefe in einer Endlosschleife immer wieder durch den Mesh-Pool.
+        // mark_dirty() NUR fuer noch nicht gemeshte Spalten im Limit -- sonst wuerde eine
+        // bereits fertige Spalte JEDEN Frame erneut als dirty markiert und liefe in einer
+        // Endlosschleife immer wieder durch den Mesh-Pool. Die Liste ist nach Abstand sortiert:
+        // ab der ersten Spalte ausserhalb kommt nichts mehr im Limit.
         for &(d, cx, cz) in &columns {
-            let should_render = d <= max_distance_sq;
-            if should_render {
-                if !self.render_limit_meshed.contains(&(cx, cz)) {
-                    self.world.mark_dirty(cx, cz);
-                }
-            } else {
-                self.world.clear_dirty(cx, cz);
-                if self.render_limit_meshed.remove(&(cx, cz)) {
-                    self.lod.mask_changed = true;
-                    gpu.block_renderer.remove_column_mesh((cx, cz));
-                }
-                self.column_meshed_at.remove(&(cx, cz));
+            if d > max_distance_sq {
+                break;
+            }
+            if !self.render_limit_meshed.contains(&(cx, cz)) {
+                self.world.mark_dirty(cx, cz);
             }
         }
         self.render_limit_order = columns;
+
+        // Ausserhalb des Limits JEDEN Frame aufraeumen, nicht nur bei Spaltenwechsel -- sonst
+        // koennte eine gerade erst dirty markierte Spalte (Job eingereiht, aber noch nicht
+        // fertig) aus dem Limit fallen und ihr Job liefe trotzdem noch durch
+        // (render_limit_meshed weiss ja erst NACH dem Job davon). Aber nur dort, wo wirklich
+        // etwas steht: Dirty-Menge, gemeshte Spalten, Mesh-Zeitpunkte. Vorher wurde fuer JEDE
+        // geladene Spalte ausserhalb in alle drei gegriffen -- mit grosser Server-Sichtweite
+        // tausende Hash-Loeschungen je Frame, fast alle ins Leere (Profil: 5,8 % des
+        // Haupt-Threads).
+        let ausserhalb = |(cx, cz): (i32, i32)| {
+            let dx = i64::from(cx) - i64::from(player_cx);
+            let dz = i64::from(cz) - i64::from(player_cz);
+            dx * dx + dz * dz > max_distance_sq
+        };
+        self.world.retain_dirty(|p| !ausserhalb(p));
+        if self.render_limit_meshed.iter().any(|&p| ausserhalb(p)) {
+            let raus: Vec<(i32, i32)> = self.render_limit_meshed.iter().copied().filter(|&p| ausserhalb(p)).collect();
+            for p in raus {
+                self.render_limit_meshed.remove(&p);
+                self.lod.mask_changed = true;
+                gpu.block_renderer.remove_column_mesh(p);
+            }
+        }
+        self.column_meshed_at.retain(|&p, _| !ausserhalb(p));
     }
 }

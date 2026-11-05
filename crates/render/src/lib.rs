@@ -2,21 +2,28 @@
 
 pub mod block_renderer;
 pub mod camera;
+pub mod celestial;
 pub mod custom_sky;
 pub mod entity_outline;
 pub mod frustum;
 pub mod gradient_sky;
 pub mod glint;
+pub mod hand_blur;
 pub mod lod_renderer;
 pub mod motion_blur;
 pub mod occlusion;
+pub mod sight;
+pub mod skinning;
+// Shader-Pfad (veraltet, ruht): nur mit Feature shader_path gebaut.
+#[cfg(feature = "shader_path")]
 pub mod shader_path;
 pub mod vanilla_draw;
 pub mod vanilla_shader;
+#[cfg(feature = "shader_path")]
 pub mod voxel_volume;
 mod terrain_arena;
 
-pub use block_renderer::{encode_tiles, upload_tiles, BlockRenderer, HitboxVertex, ParticleDraws, ParticleVertex, WeatherVertex, PARTICLE_VERTEX_CAPACITY, WEATHER_VERTEX_CAPACITY};
+pub use block_renderer::{upload_tiles, TileWriter, BlockRenderer, HitboxVertex, ParticleDraws, ParticleVertex, WeatherVertex, PARTICLE_VERTEX_CAPACITY, WEATHER_VERTEX_CAPACITY};
 pub use camera::Camera;
 pub use frustum::Frustum;
 

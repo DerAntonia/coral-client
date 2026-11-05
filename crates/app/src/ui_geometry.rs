@@ -449,16 +449,16 @@ pub(crate) fn push_graph_line(lines: &mut Vec<UiLine>, kurve: &[(f32, f32)], far
     }
 }
 
-// Lage der drei F3-Graphen unten rechts, von unten: CPU, RAM, GPU. Gross und ueber allem
+// Lage der drei F3-Graphen unten links (rechts steht der Frame-Profiler), von unten: CPU, RAM, GPU. Gross und ueber allem
 // anderen HUD (auch dem Scoreboard): die Flaechen und Ueberschriften stehen in der Overlay-
 // Ebene (s. debug_graph_overlay), die Kurven als UiLine mit top (s. render_world).
 pub(crate) const DEBUG_GRAPH_W: f32 = 640.0;
 pub(crate) const DEBUG_GRAPH_H: f32 = 190.0;
 pub(crate) fn debug_graph_areas(gpu: &GpuState) -> [Rect; 3] {
     const RAND: f32 = 16.0;
-    let (sw, sh) = gpu.size();
+    let (_, sh) = gpu.size();
     let abstand = DEBUG_GRAPH_H + gpu.text_height(UI_SCALE_SMALL) + 14.0;
-    std::array::from_fn(|i| Rect { x: sw - DEBUG_GRAPH_W - RAND, y: sh - RAND - DEBUG_GRAPH_H - i as f32 * abstand, w: DEBUG_GRAPH_W, h: DEBUG_GRAPH_H })
+    std::array::from_fn(|i| Rect { x: RAND, y: sh - RAND - DEBUG_GRAPH_H - i as f32 * abstand, w: DEBUG_GRAPH_W, h: DEBUG_GRAPH_H })
 }
 
 // Schwarze Flaeche und Ueberschrift eines Graphen.

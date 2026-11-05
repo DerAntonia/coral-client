@@ -294,6 +294,7 @@ impl App {
         // Nur Schild-Markierungen: voll deckend, sie sollen auffallen.
         let alpha = if set.module_hitbox_enabled { set.module_hitbox_opacity as f32 / 100.0 } else { 1.0 };
         let mut out = Vec::new();
+        let nur_sichtbar = set.module_hitbox_enabled && set.module_hitbox_visible_edges;
         // Eine Box aus ihren Ecken (augenrelativ) als zwoelf Kanten, mit Dichte in Pixeln und
         // ob gepunktet (das Teams-Modul hat dafuer eigene Werte).
         let mut push_box = |min: Vec3, max: Vec3, color: [f32; 4], density_px: u32, dotted: bool| {
@@ -313,7 +314,20 @@ impl App {
                 ([false, true, false], [false, true, true]),
                 ([true, true, false], [true, true, true]),
             ];
+            // Nur sichtbare Kanten: eine Kante verdeckt die Box selbst, wenn beide Flaechen,
+            // an denen sie liegt, vom Auge weg zeigen. Das Auge ist der Ursprung, eine Flaeche
+            // zeigt zu ihm, wenn es auf ihrer Aussenseite liegt. Steckt das Auge in der Box,
+            // zeigt keine Flaeche zu ihm -- dann alle Kanten, man sieht sie von innen.
+            let zum_auge = |achse: usize, oben: bool| if oben { max[achse] < 0.0 } else { min[achse] > 0.0 };
+            let innen = (0..3).all(|i| !zum_auge(i, false) && !zum_auge(i, true));
             for (a_sel, b_sel) in EDGES {
+                if nur_sichtbar && !innen {
+                    // Die zwei Achsen, auf denen die Kante fest an einer Seite liegt.
+                    let sichtbar = (0..3).filter(|&i| a_sel[i] == b_sel[i]).any(|i| zum_auge(i, a_sel[i]));
+                    if !sichtbar {
+                        continue;
+                    }
+                }
                 let a = corner(a_sel);
                 let b = corner(b_sel);
                 // Strich+Luecke-Laenge dieser KANTE, aus ihrer EIGENEN Entfernung (nicht
@@ -357,8 +371,8 @@ impl App {
             }
             // Schild-Modul: Cooldown bzw. gehobenes Schild faerbt die Box (Anzeige "Hitbox").
             // Sonst die eigene Art mit ihrer Farbe und Deckkraft, und alles andere
-            // Angreifbare (Mobs) in der Farbe von "Geglättet".
-            let art = world::entity_type_name(e.entity_type).and_then(HitboxKind::of_entity);
+            // Angreifbare (Boote, Loren, Ruestungsstaender) in der Farbe von "Geglättet".
+            let art = HitboxKind::of_entity(e.entity_type);
             // Teams-Modul: eigene Farbe, Deckkraft, Dichte und Strichelung fuer Verbuendete
             // bzw. Gegner. Es zeichnet auch ohne Hitbox-Modul (dann nur die geglaettete Box).
             let team_stil = self.team_hitbox_style(e);

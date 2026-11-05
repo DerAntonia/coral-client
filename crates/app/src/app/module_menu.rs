@@ -167,7 +167,7 @@ impl App {
             ModuleId::TotemWarning | ModuleId::TotemSlots | ModuleId::PopSounds | ModuleId::PopVisuals => {
                 rows.extend(self.toteming_rows(self.module_menu_selected));
             }
-            ModuleId::CrystalOptimizer | ModuleId::UseTimer | ModuleId::BotcheckPass | ModuleId::DynamicFire | ModuleId::ShowMarkers | ModuleId::SoundDebug | ModuleId::HandDebug | ModuleId::ConnectionDebug | ModuleId::FpsDisplay | ModuleId::InputLog | ModuleId::CoralRecord => {}
+            ModuleId::CrystalOptimizer | ModuleId::UseTimer | ModuleId::BotcheckPass | ModuleId::DynamicFire | ModuleId::ShowMarkers | ModuleId::SoundDebug | ModuleId::HandDebug | ModuleId::ConnectionDebug | ModuleId::FpsDisplay | ModuleId::Effects | ModuleId::InputLog | ModuleId::CoralRecord => {}
             ModuleId::Sustainability => {
                 rows.push(ModuleRow::Toggle {
                     label: "Im Hintergrund pausieren".to_string(),
@@ -327,6 +327,11 @@ impl App {
             action: ButtonAction::ToggleModuleHitboxDotted,
             on: set.module_hitbox_dotted,
         });
+        rows.push(ModuleRow::Toggle {
+            label: "Nur sichtbare Kanten".to_string(),
+            action: ButtonAction::ToggleModuleHitboxVisibleEdges,
+            on: set.module_hitbox_visible_edges,
+        });
         rows.push(ModuleRow::Stepper {
             label: "Dichte".to_string(),
             prev: ButtonAction::HitboxDensityPrev,
@@ -347,7 +352,7 @@ impl App {
         });
         // Je PvP-Entity: ob es die Vorgaben von oben ueberschreibt, und wenn ja, ob es
         // sichtbar ist und in welcher Farbe und Deckkraft (im Farbfenster). Ohne
-        // Ueberschreiben sind Sichtbar und Farbe ausgegraut. Was hier fehlt (Mobs), hat
+        // Ueberschreiben sind Sichtbar und Farbe ausgegraut. Was hier fehlt (Boote, Loren), hat
         // immer die Vorgaben.
         rows.push(ModuleRow::Heading { label: "Individuelle Farben".to_string(), columns: &["Überschreiben", "Sichtbar"] });
         for art in hitbox_kinds::HitboxKind::entities() {
@@ -431,6 +436,7 @@ impl App {
             action: ButtonAction::CycleArrowEmptyFeedback,
             text: ARROW_EMPTY_FEEDBACK_NAMES[set.arrow_empty_feedback as usize].to_string(),
         });
+        rows.push(ModuleRow::Toggle { label: "  Löschen-Sound".to_string(), action: ButtonAction::ToggleArrowEmptySound, on: set.arrow_empty_sound });
         rows.push(ModuleRow::Toggle { label: "Weißer Pfeil".to_string(), action: ButtonAction::ToggleArrowWhite, on: set.arrow_white });
         rows.push(ModuleRow::Toggle { label: "Trail".to_string(), action: ButtonAction::ToggleArrowTrail, on: set.arrow_trail });
         rows.push(ModuleRow::Stepper {
@@ -709,7 +715,6 @@ impl App {
             }
             ModuleId::PopVisuals => {
                 rows.push(toggle("Eigenes Flug-Totem aus", Action::ToggleHideOwnFloating, t.hide_own_floating));
-                rows.push(toggle("Eigene Partikel aus", Action::ToggleHideOwnParticles, t.hide_own_particles));
                 rows.push(toggle("Fremde Partikel aus", Action::ToggleHideOtherParticles, t.hide_other_particles));
             }
             _ => {}
@@ -1320,7 +1325,7 @@ impl App {
                     // Rand und Hover wie die Knoepfe der Einstellungsseiten (styled_button).
                     let flaeche = Rect { h: button.rect.h - 2.0 * scale, ..button.rect };
                     let (px, py) = self.pointer();
-                    let (stil, schrift) = styled_button(button, self.hover_level(button.rect, button.hits(px, py)));
+                    let (stil, schrift) = styled_button(button, self.hover_level(button.rect, button.enabled && button.hits(px, py)));
                     rects.push(UiRect { rect: flaeche, ..stil });
                     texts.push(UiText {
                         text: Self::fit_text(gpu, kategorie.label(), button.rect.w - 6.0 * scale, UI_SCALE_SMALL),
@@ -1371,7 +1376,7 @@ impl App {
                 continue;
             }
             let (px, py) = self.pointer();
-            let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, button.hits(px, py)));
+            let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, button.enabled && button.hits(px, py)));
             rects.push(flaeche);
             if let Some(c) = Self::choice_of(button.action) {
                 let offen = self.dropdown_active().is_some_and(|d| d.choice == c);
@@ -1461,6 +1466,9 @@ impl App {
             }
             ButtonAction::ToggleModuleHitboxRaw => self.settings.module_hitbox_show_raw = !self.settings.module_hitbox_show_raw,
             ButtonAction::ToggleModuleHitboxDotted => self.settings.module_hitbox_dotted = !self.settings.module_hitbox_dotted,
+            ButtonAction::ToggleModuleHitboxVisibleEdges => {
+                self.settings.module_hitbox_visible_edges = !self.settings.module_hitbox_visible_edges;
+            }
             ButtonAction::ToggleModuleHitboxItems => self.settings.module_hitbox_items = !self.settings.module_hitbox_items,
             ButtonAction::ToggleModuleHitboxSelf => self.settings.module_hitbox_self = !self.settings.module_hitbox_self,
             ButtonAction::ToggleHitboxKind(art) => {
@@ -1565,6 +1573,7 @@ impl App {
             ButtonAction::ToggleArrowIndicator => self.settings.arrow_indicator = !self.settings.arrow_indicator,
             ButtonAction::ToggleArrowNumberOnly => self.settings.arrow_number_only = !self.settings.arrow_number_only,
             ButtonAction::ToggleArrowWhite => self.settings.arrow_white = !self.settings.arrow_white,
+            ButtonAction::ToggleArrowEmptySound => self.settings.arrow_empty_sound = !self.settings.arrow_empty_sound,
             ButtonAction::ArrowOpacityPrev => {
                 self.settings.arrow_opacity = self.settings.arrow_opacity.saturating_sub(ARROW_OPACITY_STEP).max(ARROW_OPACITY_MIN);
             }
@@ -1615,6 +1624,7 @@ impl App {
                 self.sync_lag_delay();
             }
             ButtonAction::ToggleHud => self.settings.show_hud = !self.settings.show_hud,
+            ButtonAction::ToggleEffectsHud => self.settings.show_effects_hud = !self.settings.show_effects_hud,
             ButtonAction::ToggleModuleDiscordStatus => self.settings.module_discord_status = !self.settings.module_discord_status,
             ButtonAction::ToggleModuleInputLog => {
                 self.settings.module_input_log_enabled = !self.settings.module_input_log_enabled;

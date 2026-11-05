@@ -3,6 +3,17 @@
 use super::*;
 
 impl App {
+    // Hervorhebung eines Slots (Inventar > Animation: Farbe aus slot_hover_color, `anteil` vom
+    // weichen Uebergang). Ein Sprite auf der weissen Kachel des Entity-Atlas statt einer
+    // Flaeche, damit sie in der Reihenfolge der Sprites ueber dem Fensterhintergrund liegt.
+    pub(crate) fn push_slot_highlight(&self, sprites: &mut Vec<UiSprite>, slot: &inventory::SlotRect, anteil: f32) {
+        let [r, g, b, a] = self.settings.slot_hover_rgba();
+        // Nur die Mitte der Kachel: am Rand mischte die Filterung die Nachbarn hinein.
+        let [u0, v0, u1, v1] = self.entity_atlas.white_rect();
+        let (u, v) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
+        sprites.push(UiSprite::quad(slot.x, slot.y, slot.size, slot.size, [u, v, u, v], [r, g, b, a * anteil], SpriteAtlas::Entity));
+    }
+
     pub(crate) fn push_item(&self, sprites: &mut Vec<UiSprite>, texts: &mut Vec<UiText>, stack: &protocol::item::ItemStack, x: f32, y: f32, size: f32) {
         self.push_item_limited(sprites, texts, stack, x, y, size, DurabilityBarLimit::Always, 0.0);
         // Verstaerkter (S) oder verlaengerter (L) Trank -- die Farbe allein unterscheidet die

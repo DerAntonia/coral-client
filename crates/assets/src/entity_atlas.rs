@@ -314,6 +314,28 @@ impl EntityAtlas {
     pub const fn white_rect(&self) -> TexRect {
         self.white
     }
+
+    // Wie rect, aber statt None das schwarz-pinke Karo (s. MISSING_SKIN): was der Client nicht
+    // gefunden hat, soll sofort auffallen, statt unsichtbar zu sein oder falsch auszusehen.
+    #[must_use] 
+    pub fn rect_or_missing(&self, texture: &str) -> TexRect {
+        self.rect(texture).unwrap_or_else(|| self.missing_rect())
+    }
+
+    // Das schwarz-pinke Karo (64 x 64 Pixel in Feldern zu 4).
+    #[must_use] 
+    pub fn missing_rect(&self) -> TexRect {
+        self.rect(MISSING_SKIN).unwrap_or(self.white)
+    }
+
+    // Ein Ausschnitt von 8 x 8 Pixeln daraus, also 2 x 2 Felder wie Vanillas Fehltextur -- fuer
+    // Flaechen, die das ganze Rechteck zeigen.
+    #[must_use] 
+    pub fn missing_tile(&self) -> TexRect {
+        let [u0, v0, u1, v1] = self.missing_rect();
+        let teil = 8.0 / SKIN_SIZE as f32;
+        [u0, v0, u0 + (u1 - u0) * teil, v0 + (v1 - v0) * teil]
+    }
 }
 
 struct Pending {

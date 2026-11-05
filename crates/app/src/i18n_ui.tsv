@@ -135,6 +135,7 @@ Rechts	Right	Dextrā
 Geglättet	Smoothed	Lēvigātum
 Roh (Server)	Raw (server)	Crūdum (servītor)
 Gepunktet	Dotted	Punctātum
+Nur sichtbare Kanten	Visible edges only	Sōlae orae vīsibilēs
 Kreis	Circle	Circulus
 Kasten	Box	Capsa
 Orb	Orb	Orbis
@@ -150,6 +151,7 @@ Schwarz	Black	Niger
 Weiß	White	Albus
 Weiß+Kontur	White+outline	Albus+ambitus
 Weißer Pfeil	White arrow	Sagitta alba
+Löschen-Sound	Delete sound	Sonus dēlendī
 Komplementär	Complementary	Complēmentārius
 Glas hoch	Glass high	Vitrum altum
 Glas tief	Glass low	Vitrum humile
@@ -193,7 +195,7 @@ Render-Ahead	Render ahead	Praepictūra
 Monitor-Refresh	Monitor refresh	Renovātiō monitōris
 Riss-Reserve	Tear reserve	Subsidium fissūrae
 Motion Blur	Motion blur	Obscūritās mōtūs
-Bewegungsunschärfe: verwischt die Welt entlang der Kamerabewegung, wie das Auge schnelle Bewegung sieht -- Hand und HUD bleiben scharf. 100 % = die Bewegung während eines Monitorbilds; läuft das Spiel schneller als der Monitor, gleicht die Stärke das aus. Ein Durchgang auf der Grafikkarte ohne gespeicherte alte Bilder, also keine zusätzliche Verzögerung; steht die Kamera still, fällt er ganz weg. Nur mit normaler Projektion.	Motion blur: smears the world along the camera movement, the way the eye sees fast motion -- hand and HUD stay sharp. 100 % = the movement during one monitor frame; if the game runs faster than the monitor, the strength makes up for it. One pass on the graphics card without stored old frames, so no added delay; while the camera stands still it is skipped entirely. Normal projection only.	Obscūritās mōtūs: mundum secundum mōtum camerae oblinit, sīcut oculus mōtum celerem videt -- manus et HUD acūta manent. 100 % = mōtus per ūnam imāginem monitōris; sī lūdus celerius quam monitor currit, vīs id compēnsat. Ūnus trānsitus in chartā graphicā sine imāginibus veteribus servātīs, itaque nūlla mora addita; dum camera stat, omnīnō omittitur. Tantum cum prōiectiōne nōrmālī.
+Bewegungsunschärfe der Welt (bewegte Entities eingeschlossen) und der Hand, je mit eigener Stärke -- „Anpassen“ öffnet die Einstellungen. Ohne gespeicherte alte Bilder, also keine zusätzliche Verzögerung; steht alles still, fällt sie ganz weg. Nur mit normaler Projektion.	Motion blur of the world (moving entities included) and of the hand, each with its own strength -- "Customize" opens the settings. No stored old frames, so no added delay; when nothing moves it is skipped entirely. Normal projection only.	Obscūritās mōtūs mundī (entitātibus mōtīs inclūsīs) et manūs, utraque suā vī -- "Accommodāre" optiōnēs aperit. Sine imāginibus veteribus servātīs, itaque nūlla mora addita; sī nihil movētur, omnīnō omittitur. Tantum prōiectiōne normālī.
 Riss-Timing	Tear timing	Tempus fissūrae
 Tearing-Test	Tearing test	Probātiō fissūrae
 TearFree	TearFree	TearFree
@@ -265,6 +267,7 @@ Perspektive (F5)	Perspective (F5)	Prōspectus (F5)
 Spielerliste	Player list	Index lūsōrum
 Spielerliste (Tab)	Player list (Tab)	Index lūsōrum (Tab)
 Effekte	Effects	Effectus
+Statuseffekte oben rechts -- verschieben und einstellen im HUD-Editor	Status effects at the top right -- move and adjust in the HUD editor	Effectūs status suprā dextrā -- in ēditōre HUD movē et accommodā
 Im HUD	In the HUD	In HUD
 Im Inventar	In the inventory	In inventāriō
 Scoreboard	Scoreboard	Tabula punctōrum
@@ -307,7 +310,6 @@ Totem-Vorschau	Totem preview	Praevīsiō totem
 Totem-Warnung	Totem warning	Monitiō totem
 Pop-Optik	Pop visuals	Speciēs ēruptiōnis
 Pop-Klänge	Pop sounds	Sonī ēruptiōnis
-Eigene Partikel aus	Own particles off	Particulae propriae nōn
 Fremde Partikel aus	Others' particles off	Particulae aliēnae nōn
 Eigenes Flug-Totem aus	Own flying totem off	Totem volāns proprium nōn
 Ein Totem extra	One extra totem	Ūnum totem additum
@@ -316,6 +318,7 @@ Eigener Pop Zweithand	Own pop offhand	Ēruptiō propria manus alterius
 Fremder Pop	Others' pop	Ēruptiō aliēna
 Anker laden	Charge anchor	Ancoram onerāre
 Explosion	Explosion	Displōsiō
+Einfrieren	Freeze	Congelāre
 Klick	Click	Ictus
 Signalton	Beep	Sonus signī
 Untergrund	Backdrop	Fundus
@@ -581,6 +584,7 @@ Geister/Partikel	Ghosts/particles	Spectra/particulae
 Inventarfigur	Inventory figure	Figūra inventāriī
 Menü-UI	Menu UI	Interfaciēs indicis
 Sortieren/Offsets	Sorting/offsets	Ōrdināre/trānslātiōnēs
+Textsatz	Text shaping	Compositiō textūs
 # Sprach-Tab
 Alles	Everything	Omnia
 Menüs und Oberfläche	Menus and interface	Indicēs et interfaciēs
@@ -972,7 +976,6 @@ Wie weich die Schatten von Fackeln, Laternen und anderen Lichtquellen werden, al
 Fackeln, Laternen, Glowstone und andere Lichtquellen werfen Schatten: Was zwischen Quelle und Fläche steht, hält ihr Licht ab, Buntglas färbt es. Ein Rest bleibt als zurückgeworfenes Licht. Kostet GPU-Zeit, wo viele Quellen nah beieinander sind.	Torches, lanterns, glowstone and other light sources cast shadows: whatever stands between source and surface blocks their light, stained glass tints it. A remainder stays as reflected light. Costs GPU time where many sources are close together.	Facēs, lanternae, lapis lūcēns aliīque fontēs lūminis umbrās iaciunt: quod inter fontem et superficiem stat, lūmen eōrum arcet, vitrum tīnctum id colōrat. Reliquum ut lūx reflexa manet. Tempus GPU cōnsūmit, ubi multī fontēs prope sunt.
 Wie weich Schattenkanten werden, als scheinbare Größe der Sonne in Grad. Direkt an einer Wand bleibt der Schatten scharf, mit wachsendem Abstand zum Hindernis wird der Übergang breiter (Halbschatten). Die echte Sonne hat 0,5°, 0 = überall scharf.	How soft shadow edges become, as the apparent size of the sun in degrees. Right at a wall the shadow stays sharp; with growing distance to the obstacle the transition gets wider (penumbra). The real sun has 0.5°, 0 = sharp everywhere.	Quam mollēs margine umbrārum fiant, ut magnitūdō appārēns sōlis in gradibus. Ad ipsum mūrum umbra ācris manet, crēscente intervallō ab impedīmentō trānsitus lātior fit (paenumbra). Sōl vērus 0,5° habet, 0 = ubīque ācrēs.
 Wie stark die Luft Licht streut (Shader-Pfad, Oberwelt). Physikalisch die Dichte der streuenden Teilchen: 100 % = Erdatmosphäre, 0 % = keine Luft und ein schwarzer Himmel wie im Weltraum, mehr = dichtere, dunstigere Luft mit blasserem Himmel und röteren Sonnenuntergängen. Bestimmt auch das Umgebungslicht vom Himmel: ohne Luft sind Schatten tiefschwarz, mit mehr Luft heller.	How strongly the air scatters light (shader path, Overworld). Physically the density of the scattering particles: 100 % = Earth's atmosphere, 0 % = no air and a black sky as in space, more = denser, hazier air with a paler sky and redder sunsets. Also determines the ambient light from the sky: without air shadows are pitch black, with more air brighter.	Quam valdē āēr lūcem spargat (via shaderis, mundus superior). Physicē dēnsitās particulārum spargentium: 100 % = atmosphaera terrae, 0 % = nūllus āēr et caelum nigrum ut in spatiō, plūs = āēr dēnsior et cālīginōsior cum caelō pallidiōre et occāsibus rubriōribus. Etiam lūcem ambientem ā caelō dēfīnit: sine āere umbrae nigerrimae, cum plūre āere clāriōrēs.
-Hält man einen Stapel über einen Slot mit demselben Item, steht am Zeiger die Summe beider Stapel und die Zahl im Slot wird ausgeblendet, statt dass sich zwei Zahlen überlagern.	When you hold a stack over a slot with the same item, the cursor shows the sum of both stacks and the number in the slot is hidden, instead of two numbers overlapping.	Sī acervum suprā locum cum eādem rē tenēs, ad indicem summa ambōrum acervōrum stat et numerus in locō cēlātur, nē duo numerī sibi superpōnantur.
 Form	Shape	Fōrma
 {} px	{} px	{} px
 Ring hat Kontur	Ring has outline	Ānulus ambitum habet
@@ -1135,15 +1138,21 @@ Lichtstärken	Light strengths	Vīrēs lūminis
 Lichtstärken ({} geändert)	Light strengths ({} changed)	Vīrēs lūminis ({} mūtātae)
 Lichtkarten anzeigen	Show light maps	Tabulās lūminis ostendere
 Operator-Items (Kreativ)	Operator items (Creative)	Rēs administrātōris (Creātīvus)
-Zusammenfassen bei Hover	Combine on hover	Coniungere superāns
 Animation	Animation	Animātiō
 Hover-Übergang	Hover transition	Trānsitus superāns
 Hover-Farbe	Hover color	Color superāns
 Verschieben animieren	Animate moving	Mōtum animāre
+Außer Totems	Except totems	Praeter simulācra
+Außer Heiltränke	Except health pots	Praeter pōtiōnēs salūtis
+Heiltränke (auch Wurf- und Verweiltränke) fliegen nicht, sie springen sofort an ihren neuen Platz wie in Vanilla. Tauschst du ein Item mit einem Heiltrank, springen beide. Die übrigen Items fliegen weiter.	Health pots (splash and lingering too) don't fly, they jump straight to their new place as in vanilla. If you swap an item with a health pot, both jump. All other items still fly.	Pōtiōnēs salūtis (etiam iaculātae et morantēs) nōn volant, statim in novum locum saliunt ut in Vanilla. Sī rem cum pōtiōne salūtis permūtās, ambo saliunt. Cēterae rēs volāre pergunt.
+Puppen-Hintergrund durchsichtig	Puppet background transparent	Fundus pūpae perlūcidus
+Totems fliegen nicht, sie springen sofort an ihren neuen Platz wie in Vanilla. Tauschst du ein Item mit einem Totem, springen beide. Die übrigen Items fliegen weiter.	Totems don't fly, they jump straight to their new place as in vanilla. If you swap an item with a totem, both jump. All other items still fly.	Simulācra nōn volant, statim in novum locum saliunt ut in Vanilla. Sī rem cum simulācrō permūtās, ambo saliunt. Cēterae rēs volāre pergunt.
+An: das Feld hinter deiner Figur im Inventar ist frei, dahinter scheint die Welt durch. Aus: das schwarze Feld wie in Vanilla. Gilt im Überlebensinventar.	On: the field behind your figure in the inventory is clear, the world shows through. Off: the black field as in vanilla. Applies to the survival inventory.	An: campus post figūram tuam in inventāriō vacuus est, mundus perlūcet. Nōn: campus niger ut in Vanilla. Valet in inventāriō supervīvendī.
+Auswahl gleitet	Gliding selection	Selectio lābēns
 Slot-Hervorhebung	Slot highlight	Locī illūminātiō
-Wie lange die Hervorhebung des Slots unter dem Zeiger ein- und ausblendet, wenn du über die Slots fährst. Aus: sie springt sofort wie in Vanilla.	How long the highlight of the slot under the pointer fades in and out as you move over the slots. Off: it jumps instantly as in Vanilla.	Quamdiū illūminātiō locī sub indice appāret et ēvānēscit, dum super locōs movēris. Nōn: statim salit ut in Vanilla.
+Wie lange die Hervorhebung des Slots unter dem Zeiger einblendet. Danach klingt sie aus wie bei den Knöpfen der Menüs, so leuchten beim Überfahren mehrere Slots nach. Aus: sie springt sofort wie in Vanilla.	How long the highlight of the slot under the pointer fades in. It then fades out like the menu buttons, so several slots keep glowing as you move over them. Off: it jumps instantly as in Vanilla.	Quamdiū illūminātiō locī sub indice appāret. Deinde lentē ēvānēscit ut in globulīs tabulārum, ita plūrēs locī simul lūcent. Nōn: statim salit ut in Vanilla.
 Farbe und Deckkraft der Hervorhebung des Slots unter dem Zeiger. Vanilla: weiß.	Color and opacity of the highlight of the slot under the pointer. Vanilla: white.	Color et opācitās illūminātiōnis locī sub indice. Vanilla: album.
-Verschiebst du Items (Shift-Klick, Zifferntaste, Zweithand-Taste, Doppelklick), fliegen sie in dieser Zeit zu ihrem neuen Platz, statt dorthin zu springen. Aus: wie in Vanilla.	When you move items (shift-click, number key, offhand key, double click), they fly to their new place in this time instead of jumping there. Off: as in Vanilla.	Cum rēs movēs (Shift-ictus, clāvis numerī, clāvis manūs alterius, ictus duplex), hōc tempore ad locum novum volant, nōn saliunt. Nōn: ut in Vanilla.
+Verschiebst du Items mit der Tastatur (Shift-Klick, Zifferntaste, Zweithand-Taste), fliegen sie in dieser Zeit zu ihrem neuen Platz, statt dorthin zu springen. Aufnehmen, Ablegen und Verteilen mit der Maus bleiben wie in Vanilla. Aus: wie in Vanilla.	When you move items with the keyboard (shift-click, number key, offhand key), they fly to their new place in this time instead of jumping there. Picking up, placing and spreading with the mouse stay as in Vanilla. Off: as in Vanilla.	Cum rēs clāviāturā movēs (Shift-ictus, clāvis numerī, clāvis manūs alterius), hōc tempore ad locum novum volant, nōn saliunt. Capere, pōnere et dispertīre mūre manent ut in Vanilla. Nōn: ut in Vanilla.
 Puffer	Buffer	Tampōn
 Puffer aktiv	Buffer active	Tampōn āctīvus
 PipeWire aktiv	PipeWire active	PipeWire āctīvum
@@ -1225,6 +1234,8 @@ Angelhaken	Fishing hook	Hāmus
 Feuerwerksrakete	Firework rocket	Rochetta pyrotechnica
 Endkristall	End crystal	Crystallus Endis
 TNT	TNT	TNT
+Gefährliche Mobs	Dangerous mobs	Bēstiae perīculōsae
+Passive Mobs	Passive mobs	Bēstiae placidae
 Spinnennetz	Cobweb	Arāneum
 Wasserquelle	Water source	Fōns aquae
 kein verbundener Ausgang gefunden	no connected output found	nūllus exitus coniūnctus inventus
@@ -1413,3 +1424,13 @@ Eigene Partikel	Own particles	Particulae tuae
 Andere Partikel	Other particles	Particulae aliae
 Eigene Partikel ({}–{} von {})	Own particles ({}–{} of {})	Particulae tuae ({}–{} ex {})
 Andere Partikel ({}–{} von {})	Other particles ({}–{} of {})	Particulae aliae ({}–{} ex {})
+Hand Blur	Hand blur	Obscūritās manūs
+Gewichtung	Weighting	Pondus
+Gleich	Equal	Aequum
+Aufsteigend	Ascending	Ascendēns
+Gauß	Gaussian	Gaussiānum
+Verwischt die Welt entlang der Bewegung auf dem Schirm, die mit der Kamera. 100 % = die Bewegung während eines Monitorbilds; läuft das Spiel schneller als der Monitor, gleicht die Stärke das aus. 0 = aus.	Blurs the world along the movement on screen, the one from the camera. 100 % = the movement during one monitor frame; if the game runs faster than the monitor, the strength makes up for it. 0 = off.	Mundum secundum mōtum in tabulā obscūrat, eum camerae. 100 % = mōtus per ūnam imāginem monitōris; sī lūdus celerius currit quam monitor, vīs id aequat. 0 = nōn.
+Alles, was sich bewegt (Spieler, Mobs, Pfeile, Perlen, Partikel, XP-Kugeln, fallende Blöcke, TNT, Kolbenblöcke, die Teile der Todesexplosion), verwischt auch mit seiner eigenen Bewegung, wenn du stillstehst -- seine Spur zieht über den Hintergrund. Unabhängig von Motion Blur, 100 % = die Bewegung während eines Monitorbilds. 0 = aus: alles verwischt nur mit der Kamera wie die übrige Welt.	Everything that moves (players, mobs, arrows, pearls, particles, XP orbs, falling blocks, TNT, piston blocks, the pieces of the death explosion) also blurs with its own movement while you stand still -- its trail sweeps over the background. Independent of motion blur, 100 % = the movement during one monitor frame. 0 = off: everything only blurs with the camera like the rest of the world.	Omnia quae moventur (lūsōrēs, animālia, sagittae, margarītae, particulae, globī experientiae, cubī cadentēs, TNT, cubī embolō motī, partēs displōsiōnis mortis) etiam suō mōtū obscūrantur, dum stās -- vestīgium eōrum super fundum trahitur. Ā Motion Blur sēiūncta, 100 % = mōtus per ūnam imāginem monitōris. 0 = nōn: omnia tantum cum camerā obscūrantur ut cēterus mundus.
+Moving Blur	Moving blur	Obscūritās rērum mōtārum
+Verwischt beide Hände samt der Items darin entlang ihrer eigenen Bewegung (Schlag, Wackeln, Wechseln). Die Hand wird dafür in mehreren Zwischenlagen zwischen dem letzten und diesem Bild gezeichnet und gemischt, ohne alte Bilder zu speichern. 100 % = die Bewegung während eines Monitorbilds, 0 = aus.	Blurs both hands and the items in them along their own movement (swing, sway, switching). The hand is drawn in several in-between positions between the last frame and this one and mixed, without storing old frames. 100 % = the movement during one monitor frame, 0 = off.	Ambās manūs cum rēbus in eīs secundum suum mōtum obscūrat (ictus, nūtātiō, mūtātiō). Manus in plūribus positiōnibus mediīs inter imāginem priōrem et hanc pingitur et miscētur, sine imāginibus veteribus servandīs. 100 % = mōtus per ūnam imāginem monitōris, 0 = nōn.
+Wie die Zwischenlagen gewichtet werden, wie in smoothie. Aufsteigend: die jüngsten zählen am meisten, die Hand wirkt am wenigsten verzögert. Gleich: alle gleich, die Spur ist am längsten, die Hand hängt etwas nach. Gauß: die Mitte zählt am meisten, weich, hängt am meisten nach. In die Zukunft kann keine rechnen.	How the in-between positions are weighted, as in smoothie. Ascending: the newest count most, the hand looks least delayed. Equal: all the same, the trail is longest, the hand lags a little. Gaussian: the middle counts most, soft, lags the most. None can look into the future.	Quōmodo positiōnēs mediae ponderantur, ut in smoothie. Ascendēns: novissimae plūrimum valent, manus minimē tardāta vidētur. Aequum: omnēs aequē, vestīgium longissimum, manus paulum tardat. Gaussiānum: medium plūrimum valet, molle, maximē tardat. Nūlla in futūrum prōspicere potest.

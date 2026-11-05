@@ -374,7 +374,10 @@ fn block_light(n: &ColumnNeighbors, min_y: i32, height: i32) -> Option<Vec<u16>>
         for cx in -1..=1 {
             let Some(c) = column_of(n, cx, cz) else { continue };
             for (si, s) in c.sections.iter().enumerate() {
-                for (i, &st) in s.states().iter().enumerate() {
+                if s.uniform().is_some_and(|st| luminance(st) == 0) {
+                    continue;
+                }
+                for (i, st) in s.iter_states().enumerate() {
                     if luminance(st) == 0 {
                         continue;
                     }

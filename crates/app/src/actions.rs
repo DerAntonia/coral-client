@@ -528,9 +528,6 @@ pub(crate) enum ButtonAction {
     ToggleSensSplit,
     // Sens-Rechner oeffnen bzw. dessen Ergebnis als Kamera-Empfindlichkeit uebernehmen.
     OpenSensCalc,
-    // Knopf neben dem Renderpfad, der gerade ausgeblendet ist (s. buttons()).
-    #[allow(dead_code)]
-    OpenShaderSettings,
     // Configs-Seite: zur Config Nummer i (alphabetisch, s. assets::list_configs) wechseln,
     // das Namensfeld fuer Neu/Duplizieren/Umbenennen oeffnen, die aktive Config loeschen
     // (erster Klick fragt nach, s. App::config_delete_armed).
@@ -541,29 +538,25 @@ pub(crate) enum ButtonAction {
     ServerLinks,
     Reconnect,
     DeleteConfig,
-    ScatteringPrev,
-    ScatteringNext,
-    SunSizePrev,
-    SunSizeNext,
-    ToggleBlockShadows,
-    LightmapDebugPrev,
-    LightmapDebugNext,
-    BlockSoftnessPrev,
-    BlockSoftnessNext,
-    // Lichtstaerken: Seite oeffnen; Faktor der Quelle Nummer i in light_source_blocks().
-    OpenLightLevels,
     // Partikel-Anpassung oeffnen: true = die eigenen Partikel, false = die anderen.
     OpenParticleSettings(bool),
     // Unterseite Animationen (MenuScreen::SettingsAnimations) und ihr Hauptschalter.
     OpenAnimSettings,
     ToggleAnims,
+    // Unterseite Motion Blur (MenuScreen::SettingsMotionBlur): Entities mit eigener Bewegung,
+    // Hand-Unschaerfe und ihre Kurve.
+    OpenMotionBlurSettings,
+    EntityBlurDown,
+    EntityBlurUp,
+    HandBlurDown,
+    HandBlurUp,
+    HandBlurCurvePrev,
+    HandBlurCurveNext,
     // Partikel-Anpassung (eigene?, Index = particles::KINDS).
     ParticleToggle(bool, usize),
     ParticleAllAtOnce(bool, usize),
     // (eigene?, Art, Spalte 0 Dauer / 1 Deckkraft / 2 Tempo, hoeher?)
     ParticleStep(bool, usize, u8, bool),
-    LightFactorPrev(usize),
-    LightFactorNext(usize),
     ApplySensCalc,
     CursorSensitivityDown,
     CursorSensitivityUp,
@@ -586,7 +579,6 @@ pub(crate) enum ButtonAction {
     CameraYOffsetUp(Perspective),
     CycleProjection,
     CycleTearPosition,
-    CycleRenderPath,
     TearTimingDown,
     TearTimingUp,
     TearReserveDown,
@@ -646,6 +638,8 @@ pub(crate) enum ButtonAction {
     CrosshairPainterSymmetry,
     ToggleEffectsHud,
     ToggleCaveCulling,
+    // 0 Aus, 1 Vanilla, 2 Sichtlinien (s. ENTITY_CULLING_NAMES).
+    SetEntityCulling(u8),
     ToggleMipmapping,
     ToggleEffectsInventory,
     // Detaillierte Effektanzeige: Stil (true = detailliert), Ausrichtung (EFFECTS_ALIGNS),
@@ -684,7 +678,6 @@ pub(crate) enum ButtonAction {
     ToggleSignEditInWorld,
     NoSlotSet(u8),
     NoRotateSet(u8),
-    ToggleInventoryMergeHover,
     TogglePotionMarkStrong,
     TogglePotionMarkLong,
     TogglePotionMarkWeak,
@@ -770,6 +763,7 @@ pub(crate) enum ButtonAction {
     ToggleModuleHitboxSmoothed,
     ToggleModuleHitboxRaw,
     ToggleModuleHitboxDotted,
+    ToggleModuleHitboxVisibleEdges,
     ToggleModuleHitboxItems,
     ToggleModuleHitboxSelf,
     HitboxDensityPrev,
@@ -848,6 +842,7 @@ pub(crate) enum ButtonAction {
     ToggleModuleFreelook,
     FreelookView(u8),
     ToggleArrowWhite,
+    ToggleArrowEmptySound,
     ArrowOpacityPrev,
     ArrowOpacityNext,
     ToggleArrowTrail,
@@ -950,6 +945,12 @@ pub(crate) enum ButtonAction {
     SlotHoverFadeUp,
     SwapAnimDown,
     SwapAnimUp,
+    ToggleSwapAnimSkipTotems,
+    ToggleSwapAnimSkipHealing,
+    ToggleDollBackdropClear,
+    // Hotbar > Auswahl gleitet (Settings::hotbar_glide_ms).
+    HotbarGlideDown,
+    HotbarGlideUp,
     GhostTolerancePrev,
     GhostToleranceNext,
     CycleSkyMode,

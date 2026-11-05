@@ -1,6 +1,7 @@
 // Namensschilder, Schildtexte und Display-Text in der Welt.
 
 use super::*;
+use crate::{push_font_marker, push_plain_numbers_marker, push_shadow_marker, push_smooth_scale_marker, rect_verts, sign_border_mode, ShadowRun, SignInstance, SignLayout, SIGN_LAYOUT_KEEP};
 
 impl App {
     // Beschriftungen, die IN der Welt haengen: text_display-Entities und die Namensschilder
@@ -36,9 +37,15 @@ impl App {
     pub(crate) fn build_world_labels(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         gpu.world_label_glyphs.borrow_mut().clear();
         gpu.world_label_quads.borrow_mut().clear();
+        gpu.occluded_label_texts.borrow_mut().clear();
+        gpu.occluded_label_ends.borrow_mut().clear();
+        gpu.occluded_label_quads.borrow_mut().clear();
+        gpu.occluded_label_glyphs.borrow_mut().clear();
         gpu.label_font.set(self.settings.font_of(ShadowArea::Nametags));
         self.begin_text_area(gpu, texts, ShadowArea::Nametags);
+        push_smooth_scale_marker(texts, true);
         self.build_world_labels_in(gpu, rects, texts);
+        push_smooth_scale_marker(texts, false);
         Self::end_text_area(gpu, texts);
     }
 
@@ -109,8 +116,14 @@ impl App {
             // Abweisungen gehoeren davor.
             //
             // Ein Text mit "see through"-Flag darf durch Waende gelesen werden -- Vanilla
-            // zeichnet ihn dann ohne Tiefentest.
-            if !label.see_through && !self.sicht_frei(eye, label.anchor) {
+            // zeichnet ihn dann ohne Tiefentest, hier voll deckend im HUD.
+            //
+            // Alles andere (schleichend) verdeckt die Tiefe der Welt pixelgenau: es kommt in
+            // occluded_label_texts mit der NDC-Tiefe des Ankers und wird nach der Welt, vor der
+            // Hand gezeichnet -- voll deckend, nicht halb durchsichtig wie in Vanilla. Nur der
+            // Shader-Pfad hat dafuer keine Welt-Tiefe und tastet die Sichtlinie ab.
+            let tiefe = (!label.see_through && self.label_depth_usable(gpu)).then(|| clip.z / clip.w);
+            if !label.see_through && !self.label_depth_usable(gpu) && !self.sicht_frei(eye, label.anchor) {
                 continue;
             }
             // Wie viele Bildschirmpixel ist EIN Weltblock an dieser Tiefe hoch? Gemessen
@@ -145,7 +158,9 @@ impl App {
             if zeilen.is_empty() {
                 continue;
             }
-            let breiten: Vec<f32> = zeilen.iter().map(|z| z.iter().map(|s| gpu.measure_text(&s.text, 1.0)).sum()).collect();
+            // Je Abschnitt einmal gemessen, fuer Zeilenbreite und Schreiben (s. zeilen_schreiben).
+            let abschnitt_breiten: Vec<Vec<f32>> = zeilen.iter().map(|z| z.iter().map(|s| gpu.measure_text(&s.text, 1.0)).collect()).collect();
+            let breiten: Vec<f32> = abschnitt_breiten.iter().map(|z| z.iter().sum()).collect();
             let block_breite = breiten.iter().copied().fold(0.0f32, f32::max);
             // Vanillas `n`: die letzte Zeile bekommt den Zeilenabstand nicht mehr dazu.
             let block_hoehe = zeilen.len() as f32 * line_pitch - WORLD_LABEL_LINE_GAP;
@@ -175,17 +190,20 @@ impl App {
                 ));
             }
             let (sx, sy) = ((ndc.0 * 0.5 + 0.5) * sw, (0.5 - ndc.1 * 0.5) * sh);
-            let links = (sx - block_breite * scale / 2.0).round();
+            // NICHT auf ganze Pixel gerundet: bei stufenloser Groesse traf die Schrift das Raster
+            // ohnehin nicht, gerundet sprang das Schild beim Drehen der Kamera aber pixelweise
+            // gegen seinen Anker. Ebenso Oberkante und Abschnittsanfaenge.
+            let links = sx - block_breite * scale / 2.0;
             // Ein Text-Display waechst NACH OBEN vom Ankerpunkt weg (Vanillas
             // `translate(1 - m/2, -n, 0)` setzt die Unterkante auf den Ursprung); ein
             // Namensschild sitzt dagegen mittig auf seinem Ankerpunkt.
             let block_px = block_hoehe * scale;
-            let oben = if label.above_anchor { (sy - block_px).round() } else { (sy - block_px / 2.0).round() };
+            let oben = if label.above_anchor { sy - block_px } else { sy - block_px / 2.0 };
 
             // Hintergrundflaeche, ein Schriftpixel Luft ringsum (Vanilla: -1 bis m bzw. n).
             let bg = argb_to_rgba(label.background);
             if bg[3] > 0.0 {
-                rects.push(UiRect {
+                let flaeche = UiRect {
                     rect: Rect {
                         x: links - scale,
                         y: oben - scale,
@@ -194,27 +212,57 @@ impl App {
                     },
                     color: bg,
                     ..UiRect::FLAT
-                });
+                };
+                match tiefe {
+                    Some(z) => {
+                        let mut ecken = rect_verts(&flaeche, (sw, sh));
+                        for v in &mut ecken {
+                            v.local[3] = z;
+                        }
+                        gpu.occluded_label_quads.borrow_mut().extend_from_slice(&ecken);
+                    }
+                    None => rects.push(flaeche),
+                }
             }
 
             let deckkraft = f32::from(label.opacity) / 255.0;
-            for (i, zeile) in zeilen.iter().enumerate() {
-                // Ausrichtung innerhalb des Blocks (TextDisplayEntity.TextAlignment).
-                let versatz = match label.align {
-                    LabelAlign::Left => 0.0,
-                    LabelAlign::Right => block_breite - breiten[i],
-                    LabelAlign::Center => (block_breite - breiten[i]) / 2.0,
-                };
-                let mut x = links + versatz * scale;
-                let y = oben + i as f32 * line_pitch * scale;
-                for span in zeile {
-                    let mut color = span.color.map_or(COLOR_WHITE, rgb_to_rgba);
-                    color[3] *= deckkraft;
-                    let breite = gpu.measure_text(&span.text, 1.0) * scale;
-                    push_span_shadow(texts, span.shadow);
-                    texts.push(UiText { text: span.text.clone(), x: x.round(), y, color, scale });
-                    x += breite;
+            let zeilen_schreiben = |ziel: &mut Vec<UiText>| {
+                for (i, zeile) in zeilen.iter().enumerate() {
+                    // Ausrichtung innerhalb des Blocks (TextDisplayEntity.TextAlignment).
+                    let versatz = match label.align {
+                        LabelAlign::Left => 0.0,
+                        LabelAlign::Right => block_breite - breiten[i],
+                        LabelAlign::Center => (block_breite - breiten[i]) / 2.0,
+                    };
+                    let mut x = links + versatz * scale;
+                    let y = oben + i as f32 * line_pitch * scale;
+                    for (span, &breite) in zeile.iter().zip(&abschnitt_breiten[i]) {
+                        let mut color = span.color.map_or(COLOR_WHITE, rgb_to_rgba);
+                        color[3] *= deckkraft;
+                        let breite = breite * scale;
+                        push_span_shadow(ziel, span.shadow);
+                        ziel.push(UiText { text: span.text.clone(), x, y, color, scale });
+                        x += breite;
+                    }
                 }
+            };
+            match tiefe {
+                // Je Schild einzeln geformt (s. GpuState::occluded_label_texts), darum mit den
+                // Markern des Bereichs Nametags am Anfang und ihrem Ende danach.
+                Some(z) => {
+                    let mut verdeckbar = gpu.occluded_label_texts.borrow_mut();
+                    push_shadow_marker(&mut verdeckbar, self.settings.shadow_marker_of(ShadowArea::Nametags));
+                    push_font_marker(&mut verdeckbar, self.settings.font_of(ShadowArea::Nametags));
+                    push_plain_numbers_marker(&mut verdeckbar, ShadowArea::Nametags.plain_numbers());
+                    push_smooth_scale_marker(&mut verdeckbar, true);
+                    zeilen_schreiben(&mut verdeckbar);
+                    push_smooth_scale_marker(&mut verdeckbar, false);
+                    push_shadow_marker(&mut verdeckbar, None);
+                    push_font_marker(&mut verdeckbar, None);
+                    push_plain_numbers_marker(&mut verdeckbar, false);
+                    gpu.occluded_label_ends.borrow_mut().push((verdeckbar.len(), z));
+                }
+                None => zeilen_schreiben(texts),
             }
         }
         if debug {
@@ -234,7 +282,7 @@ impl App {
     // Schilder.
     pub(crate) fn build_sign_texts(&self, gpu: &GpuState) {
         const SIGN_TEXT_DISTANCE: f64 = 32.0;
-        gpu.sign_glyphs.borrow_mut().clear();
+        self.sign_layouts.borrow_mut().sichtbar.clear();
         let _schrift = self.area_font_scope(gpu, ShadowArea::Signs);
         gpu.sign_font.set(self.settings.font_of(ShadowArea::Signs));
         let (sw, sh) = gpu.size();
@@ -245,7 +293,7 @@ impl App {
         let editiert = self.sign_edit_in_world(gpu).and(self.sign_edit.as_ref());
         for (&pos, text) in &self.signs {
             let mitte = DVec3::new(f64::from(pos.0) + 0.5, f64::from(pos.1) + 0.5, f64::from(pos.2) + 0.5);
-            if !self.block_column_drawn(pos) || (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE {
+            if !self.block_column_drawn(pos) || (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE || self.block_entity_culled(pos) {
                 continue;
             }
             for (seite, vorn) in [(&text.front, true), (&text.back, false)] {
@@ -254,14 +302,27 @@ impl App {
                 }
                 let Some((frame, zeile_h)) = self.sign_side_frame(pos, vorn) else { continue };
                 // Verdeckung macht der Tiefentest -- nur ohne ihn (Shader-Pfad) der Strahl.
-                if self.sign_side_visible(frame, view_proj, zeile_h, (sw, sh), gpu.use_shader_path) {
-                    self.push_sign_side(gpu, seite, frame, view_proj, zeile_h, (sw, sh));
+                if self.sign_side_visible(frame, view_proj, zeile_h, (sw, sh), crate::shader_path_on()) {
+                    self.push_sign_side(gpu, (pos, vorn), seite, frame, view_proj, zeile_h, (sw, sh));
                 }
             }
         }
         if let Some(edit) = editiert {
             self.push_sign_edit_in_world(gpu, edit, view_proj, (sw, sh));
         }
+        let mut gesetzt = self.sign_layouts.borrow_mut();
+        let gesetzt = &mut *gesetzt;
+        let runde = gesetzt.runde;
+        let frei = &mut gesetzt.freie_slots;
+        gesetzt.seiten.retain(|_, l| {
+            let bleibt = l.runde + SIGN_LAYOUT_KEEP > runde;
+            if !bleibt {
+                frei.push(l.slot);
+            }
+            bleibt
+        });
+        gesetzt.runde += 1;
+        gpu.upload_signs(gesetzt);
     }
 
     // Vanillas Matrixkette bis in die Textebene einer Schildseite (s. build_sign_texts) und
@@ -333,7 +394,7 @@ impl App {
             color: edit.color,
             glowing,
         };
-        self.push_sign_side(gpu, &seite, frame, view_proj, zeile_h, screen);
+        self.push_sign_side(gpu, (edit.pos, edit.front), &seite, frame, view_proj, zeile_h, screen);
 
         let jetzt = Instant::now();
         let ziel = (gpu.measure_text(&edit.lines[edit.row], 1.0) / 2.0, edit.row as f32 * zeile_h - 2.0 * zeile_h);
@@ -356,35 +417,52 @@ impl App {
         gpu.world_label_quads.borrow_mut().extend_from_slice(&[v(a), v(b), v(cc), v(a), v(cc), v(d)]);
     }
 
-    // Eine Schildseite in gpu.sign_glyphs, mit der Tiefe jedes Punktes fuer den Welt-Durchgang.
-    // Rand: wie bei der Weltschrift, ausser der Bereich Schilder hat ihn ausgeschaltet.
-    pub(crate) fn push_sign_side(&self, gpu: &GpuState, seite: &protocol::sign::SignSide, frame: glam::Mat4, view_proj: glam::Mat4, zeile_h: f32, screen: (f32, f32)) {
+    // Eine Schildseite fuer den Welt-Durchgang (s. SignLayout, GpuState::upload_signs). Rand:
+    // wie bei der Weltschrift, ausser der Bereich Schilder hat ihn ausgeschaltet. Gesetzt wird
+    // nur, wenn sich Text, Schrift, Rasterstufe, Rand oder Zeilenhoehe geaendert haben; sonst
+    // kommt nur die Matrix der Seite fuer dieses Bild dazu.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_sign_side(
+        &self,
+        gpu: &GpuState,
+        schluessel: ((i32, i32, i32), bool),
+        seite: &protocol::sign::SignSide,
+        frame: glam::Mat4,
+        view_proj: glam::Mat4,
+        zeile_h: f32,
+        screen: (f32, f32),
+    ) {
         let clip = view_proj * frame;
         let project = sign_projector(clip, screen);
-        let tiefe = |x: f32, y: f32| {
-            let c = clip * glam::Vec4::new(x, y, 0.0, 1.0);
-            c.z / c.w
-        };
-        let oben = -2.0 * zeile_h;
         let raster = match (project(0.0, 0.0), project(1.0, 0.0)) {
             (Some(p), Some(q)) => ((q.0 - p.0).hypot(q.1 - p.1)).clamp(1.0, WORLD_LABEL_MAX_SCALE),
             _ => 1.0,
         };
-        let vorgabe = sign_text_color(seite.color, seite.glowing);
-        let rand_an = self.settings.shadow_of(ShadowArea::Signs) != Some(TextShadow::Off);
-        let mut glyphen = gpu.sign_glyphs.borrow_mut();
-        for (i, zeile) in seite.lines.iter().enumerate() {
-            let breite: f32 = zeile.iter().map(|s| gpu.measure_text(&s.text, 1.0)).sum();
-            let mut x = -breite / 2.0;
-            let top = i as f32 * zeile_h + oben;
-            for span in zeile {
-                let color = rgb_to_rgba(span.color.unwrap_or(vorgabe));
-                let rand = gpu.world_text_border(color, span.shadow, rand_an);
-                x += gpu.shape_projected_text(&span.text, x, top, color, rand, raster, &project, Some(&tiefe), screen, &mut glyphen);
-            }
+        let atlas = gpu.layout_atlas();
+        let generation = font_atlas::glyph_generation();
+        let stufe = atlas.linear_raster(raster).ok_or(raster.to_bits());
+        let lauf = self.settings.shadow_marker_of(ShadowArea::Signs);
+        let lauf_wert = lauf.unwrap_or((gpu.text_shadow_style, gpu.text_shadow_strength, gpu.text_shadow_half));
+        let mut gesetzt = self.sign_layouts.borrow_mut();
+        let gesetzt = &mut *gesetzt;
+        let runde = gesetzt.runde;
+        let gilt = gesetzt.seiten.get(&schluessel).is_some_and(|l| l.gilt(seite, generation, atlas.kind(), stufe, lauf_wert, zeile_h));
+        if !gilt {
+            let slot = match gesetzt.seiten.get(&schluessel) {
+                Some(alt) => alt.slot,
+                None => gesetzt.freie_slots.pop().unwrap_or_else(|| {
+                    gesetzt.slots += 1;
+                    gesetzt.slots - 1
+                }),
+            };
+            let instanzen = layout_sign_side(gpu, seite, zeile_h, raster, lauf, slot);
+            let neu = SignLayout { seite: seite.clone(), generation, font: atlas.kind(), raster: stufe, lauf: lauf_wert, zeile_h, instanzen, slot, gpu: None, runde };
+            gesetzt.seiten.insert(schluessel, neu);
         }
-        let ganz = glyphen.len().min(MAX_SIGN_TEXT_VERTICES) / VERTS_PER_QUAD * VERTS_PER_QUAD;
-        glyphen.truncate(ganz);
+        if let Some(l) = gesetzt.seiten.get_mut(&schluessel) {
+            l.runde = runde;
+        }
+        gesetzt.sichtbar.push((schluessel, clip));
     }
 
     // Kamerawinkel wie Vanillas Camera.getYaw/-Pitch: in der Frontansicht umgedreht (s.
@@ -429,19 +507,36 @@ impl App {
         if xs.iter().all(|&x| x < 0.0) || xs.iter().all(|&x| x > sw) || ys.iter().all(|&y| y < 0.0) || ys.iter().all(|&y| y > sh) {
             return;
         }
-        // Verdeckung wie bei den Namensschildern, gemessen an der Mitte der Flaeche.
-        if !label.see_through {
+        // Verdeckung wie bei den Namensschildern: ohne Durchscheinen gegen die Tiefe der Welt,
+        // hier mit der Tiefe jeder Ecke (die Flaeche steht schraeg im Raum). Nur der
+        // Shader-Pfad tastet die Sichtlinie zur Mitte ab.
+        let verdeckbar = !label.see_through && self.label_depth_usable(gpu);
+        if !label.see_through && !verdeckbar {
             let mitte = frame * glam::Vec4::new((m - 1.0) / 2.0, (n - 1.0) / 2.0, 0.0, 1.0);
             let welt = self.camera.position + glam::DVec3::new(f64::from(mitte.x), f64::from(mitte.y), f64::from(mitte.z));
             if !self.sicht_frei(self.camera.view_position(), welt) {
                 return;
             }
         }
+        let tiefe = |x: f32, y: f32| {
+            let c = clip * glam::Vec4::new(x, y, 0.0, 1.0);
+            c.z / c.w
+        };
 
         let bg = argb_to_rgba(label.background);
         if bg[3] > 0.0 {
-            let v = |p: (f32, f32)| Vertex { position: pixel_to_ndc(p.0, p.1, screen), color: bg, ..Vertex::PLAIN };
-            gpu.world_label_quads.borrow_mut().extend_from_slice(&[v(a), v(b), v(c), v(a), v(c), v(d)]);
+            let v = |p: (f32, f32), z: f32| {
+                let mut v = Vertex { position: pixel_to_ndc(p.0, p.1, screen), color: bg, ..Vertex::PLAIN };
+                v.local[3] = z;
+                v
+            };
+            let z = [tiefe(-1.0, -1.0), tiefe(m, -1.0), tiefe(m, n), tiefe(-1.0, n)];
+            let ecken = [v(a, z[0]), v(b, z[1]), v(c, z[2]), v(a, z[0]), v(c, z[2]), v(d, z[3])];
+            if verdeckbar {
+                gpu.occluded_label_quads.borrow_mut().extend_from_slice(&ecken);
+            } else {
+                gpu.world_label_quads.borrow_mut().extend_from_slice(&ecken);
+            }
         }
 
         // Rasterstufe der Glyphen: wie viele Bildschirmpixel ein Schriftpixel etwa breit ist.
@@ -450,7 +545,8 @@ impl App {
             _ => 1.0,
         };
         let deckkraft = f32::from(label.opacity) / 255.0;
-        let mut glyphen = gpu.world_label_glyphs.borrow_mut();
+        let mut glyphen = if verdeckbar { gpu.occluded_label_glyphs.borrow_mut() } else { gpu.world_label_glyphs.borrow_mut() };
+        let tiefe_je_punkt: Option<&dyn Fn(f32, f32) -> f32> = verdeckbar.then_some(&tiefe);
         for (i, zeile) in zeilen.iter().enumerate() {
             let mut x = match label.align {
                 LabelAlign::Left => 0.0,
@@ -461,8 +557,8 @@ impl App {
             for span in zeile {
                 let mut color = span.color.map_or(COLOR_WHITE, rgb_to_rgba);
                 color[3] *= deckkraft;
-                let rand = gpu.world_text_border(color, span.shadow, label.shadow);
-                x += gpu.shape_projected_text(&span.text, x, top, color, rand, raster, &project, None, screen, &mut glyphen);
+                let rand = gpu.world_text_border(color, span.shadow, label.shadow, None);
+                x += gpu.shape_projected_text(&span.text, x, top, color, rand, raster, &project, tiefe_je_punkt, screen, &mut glyphen);
             }
         }
     }
@@ -586,13 +682,16 @@ impl App {
             world_scale: 1.0,
             background: protocol::packets::TEXT_DISPLAY_INITIAL_BACKGROUND,
             opacity: 0xFF,
-            see_through: false,
+            // Wie bei Spielern: EntityRenderer.submitNameTag zeichnet JEDES Namensschild mit
+            // seeThrough = !isDiscrete, also auch Hologramme und benannte Mobs durch Waende.
+            see_through: !e.sneaking(),
             shadow: true,
             align: LabelAlign::Center,
             above_anchor: false,
             // Ein Namensschild bricht in Vanilla nicht um.
             line_width: f32::INFINITY,
-            max_distance: NAMETAG_MAX_DISTANCE,
+            // Schleichend 32 Bloecke wie bei Spielern (LivingEntityRenderer.shouldShowName).
+            max_distance: if e.sneaking() { NAMETAG_SNEAK_DISTANCE } else { NAMETAG_MAX_DISTANCE },
             display_matrix: None,
         })
     }
@@ -610,6 +709,13 @@ impl App {
             _ => e.hit_size().1,
         };
         hoehe + NAMETAG_HEIGHT_ABOVE_HEAD
+    }
+
+    // Taugt die Tiefe der Welt fuer die verdeckbaren Weltbeschriftungen? Nicht im Shader-Pfad
+    // (eigene Tiefe, kein Durchgang dafuer) und nicht mit Warp-Projektion: die verbiegt die Welt
+    // im Vertex-Shader, die Tiefe aus view_proj passt dann nicht. Dort bleibt die Sichtlinie.
+    pub(crate) fn label_depth_usable(&self, _gpu: &GpuState) -> bool {
+        !crate::shader_path_on() && self.camera.projection == 0
     }
 
     // Ist die Sichtlinie zwischen zwei Weltpunkten frei von Bloecken? Ersatz fuer den
@@ -650,4 +756,46 @@ impl App {
         }
         true
     }
+}
+
+// Setzt eine Schildseite in Schriftpixeln ihrer Textebene (s. SignLayout): Zeile i bei
+// y = i * h - 2 * h, mittig um x = 0 nach der Breite ihrer Glyphen, je Farbabschnitt erst die
+// Raender, dann die Glyphen. `raster` = Bildschirmpixel je Schriftpixel, waehlt die
+// Rasterstufe (s. GpuState::shape_projected_text); `slot` = Platz der Matrix der Seite.
+fn layout_sign_side(gpu: &GpuState, seite: &protocol::sign::SignSide, zeile_h: f32, raster: f32, lauf: Option<ShadowRun>, slot: u32) -> Vec<SignInstance> {
+    let atlas = gpu.layout_atlas();
+    let vorgabe = sign_text_color(seite.color, seite.glowing);
+    let mut instanzen = Vec::new();
+    // Die Glyphen eines Abschnitts: Rechteck, UV, Pack.
+    let mut glyphen: Vec<([f32; 4], [f32; 4], bool)> = Vec::new();
+    for (i, zeile) in seite.lines.iter().enumerate() {
+        let grundlinie = i as f32 * zeile_h - 2.0 * zeile_h + atlas.ascent_px();
+        let anfang = instanzen.len();
+        let mut pen = 0.0;
+        for span in zeile {
+            let color = rgb_to_rgba(span.color.unwrap_or(vorgabe));
+            glyphen.clear();
+            for ch in atlas.display_text(&span.text).chars() {
+                let Some(g) = atlas.glyph(ch) else { continue };
+                if let Some(p) = atlas.place(ch, raster).filter(|p| p.size[0] > 0.0 && p.size[1] > 0.0) {
+                    let x0 = pen + p.offset[0] / raster;
+                    let y0 = grundlinie + p.offset[1] / raster;
+                    glyphen.push(([x0, y0, x0 + p.size[0] / raster, y0 + p.size[1] / raster], [p.uv_min[0], p.uv_min[1], p.uv_max[0], p.uv_max[1]], p.pack));
+                }
+                pen += g.advance_px;
+            }
+            let pack = |art: f32, pack: bool| if pack { art + crate::text_draw::TEXT_MODE_PACK } else { art };
+            let rand = gpu.world_text_border(color, span.shadow, true, lauf).and_then(|((stil, staerke, halb), farbe)| sign_border_mode(stil, staerke, halb, farbe));
+            if let Some((art, wert, farbe)) = rand {
+                instanzen.extend(glyphen.iter().map(|&(rect, uv, p)| SignInstance { rect, uv, color: farbe, mode: [pack(art, p), wert, 0.0, 0.0], seite: slot }));
+            }
+            instanzen.extend(glyphen.iter().map(|&(rect, uv, p)| SignInstance { rect, uv, color, mode: [pack(0.0, p), 0.0, 0.0, 0.0], seite: slot }));
+        }
+        let halb = pen / 2.0;
+        for q in &mut instanzen[anfang..] {
+            q.rect[0] -= halb;
+            q.rect[2] -= halb;
+        }
+    }
+    instanzen
 }

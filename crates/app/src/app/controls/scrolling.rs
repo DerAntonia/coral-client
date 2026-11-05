@@ -120,14 +120,14 @@ impl App {
             (panel.contains(qx, qy) && qx >= links).then_some(ScrollList::ModuleMenu)?
         } else if self.mode != AppMode::Menu {
             return None;
-        } else if matches!(self.screen, MenuScreen::SettingsParticles | MenuScreen::SettingsLightLevels) {
-            // Die Eintraege unter der festen Kopfzeile (s. header_list_rows).
-            let sichtbar = self.light_visible_rows() as f32;
+        } else if self.screen == MenuScreen::SettingsParticles {
+            // Die Eintraege unter der festen Kopfzeile (s. header_list_rows_smooth).
+            let sichtbar = self.particle_visible_rows() as f32;
             let oben = settings_row_y(0) + SETTINGS_ROW_H;
             if !(qx >= 0.0 && qy >= oben && qy < oben + sichtbar * SETTINGS_ROW_H) {
                 return None;
             }
-            if self.screen == MenuScreen::SettingsParticles { ScrollList::Particles } else { ScrollList::LightLevels }
+            ScrollList::Particles
         } else if self.screen.settings_page().is_some() {
             let h = self.gpu.as_ref().map_or(1080.0, |g| g.size().1);
             if !(qx >= 0.0 && qy >= SETTINGS_FIRST_Y && qy < settings_rows_bottom(h)) {
@@ -163,7 +163,6 @@ impl App {
                 Some((px, SETTINGS_SCROLL_ROWS_PER_NOTCH, self.page_max_scroll() as f32))
             }
             ScrollList::Particles => menue(MenuScreen::SettingsParticles).then(|| (SETTINGS_ROW_H, SETTINGS_SCROLL_ROWS_PER_NOTCH, self.particle_max_scroll())),
-            ScrollList::LightLevels => menue(MenuScreen::SettingsLightLevels).then(|| (SETTINGS_ROW_H, SETTINGS_SCROLL_ROWS_PER_NOTCH, self.light_max_scroll())),
             ScrollList::ModuleMenu => {
                 let gpu = self.gpu.as_ref().filter(|_| self.module_menu_shown())?;
                 let px = if self.module_menu_detail { SETTINGS_ROW_H } else { (Self::MODULE_TILE_H + Self::MODULE_TILE_GAP) * self.module_scale(gpu) };
@@ -198,7 +197,6 @@ impl App {
         let s = match liste {
             ScrollList::SettingsPage(_) => self.page_scroll_mut(),
             ScrollList::Particles => &mut self.particle_scroll,
-            ScrollList::LightLevels => &mut self.light_scroll,
             ScrollList::ModuleMenu => &mut self.module_menu_scroll,
             ScrollList::Dropdown => match self.dropdown.as_mut() {
                 Some(d) => &mut d.scroll,
@@ -241,7 +239,7 @@ impl App {
             ScrollList::Dropdown if self.dropdown.is_some() => {
                 self.dropdown_press();
             }
-            ScrollList::SettingsPage(_) | ScrollList::Particles | ScrollList::LightLevels | ScrollList::ModuleMenu if self.drag_scroll_geometry(liste).is_some() => {
+            ScrollList::SettingsPage(_) | ScrollList::Particles | ScrollList::ModuleMenu if self.drag_scroll_geometry(liste).is_some() => {
                 let (px, py) = self.cursor_pos;
                 self.handle_click(px, py);
             }

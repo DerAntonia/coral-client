@@ -327,6 +327,24 @@ pub(crate) fn push_plain_numbers_marker(texts: &mut Vec<UiText>, an: bool) {
     texts.push(UiText { text: String::new(), x: 0.0, y: 0.0, color: [0.0, 0.0, 0.0, if an { -33.0 } else { -34.0 }], scale: 1.0 });
 }
 
+// Ab hier stufenlos skalierter Text (Code -35, Weltbeschriftungen) bzw. wieder normaler (-36):
+// rastet nie aufs Pixelraster ein (s. FontAtlas::smooth_raster). Sonst rastete er genau an den
+// vorgerasterten Faktoren fuer ein Bild ein und sprang beim Drehen der Kamera hin und her.
+pub(crate) fn push_smooth_scale_marker(texts: &mut Vec<UiText>, an: bool) {
+    texts.push(UiText { text: String::new(), x: 0.0, y: 0.0, color: [0.0, 0.0, 0.0, if an { -35.0 } else { -36.0 }], scale: 1.0 });
+}
+
+pub(crate) fn smooth_scale_marker(t: &UiText) -> Option<bool> {
+    if !t.text.is_empty() {
+        return None;
+    }
+    match t.color[3] {
+        -35.0 => Some(true),
+        -36.0 => Some(false),
+        _ => None,
+    }
+}
+
 pub(crate) fn plain_numbers_marker(t: &UiText) -> Option<bool> {
     if !t.text.is_empty() {
         return None;
@@ -666,6 +684,16 @@ pub(crate) fn selection_text(runs: &[TextRun], sel: &[(usize, std::ops::Range<us
         vorher = Some((top, x1));
     }
     text.trim_end().to_string()
+}
+
+// Der gesetzte Verlauf des offenen Chats (s. App::chat_wrapped_all): Schluessel (Generation,
+// Breite, Groesse, Schrift), Nummer der ersten Nachricht (s. App::chat_pushed), Zeilen je
+// Nachricht und alle Zeilen hintereinander.
+pub(crate) struct ChatWrapCache {
+    pub(crate) key: (u64, u32, u32, u8),
+    pub(crate) first: u64,
+    pub(crate) counts: std::collections::VecDeque<usize>,
+    pub(crate) lines: std::rc::Rc<Vec<ChatLine>>,
 }
 
 // Eine gesetzte Chatzeile: Einzug (Bildschirmpixel) und die farbigen Abschnitte.

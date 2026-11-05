@@ -210,6 +210,8 @@ impl App {
             symbol(sprites, ping, spalte_x + spalte - 11.0 * g, z, 10.0, 8.0);
         }
 
+        let oben = (10.0 * g).round() - g;
+        let mut unten = y + reihen as f32 * zeile_h;
         if !fuss.is_empty() {
             y += reihen as f32 * zeile_h + g;
             flaeche(rects, mitte - t / 2.0 - g, y - g, mitte + t / 2.0 + g, y + fuss.len() as f32 * zeile_h, black_veil(PLAYER_LIST_BG_ALPHA));
@@ -217,7 +219,10 @@ impl App {
                 schreibe(texts, zeile, mitte - breite(zeile) / 2.0, y, 1.0);
                 y += zeile_h;
             }
+            unten = y;
         }
+        let (x0, x1) = (mitte - t / 2.0 - g, mitte + t / 2.0 + g);
+        self.player_list_rect.set(Some(Rect { x: x0, y: oben, w: x1 - x0, h: unten - oben }));
     }
 
     // PlayerListHud.renderHearts ohne das Blinken: Herzcontainer bis mindestens 10, darin

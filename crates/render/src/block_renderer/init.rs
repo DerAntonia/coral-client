@@ -532,6 +532,16 @@ impl BlockRenderer {
             mapped_at_creation: false,
         });
         let glint_sampler = crate::glint::create_sampler(device);
+        let hand_blur = crate::hand_blur::HandBlur::new(
+            device,
+            &shader,
+            &camera_bind_group_layout,
+            &atlas_bind_group_layout,
+            &glint_bind_group_layout,
+            surface_format,
+            DEPTH_FORMAT,
+            HAND_VERTEX_CAPACITY,
+        );
         // Bis die App die echten Texturen setzt (set_glint_textures): weiss.
         let glint_bind_group = create_glint_bind_group(
             device,
@@ -615,6 +625,43 @@ impl BlockRenderer {
             cache: None,
         });
 
+        let skinning = crate::skinning::Skinning::new(
+            device,
+            &shader,
+            [&camera_bind_group_layout, &atlas_bind_group_layout],
+            wgpu::ColorTargetState { format: surface_format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL },
+            wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            },
+        );
+
+        let mut skinning = skinning;
+        {
+            let glint = |m| wgpu::BlendComponent { src_factor: m, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+            skinning.create_glint_pipeline(
+                device,
+                &shader,
+                [&camera_bind_group_layout, &atlas_bind_group_layout, &glint_bind_group_layout],
+                wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState { color: glint(wgpu::BlendFactor::One), alpha: glint(wgpu::BlendFactor::Zero) }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+                wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState { constant: -2, slope_scale: -1.0, clamp: 0.0 },
+                },
+            );
+        }
+
         // Silhouetten leuchtender Entities: dieselben Vertices und Bindungen wie die Entities,
         // aber in ein eigenes Bild (s. entity_outline.rs) -- ohne Tiefe, damit der Umriss durch
         // Waende sichtbar ist, und beidseitig, weil nur die Flaeche zaehlt.
@@ -657,6 +704,80 @@ impl BlockRenderer {
                 entry_point: "fs_entity_mask",
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: crate::motion_blur::MASK_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Bewegung der Entities je Pixel (Motion Blur, s. crate::motion_blur): Rasterung und
+        // Tiefe wie die Maske des eigenen Spielers, dazu die Ecken des vorigen Bildes.
+        let entity_motion_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("entity motion params layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
+        let entity_motion_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("entity motion params"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let entity_motion_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entity motion params bind group"),
+            layout: &entity_motion_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 4, resource: entity_motion_params.as_entire_binding() }],
+        });
+        let entity_prev_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("entity prev positions"),
+            size: (ENTITY_VERTEX_CAPACITY * 12) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ghost_prev_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ghost prev positions"),
+            size: (GHOST_VERTEX_CAPACITY * 12) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let entity_motion_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("entity motion pipeline layout"),
+            bind_group_layouts: &[&camera_bind_group_layout, &atlas_bind_group_layout, &entity_motion_layout],
+            push_constant_ranges: &[],
+        });
+        let entity_motion_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("entity motion pipeline"),
+            layout: Some(&entity_motion_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_entity_motion",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[
+                    vertex_buffer_layout.clone(),
+                    wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute { offset: 0, shader_location: 3, format: wgpu::VertexFormat::Float32x3 }],
+                    },
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_entity_motion",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: crate::motion_blur::OBJECT_MOTION_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
             }),
             primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -950,6 +1071,48 @@ impl BlockRenderer {
         let particle_opaque_pipeline = particle_pipeline("particle opaque pipeline", "fs_particle_opaque", wgpu::BlendState::REPLACE, true);
         let particle_translucent_pipeline =
             particle_pipeline("particle translucent pipeline", "fs_particle_translucent", wgpu::BlendState::ALPHA_BLENDING, false);
+        // Motion Blur der Partikel: wie entity_motion_pipeline, nur mit Partikel-Ecken. Ohne
+        // Ruecksicht auf die Wicklung wie die Partikel selbst.
+        let particle_prev_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle prev positions"),
+            size: (PARTICLE_VERTEX_CAPACITY * 12) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let particle_motion_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("particle motion pipeline"),
+            layout: Some(&entity_motion_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_particle_motion",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[
+                    particle_vertex_layout.clone(),
+                    wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute { offset: 0, shader_location: 3, format: wgpu::VertexFormat::Float32x3 }],
+                    },
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_particle_motion",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: crate::motion_blur::OBJECT_MOTION_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
         let weather_pipeline =
             quad_pipeline("weather pipeline", ("vs_weather", &weather_vertex_layout), "fs_weather", wgpu::BlendState::ALPHA_BLENDING, false);
         let weather_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1092,6 +1255,7 @@ impl BlockRenderer {
             occlusion: OcclusionCulling::new(),
             cave_culling: true,
             cull_radius: 32,
+            sight: crate::sight::SightCulling::new(),
             culling_stats: (0, 0),
             translucent_meshes: HashMap::default(),
             draw_order: Vec::new(),
@@ -1124,12 +1288,26 @@ impl BlockRenderer {
             entity_head_translucent: 0,
             outline_pipeline,
             own_mask_pipeline,
+            entity_motion_pipeline,
+            entity_prev_buffer,
+            entity_motion_params,
+            entity_motion_bind_group,
+            entity_prev_count: 0,
+            entity_moving: false,
+            ghost_prev_buffer,
+            ghost_prev_count: 0,
+            ghost_moving: false,
+            particle_motion_pipeline,
+            particle_prev_buffer,
+            particle_prev_count: 0,
+            particle_moving: false,
             own_vertex_count: 0,
             sharp_entity_ranges: Vec::new(),
             outline_buffer,
             outline_color_buffer,
             outline_vertex_count: 0,
             entity_pipeline,
+            skinning,
             entity_translucent_pipeline,
             entity_light_buffer,
             entity_light_count: 0,
@@ -1137,6 +1315,7 @@ impl BlockRenderer {
             lit_entity_translucent_pipeline,
             hand_light: None,
             keep_depth: false,
+            depth_read_later: false,
             hand_lit_pipeline,
             ghost_light_buffer,
             ghost_light_count: 0,
@@ -1144,6 +1323,7 @@ impl BlockRenderer {
             hand_camera_buffer,
             hand_camera_bind_group,
             hand_buffer,
+            hand_blur,
             doll_camera_buffer,
             doll_camera_bind_group,
             doll_buffer,

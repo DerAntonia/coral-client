@@ -131,6 +131,20 @@ impl GpuTimer {
         Some((begin, end))
     }
 
+    // Der zuletzt reservierte Pass `label` lief doch nicht (s. render_hand_blurred): seine
+    // Zeitstempel wurden nie geschrieben und stuenden sonst mit Werten aus alten Frames da --
+    // im Profiler Sekunden statt Bruchteilen einer Millisekunde.
+    pub fn discard_last(&mut self, label: &'static str) {
+        let Some(frame) = self.frame.as_mut() else { return };
+        if frame.last().is_some_and(|p| p.label == label && p.marks.is_empty()) {
+            if let Some(p) = frame.pop() {
+                if p.end + 1 == self.next {
+                    self.next = p.begin;
+                }
+            }
+        }
+    }
+
     pub fn query_set(&self) -> Arc<wgpu::QuerySet> {
         self.query_set.clone()
     }

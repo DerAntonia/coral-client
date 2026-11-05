@@ -249,6 +249,13 @@ impl App {
                     texts.push(UiText { text: "Sauerstoff".to_string(), x: HUD_CONFIG_LABEL_X, y: row3_y, color: theme::text(), scale: UI_SCALE_SMALL });
                     let row4_y = (settings_row_y(4) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                     texts.push(UiText { text: "Farbe der Anzahl".to_string(), x: HUD_CONFIG_LABEL_X, y: row4_y, color: theme::text(), scale: UI_SCALE_SMALL });
+                    let row5_y = (settings_row_y(HOTBAR_GLIDE_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: "Auswahl gleitet".to_string(), x: HUD_CONFIG_LABEL_X, y: row5_y, color: theme::text(), scale: UI_SCALE_SMALL });
+                    // Dauer in Millisekunden, 0 heisst aus (springt wie Vanilla).
+                    let ms = self.settings.hotbar_glide_ms;
+                    let value_rect = stepper_value_rect(HOTBAR_GLIDE_ROW);
+                    rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                    texts.push(gpu.centered_text(value_rect, if ms == 0 { "Aus".to_string() } else { format!("{ms} ms") }, theme::text(), UI_SCALE_SMALL));
                 }
             }
             HudElement::Title | HudElement::Subtitle | HudElement::ActionBar => {
@@ -273,7 +280,7 @@ impl App {
                 let value_rect = stepper_value_rect(0);
                 rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
                 texts.push(gpu.centered_text(value_rect, format!("{} %", self.settings.hud_effects_scale), theme::text(), UI_SCALE_SMALL));
-                let mut zeilen = vec![(1, "Im HUD"), (2, "Im Inventar"), (EFFECTS_HIDE_AMBIENT_ROW, "Ambiente verstecken"), (EFFECTS_STYLE_ROW, "Stil")];
+                let mut zeilen = vec![(1, "Im Inventar"), (EFFECTS_HIDE_AMBIENT_ROW, "Ambiente verstecken"), (EFFECTS_STYLE_ROW, "Stil")];
                 if self.settings.effects_detailed {
                     zeilen.extend([
                         (EFFECTS_ALIGN_ROW, "Ausrichtung"),

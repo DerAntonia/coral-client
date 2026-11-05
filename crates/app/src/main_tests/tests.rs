@@ -1164,6 +1164,17 @@ fn zu_schmales_panel_verschluckt_nichts() {
     assert_eq!(zeilen.concat(), "abc");
 }
 
+// Token-Feld: das laengste Ende, das passt -- auch mit Umlauten und wenn nichts passt.
+#[test]
+fn token_feld_zeigt_das_laengste_passende_ende() {
+    assert_eq!(fitting_suffix(mono, "abc", 5.0), "abc");
+    assert_eq!(fitting_suffix(mono, "abcdefghij", 4.0), "ghij");
+    assert_eq!(fitting_suffix(mono, "äöüß", 3.0), "öüß");
+    assert_eq!(fitting_suffix(mono, "abc", 0.0), "");
+    let lang = "x".repeat(5000);
+    assert_eq!(fitting_suffix(mono, &lang, 100.0).len(), 100);
+}
+
 fn span(text: &str, color: Option<u32>) -> protocol::nbt::TextSpan {
     protocol::nbt::TextSpan { text: text.to_string(), color, link: None, action: None, style: 0, shadow: None }
 }
@@ -1331,6 +1342,27 @@ fn standardwerte_kommen_aus_default_settings_conf() {
     for zeile in DEFAULT_SETTINGS_CONF.lines().filter(|z| !z.starts_with('#')) {
         assert!(geschrieben.lines().any(|g| g == zeile), "{zeile} kommt nicht an");
     }
+}
+
+#[test]
+// Pop-Optik > "Eigene Partikel aus" gibt es nicht mehr: ein alter Wert An wird zu
+// Video > Eigene Partikel > Totem aus, aber nur, wenn die Pop-Optik an war.
+fn alter_pop_schalter_wird_eigene_totem_partikel() {
+    let totem = crate::particles::KINDS.iter().position(|k| k.key == "totem").unwrap();
+    let alt = Settings::parse_onto(Settings::base(), "toteming_hide_own_particles=true\ntoteming_visuals=true\n");
+    assert!(!alt.particle_tuning_own[totem].enabled && alt.particle_tuning[totem].enabled);
+    let modul_aus = Settings::parse_onto(Settings::base(), "toteming_hide_own_particles=true\ntoteming_visuals=false\n");
+    assert!(modul_aus.particle_tuning_own[totem].enabled);
+    assert!(!Settings::default().particle_tuning_own[totem].enabled, "Standard wie vorher: eigene Pop-Wolke aus");
+    assert!(!alt.serialize().contains("hide_own_particles"));
+}
+
+#[test]
+// Einfrieren haengt hinten an: gespeicherte Werte 0..2 behalten ihre Bedeutung.
+fn todesanimation_einfrieren_ist_der_vierte_wert() {
+    assert_eq!(DEATH_ANIM_NAMES[DEATH_ANIM_FREEZE as usize], "Einfrieren");
+    let set = Settings::parse_onto(Settings::base(), "death_animation=3\n");
+    assert_eq!(set.death_animation, DEATH_ANIM_FREEZE);
 }
 
 #[test]
@@ -1729,6 +1761,16 @@ fn schrift_shader_ist_gueltig() {
         .expect("font.wgsl ungueltig");
 }
 
+// Mit vs_label (verdeckbare Weltbeschriftungen) hat auch quad.wgsl zwei Einstiege.
+#[test]
+fn flaechen_shader_ist_gueltig() {
+    let quelle = include_str!("../quad.wgsl");
+    let modul = naga::front::wgsl::parse_str(quelle).unwrap_or_else(|e| panic!("{}", e.emit_to_string(quelle)));
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&modul)
+        .expect("quad.wgsl ungueltig");
+}
+
 // "Aussen" ist der weiche Schatten ohne Versatz: das Viereck ragt rundherum gleich weit.
 #[test]
 fn schatten_aussen_ragt_rundherum_gleich_weit() {
@@ -1807,8 +1849,9 @@ fn aufhellungs_zeile_nur_im_komplementaer_modus() {
         assert_eq!(hud_config_rows(HudElement::Crosshair, &mit_modus(feste_farbe)), 5, "Modus {feste_farbe} hat keine Aufhellung");
         assert_eq!(crosshair_shape_row(feste_farbe), 3);
     }
-    // Hotbar: Skalierung, Haltbarkeit ab, Grenze prozentual/pauschal, Sauerstoff, Zahl-Farbe.
-    assert_eq!(hud_config_rows(HudElement::Hotbar, &mit_modus(CROSSHAIR_MODE_COMPLEMENTARY)), 5);
+    // Hotbar: Skalierung, Haltbarkeit ab, Grenze prozentual/pauschal, Sauerstoff, Zahl-Farbe,
+    // Auswahl gleitet.
+    assert_eq!(hud_config_rows(HudElement::Hotbar, &mit_modus(CROSSHAIR_MODE_COMPLEMENTARY)), 6);
     // Und der Button rutscht entsprechend mit, statt auf der Zeile zu liegen.
     assert!(hud_reset_button(2).y > hud_reset_button(1).y);
 }

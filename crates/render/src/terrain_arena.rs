@@ -18,6 +18,12 @@ use world::TerrainVertex;
 
 const VERTEX_BYTES: u64 = std::mem::size_of::<TerrainVertex>() as u64;
 
+// Seitengroesse. Frueher die vollen 256 MB: in perfwelt reichte opak wie durchsichtig je eine
+// Seite, belegt waren aber 2 x 256 MB VRAM -- eine Seite waechst nicht mit, sie steht ganz da.
+// Mit 64 MB wird nur in kleinen Schritten angelegt; jede weitere Seite kostet einen
+// Zeichenaufruf mehr (s. IndirectDraws::draw), das ist bei wenigen Seiten nichts.
+const PAGE_BYTES: u64 = 64 << 20;
+
 pub struct ArenaPage {
     pub buffer: wgpu::Buffer,
     free: FreeList,
@@ -75,7 +81,7 @@ pub struct ArenaSlot {
 
 impl TerrainArena {
     pub fn new(device: &wgpu::Device) -> Self {
-        let max = device.limits().max_buffer_size.min(256 << 20);
+        let max = device.limits().max_buffer_size.min(PAGE_BYTES);
         Self { pages: Vec::new(), page_vertices: (max / VERTEX_BYTES) as u32 }
     }
 

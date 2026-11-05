@@ -104,6 +104,17 @@ pub fn all_effects(contents: &PotionContents) -> Vec<(u32, i32, i32)> {
     basis.iter().copied().chain(contents.custom_effects.iter().map(|e| (e.effect, e.amplifier, e.duration))).collect()
 }
 
+// MobEffect-ID von Sofortheilung (instant_health).
+const INSTANT_HEALTH: u32 = 5;
+
+// Ein Heiltrank: Trank, Wurf- oder Verweiltrank, dessen Effekte Sofortheilung enthalten
+// (Inventar > Außer Heiltränke).
+#[must_use]
+pub fn is_healing_potion(stack: &ItemStack) -> bool {
+    let trank = matches!(crate::item_registry::item_name(stack.item_id), Some("potion" | "splash_potion" | "lingering_potion"));
+    trank && stack.potion.as_ref().is_some_and(|c| all_effects(c).iter().any(|e| e.0 == INSTANT_HEALTH))
+}
+
 // potion_duration_scale: was der Stack mitbringt, sonst die Vorgabe des Items (Verweiltrank
 // ein Viertel, getippter Pfeil ein Achtel der Trankdauer).
 #[must_use] 
@@ -294,6 +305,16 @@ mod tests {
     fn trank(name: &str) -> PotionContents {
         let id = POTIONS.iter().position(|p| p.0 == name).unwrap() as u32;
         PotionContents { potion: Some(id), ..Default::default() }
+    }
+
+    #[test]
+    fn heiltrank_erkannt() {
+        let stapel = |item: &str, name: &str| ItemStack { potion: Some(trank(name)), ..ItemStack::new(crate::item_registry::item_id_by_name(item).unwrap(), 1) };
+        assert!(is_healing_potion(&stapel("splash_potion", "healing")));
+        assert!(is_healing_potion(&stapel("potion", "strong_healing")));
+        assert!(is_healing_potion(&stapel("lingering_potion", "healing")));
+        assert!(!is_healing_potion(&stapel("splash_potion", "harming")));
+        assert!(!is_healing_potion(&stapel("tipped_arrow", "healing")));
     }
 
     #[test]

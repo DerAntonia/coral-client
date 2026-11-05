@@ -437,6 +437,63 @@ pub(crate) struct FrameStats {
     pub(crate) last_frame: Option<Instant>,
     // Seit dem letzten Frame verschlafen (s. App::loop_idle_since).
     pub(crate) slept_ms: f32,
+    // Ueber die ganze Sitzung, nur Frames in der Welt: zum Vergleichen zweier Builds, weil der
+    // HUD-Wert (Maximum einer Sekunde) dafuer zu stark schwankt. Beim Beenden ins Log.
+    pub(crate) session_cpu: WorkHistogram,
+    pub(crate) session_gpu: WorkHistogram,
+}
+
+// Verteilung von Frame-Zeiten in 0,1-ms-Faechern bis 100 ms, darueber im letzten Fach.
+pub(crate) struct WorkHistogram {
+    pub(crate) bins: Box<[u32; 1001]>,
+    pub(crate) count: u64,
+    pub(crate) sum_ms: f64,
+    pub(crate) max_ms: f32,
+}
+
+impl Default for WorkHistogram {
+    fn default() -> Self {
+        Self { bins: Box::new([0; 1001]), count: 0, sum_ms: 0.0, max_ms: 0.0 }
+    }
+}
+
+impl WorkHistogram {
+    pub(crate) fn add(&mut self, ms: f32) {
+        let fach = ((ms * 10.0).round() as usize).min(1000);
+        self.bins[fach] += 1;
+        self.count += 1;
+        self.sum_ms += f64::from(ms);
+        self.max_ms = self.max_ms.max(ms);
+    }
+
+    // Kleinste Zeit, unter oder bei der der Anteil `q` aller Frames liegt.
+    pub(crate) fn quantile(&self, q: f64) -> f32 {
+        let ziel = (self.count as f64 * q).ceil() as u64;
+        let mut summe = 0u64;
+        for (fach, &n) in self.bins.iter().enumerate() {
+            summe += u64::from(n);
+            if summe >= ziel.max(1) {
+                return fach as f32 / 10.0;
+            }
+        }
+        self.max_ms
+    }
+
+    pub(crate) fn summary(&self) -> String {
+        if self.count == 0 {
+            return "keine Frames".to_string();
+        }
+        format!(
+            "{} Frames, mittel {:.2} ms, p50 {:.1}, p90 {:.1}, p99 {:.1}, p99.9 {:.1}, max {:.1} ms",
+            self.count,
+            self.sum_ms / self.count as f64,
+            self.quantile(0.5),
+            self.quantile(0.9),
+            self.quantile(0.99),
+            self.quantile(0.999),
+            self.max_ms
+        )
+    }
 }
 
 impl FrameStats {
@@ -445,7 +502,7 @@ impl FrameStats {
     }
 
     // Am Ende eines gezeigten Frames, mit der Wartezeit darin (s. FrameTiming::idle_ms).
-    pub(crate) fn record(&mut self, now: Instant, idle_ms: f32) {
+    pub(crate) fn record(&mut self, now: Instant, idle_ms: f32) -> f32 {
         let cpu_ms = match self.last_frame {
             Some(last) => (now.duration_since(last).as_secs_f32() * 1000.0 - self.slept_ms - idle_ms).max(0.0),
             None => 0.0,
@@ -454,6 +511,7 @@ impl FrameStats {
         self.slept_ms = 0.0;
         self.samples.push_back((now, cpu_ms));
         Self::trim(&mut self.samples, now);
+        cpu_ms
     }
 
     pub(crate) fn record_gpu(&mut self, now: Instant, ms: f32) {

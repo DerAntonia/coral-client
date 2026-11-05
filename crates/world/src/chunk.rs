@@ -36,10 +36,67 @@ pub const fn is_solid(state: u32) -> bool {
     state != STATE_AIR
 }
 
+// Die Block-States einer Section. Gut die Haelfte der Sections einer Spalte ist durchgehend
+// ein einziger State (Luft, aber auch Stein oder Wasser in der Tiefe) und braucht dann kein
+// Feld; alle anderen passen mit den heutigen State-IDs (unter 65536) in u16. Vorher lag jede
+// Section als 4096 u32 = 16 KB im Speicher, bei 32 Chunks Sichtweite weit ueber ein GB.
+#[derive(Clone)]
+enum States {
+    Uniform(u32),
+    Small(Box<[u16]>),
+    // Falls eine ID doch nicht in u16 passt (kuenftige Versionen, Mods).
+    Wide(Box<[u32]>),
+}
+
+impl States {
+    fn from_vec(states: Vec<u32>) -> Self {
+        let erster = states.first().copied().unwrap_or(STATE_AIR);
+        if states.iter().all(|&s| s == erster) {
+            return Self::Uniform(erster);
+        }
+        if states.iter().all(|&s| s <= u32::from(u16::MAX)) {
+            Self::Small(states.iter().map(|&s| s as u16).collect())
+        } else {
+            Self::Wide(states.into_boxed_slice())
+        }
+    }
+}
+
+// Die States einer Section der Reihe nach (Index = (y * 16 + z) * 16 + x), s.
+// ChunkSection::iter_states.
+pub enum StatesIter<'a> {
+    Uniform(std::iter::Take<std::iter::Repeat<u32>>),
+    Small(std::slice::Iter<'a, u16>),
+    Wide(std::slice::Iter<'a, u32>),
+}
+
+impl Iterator for StatesIter<'_> {
+    type Item = u32;
+
+    #[inline]
+    fn next(&mut self) -> Option<u32> {
+        match self {
+            Self::Uniform(i) => i.next(),
+            Self::Small(i) => i.next().map(|&s| u32::from(s)),
+            Self::Wide(i) => i.next().copied(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Uniform(i) => i.size_hint(),
+            Self::Small(i) => i.size_hint(),
+            Self::Wide(i) => i.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for StatesIter<'_> {}
+
 #[derive(Clone)]
 pub struct ChunkSection {
-    // 4096 State-IDs, Reihenfolge wie im Protokoll: Index = (y * 16 + z) * 16 + x.
-    states: Vec<u32>,
+    // 4096 State-IDs, Reihenfolge wie im Protokoll: Index = (y * 16 + z) * 16 + x (s. States).
+    states: States,
     // 4x4x4-Biom-Raster (64 Eintraege, s. protocol::chunk::ChunkSectionData::biomes) fuer
     // die Gras-/Laub-/Wasser-Faerbung. Default (leer -> alles Biom 0) fuer Aufrufer/Tests,
     // die sich nicht um Biome scheren (s. from_states).
@@ -53,7 +110,7 @@ impl ChunkSection {
     #[must_use] 
     pub fn from_states(states: Vec<u32>) -> Self {
         debug_assert_eq!(states.len(), SECTION_VOLUME);
-        Self { states, biomes: vec![0; 64] }
+        Self { states: States::from_vec(states), biomes: vec![0; 64] }
     }
 
     #[must_use] 
@@ -65,21 +122,38 @@ impl ChunkSection {
             *s = crate::block_registry::normalize_air(*s, luft);
         }
         debug_assert_eq!(biomes.len(), 64);
-        Self { states, biomes }
+        Self { states: States::from_vec(states), biomes }
     }
 
     // Nur fuer Koordinaten innerhalb der Sektion; Bereichspruefung macht der Aufrufer
     // (World::block_at), weil ausserhalb der Nachbar-Chunk zustaendig ist, nicht "Luft".
     #[must_use] 
+    #[inline]
     pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
-        self.states[((y * SECTION_SIZE + z) * SECTION_SIZE + x) as usize]
+        let i = ((y * SECTION_SIZE + z) * SECTION_SIZE + x) as usize;
+        match &self.states {
+            States::Uniform(s) => *s,
+            States::Small(v) => v.get(i).map_or(STATE_AIR, |&s| u32::from(s)),
+            States::Wide(v) => v.get(i).copied().unwrap_or(STATE_AIR),
+        }
     }
 
     // Fuer Block Update/Section Blocks Update (s. World::set_block) -- Bereichspruefung
     // macht dort der Aufrufer.
     pub fn set(&mut self, x: i32, y: i32, z: i32, state: u32) {
         let state = crate::block_registry::normalize_air(state, crate::block_registry::air_variants());
-        self.states[((y * SECTION_SIZE + z) * SECTION_SIZE + x) as usize] = state;
+        let i = ((y * SECTION_SIZE + z) * SECTION_SIZE + x) as usize;
+        let schmal = state <= u32::from(u16::MAX);
+        match &mut self.states {
+            States::Uniform(s) if *s == state => {}
+            States::Small(v) if schmal => v[i] = state as u16,
+            States::Wide(v) => v[i] = state,
+            _ => {
+                let mut alle: Vec<u32> = self.iter_states().collect();
+                alle[i] = state;
+                self.states = States::from_vec(alle);
+            }
+        }
     }
 
     // Biom-ID an einer sektionslokalen Koordinate -- eine 4x4x4-Zelle deckt vier
@@ -90,20 +164,37 @@ impl ChunkSection {
         self.biomes[((by * 4 + bz) * 4 + bx) as usize]
     }
 
-    // Alle 4096 State-IDs in Protokollreihenfolge (Index = (y * 16 + z) * 16 + x).
     #[must_use] 
     pub fn biomes(&self) -> &[u32] {
         &self.biomes
     }
 
+    // Alle 4096 State-IDs in Protokollreihenfolge (Index = (y * 16 + z) * 16 + x).
     #[must_use] 
-    pub fn states(&self) -> &[u32] {
-        &self.states
+    pub fn iter_states(&self) -> StatesIter<'_> {
+        match &self.states {
+            States::Uniform(s) => StatesIter::Uniform(std::iter::repeat(*s).take(SECTION_VOLUME)),
+            States::Small(v) => StatesIter::Small(v.iter()),
+            States::Wide(v) => StatesIter::Wide(v.iter()),
+        }
+    }
+
+    // Some(state), wenn die ganze Section aus diesem einen State besteht -- fuer Aufrufer,
+    // die dann nicht ueber alle 4096 laufen muessen.
+    #[must_use] 
+    pub fn uniform(&self) -> Option<u32> {
+        match self.states {
+            States::Uniform(s) => Some(s),
+            _ => None,
+        }
     }
 
     #[must_use] 
     pub fn is_empty(&self) -> bool {
-        self.states.iter().all(|&s| !is_solid(s))
+        match self.uniform() {
+            Some(s) => !is_solid(s),
+            None => self.iter_states().all(|s| !is_solid(s)),
+        }
     }
 }
 
@@ -481,7 +572,10 @@ impl World {
         let ist_modell = |s: u32| tabelle.get(s as usize).copied().unwrap_or(false);
         for (index, section) in sections.iter().enumerate() {
             let base_y = self.min_y + index as i32 * SECTION_SIZE;
-            for (i, &state) in section.states().iter().enumerate() {
+            if section.uniform().is_some_and(|s| !ist_modell(s)) {
+                continue;
+            }
+            for (i, state) in section.iter_states().enumerate() {
                 if ist_modell(state) {
                     let (lx, lz, ly) = ((i % 16) as i32, ((i / 16) % 16) as i32, (i / 256) as i32);
                     self.beds.insert((x * SECTION_SIZE + lx, base_y + ly, z * SECTION_SIZE + lz), state);
@@ -603,6 +697,12 @@ impl World {
     // nicht gebaut sind.
     pub fn clear_dirty(&mut self, x: i32, z: i32) {
         self.dirty.remove(&(x, z));
+    }
+
+    // Nur die Spalten dirty lassen, fuer die `behalten` gilt -- ein Durchgang ueber die (meist
+    // kleine) Dirty-Menge statt clear_dirty fuer jede geladene Spalte.
+    pub fn retain_dirty(&mut self, mut behalten: impl FnMut((i32, i32)) -> bool) {
+        self.dirty.retain(|&p| behalten(p));
     }
 
     // Fuer das Voxel-Abbild (s. voxel_dirty): ob die Welt geleert wurde, und welche Spalten

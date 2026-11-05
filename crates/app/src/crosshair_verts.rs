@@ -11,7 +11,7 @@ pub(crate) struct CrosshairVertex {
     pub(crate) glyph_uv: [f32; 2],
     // Was dieses Dreieck ist (s. crosshair.wgsl): 0 = Flaeche in Fadenkreuz-Farbe, 1 = schwarze
     // Kontur, 2 = Glyphe in Fadenkreuz-Farbe, 3 = Glyphe schwarz (Kontur), 4 = Glyphe weiss,
-    // 5 = Kreis in Fadenkreuz-Farbe, 6 = Kreis schwarz (Kontur).
+    // 5 = Kreis in Fadenkreuz-Farbe, 6 = Kreis schwarz (Kontur), 7 = Glyphe gelb.
     // Als Attribut und nicht als Uniform, weil alles in EINEM Zeichenaufruf rausgeht.
     pub(crate) kind: f32,
     // Deckkraft (Pfeil-Anzeige hat eine eigene).
@@ -28,6 +28,7 @@ pub(crate) const CROSSHAIR_KIND_DISC_OUTLINE: f32 = 6.0;
 pub(crate) const CROSSHAIR_KIND_GLYPH: f32 = 2.0;
 pub(crate) const CROSSHAIR_KIND_GLYPH_BLACK: f32 = 3.0;
 pub(crate) const CROSSHAIR_KIND_GLYPH_WHITE: f32 = 4.0;
+pub(crate) const CROSSHAIR_KIND_GLYPH_YELLOW: f32 = 7.0;
 
 // s. App::area_font_scope: stellt beim Fallen die vorige Messschrift wieder her.
 pub(crate) struct LayoutFontScope<'a> {
@@ -53,11 +54,28 @@ pub(crate) struct CrosshairText {
     // true = weiss mit schwarzer Kontur, false = Fadenkreuz-Farbe (Kontur nur, wenn das
     // Fadenkreuz eine hat).
     pub(crate) white: bool,
+    // Gelb mit schwarzer Kontur, geht vor `white` (Pfeil-Zahl mit geladener Armbrust).
+    pub(crate) yellow: bool,
     // Schrift (GpuState::hud_font).
     pub(crate) font: FontKind,
     pub(crate) alpha: f32,
     // Eigene Gegenfarbe zum Untergrund der Zahl (s. crosshair.wgsl::FADE_PLAETZE).
     pub(crate) fade_slot: u32,
+    // Jede Ziffer in der Breite der breitesten, mittig darin (Einstellung "Stabile Zahlen"):
+    // aus einer 8 wird eine 1, ohne dass die Zahl ruckt. Anders als in stable_numbers ohne
+    // Lernen -- ein Zaehler wechselt ohnehin.
+    pub(crate) stable_digits: bool,
+}
+
+// Platz und eigener Vorschub eines Zeichens im Fadenkreuz-Text (in Schriftpixeln), s.
+// CrosshairText::stable_digits. None = die Schrift hat das Zeichen nicht.
+pub(crate) fn crosshair_advance(atlas: &FontAtlas, ch: char, stable_digits: bool) -> Option<(f32, f32)> {
+    let eigen = atlas.glyph(ch)?.advance_px;
+    if !(stable_digits && ch.is_ascii_digit()) {
+        return Some((eigen, eigen));
+    }
+    let breiteste = ('0'..='9').filter_map(|c| atlas.glyph(c)).map(|g| g.advance_px).fold(eigen, f32::max);
+    Some((breiteste, eigen))
 }
 
 // Farbplaetze der Gegenfarbe (crosshair.wgsl::FADE_PLAETZE): Kreuz und Ring, Schild-Countdown,

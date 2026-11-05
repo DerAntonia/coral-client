@@ -290,47 +290,6 @@ impl App {
         self.search_flash = Some((place, Instant::now()));
     }
 
-    pub(crate) fn build_settings_light_levels(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
-        let zeile = |row: usize| (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        // Suchfeld: Tippen geht immer hierhin, solange die Seite offen ist.
-        texts.push(UiText { text: "Suche".to_string(), x: SETTINGS_LABEL_X, y: zeile(0), color: theme::text(), scale: UI_SCALE_SMALL });
-        let feld = Rect { x: SETTINGS_CTRL_X, y: settings_row_y(0), w: STEPPER_VALUE_W + 2.0 * (STEPPER_BTN_W + STEPPER_GAP), h: SETTINGS_CTRL_H };
-        rects.push(UiRect { rect: feld, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-        let tx = feld.x + 10.0;
-        let (shown, farbe) = if self.light_search.is_empty() { ("Fackel, Laterne, ...".to_string(), theme::text_disabled()) } else { (self.light_search.clone(), theme::text()) };
-        let text_x = if self.light_search.is_empty() { tx + CARET_WIDTH_PX + 3.0 } else { tx };
-        push_typed_marker(texts);
-        texts.push(UiText { text: shown, x: text_x, y: zeile(0), color: farbe, scale: UI_SCALE_SMALL });
-        let caret_x = tx + if self.light_search.is_empty() { 0.0 } else { gpu.measure_raw(&self.light_search, UI_SCALE_SMALL) };
-        self.push_caret(rects, gpu.caret_rect(caret_x, zeile(0), UI_SCALE_SMALL));
-        let treffer = self.light_search_hits();
-        if treffer.is_empty() {
-            texts.push(UiText { text: "Keine Lichtquelle gefunden.".to_string(), x: SETTINGS_LABEL_X, y: zeile(1), color: theme::text_disabled(), scale: UI_SCALE_SMALL });
-        }
-        let sichtbar = self.light_visible_rows();
-        let text_dy = (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0;
-        for (k, y) in header_list_rows(treffer.len(), self.light_scroll.stand, sichtbar) {
-            let id = light_source_blocks()[treffer[k]];
-            let p = self.settings.light_factor_of(id);
-            let farbe = if p == 100 { theme::text() } else { COLOR_HUD };
-            texts.push(UiText { text: block_display_name(id), x: SETTINGS_LABEL_X, y: (y + text_dy).round(), color: farbe, scale: UI_SCALE_SMALL });
-            let rect = Rect { y, ..stepper_value_rect(0) };
-            rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-            texts.push(gpu.centered_text(rect, format!("{p} %"), farbe, UI_SCALE_SMALL));
-        }
-        if treffer.len() > sichtbar {
-            let erste = header_list_first(treffer.len(), self.light_scroll.stand, sichtbar);
-            let bis = (erste + sichtbar).min(treffer.len());
-            texts.push(UiText {
-                text: format!("{}–{} von {} (Mausrad)", erste + 1, bis, treffer.len()),
-                x: SETTINGS_CTRL_X + STEPPER_VALUE_W + 2.0 * (STEPPER_BTN_W + STEPPER_GAP) + 20.0,
-                y: zeile(0),
-                color: theme::text_disabled(),
-                scale: UI_SCALE_SMALL,
-            });
-        }
-    }
-
     pub(crate) fn build_settings_particles(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         let zeile = |row: usize| (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         // Spaltenkoepfe ueber den Knoepfen. Die vierte Spalte ist je nach Art Menge (Schwall)
@@ -391,39 +350,6 @@ impl App {
         }
     }
 
-    pub(crate) fn build_settings_shader(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
-        let y = (settings_row_y(0) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        texts.push(UiText { text: "Lichtstreuung".to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
-        let rect = stepper_value_rect(0);
-        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-        texts.push(gpu.centered_text(rect, format!("{} %", self.settings.shader_scattering_percent), theme::text(), UI_SCALE_SMALL));
-        let y1 = (settings_row_y(1) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        texts.push(UiText { text: "Schattenweichheit".to_string(), x: SETTINGS_LABEL_X, y: y1, color: theme::text(), scale: UI_SCALE_SMALL });
-        let rect1 = stepper_value_rect(1);
-        rects.push(UiRect { rect: rect1, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-        let g = self.settings.shader_sun_size_tenths;
-        texts.push(gpu.centered_text(rect1, format!("{}.{}°", g / 10, g % 10), theme::text(), UI_SCALE_SMALL));
-        let y2 = (settings_row_y(2) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        texts.push(UiText { text: "Blocklicht-Schatten".to_string(), x: SETTINGS_LABEL_X, y: y2, color: theme::text(), scale: UI_SCALE_SMALL });
-        // Weichheit nur, solange die Blocklicht-Schatten an sind (sonst ist der Regler aus).
-        if self.settings.shader_block_shadows {
-            let y3 = (settings_row_y(3) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-            texts.push(UiText { text: "Blocklicht-Weichheit".to_string(), x: SETTINGS_LABEL_X, y: y3, color: theme::text(), scale: UI_SCALE_SMALL });
-            let rect3 = stepper_value_rect(3);
-            rects.push(UiRect { rect: rect3, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-            texts.push(gpu.centered_text(rect3, format!("{}°", self.settings.shader_block_softness_deg), theme::text(), UI_SCALE_SMALL));
-        }
-        let y4 = (settings_row_y(4) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        let geaendert = self.settings.light_factors.len();
-        let text = if geaendert == 0 { "Lichtstärken".to_string() } else { format!("Lichtstärken ({geaendert} geändert)") };
-        texts.push(UiText { text, x: SETTINGS_LABEL_X, y: y4, color: theme::text(), scale: UI_SCALE_SMALL });
-        let y5 = (settings_row_y(5) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        texts.push(UiText { text: "Lichtkarten anzeigen".to_string(), x: SETTINGS_LABEL_X, y: y5, color: theme::text(), scale: UI_SCALE_SMALL });
-        let rect5 = stepper_value_rect(5);
-        rects.push(UiRect { rect: rect5, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-        texts.push(gpu.centered_text(rect5, LIGHTMAP_DEBUG_NAMES[self.settings.shader_lightmap_debug as usize].to_string(), theme::text(), UI_SCALE_SMALL));
-    }
-
     pub(crate) fn build_settings_inventory_tab(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         let y = (settings_row_y(0) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
         texts.push(UiText {
@@ -453,14 +379,16 @@ impl App {
         texts.push(UiText { text: "Operator-Items (Kreativ)".to_string(), x: SETTINGS_LABEL_X, y: y3, color: theme::text(), scale: UI_SCALE_SMALL });
 
         for (zeile, text) in [
-            (4, "Zusammenfassen bei Hover"),
-            (5, "Farbe der Anzahl"),
-            (6, "Trank-Buchstabe S (verstärkt)"),
-            (7, "Trank-Buchstabe L (verlängert)"),
-            (8, "Trank-Buchstabe W (schwach)"),
+            (4, "Farbe der Anzahl"),
+            (5, "Trank-Buchstabe S (verstärkt)"),
+            (6, "Trank-Buchstabe L (verlängert)"),
+            (7, "Trank-Buchstabe W (schwach)"),
             (SLOT_HOVER_FADE_ROW, "Hover-Übergang"),
             (SLOT_HOVER_COLOR_ROW, "Hover-Farbe"),
             (SWAP_ANIM_ROW, "Verschieben animieren"),
+            (SWAP_ANIM_TOTEM_ROW, "Außer Totems"),
+            (SWAP_ANIM_HEALING_ROW, "Außer Heiltränke"),
+            (DOLL_BACKDROP_ROW, "Puppen-Hintergrund durchsichtig"),
         ] {
             let y = (settings_row_y(zeile) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: text.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });

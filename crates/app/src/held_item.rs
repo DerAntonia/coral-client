@@ -49,17 +49,70 @@ enum Resolved {
     Special { kind: SpecialKind, texture: String, rect: Option<TexRect>, display: Displays },
 }
 
+// Ein Item in der Hand eines Entities als starres Netz fuers GPU-Skinning (s.
+// HeldItems::rigid_pre, App::emit_held_items).
+pub(crate) struct RigidItem<'a> {
+    // Netz-Schluessel (Hash der Textur bzw. der sechs Flaechen) und Fingerabdruck der Geometrie.
+    pub(crate) key: u64,
+    pub(crate) abdruck: u64,
+    // Die Lage des Modellraums 0..1, wie emit_pre sie setzt.
+    pub(crate) base: Affine,
+    // Atlas-Rechteck der Instanz (flaches Item: das Sprite; Blockitem: 0..1, die UV stehen im Netz).
+    pub(crate) rect: TexRect,
+    // Relative UV wie die lokalen des Glints: dann geht auch der Glint als Instanz.
+    pub(crate) glint: bool,
+    pub(crate) source: RigidSource<'a>,
+}
+
+pub(crate) enum RigidSource<'a> {
+    Sprite(&'a SpriteMask),
+    Block([TexRect; 6]),
+}
+
+impl RigidSource<'_> {
+    pub(crate) fn mesh(&self) -> Vec<world::entity_model::SkinVertex> {
+        match self {
+            Self::Sprite(mask) => world::item_model::sprite_item_skin_mesh(mask),
+            Self::Block(faces) => world::item_model::block_item_skin_mesh(faces),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum SpecialKind {
     Chest,
     ShulkerBox,
     // Kupfergolem-Statue (CopperGolemStatueSpecialRenderer), gezeigt in der Grundpose.
     CopperGolemStatue,
+    // Dreizack in der Hand (TridentSpecialRenderer). Im Inventar, am Boden und im Rahmen
+    // waehlt items/trident.json das flache Bild, sonst dieses Modell.
+    Trident,
+}
+
+// Benannte Modelle, die in einer Item-Definition nur "base" eines Sondermodells sind
+// (Haltungen ohne eigene Flaechen): der Dreizack in der Hand und beim Werfen
+// (items/trident.json, Bedingung using_item).
+pub(crate) fn special_model(model: &str) -> Option<(SpecialKind, &'static str)> {
+    matches!(model, "item/trident_in_hand" | "item/trident_throwing").then_some((SpecialKind::Trident, world::entity_model::TRIDENT_TEXTURE))
 }
 
 // Das Basismodell der Statuen-Items: items/*copper_golem_statue.json waehlt per select auf
 // die Haltung, jeder Zweig mit demselben Template -- daraus kommen die Haltungen (display).
 pub(crate) const STATUE_TEMPLATE: &str = "item/template_copper_golem_statue";
+// Unter diesem Pfad liegt das schwarz-pinke Karo (wie Vanillas Fehltextur) fuer alles, was der
+// Client nicht gefunden hat: fehlende Texturen und Items ganz ohne Modell.
+const MISSING_TEXTURE: &str = "coral/missing";
+
+// 16 x 16 Pixel, 2 x 2 Felder magenta/schwarz.
+fn missing_rgba() -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            rgba.extend_from_slice(if (x / 8 + y / 8) % 2 == 0 { &[248, 0, 248, 255] } else { &[0, 0, 0, 255] });
+        }
+    }
+    rgba
+}
 
 // Die "transformation" aus items/*copper_golem_statue.json, nach Vanillas translate(-0.5):
 // translation (0.5, 1.5, 0.5), scale (1, -1, -1).
@@ -73,6 +126,9 @@ pub(crate) fn statue_item_transform() -> Affine {
 pub(crate) fn special_item(name: &str) -> Option<(SpecialKind, String)> {
     if let Some(texture) = world::copper_golem_statue_texture(name) {
         return Some((SpecialKind::CopperGolemStatue, texture.to_string()));
+    }
+    if name == "trident" {
+        return Some((SpecialKind::Trident, world::entity_model::TRIDENT_TEXTURE.to_string()));
     }
     let name = name.strip_prefix("waxed_").unwrap_or(name);
     let truhe = match name {
@@ -99,12 +155,18 @@ pub(crate) fn special_item(name: &str) -> Option<(SpecialKind, String)> {
 // Das Sondermodell in Item-Koordinaten (`base` steht schon auf der Blockecke, nach Vanillas
 // translate(-0.5)): die Truhe roh wie ChestModelRenderer, die Shulkerkiste ueber die
 // Block-Einbettung mit Blickrichtung "up" wie ShulkerBoxModelRenderer.
-fn emit_special(kind: SpecialKind, tex: TexRect, base: Affine, brightness: f32, out: &mut Vec<BlockVertex>) {
+pub(crate) fn emit_special(kind: SpecialKind, tex: TexRect, base: Affine, brightness: f32, out: &mut Vec<BlockVertex>) {
     use world::entity_model as em;
     match kind {
         SpecialKind::Chest => world::emit_entity_model(em::chest_model(world::ChestHalf::Single), &em::chest_pose(0.0), base, tex, brightness, out),
         SpecialKind::ShulkerBox => {
             world::emit_entity_model(em::shulker_box_model(), &em::shulker_box_pose(0.0), base.then(em::shulker_box_transform([0.0; 3], "up")), tex, brightness, out);
+        }
+        // TridentSpecialRenderer: scale(1, -1, -1), dann das Modell.
+        SpecialKind::Trident => {
+            if let Some(model) = world::model_data::layer_model("trident#main") {
+                world::emit_entity_model(model, &world::entity_model::Pose::new(), base.then(Affine::scale([1.0, -1.0, -1.0])), tex, brightness, out);
+            }
         }
         SpecialKind::CopperGolemStatue => {
             if let Some(model) = world::model_data::layer_model("copper_golem#main") {
@@ -128,14 +190,32 @@ pub fn emit_skull_model(tex: TexRect, hut: bool, base: Affine, brightness: f32, 
 // Ein PLATZIERTER Kopf (SkullBlockEntityRenderer.render): `base` steht schon auf dem Ankerpunkt
 // (Blockmitte bzw. vor der Wand), danach scale(-1, -1, 1) und die Kopfdrehung um Y.
 pub fn emit_skull_at(tex: TexRect, hut: bool, base: Affine, yaw_deg: f32, brightness: f32, out: &mut Vec<BlockVertex>) {
+    world::emit_entity_model(skull_model(hut), &world::Pose::new(), skull_transform(base, yaw_deg), tex, brightness, out);
+}
+
+// Das Kopfmodell: ein 8x8x8-Kopf, bei 64x64-Texturen mit Hutlage. Einmal gebaut (vorher je
+// Kopf und Bild) -- und eine feste Adresse, wie sie das GPU-Skinning als Netz-Schluessel braucht.
+pub(crate) fn skull_model(hut: bool) -> &'static world::entity_model::Model {
     use world::entity_model::{Cuboid, Model, Part};
-    let mut cuboids = vec![Cuboid::new([0.0, 0.0], [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0])];
-    if hut {
-        cuboids.push(Cuboid::new([32.0, 0.0], [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]).dilated(0.25));
+    fn bau(hut: bool) -> Model {
+        let mut cuboids = vec![Cuboid::new([0.0, 0.0], [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0])];
+        if hut {
+            cuboids.push(Cuboid::new([32.0, 0.0], [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]).dilated(0.25));
+        }
+        Model { texture: "", tex_size: [64.0, if hut { 64.0 } else { 32.0 }], parts: vec![Part::new("head", [0.0; 3], cuboids)] }
     }
-    let model = Model { texture: "", tex_size: [64.0, if hut { 64.0 } else { 32.0 }], parts: vec![Part::new("head", [0.0; 3], cuboids)] };
-    let base = base.then(Affine::scale([-1.0, -1.0, 1.0])).then(Affine::rotation_y_deg(yaw_deg));
-    world::emit_entity_model(&model, &world::Pose::new(), base, tex, brightness, out);
+    static OHNE: std::sync::OnceLock<Model> = std::sync::OnceLock::new();
+    static MIT: std::sync::OnceLock<Model> = std::sync::OnceLock::new();
+    if hut {
+        MIT.get_or_init(|| bau(true))
+    } else {
+        OHNE.get_or_init(|| bau(false))
+    }
+}
+
+// Vom Ankerpunkt (s. emit_skull_at) zum Kopf: scale(-1, -1, 1), dann die Kopfdrehung um Y.
+pub(crate) fn skull_transform(base: Affine, yaw_deg: f32) -> Affine {
+    base.then(Affine::scale([-1.0, -1.0, 1.0])).then(Affine::rotation_y_deg(yaw_deg))
 }
 
 // Die Ego-Haltung der Hand, wie emit_resolved_hand sie anwendet (links: Linkshand-Eintrag,
@@ -295,7 +375,7 @@ impl HeldItems {
         upload: &mut dyn FnMut(usize, (u32, u32), u32, u32, &[u8]),
     ) {
         self.items.entry(item_id).or_insert_with(|| {
-            let resolved = Self::resolve(item_id, mc);
+            let resolved = Self::resolve_or_missing(item_id, mc);
             // Diagnose (CORAL_ITEM_DEBUG=1): EINMAL pro Item, wenn es zum ersten Mal in
             // einer Hand auftaucht. Zeigt, als was das Item aufgeloest wurde und mit welcher
             // Haltung es gezeichnet wird -- die Groesse in der Hand haengt allein an `scale`,
@@ -327,7 +407,7 @@ impl HeldItems {
         });
         if let Some(Some(Resolved::Special { texture, rect, .. })) = self.items.get_mut(&item_id) {
             if rect.is_none() {
-                *rect = atlas.rect(texture);
+                *rect = Some(atlas.rect_or_missing(texture));
             }
             return;
         }
@@ -374,6 +454,12 @@ impl HeldItems {
             let resolved = Self::resolve_model(model, mc);
             self.models.insert(model.to_string(), resolved);
         }
+        if let Some(Some(Resolved::Special { texture, rect, .. })) = self.models.get_mut(model) {
+            if rect.is_none() {
+                *rect = Some(atlas.rect_or_missing(texture));
+            }
+            return;
+        }
         let paths = match self.models.get(model) {
             Some(Some(resolved)) => Self::texture_paths(resolved),
             _ => return,
@@ -411,6 +497,9 @@ impl HeldItems {
 
     fn resolve_model(model: &str, mc: &mut MinecraftInstallation) -> Option<Resolved> {
         let display = Self::model_displays(model, mc);
+        if let Some((kind, texture)) = special_model(model) {
+            return Some(Resolved::Special { kind, texture: texture.to_string(), rect: None, display });
+        }
         match assets::model_world_textures(mc, model)? {
             ItemWorldTextures::Sprite(texture) => Some(Resolved::Sprite { texture, layers: Vec::new(), display }),
             ItemWorldTextures::Block(textures) => Some(Resolved::Block { textures, display }),
@@ -460,6 +549,22 @@ impl HeldItems {
         }
     }
 
+    // Ein Item, dessen Modell es gar nicht gibt: ein schwarz-pinker Wuerfel in den Haltungen
+    // eines Blocks, damit man sieht, dass hier etwas fehlt.
+    fn resolve_or_missing(item_id: u32, mc: &mut MinecraftInstallation) -> Option<Resolved> {
+        if let Some(r) = Self::resolve(item_id, mc) {
+            return Some(r);
+        }
+        let name = match world::entity::custom_model_name(item_id) {
+            Some(id) => id,
+            None => world::item_registry::item_name(item_id)?.to_string(),
+        };
+        assets::item_model_missing(mc, &name).then(|| Resolved::Block {
+            textures: Box::new(std::array::from_fn(|_| MISSING_TEXTURE.to_string())),
+            display: Self::model_displays("block/block", mc),
+        })
+    }
+
     // Alle Lagen uebereinander in EINE Textur, die Trank-Lagen vorher mit der Farbe
     // multipliziert. Vanilla zeichnet die Lagen als eigene Flaechen am selben Ort; fuer
     // Ausschnitt-Texturen (jedes Pixel ganz deckend oder ganz leer) ist das Zusammensetzen
@@ -507,7 +612,7 @@ impl HeldItems {
                 }
             }
         }
-        let Some((width, height, rgba)) = bild else { return };
+        let (width, height, rgba) = bild.unwrap_or_else(|| (16, 16, missing_rgba()));
         self.install_texture(key, width, height, rgba, atlas, upload);
     }
 
@@ -522,10 +627,13 @@ impl HeldItems {
             return;
         }
         let png = assets::resource_path("textures", path, ".png");
-        let Ok(tex) = mc.load_texture(&png) else { return };
-        let meta = assets::animation_meta(mc, &png);
-        let bild = assets::frame_size(meta.as_ref(), tex.width, tex.height);
-        let Some((width, height, rgba)) = fit_to_slot(tex.width, bild, &tex.rgba) else { return };
+        // Nicht da oder nicht lesbar: das Karo unter diesem Pfad, statt das Item wegzulassen.
+        let geladen = mc.load_texture(&png).ok().and_then(|tex| {
+            let meta = assets::animation_meta(mc, &png);
+            let bild = assets::frame_size(meta.as_ref(), tex.width, tex.height);
+            fit_to_slot(tex.width, bild, &tex.rgba).map(|b| (b, meta))
+        });
+        let ((width, height, rgba), meta) = geladen.unwrap_or_else(|| ((16, 16, missing_rgba()), None));
         let Some(origin) = self.install_texture(path, width, height, rgba, atlas, upload) else { return };
         // Animation: im Platz in der eingepassten Groesse weiterspielen (der Entity-Atlas hat
         // keine Mip-Stufen).
@@ -814,24 +922,44 @@ impl HeldItems {
         local: bool,
         out: &mut Vec<BlockVertex>,
     ) {
-        let displays = match resolved {
-            Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => display,
-        };
-        // Die linke Hand nimmt ihren eigenen Eintrag und spiegelt ihn erst beim Anwenden
-        // (Transformation.apply mit leftHanded).
-        let display = match (first_person, right_hand) {
-            (true, true) => displays.first_person,
-            (false, true) => displays.third_person,
-            (true, false) => displays.first_person_left.mirrored(),
-            (false, false) => displays.third_person_left.mirrored(),
-        };
-        let base = pre
-            .then(Affine::translation(display.translation))
-            .then(Affine::rotation_xyz_deg(display.rotation[0], display.rotation[1], display.rotation[2]))
-            .then(Affine::scale(display.scale))
-            // Zentriert das Modell, dessen Koordinaten von 0 bis 1 laufen.
-            .then(Affine::translation([-0.5, -0.5, -0.5]));
-        self.emit_resolved(resolved, potion, base, brightness, local, out);
+        self.emit_resolved(resolved, potion, hand_base(resolved, pre, right_hand, first_person), brightness, local, out);
+    }
+
+    // Das Item in der Hand eines Entities als starres Netz (s. RigidItem): dieselbe Lage wie
+    // emit_pre, die Geometrie wie emit_sprite_item / emit_block_item. None, wo der normale Weg
+    // zeichnet: flache Items ueber die Pack-Shader (emit_vanilla), Pack-Modelle, Koepfe,
+    // Sondermodelle, fehlende Texturen.
+    pub(crate) fn rigid_pre(&self, item_id: u32, potion: Option<u32>, pre: Affine, right_hand: bool) -> Option<RigidItem<'_>> {
+        use std::hash::{Hash, Hasher};
+        let Some(Some(resolved)) = self.items.get(&item_id) else { return None };
+        let base = hand_base(resolved, pre, right_hand, false);
+        let mut hasher = rustc_hash::FxHasher::default();
+        match resolved {
+            Resolved::Sprite { texture, layers, .. } => {
+                if self.vanilla_route.get() && !self.vanilla_bypass.get() {
+                    return None;
+                }
+                let key = composite_key(layers, potion);
+                let pfad = key.as_deref().unwrap_or(texture);
+                let loaded = self.textures.get(pfad)?;
+                let mask = loaded.mask.as_ref().filter(|m| m.any_opaque())?;
+                ("sprite", pfad).hash(&mut hasher);
+                Some(RigidItem { key: hasher.finish(), abdruck: mask.fingerprint(), base, rect: loaded.rect, glint: true, source: RigidSource::Sprite(mask) })
+            }
+            Resolved::Block { textures, .. } => {
+                let mut rects = [[0.0f32; 4]; 6];
+                for (slot, path) in rects.iter_mut().zip(textures.iter()) {
+                    *slot = self.textures.get(path)?.rect;
+                }
+                "block".hash(&mut hasher);
+                for r in &rects {
+                    r.map(f32::to_bits).hash(&mut hasher);
+                }
+                let h = hasher.finish();
+                Some(RigidItem { key: h, abdruck: h, base, rect: [0.0, 0.0, 1.0, 1.0], glint: false, source: RigidSource::Block(rects) })
+            }
+            Resolved::Model { .. } | Resolved::Skull { .. } | Resolved::Special { .. } => None,
+        }
     }
 
     // Dasselbe Modell als FREISTEHENDE Geometrie in der Welt -- fuer die Display-Entities
@@ -1060,6 +1188,26 @@ fn assets_frame(rgba: &[u8], tex_width: u32, bild: (u32, u32)) -> Vec<u8> {
 // Schluessel der zusammengesetzten Textur (s. HeldItems::load_composite), oder None fuer ein
 // einlagiges Item. Die Farbe gehoert nur dann dazu, wenn eine Lage sie auch traegt -- sonst
 // bekaeme jede Trankfarbe einen eigenen, identischen Atlas-Platz.
+// Die Haltung eines Items in der Hand (Transformation.apply): `pre` ist die Hand, dann
+// translate, rotate, scale aus dem Modell-JSON und translate(-0.5) zur Modellmitte. Die linke
+// Hand nimmt ihren eigenen Eintrag und spiegelt ihn erst beim Anwenden (leftHanded).
+fn hand_base(resolved: &Resolved, pre: Affine, right_hand: bool, first_person: bool) -> Affine {
+    let displays = match resolved {
+        Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => display,
+    };
+    let display = match (first_person, right_hand) {
+        (true, true) => displays.first_person,
+        (false, true) => displays.third_person,
+        (true, false) => displays.first_person_left.mirrored(),
+        (false, false) => displays.third_person_left.mirrored(),
+    };
+    pre.then(Affine::translation(display.translation))
+        .then(Affine::rotation_xyz_deg(display.rotation[0], display.rotation[1], display.rotation[2]))
+        .then(Affine::scale(display.scale))
+        // Zentriert das Modell, dessen Koordinaten von 0 bis 1 laufen.
+        .then(Affine::translation([-0.5, -0.5, -0.5]))
+}
+
 fn composite_key(layers: &[(String, bool)], potion: Option<u32>) -> Option<String> {
     if layers.is_empty() {
         return None;

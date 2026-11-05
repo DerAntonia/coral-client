@@ -90,6 +90,7 @@ impl Settings {
         kv(&mut body, "module_hitbox_show_smoothed", self.module_hitbox_show_smoothed);
         kv(&mut body, "module_hitbox_show_raw", self.module_hitbox_show_raw);
         kv(&mut body, "module_hitbox_dotted", self.module_hitbox_dotted);
+        kv(&mut body, "module_hitbox_visible_edges", self.module_hitbox_visible_edges);
         kv(&mut body, "module_hitbox_items", self.module_hitbox_items);
         kv(&mut body, "module_hitbox_self", self.module_hitbox_self);
         kv(&mut body, "module_hitbox_density_px", self.module_hitbox_density_px);
@@ -127,6 +128,7 @@ impl Settings {
         kv(&mut body, "hud_arrows_y", self.hud_arrows_y);
         kv(&mut body, "arrow_trail", self.arrow_trail);
         kv(&mut body, "arrow_white", self.arrow_white);
+        kv(&mut body, "arrow_empty_sound", self.arrow_empty_sound);
         kv(&mut body, "trail_hold_tenths", self.trail_hold_tenths);
         kv(&mut body, "trail_fade_tenths", self.trail_fade_tenths);
         kv(&mut body, "module_crit_color_enabled", self.module_crit_color_enabled);
@@ -149,6 +151,9 @@ impl Settings {
         kv(&mut body, "block_rng_rotation", self.block_rng_rotation);
         kv(&mut body, "smooth_lighting_percent", self.smooth_lighting_percent);
         kv(&mut body, "motion_blur_percent", self.motion_blur_percent);
+        kv(&mut body, "motion_blur_entities_percent", self.motion_blur_entities_percent);
+        kv(&mut body, "hand_blur_percent", self.hand_blur_percent);
+        kv(&mut body, "hand_blur_curve", self.hand_blur_curve);
         kv(&mut body, "jump_cooldown_enabled", self.jump_cooldown_enabled);
         kv(&mut body, "sneak_edge_protection_enabled", self.sneak_edge_protection_enabled);
         kv(&mut body, "snap_tap_enabled", self.snap_tap_enabled);
@@ -232,8 +237,6 @@ impl Settings {
         body.push_str(&format!("module_voice_chat={}\n", self.module_voice_chat));
         body.push_str(&self.voice.serialize());
         body.push_str(&format!("hotbar_durability_percent={}\n", self.hotbar_durability_percent));
-        body.push_str(&format!("shader_scattering_percent={}\n", self.shader_scattering_percent));
-        body.push_str(&format!("shader_sun_size_tenths={}\n", self.shader_sun_size_tenths));
         body.push_str(&format!(
             "sky_mode={}\nsky_sun={}\nsky_moon={}\nsky_stars={}\nmodule_sky_fixed_time={}\nmodule_sky_time={}\n",
             self.sky_mode.key(),
@@ -250,14 +253,9 @@ impl Settings {
             self.weather_radius_inner,
             self.weather_radius
         ));
-        body.push_str(&format!("shader_block_shadows={}\n", self.shader_block_shadows));
-        body.push_str(&format!("shader_lightmap_debug={}\n", self.shader_lightmap_debug));
-        body.push_str(&format!("shader_block_softness_deg={}\n", self.shader_block_softness_deg));
-        let faktoren: Vec<String> = self.light_factors.iter().map(|(n, p)| format!("{n}:{p}")).collect();
-        body.push_str(&format!("light_factors={}\n", faktoren.join(";")));
         body.push_str(&format!(
-            "hotbar_durability_absolute={}\nhotbar_durability_points={}\nhotbar_air_bar={}\n",
-            self.hotbar_durability_absolute, self.hotbar_durability_points, self.hotbar_air_bar
+            "hotbar_durability_absolute={}\nhotbar_durability_points={}\nhotbar_air_bar={}\nhotbar_glide_ms={}\n",
+            self.hotbar_durability_absolute, self.hotbar_durability_points, self.hotbar_air_bar, self.hotbar_glide_ms
         ));
         body.push_str(&format!("spectator_speed={}\n", self.spectator_speed));
         body.push_str(&format!("mouse_sens_split={}\nmouse_sensitivity_y={}\n", self.mouse_sens_split, self.mouse_sensitivity_y));
@@ -296,8 +294,9 @@ impl Settings {
         body.push_str(&format!("particles_mode_own={}\n", self.particles_mode_own));
         body.push_str(&format!("particle_tuning_own={}\n", partikel(&self.particle_tuning_own)));
         body.push_str(&format!("cave_culling={}\n", self.cave_culling));
+        body.push_str(&format!("entity_culling={}\n", self.entity_culling));
+        body.push_str(&format!("entity_ray_culling={}\n", self.entity_ray_culling));
         body.push_str(&format!("mipmapping={}\n", self.mipmapping));
-        body.push_str(&format!("render_path={}\n", self.render_path));
         let liste = |v: &[u8]| v.iter().map(u8::to_string).collect::<Vec<_>>().join(",");
         body.push_str(&format!("shadow_thickness={}\nshadow_opacity={}\n", liste(&self.shadow_thickness), liste(&self.shadow_opacity)));
         for a in ShadowArea::ALL {
@@ -466,9 +465,11 @@ impl Settings {
         body.push_str(&format!("sign_edit_in_world={}\n", self.sign_edit_in_world));
         body.push_str(&format!("no_slot_set={}\nno_rotate_set={}\n", self.no_slot_set, self.no_rotate_set));
         body.push_str(&format!("skip_third_back={}\nskip_third_front={}\n", self.skip_third_back, self.skip_third_front));
-        body.push_str(&format!("inventory_merge_hover={}\n", self.inventory_merge_hover));
         let [h, s, v, a] = self.slot_hover_color;
         body.push_str(&format!("slot_hover_fade_ms={}\nslot_hover_color={h}/{s}/{v}/{a}\nswap_anim_ms={}\n", self.slot_hover_fade_ms, self.swap_anim_ms));
+        kv(&mut body, "swap_anim_skip_totems", self.swap_anim_skip_totems);
+        kv(&mut body, "swap_anim_skip_healing", self.swap_anim_skip_healing);
+        kv(&mut body, "doll_backdrop_clear", self.doll_backdrop_clear);
         body.push_str(&format!(
             "potion_mark_strong={}\npotion_mark_long={}\npotion_mark_weak={}\n",
             self.potion_mark_strong, self.potion_mark_long, self.potion_mark_weak

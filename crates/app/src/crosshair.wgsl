@@ -51,7 +51,7 @@ struct VertexOutput {
     @location(1) glyph_uv: vec2<f32>,
     // Art des Dreiecks (s. main.rs::CrosshairVertex::kind): 0 Flaeche, 1 Kontur, 2 Glyphe in
     // Fadenkreuz-Farbe, 3 Glyphe schwarz, 4 Glyphe weiss, 5 Kreis in Fadenkreuz-Farbe, 6 Kreis
-    // schwarz. Per-Vertex statt per-Uniform, weil
+    // schwarz, 7 Glyphe gelb. Per-Vertex statt per-Uniform, weil
     // alles in EINEM Zeichenaufruf rausgeht. @interpolate(flat): je Dreieck konstant, eine
     // Interpolation koennte auf der gemeinsamen Kante Zwischenwerte erzeugen.
     @location(2) @interpolate(flat) kind: f32,
@@ -133,12 +133,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Kontrollfluss stehen.
     let glyph = textureSample(glyph_tex, glyph_sampler, in.glyph_uv).r;
     var coverage = 1.0;
-    if (in.kind > 1.5 && in.kind < 4.5) {
+    if ((in.kind > 1.5 && in.kind < 4.5) || abs(in.kind - 7.0) < 0.5) {
         coverage = glyph;
     }
     // Kreise: Deckung aus dem Abstand zur Mitte, mit einem Pixel weicher Kante -- so ist auch
     // ein Punkt von wenigen Pixeln rund statt eckig.
-    if (in.kind > 4.5) {
+    if (in.kind > 4.5 && in.kind < 6.5) {
         let d = length(in.glyph_uv);
         coverage = clamp(in.circle.y - d + 0.5, 0.0, 1.0);
         if (in.circle.x > 0.0) {
@@ -157,6 +157,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if (abs(in.kind - 4.0) < 0.5) {
         return vec4<f32>(1.0, 1.0, 1.0, a);
+    }
+    // Gelb wie Vanillas Formatcode e (#FFFF55), linear.
+    if (abs(in.kind - 7.0) < 0.5) {
+        return vec4<f32>(1.0, 1.0, 0.0908, a);
     }
     let feuer = unpack4x8unorm(settings.fire);
     if (feuer.a > 0.5 && (in.kind < 0.5 || abs(in.kind - 5.0) < 0.5)) {

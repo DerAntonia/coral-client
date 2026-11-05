@@ -644,16 +644,22 @@ impl App {
         }
 
         if let Some(sheet) = self.ui_atlas.rect(layout.sheet) {
+            // Das schwarze Feld hinter der Spielerfigur bleibt frei, die Figur steht vor dem
+            // Bild dahinter (GUI-Pixel im Fensterbild, wie DollRect in inventory::screen_layout).
+            // Inventar > Puppen-Hintergrund durchsichtig aus: das Feld bleibt wie in Vanilla.
+            let loch = (self.settings.doll_backdrop_clear && layout.sheet == "container/inventory" && layout.doll.is_some()).then_some((26, 8, 75, 78));
             for ((sx, sy, sw, sh), dy) in &layout.parts {
-                sprites.push(UiSprite::quad(
-                    layout.bg_x,
-                    layout.bg_y + dy * layout.scale,
-                    *sw as f32 * layout.scale,
-                    *sh as f32 * layout.scale,
-                    sheet.sub(*sx, *sy, *sw, *sh),
-                    [1.0, 1.0, 1.0, 1.0],
-                    SpriteAtlas::Ui,
-                ));
+                for (px, py, pw, ph) in parts_around_hole((*sw, *sh), *dy as u32, loch) {
+                    sprites.push(UiSprite::quad(
+                        layout.bg_x + px as f32 * layout.scale,
+                        layout.bg_y + (dy + py as f32) * layout.scale,
+                        pw as f32 * layout.scale,
+                        ph as f32 * layout.scale,
+                        sheet.sub(sx + px, sy + py, pw, ph),
+                        [1.0, 1.0, 1.0, 1.0],
+                        SpriteAtlas::Ui,
+                    ));
+                }
             }
         }
         // Containertitel oben links (HandledScreen.drawForeground: titleX/Y = 8/6) und darueber
@@ -717,19 +723,19 @@ impl App {
         // Inventar > Animation: Fluege seit dem letzten Bild weiterzaehlen (s. inventory_anim).
         let jetzt = Instant::now();
         let mut anim = self.inventory_anim.borrow_mut();
-        anim.flights.step(sync_id, slots, self.inventory.cursor.as_ref(), jetzt, self.settings.swap_anim_ms);
-        // Zusammenfassen bei Hover: der gleichartige Stapel unter dem Zeiger zeigt keine Zahl,
-        // der am Zeiger die Summe.
-        let zusammen = self
-            .inventory
-            .cursor
-            .as_ref()
-            .filter(|_| self.settings.inventory_merge_hover)
-            .and_then(|c| {
-                let slot = layout.slots.iter().find(|s| s.contains(cx, cy))?;
-                let unten = slots.get(slot.index)?.as_ref().filter(|s| s.stackable_with(c))?;
-                Some((slot.index, unten.count + c.count))
-            });
+        let (ohne_totems, ohne_heil) = (self.settings.swap_anim_skip_totems, self.settings.swap_anim_skip_healing);
+        anim.flights.step(sync_id, slots, self.inventory.cursor.as_ref(), jetzt, self.settings.swap_anim_ms, |s| {
+            (ohne_totems && world::item_behavior::death_protection(s)) || (ohne_heil && world::potion::is_healing_potion(s))
+        });
+        // Slot unter dem Zeiger hervorheben (Vanillas heller Schleier), mit weichem Uebergang.
+        // Ueber dem Fensterhintergrund und unter den Items -- als Sprite, denn alle Flaechen
+        // des HUDs liegen unter allen Sprites und damit unter dem Hintergrund.
+        let unter_zeiger = layout.slots.iter().find(|s| s.contains(cx, cy)).map(|s| s.index);
+        for (index, anteil) in anim.hover.step(sync_id, unter_zeiger, jetzt, self.settings.slot_hover_fade_ms) {
+            if let Some(slot) = layout.slots.iter().find(|s| s.index == index) {
+                self.push_slot_highlight(sprites, slot, anteil);
+            }
+        }
         // Tooltip des Slots unter dem Zeiger: je Zeile ihre Abschnitte (Text, Farbe). Erste
         // Zeile der Name, darunter die Verzauberungen (world::enchantment::tooltip_lines).
         let mut hovered: Option<(Vec<Vec<protocol::nbt::TextSpan>>, inventory::SlotRect, Option<&protocol::item::ItemStack>)> = None;
@@ -743,10 +749,8 @@ impl App {
                 _ => 0.0,
             };
             // Was noch hierher unterwegs ist, kommt erst mit seinem Flug an.
-            let unterwegs = anim.flights.incoming(slot.index);
-            if zusammen.is_some_and(|(index, _)| index == slot.index) {
-                self.push_item(sprites, texts, &protocol::item::ItemStack { count: 1, ..stack.clone() }, slot.x + zittern, slot.y, slot.size);
-            } else if unterwegs > 0 {
+            let unterwegs = anim.flights.incoming(inventory_anim::Target::Slot(slot.index));
+            if unterwegs > 0 {
                 if stack.count > unterwegs {
                     self.push_item(sprites, texts, &protocol::item::ItemStack { count: stack.count - unterwegs, ..stack.clone() }, slot.x + zittern, slot.y, slot.size);
                 }
@@ -757,34 +761,28 @@ impl App {
                 hovered = self.item_hover_tooltip(stack).map(|zeilen| (zeilen, *slot, world::bundle::is_bundle(stack).then_some(stack)));
             }
         }
-        // Fliegende Items, von ihrem alten Platz zum neuen (oder zum Zeiger).
+        // Fliegende Items, von ihrem alten Platz zum neuen; der Zeiger ist ein Platz wie ein Slot.
+        let zeiger_size = inventory::ICON_SIZE * layout.scale;
+        let platz = |p: inventory_anim::Target| match p {
+            inventory_anim::Target::Slot(i) => layout.slots.iter().find(|s| s.index == i).map(|s| (s.x, s.y, s.size)),
+            inventory_anim::Target::Cursor => Some((cx - zeiger_size / 2.0, cy - zeiger_size / 2.0, zeiger_size)),
+        };
         for f in &anim.flights.list {
-            let Some(von) = layout.slots.iter().find(|s| s.index == f.from) else { continue };
-            let nach = match f.to {
-                inventory_anim::Target::Slot(i) => layout.slots.iter().find(|s| s.index == i).map(|s| (s.x, s.y)),
-                inventory_anim::Target::Cursor => Some((cx - von.size / 2.0, cy - von.size / 2.0)),
-            };
-            let Some((nx, ny)) = nach else { continue };
+            let (Some(von), Some(nach)) = (platz(f.from), platz(f.to)) else { continue };
             let t = inventory_anim::Flights::progress(f, jetzt, self.settings.swap_anim_ms);
-            let (x, y) = if f.arc { inventory_anim::arc_point((von.x, von.y), (nx, ny), t) } else { (von.x + (nx - von.x) * t, von.y + (ny - von.y) * t) };
-            self.push_item(sprites, texts, &f.stack, x, y, von.size);
+            let (x, y) = if f.arc { inventory_anim::arc_point((von.0, von.1), (nach.0, nach.1), t, von.2) } else { (von.0 + (nach.0 - von.0) * t, von.1 + (nach.1 - von.1) * t) };
+            self.push_item(sprites, texts, &f.stack, x, y, von.2 + (nach.2 - von.2) * t);
         }
-        // Slot unter dem Zeiger hervorheben (Vanillas heller Schleier), mit weichem Uebergang.
-        let unter_zeiger = layout.slots.iter().find(|s| s.contains(cx, cy)).map(|s| s.index);
-        let farbe = self.settings.slot_hover_rgba();
-        for (index, anteil) in anim.hover.step(sync_id, unter_zeiger, jetzt, self.settings.slot_hover_fade_ms) {
-            if let Some(slot) = layout.slots.iter().find(|s| s.index == index) {
-                rects.push(UiRect { rect: Rect { x: slot.x, y: slot.y, w: slot.size, h: slot.size }, color: [farbe[0], farbe[1], farbe[2], farbe[3] * anteil], ..UiRect::FLAT });
-            }
-        }
+        // Was noch zum Zeiger unterwegs ist, haengt erst nach seinem Flug daran.
+        let zum_zeiger = anim.flights.incoming(inventory_anim::Target::Cursor);
         drop(anim);
 
         // Der Stack an der Maus haengt am Zeiger.
         if let Some(stack) = &self.inventory.cursor {
             let size = inventory::ICON_SIZE * layout.scale;
-            match zusammen {
-                Some((_, summe)) => self.push_item(sprites, texts, &protocol::item::ItemStack { count: summe, ..stack.clone() }, cx - size / 2.0, cy - size / 2.0, size),
-                None => self.push_item(sprites, texts, stack, cx - size / 2.0, cy - size / 2.0, size),
+            let anzahl = stack.count - zum_zeiger;
+            if anzahl > 0 {
+                self.push_item(sprites, texts, &protocol::item::ItemStack { count: anzahl, ..stack.clone() }, cx - size / 2.0, cy - size / 2.0, size);
             }
         } else if let Some(zeilen) = enchant_tooltip {
             // Hinweis einer Zauber-Option: rechts neben dem Zeiger, mit dunklem Grund.
@@ -1746,5 +1744,40 @@ impl App {
         if let Some(c) = self.inventory.open.as_mut().filter(|c| c.merchant.dragging) {
             c.merchant.drag_to(rel);
         }
+    }
+}
+
+// Ein Streifen des Fensterbilds (Breite, Hoehe; `dy` = seine Hoehe im Fenster) ohne das Loch
+// (x0, y0, x1, y1 in Fensterpixeln): die Stuecke oben, links, rechts und unten davon, je als
+// (x, y, w, h) im Streifen. Ohne Loch oder ohne Ueberschneidung der ganze Streifen.
+fn parts_around_hole((w, h): (u32, u32), dy: u32, loch: Option<(u32, u32, u32, u32)>) -> Vec<(u32, u32, u32, u32)> {
+    let Some((x0, y0, x1, y1)) = loch else { return vec![(0, 0, w, h)] };
+    let (oben, unten) = (y0.saturating_sub(dy).min(h), y1.saturating_sub(dy).min(h));
+    if oben >= unten || x0 >= w {
+        return vec![(0, 0, w, h)];
+    }
+    let x1 = x1.min(w);
+    [(0, 0, w, oben), (0, oben, x0, unten - oben), (x1, oben, w - x1, unten - oben), (0, unten, w, h - unten)]
+        .into_iter()
+        .filter(|&(_, _, pw, ph)| pw > 0 && ph > 0)
+        .collect()
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::parts_around_hole;
+
+    #[test]
+    fn loch_im_inventar() {
+        let teile = parts_around_hole((176, 166), 0, Some((26, 8, 75, 78)));
+        assert_eq!(teile, vec![(0, 0, 176, 8), (0, 8, 26, 70), (75, 8, 101, 70), (0, 78, 176, 88)]);
+        let flaeche: u32 = teile.iter().map(|t| t.2 * t.3).sum();
+        assert_eq!(flaeche, 176 * 166 - 49 * 70);
+    }
+
+    #[test]
+    fn ohne_loch_ganz() {
+        assert_eq!(parts_around_hole((176, 166), 0, None), vec![(0, 0, 176, 166)]);
+        assert_eq!(parts_around_hole((176, 20), 100, Some((26, 8, 75, 78))), vec![(0, 0, 176, 20)]);
     }
 }

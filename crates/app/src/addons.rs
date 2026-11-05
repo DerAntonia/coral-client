@@ -99,6 +99,9 @@ pub struct ModuleDef {
     pub settings: Vec<SettingDef>,
     // Was das Modul gerade ins HUD zeichnet (s. Call::Hud).
     pub hud: Vec<HudItem>,
+    // Schluessel seines An-Schalters in Settings::addon_values ("addon/modul/enabled"), einmal
+    // gebaut: App::addon_active fragt ihn bei jedem Hook ab, vorher mit format! je Aufruf.
+    pub enabled_key: String,
 }
 
 // Was der Client fuer die Abfragen eines Addons bereitstellt (App, s. addon_host.rs).
@@ -189,6 +192,9 @@ impl Addon {
         self.hooks = reg.hooks;
         self.commands = reg.commands.iter().map(|c| c.trim_start_matches('/').to_lowercase()).filter(|c| !c.is_empty()).collect();
         self.modules = reg.modules.into_iter().map(module_def).collect();
+        for m in &mut self.modules {
+            m.enabled_key = format!("{}/{}/enabled", self.id, m.id);
+        }
         self.registered = true;
     }
 }
@@ -200,6 +206,7 @@ fn module_def(m: api::Module) -> ModuleDef {
         description: m.description,
         settings: m.settings.into_iter().filter_map(setting_def).collect(),
         hud: Vec::new(),
+        enabled_key: String::new(),
         id,
     }
 }

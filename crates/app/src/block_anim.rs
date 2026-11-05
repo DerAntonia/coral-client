@@ -21,6 +21,9 @@
 // - zu Beginn des Frames: der Frame wartete auf sie und kam um ~0,2 ms zu spaet.
 // Ohne Ziel gehen die Bilder wie frueher ueber drain() an den Aufrufer.
 //
+// Hochgeladen wird inzwischen per Zeichenaufruf statt Kopie (s. render::TileWriter): die
+// ~1750 Kopierbefehle je Tick kosteten im Radeon-Treiber mehr CPU als alles Rechnen hier.
+//
 // Bilder ohne Interpolation wiederholen sich (die Folge laeuft im Kreis) und werden im Thread
 // zwischengespeichert; nach dem ersten Durchlauf kostet eine solche Animation nichts mehr.
 //
@@ -136,13 +139,17 @@ impl BlockAnimations {
         // Atlas-Neubau entsteht ein neues.
         let _ = std::thread::Builder::new().name("block-anim".into()).spawn(move || {
             let mut cache: HashMap<(usize, Key), Arc<Vec<Vec<u8>>>> = HashMap::new();
-            let mut target: Option<UploadTarget> = None;
+            // Mit dem Zeichner fuer genau diesen Atlas (s. render::TileWriter).
+            let mut target: Option<(UploadTarget, render::TileWriter)> = None;
             while let Ok(first) = worker_rx.recv() {
                 // Aufgelaufene Anfragen zusammenziehen: gilt nur noch der neueste Stand je Kachel.
                 let mut latest: HashMap<usize, Key> = HashMap::new();
                 let mut take = |message: Message, latest: &mut HashMap<usize, Key>| match message {
                     Message::Request(batch) => latest.extend(batch),
-                    Message::Target(t) => target = Some(t),
+                    Message::Target(t) => {
+                        let writer = render::TileWriter::new(&t.device, &t.texture);
+                        target = Some((t, writer));
+                    }
                 };
                 take(first, &mut latest);
                 while let Ok(more) = worker_rx.try_recv() {
@@ -174,9 +181,9 @@ impl BlockAnimations {
                         return;
                     }
                 }
-                if let (Some(t), false) = (&target, fertig.is_empty()) {
+                if let (Some((t, writer)), false) = (&target, fertig.is_empty()) {
                     let tiles: Vec<(&[Vec<u8>], (u32, u32), u32)> = fertig.iter().map(|(m, o, s)| (m.as_slice(), *o, *s)).collect();
-                    if let Some(befehle) = render::encode_tiles(&t.device, &t.texture, &tiles) {
+                    if let Some(befehle) = writer.encode(&t.device, &tiles) {
                         submit_window(&present_seen);
                         t.queue.submit(Some(befehle));
                     }

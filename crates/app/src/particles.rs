@@ -21,6 +21,17 @@ use protocol::particle::{self as pp, ParticleEffect, ParticleOptions};
 use render::{ParticleDraws, ParticleVertex};
 use rustc_hash::FxHashMap as HashMap;
 
+// Motion Blur der Partikel (s. Particles::build_vertices): Eingabe `ticks` (Zeit seit dem
+// vorigen Bild in Ticks) und `eye_step` (Auge jetzt minus Auge im vorigen Bild), Ausgabe je
+// Ecke die Lage im vorigen Bild und ob sich ueberhaupt ein Partikel bewegt hat.
+#[derive(Default)]
+pub struct ParticlePrev {
+    pub ticks: f32,
+    pub eye_step: Vec3,
+    pub positions: Vec<[f32; 3]>,
+    pub moving: bool,
+}
+
 mod kinds;
 mod spawners;
 mod ticking;

@@ -8,6 +8,9 @@ mod text_shaping;
 mod uploads;
 mod ui_draw;
 mod frames;
+mod sign_text;
+pub(crate) use sign_text::{SignGpu, SignInstance};
+pub(crate) use text_shaping::sign_border_mode;
 
 // Fuer render_world (s. dortigen Kommentar zu offscreen_texture) -- RENDER_ATTACHMENT zum
 // Hineinzeichnen (Welt+HUD), COPY_SRC fuer den Blit zur Swapchain-Textur, TEXTURE_BINDING
@@ -189,11 +192,9 @@ pub(crate) struct GpuState {
     pub(crate) color_bind_group: wgpu::BindGroup,
     pub(crate) text_pipeline: wgpu::RenderPipeline,
     pub(crate) text_vertex_buffer: wgpu::Buffer,
-    // Schildtext im Welt-Durchgang, mit Tiefentest (s. App::build_sign_texts): Pipeline,
-    // Puffer, die Glyphen dieses Bildes und ihre Schrift (Bereich Schilder).
-    pub(crate) world_text_pipeline: wgpu::RenderPipeline,
-    pub(crate) sign_text_buffer: wgpu::Buffer,
-    pub(crate) sign_glyphs: std::cell::RefCell<Vec<TextVertex>>,
+    // Schildtext im Welt-Durchgang, mit Tiefentest (s. App::build_sign_texts): im VRAM
+    // gesetzte Seiten samt Pipelines (s. SignGpu) und ihre Schrift (Bereich Schilder).
+    pub(crate) sign_gpu: std::cell::RefCell<SignGpu>,
     pub(crate) sign_font: std::cell::Cell<Option<FontKind>>,
     // Schrift der Weltbeschriftungen (Bereich Nametags), s. world_label_glyphs.
     pub(crate) label_font: std::cell::Cell<Option<FontKind>>,
@@ -236,6 +237,19 @@ pub(crate) struct GpuState {
     // HUD-Flaechen).
     pub(crate) world_label_glyphs: std::cell::RefCell<Vec<TextVertex>>,
     pub(crate) world_label_quads: std::cell::RefCell<Vec<Vertex>>,
+    // Verdeckbare Weltbeschriftungen (schleichende Namensschilder, Text-Displays ohne
+    // Durchscheinen): statt des Sichtlinien-Tests gegen die Tiefe der Welt gezeichnet, nach der
+    // Welt und vor der Hand (s. App::build_world_labels). Namensschilder als Bildschirmtext je
+    // Schild (Ende in occluded_label_texts, NDC-Tiefe des Ankers), Text-Displays schon
+    // projiziert mit Tiefe je Ecke, Hintergruende mit der Tiefe in local.w.
+    pub(crate) occluded_label_texts: std::cell::RefCell<Vec<UiText>>,
+    pub(crate) occluded_label_ends: std::cell::RefCell<Vec<(usize, f32)>>,
+    pub(crate) occluded_label_quads: std::cell::RefCell<Vec<Vertex>>,
+    pub(crate) occluded_label_glyphs: std::cell::RefCell<Vec<TextVertex>>,
+    pub(crate) label_text_pipeline: wgpu::RenderPipeline,
+    pub(crate) label_text_buffer: wgpu::Buffer,
+    pub(crate) label_quad_pipeline: wgpu::RenderPipeline,
+    pub(crate) label_quad_buffer: wgpu::Buffer,
     // Texturierte 2D-Quads (Hotbar-/Inventar-Sheets, Item-Icons -- s. sprite.wgsl). Zwei
     // Bind-Groups gegen DENSELBEN Layout: der UI-Atlas (GUI + flache Item-Sprites) und der
     // Blockatlas (isometrische Blockitems). Eigener Nearest-Sampler ohne Mipmaps, damit
@@ -302,6 +316,10 @@ pub(crate) struct GpuState {
     // Fuer den Frame-Profiler: Zeit in render_world fuer Kamera, Zeichenreihenfolge,
     // Translucent-Sortierung und Spalten-Versaetze (vor dem Encoding), letzter Frame.
     pub(crate) last_sort_ms: f32,
+    // Zeit in shape_text seit dem letzten Abholen (Profiler-Phase Textsatz), ms.
+    pub(crate) text_shape_ms: std::cell::Cell<f32>,
+    // Fertig gesetzte Texte vom letzten Mal (s. text_shaping::ShapedCache).
+    pub(crate) shaped_cache: std::cell::RefCell<text_shaping::ShapedCache>,
     // Profiler: nach dem Present auf das GPU-Ende dieses Frames warten und den Zeitpunkt
     // festhalten. Erst dann schaltet bei Immediate das Bild um -- das ist der Moment, der
     // ueber die Risszeile entscheidet, nicht der Present-Aufruf. Aendert das Timing leicht
@@ -310,11 +328,9 @@ pub(crate) struct GpuState {
     // GPU-Zeit je Pass (s. gpu_timer), None ohne Timestamp-Unterstuetzung. Misst immer: die
     // Gesamtzeit geht in die Leistungsanzeige (s. FrameStats), die Passes in den Profiler.
     pub(crate) gpu_timer: Option<gpu_timer::GpuTimer>,
-    // Renderpfad (Settings::render_path): false = PvP (Forward), true = Shader (s.
-    // render::shader_path). Die App setzt das jeden Frame; die Ziele des Shader-Pfads
-    // entstehen erst bei seinem ersten Frame. Der Shader-Pfad ist veraltet (s. dort): neue
-    // Funktionen nur im PvP-Pfad.
-    pub(crate) use_shader_path: bool,
+    // Shader-Pfad (veraltet, nur mit Feature shader_path, s. crate::shader_path_on): seine
+    // Ziele entstehen erst bei seinem ersten Frame.
+    #[cfg(feature = "shader_path")]
     pub(crate) shader_path: Option<render::shader_path::ShaderPath>,
     // Fernsicht des Moduls Chunk-Saver (s. lod.rs); `lod_active`: in diesem Frame zeichnen.
     pub(crate) lod: Option<render::lod_renderer::LodRenderer>,
@@ -326,24 +342,34 @@ pub(crate) struct GpuState {
     pub(crate) sky_layers: Vec<render::custom_sky::SkyLayerDraw>,
     // Leucht-Umriss leuchtender Entities (s. render::entity_outline).
     pub(crate) entity_outline: render::entity_outline::EntityOutline,
-    // Bewegungsunschaerfe (Render-Tab, s. render::motion_blur); Staerke dieses Frames (0 = aus)
-    // und wie lange der Monitor ein Bild zeigt, in Sekunden.
+    // Bewegungsunschaerfe (Render-Tab, s. render::motion_blur); Staerke dieses Frames mit der
+    // Kamera und fuer die eigene Bewegung der Entities (je 0 = aus) und wie lange der Monitor
+    // ein Bild zeigt, in Sekunden.
     pub(crate) motion_blur: render::motion_blur::MotionBlur,
     pub(crate) motion_blur_strength: f32,
+    pub(crate) motion_blur_entity_strength: f32,
     pub(crate) motion_blur_interval_s: f32,
+    // Unschaerfe der Hand (Motion Blur > Hand Blur, s. render::hand_blur): Staerke wie oben
+    // (0 = aus) und Gewichtung der Teilbilder.
+    pub(crate) hand_blur_strength: f32,
+    pub(crate) hand_blur_curve: render::hand_blur::Curve,
     // Modul Himmel, Art Verlauf: der Verlaufshimmel dieses Frames (None = Loeschfarbe).
     pub(crate) gradient_sky: render::gradient_sky::GradientSky,
     pub(crate) sky_gradient: Option<render::gradient_sky::GradientFrame>,
-    // Oberwelt: der Shader-Pfad rechnet den Himmel als Atmosphaere.
+    // Shader-Pfad: Oberwelt (der Himmel als Atmosphaere) und seine festen Vorgaben fuer
+    // Lichtstreuung (1.0 = Erde), Sonnengroesse und Blocklicht-Schatten in Grad, Lichtkarten-
+    // Ansicht (0 = aus). Einstellungen dafuer gibt es nicht mehr.
+    #[cfg(feature = "shader_path")]
     pub(crate) atmosphere: bool,
-    // Lichtstreuung der Atmosphaere, 1.0 = Erde (s. Settings::shader_scattering_percent).
+    #[cfg(feature = "shader_path")]
     pub(crate) scattering: f32,
-    // Scheinbare Sonnengroesse in Grad (s. Settings::shader_sun_size_tenths).
+    #[cfg(feature = "shader_path")]
     pub(crate) sun_size_deg: f32,
-    // Blocklicht-Schatten (s. Settings::shader_block_shadows).
+    #[cfg(feature = "shader_path")]
     pub(crate) block_shadows: bool,
+    #[cfg(feature = "shader_path")]
     pub(crate) block_softness_deg: f32,
-    // Lichtkarten-Ansicht (s. Settings::shader_lightmap_debug).
+    #[cfg(feature = "shader_path")]
     pub(crate) lightmap_debug: u8,
     // Riss-Steuerung: genau zu diesem Zeitpunkt (MONOTONIC, ns) praesentieren, s.
     // submit_and_present. Gilt fuer einen Frame.

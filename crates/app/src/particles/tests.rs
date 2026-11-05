@@ -295,7 +295,7 @@ fn dauer_und_tempo() {
     for _ in 0..6 {
         for schritt in 0..=4 {
             let mut out = Vec::new();
-            p.build_vertices(DVec3::ZERO, Vec3::X, Vec3::Y, schritt as f32 / 4.0, &mut out);
+            p.build_vertices(DVec3::ZERO, Vec3::X, Vec3::Y, schritt as f32 / 4.0, &mut out, None);
             let mitte = out.iter().map(|v| Vec3::from(v.position)).sum::<Vec3>() / out.len() as f32;
             if let Some(v) = vorher {
                 assert!((mitte - v).length() < 0.2, "Sprung im Bild: {v} -> {mitte}");

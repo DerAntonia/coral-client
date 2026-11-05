@@ -3,38 +3,12 @@
 
 use crate::*;
 
-// Zeilen der Lichtstaerken-Seite: oben Sonnenlicht und "alle Lichtquellen", dann alle
-// leuchtenden Bloecke (world::light::light_source_blocks), einmal ermittelt -- die
-// Block-Registry aendert sich zur Laufzeit nicht.
-pub(crate) fn light_source_blocks() -> &'static [&'static str] {
-    static LISTE: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-    LISTE.get_or_init(|| [world::light::SUNLIGHT, world::light::ALL_LIGHTS].into_iter().chain(world::light::light_source_blocks()).collect())
-}
-
-// Anzeigename eines Blocks: Uebersetzung, sonst die ID. Dazu die beiden Sonderzeilen.
-pub(crate) fn block_display_name(id: &str) -> String {
-    match id {
-        world::light::SUNLIGHT => "Sonnenlicht".to_string(),
-        world::light::ALL_LIGHTS => "Alle Lichtquellen".to_string(),
-        _ => protocol::nbt::translate(&format!("block.minecraft.{id}")).unwrap_or_else(|| id.to_string()),
-    }
-}
-
-// Weichheit der Blocklicht-Schatten (scheinbare Groesse der Quellen) in ganzen Grad.
-pub(crate) const BLOCK_SOFTNESS_MAX_DEG: u32 = 30;
-// Stufen der Lichtkarten-Ansicht (Settings::shader_lightmap_debug).
-pub(crate) const LIGHTMAP_DEBUG_NAMES: [&str; 4] = ["Aus", "Licht", "Abweichung", "Art"];
-pub(crate) const BLOCK_SOFTNESS_STEP_DEG: u32 = 1;
-
-// Renderpfad (Settings::render_path): Index in RENDER_PATH_NAMES.
-#[allow(dead_code)]
-pub(crate) const RENDER_PATH_NAMES: [&str; 2] = ["PvP", "Shader"];
 // Riss-Reserve (Settings::tear_reserve_us), s. App::adapt_tear_lead.
 pub(crate) const TEAR_RESERVE_MIN_US: i32 = 0;
 pub(crate) const TEAR_RESERVE_MAX_US: i32 = 3000;
 pub(crate) const TEAR_RESERVE_STEP_US: i32 = 50;
 pub(crate) const TEAR_RESERVE_DEFAULT_US: i32 = 300;
-pub(crate) const TEAR_RESERVE_ROW: usize = 11;
+pub(crate) const TEAR_RESERVE_ROW: usize = 12;
 // Riss-Timing (Settings::tear_timing_us): Verschiebung des Bildwechsels in Mikrosekunden,
 // negativ = frueher. Ohne Hardware-Flip kopiert der X-Server das Bild erst ~1,5 ms nach dem
 // Present auf den Schirm -- wie lange, haengt an X-Server, Treiber und Monitor und ist von hier
@@ -43,7 +17,7 @@ pub(crate) const TEAR_TIMING_MIN_US: i32 = -8000;
 pub(crate) const TEAR_TIMING_MAX_US: i32 = 8000;
 pub(crate) const TEAR_TIMING_STEP_US: i32 = 50;
 pub(crate) const TEAR_TIMING_DEFAULT_US: i32 = 0;
-pub(crate) const TEAR_TIMING_ROW: usize = 10;
+pub(crate) const TEAR_TIMING_ROW: usize = 11;
 // Scanout-Timing (Settings::tear_position, s. App::tear_target_phase): 0 = aus, 1 = jeden
 // Bildwechsel knapp vor die Austastluecke legen.
 //
@@ -52,7 +26,7 @@ pub(crate) const TEAR_TIMING_ROW: usize = 10;
 // Austastluecke oder kurz danach verlangt wird, erst irgendwo im oberen Viertel um -- und bei
 // weiterem Verschieben unregelmaessig (der Riss sprang wild). Zuverlaessig ist nur der Wechsel
 // knapp VOR der Luecke: er landet unsichtbar darin.
-pub(crate) const TEAR_POSITION_ROW: usize = 9;
+pub(crate) const TEAR_POSITION_ROW: usize = 10;
 // Maus-Empfindlichkeit ist echte Steuerung, keine Performance-Einstellung -- eigene Zeile
 // (Zeile 0) auf dem Steuerung-Screen, s. build_settings_controls_tab.
 pub(crate) const SENSITIVITY_TOOLTIP: &str =
@@ -115,21 +89,9 @@ pub(crate) fn particle_column_x(col: usize) -> f32 {
     PARTICLE_TOGGLE_X + PARTICLE_TOGGLE_W + 24.0 + col as f32 * PARTICLE_COLUMN_W
 }
 
-// Gleitende Liste unter einer festen Kopfzeile (Partikel, Lichtstaerken): die Eintraege von
-// `n`, die beim Scrollstand `stand` ganz in den Zeilen 1..=sichtbar stehen, mit ihrer Hoehe.
-// Was ueber den Rand gleitet, verschwindet ganz -- es gibt kein Abschneiden.
-pub(crate) fn header_list_rows(n: usize, stand: f32, sichtbar: usize) -> Vec<(usize, f32)> {
-    let von = stand.max(0.0).floor() as usize;
-    (von..(von + sichtbar + 1).min(n))
-        .filter_map(|i| {
-            let platz = 1.0 + i as f32 - stand;
-            (platz >= 0.99 && platz <= sichtbar as f32 + 0.01).then(|| (i, settings_row_y(0) + platz * SETTINGS_ROW_H))
-        })
-        .collect()
-}
-
-// Wie header_list_rows, aber gleitend: auch die am Rand nur angeschnittenen Zeilen, die das
-// Zeilenband der Liste beschneidet (s. App::particle_list_band).
+// Gleitende Liste unter einer festen Kopfzeile (Partikel): die Eintraege von `n` beim
+// Scrollstand `stand`, auch die am Rand nur angeschnittenen Zeilen, die das Zeilenband der
+// Liste beschneidet (s. App::particle_list_band).
 pub(crate) fn header_list_rows_smooth(n: usize, stand: f32, sichtbar: usize) -> Vec<(usize, f32)> {
     let von = stand.max(0.0).floor() as usize;
     (von..(von + sichtbar + 2).min(n))
@@ -428,12 +390,16 @@ pub(crate) const VIEW_MODEL_TOOLTIP: &str = "In der Ich-Sicht hält deine Hand d
 pub(crate) const ANIMS_TOOLTIP: &str = "Haltungen für Spieler in der dritten Person, die Vanilla nur in der Ich-Sicht oder gar nicht zeigt (wie die Mod Not Enough Animations) -- bei anderen Spielern und bei dir in F5. Schild, Speer und Schläge bleiben wie in Vanilla.";
 // Vanilla: umkippen (LivingEntityRenderer.setupRotations, deathTime) und rot. Aus: Spieler
 // verschwinden sofort. Explosion: Spieler fliegen in ihre Teile auseinander (death_burst.rs).
+// Einfrieren: eine Sekunde (DEATH_FREEZE_TICKS) nur der Skin -- ohne Ruestung, Items, Umhang,
+// Feuer, Rot und Umkippen --, danach weg, auch wenn der Server die Figur noch nicht entfernt.
 // Aus und Explosion gelten nur fuer Spieler, Mobs sterben immer wie in Vanilla.
 pub(crate) const DEATH_ANIM_VANILLA: u8 = 0;
 pub(crate) const DEATH_ANIM_OFF: u8 = 1;
 pub(crate) const DEATH_ANIM_EXPLOSION: u8 = 2;
-pub(crate) const DEATH_ANIM_NAMES: [&str; 3] = ["Vanilla", "Aus", "Explosion"];
-pub(crate) const DEATH_ANIM_TOOLTIP: &str = "Wie sterbende Spieler aussehen: Vanilla kippt sie rot um, Aus lässt sie sofort verschwinden, Explosion lässt Kopf, Rumpf, Arme und Beine auseinanderfliegen. Mobs sterben immer wie in Vanilla.";
+pub(crate) const DEATH_ANIM_FREEZE: u8 = 3;
+pub(crate) const DEATH_FREEZE_TICKS: u32 = 20;
+pub(crate) const DEATH_ANIM_NAMES: [&str; 4] = ["Vanilla", "Aus", "Explosion", "Einfrieren"];
+pub(crate) const DEATH_ANIM_TOOLTIP: &str = "Wie sterbende Spieler aussehen: Vanilla kippt sie rot um, Aus lässt sie sofort verschwinden, Explosion lässt Kopf, Rumpf, Arme und Beine auseinanderfliegen, Einfrieren lässt eine Sekunde lang nur ihren Skin stehen, ohne Rüstung, Items und Rot. Mobs sterben immer wie in Vanilla.";
 // Hurt-Cam: Ausschlag bei 100 % in Grad (Vanillas bobHurt).
 pub(crate) const HURT_CAM_MAX_DEGREES: f32 = 14.0;
 // Feuer vor den Augen (Settings::fire_mode).
@@ -445,18 +411,31 @@ pub(crate) const FIRE_MODE_NAMES: [&str; 3] = ["Vanilla", "Fadenkreuz", "Aus"];
 
 // Inventar > Animation: Hervorhebung unter dem Zeiger (Uebergang, Farbe) und fliegende Items
 // beim Verschieben (s. Settings::slot_hover_fade_ms, swap_anim_ms).
-pub(crate) const INVENTORY_ANIM_ROW: usize = 9;
+pub(crate) const INVENTORY_ANIM_ROW: usize = 8;
 pub(crate) const SLOT_HOVER_FADE_ROW: usize = INVENTORY_ANIM_ROW;
 pub(crate) const SLOT_HOVER_COLOR_ROW: usize = INVENTORY_ANIM_ROW + 1;
 pub(crate) const SWAP_ANIM_ROW: usize = INVENTORY_ANIM_ROW + 2;
-pub(crate) const INVENTORY_ROW_COUNT: usize = SWAP_ANIM_ROW + 1;
+// Totems vom Verschieben ausnehmen (Settings::swap_anim_skip_totems).
+pub(crate) const SWAP_ANIM_TOTEM_ROW: usize = INVENTORY_ANIM_ROW + 3;
+// Feld hinter der Spielerfigur frei oder Vanilla-schwarz (Settings::doll_backdrop_clear).
+// Heiltraenke vom Verschieben ausnehmen (Settings::swap_anim_skip_healing).
+pub(crate) const SWAP_ANIM_HEALING_ROW: usize = INVENTORY_ANIM_ROW + 4;
+pub(crate) const DOLL_BACKDROP_ROW: usize = INVENTORY_ANIM_ROW + 5;
+pub(crate) const INVENTORY_ROW_COUNT: usize = DOLL_BACKDROP_ROW + 1;
 pub(crate) const SLOT_HOVER_FADE_MAX: u32 = 500;
 pub(crate) const SLOT_HOVER_FADE_STEP: u32 = 10;
 pub(crate) const SWAP_ANIM_MAX: u32 = 1000;
 pub(crate) const SWAP_ANIM_STEP: u32 = 10;
-pub(crate) const SLOT_HOVER_FADE_TOOLTIP: &str = "Wie lange die Hervorhebung des Slots unter dem Zeiger ein- und ausblendet, wenn du über die Slots fährst. Aus: sie springt sofort wie in Vanilla.";
+// Hotbar > Auswahl gleitet (s. Settings::hotbar_glide_ms), Zeile im Hotbar-Fenster des HUD-Editors.
+pub(crate) const HOTBAR_GLIDE_ROW: usize = 5;
+pub(crate) const HOTBAR_GLIDE_MAX: u32 = 500;
+pub(crate) const HOTBAR_GLIDE_STEP: u32 = 10;
+pub(crate) const SLOT_HOVER_FADE_TOOLTIP: &str = "Wie lange die Hervorhebung des Slots unter dem Zeiger einblendet. Danach klingt sie aus wie bei den Knöpfen der Menüs, so leuchten beim Überfahren mehrere Slots nach. Aus: sie springt sofort wie in Vanilla.";
+pub(crate) const SWAP_ANIM_TOTEM_TOOLTIP: &str = "Totems fliegen nicht, sie springen sofort an ihren neuen Platz wie in Vanilla. Tauschst du ein Item mit einem Totem, springen beide. Die übrigen Items fliegen weiter.";
+pub(crate) const SWAP_ANIM_HEALING_TOOLTIP: &str = "Heiltränke (auch Wurf- und Verweiltränke) fliegen nicht, sie springen sofort an ihren neuen Platz wie in Vanilla. Tauschst du ein Item mit einem Heiltrank, springen beide. Die übrigen Items fliegen weiter.";
+pub(crate) const DOLL_BACKDROP_TOOLTIP: &str = "An: das Feld hinter deiner Figur im Inventar ist frei, dahinter scheint die Welt durch. Aus: das schwarze Feld wie in Vanilla. Gilt im Überlebensinventar.";
 pub(crate) const SLOT_HOVER_COLOR_TOOLTIP: &str = "Farbe und Deckkraft der Hervorhebung des Slots unter dem Zeiger. Vanilla: weiß.";
-pub(crate) const SWAP_ANIM_TOOLTIP: &str = "Verschiebst du Items (Shift-Klick, Zifferntaste, Zweithand-Taste, Doppelklick), fliegen sie in dieser Zeit zu ihrem neuen Platz, statt dorthin zu springen. Aus: wie in Vanilla.";
+pub(crate) const SWAP_ANIM_TOOLTIP: &str = "Verschiebst du Items mit der Tastatur (Shift-Klick, Zifferntaste, Zweithand-Taste), fliegen sie in dieser Zeit zu ihrem neuen Platz, statt dorthin zu springen. Aufnehmen, Ablegen und Verteilen mit der Maus bleiben wie in Vanilla. Aus: wie in Vanilla.";
 
 // Sonstiges > Server-Bildschirme (MenuScreen::SettingsServerScreens): je Bildschirm, ob der
 // Server ihn schliessen (Settings::server_close_blocked, Bit = Zeile) und oeffnen
@@ -891,14 +870,14 @@ pub(crate) fn align_anchor(left: f32, w: f32, align: u8) -> f32 {
 }
 
 // Zeilen der Effekte im Einstellungsfenster (s. hud_config_rows).
-pub(crate) const EFFECTS_HIDE_AMBIENT_ROW: usize = 3;
-pub(crate) const EFFECTS_STYLE_ROW: usize = 4;
-pub(crate) const EFFECTS_ALIGN_ROW: usize = 5;
-pub(crate) const EFFECTS_ICON_ROW: usize = 6;
-pub(crate) const EFFECTS_NAME_ROW: usize = 7;
-pub(crate) const EFFECTS_TIMER_ROW: usize = 8;
-pub(crate) const EFFECTS_TIMER_COLOR_ROW: usize = 9;
-pub(crate) const EFFECTS_BLINK_ROW: usize = 10;
+pub(crate) const EFFECTS_HIDE_AMBIENT_ROW: usize = 2;
+pub(crate) const EFFECTS_STYLE_ROW: usize = 3;
+pub(crate) const EFFECTS_ALIGN_ROW: usize = 4;
+pub(crate) const EFFECTS_ICON_ROW: usize = 5;
+pub(crate) const EFFECTS_NAME_ROW: usize = 6;
+pub(crate) const EFFECTS_TIMER_ROW: usize = 7;
+pub(crate) const EFFECTS_TIMER_COLOR_ROW: usize = 8;
+pub(crate) const EFFECTS_BLINK_ROW: usize = 9;
 
 // Auswahl mit mehr als zwei Knoepfen in einer Konfig-Zeile, so breit wie ein Schieberegler.
 pub(crate) fn hud_config_pick_rect(row: usize) -> Rect {
@@ -949,14 +928,14 @@ pub(crate) const fn hud_config_rows(element: HudElement, set: &Settings) -> usiz
     match element {
         // Skalierung, Haltbarkeit ab, Grenze prozentual/pauschal, Sauerstoff Blasen/Balken,
         // Farbe der Stueckzahl.
-        HudElement::Hotbar => 5,
+        HudElement::Hotbar => HOTBAR_GLIDE_ROW + 1,
         // Zeile 0 Farbe, Zeile 1 Kontur, Zeile 2 Kontur des Rings, Zeile 3 Aufhellung (nur beim
         // Komplementaeren). Dazu "Form" und darunter "Groesse" bzw. "Pixel bearbeiten".
         HudElement::Crosshair if crosshair_color_mode == CROSSHAIR_MODE_COMPLEMENTARY => 6,
         HudElement::Crosshair => 5,
         // Ausrichtung + Groesse.
         HudElement::Title | HudElement::Subtitle => 2,
-        // Groesse, Im HUD, Im Inventar, Ambiente verstecken, Stil -- beim detaillierten dazu Ausrichtung, Icon,
+        // Groesse, Im Inventar, Ambiente verstecken, Stil -- beim detaillierten dazu Ausrichtung, Icon,
         // Name (mit Farbe), Timer, Timer-Farbe und Blinken.
         HudElement::Effects if set.effects_detailed => EFFECTS_BLINK_ROW + 1,
         HudElement::Effects => EFFECTS_STYLE_ROW + 1,

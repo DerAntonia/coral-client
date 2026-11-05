@@ -153,6 +153,10 @@ pub enum ClientEvent {
     // passiert im Netz-Task, weil DORT auch die Bestaetigung rausgeht und beide denselben
     // Wert benutzen muessen (s. handle_play_packet).
     ServerRotation { yaw_deg: f32, pitch_deg: f32 },
+    // Der Server laesst uns auf einen Punkt oder ein Entity schauen (Player Look At 0x45).
+    // Die Richtung rechnet die App, sie kennt Entities und die eigene Augenhoehe.
+    // Ziel-Entity: (ID, auf seine Augen); `target` gilt, wenn die App es nicht kennt.
+    LookAt { from_eyes: bool, target: (f64, f64, f64), entity: Option<(i32, bool)> },
     // Server entlaedt eine Chunk-Spalte (Forget Level Chunk) -- der Client muss sie aus
     // Weltzustand und VRAM werfen, sonst wachsen beide beim Umherlaufen unbegrenzt.
     ForgetChunk(i32, i32),
@@ -320,7 +324,8 @@ pub enum ClientEvent {
     // gibt es nicht, der Gesundheitswert fremder Entities kommt nie ueber die Leitung.
     // `damage_type` ist ein Index in die Schadensart-Registry (s. ClientEvent::DamageTypes) --
     // gebraucht fuer den EIGENEN Schadenston, den der Server bewusst nicht mitschickt.
-    EntityDamaged { entity_id: i32, damage_type: i32 },
+    // `cause_id`/`direct_id`/`source_pos`: woher der Schaden kam (s. packets::DamageEvent).
+    EntityDamaged { entity_id: i32, damage_type: i32, cause_id: Option<i32>, direct_id: Option<i32>, source_pos: Option<[f64; 3]> },
     // EntityAnimationS2CPacket: dieses Entity hat geschlagen (oder ist aufgewacht / hat einen
     // Kritischen gelandet, s. packets::ANIMATION_*). Wie beim Schaden ist das Paket die
     // einzige Quelle: der Armschwung folgt aus keiner anderen Groesse, die wir bekommen.

@@ -355,7 +355,6 @@ pub struct TotemingSettings {
     // Pop-Optik.
     pub visuals: bool,
     pub hide_own_floating: bool,
-    pub hide_own_particles: bool,
     // Standardmaessig an gelassen: die Wolke ist der einzige Hinweis, WER gepoppt hat.
     pub hide_other_particles: bool,
 }
@@ -384,7 +383,6 @@ impl Default for TotemingSettings {
             ],
             visuals: true,
             hide_own_floating: false,
-            hide_own_particles: false,
             hide_other_particles: false,
         }
     }
@@ -409,7 +407,6 @@ pub enum Action {
     Pitch(SoundSlot, i8),
     ToggleVisuals,
     ToggleHideOwnFloating,
-    ToggleHideOwnParticles,
     ToggleHideOtherParticles,
 }
 
@@ -463,7 +460,6 @@ impl TotemingSettings {
             }
             Action::ToggleVisuals => self.visuals = !self.visuals,
             Action::ToggleHideOwnFloating => self.hide_own_floating = !self.hide_own_floating,
-            Action::ToggleHideOwnParticles => self.hide_own_particles = !self.hide_own_particles,
             Action::ToggleHideOtherParticles => self.hide_other_particles = !self.hide_other_particles,
         }
     }
@@ -497,7 +493,6 @@ impl TotemingSettings {
             "sounds" => self.sounds = flag,
             "visuals" => self.visuals = flag,
             "hide_own_floating" => self.hide_own_floating = flag,
-            "hide_own_particles" => self.hide_own_particles = flag,
             "hide_other_particles" => self.hide_other_particles = flag,
             _ => {
                 let Some(slot_key) = key.strip_prefix("sound_") else { return false };
@@ -512,7 +507,7 @@ impl TotemingSettings {
         let mut out = format!(
             "toteming_warning={}\ntoteming_warning_offhand_color={}\ntoteming_warning_hotbar_color={}\ntoteming_warning_offset={}\ntoteming_warning_size={}\ntoteming_warning_shadow={}\n\
              toteming_slots={}\ntoteming_slots_backdrop={}\ntoteming_slots_extra={}\ntoteming_sounds={}\n\
-             toteming_visuals={}\ntoteming_hide_own_floating={}\ntoteming_hide_own_particles={}\ntoteming_hide_other_particles={}\n",
+             toteming_visuals={}\ntoteming_hide_own_floating={}\ntoteming_hide_other_particles={}\n",
             self.warning,
             self.offhand_color.key(),
             self.hotbar_color.key(),
@@ -525,7 +520,6 @@ impl TotemingSettings {
             self.sounds,
             self.visuals,
             self.hide_own_floating,
-            self.hide_own_particles,
             self.hide_other_particles,
         );
         for slot in SoundSlot::ALL {
