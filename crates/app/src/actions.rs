@@ -964,8 +964,14 @@ pub(crate) enum ButtonAction {
     CycleWeatherMode,
     WeatherRadiusPrev,
     WeatherRadiusNext,
-    WeatherRadiusInnerPrev,
-    WeatherRadiusInnerNext,
+    WeatherSnowRadiusPrev,
+    WeatherSnowRadiusNext,
+    WeatherSnowRadiusMaxPrev,
+    WeatherSnowRadiusMaxNext,
+    WeatherDensityPrev,
+    WeatherDensityNext,
+    WeatherSnowSpeedPrev,
+    WeatherSnowSpeedNext,
     // Farbfeld angeklickt: klappt den HSV-Editor dieser Variante auf bzw. wieder zu.
     HitboxColorEditor(HitboxVariant),
     // Eigene Art der Hitbox-Anzeige an/aus (s. hitbox_kinds).

@@ -573,8 +573,11 @@ impl App {
             ButtonAction::TrailHoldPrev => (&mut set.trail_hold_tenths).into(),
             ButtonAction::TrailFadePrev => (&mut set.trail_fade_tenths).into(),
             ButtonAction::SkyTimePrev => (&mut set.module_sky_time).into(),
-            ButtonAction::WeatherRadiusInnerPrev => (&mut set.weather_radius_inner).into(),
             ButtonAction::WeatherRadiusPrev => (&mut set.weather_radius).into(),
+            ButtonAction::WeatherSnowRadiusPrev => (&mut set.weather_snow_radius).into(),
+            ButtonAction::WeatherSnowRadiusMaxPrev => (&mut set.weather_snow_radius_max).into(),
+            ButtonAction::WeatherDensityPrev => (&mut set.weather_density).into(),
+            ButtonAction::WeatherSnowSpeedPrev => (&mut set.weather_snow_speed).into(),
             ButtonAction::ColorSaturationPrev => (&mut set.color_saturation).into(),
             ButtonAction::BlockOutlineWidthPrev => (&mut set.block_outline_width_px).into(),
             ButtonAction::VoiceStep(knob, false) => {
@@ -680,6 +683,7 @@ impl App {
                 }
             }
             ButtonAction::LagDelayPrev => self.sync_lag_delay(),
+            ButtonAction::WeatherSnowRadiusPrev | ButtonAction::WeatherSnowRadiusMaxPrev => self.settings.couple_snow_radius(),
             // Gezogen oder getippt: wie bei den Pfeilen steckt sie im Mesh (s. run_menu_action).
             ButtonAction::SmoothLightingDown => {
                 for (cx, cz) in self.world.column_keys().collect::<Vec<_>>() {

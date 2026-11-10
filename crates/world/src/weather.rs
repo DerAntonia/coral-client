@@ -32,6 +32,23 @@ pub struct BiomeClimate {
     pub temperature: f32,
 }
 
+// Was fallenden Schnee im Bild aufhaelt (s. app::precipitation): jeder Block mit
+// Kollisionsform (auch Stufen, Zaeune, Teppiche) mit der Oberkante der Form (0.05..1 im Block)
+// und Fluessigkeit (voll). Barrieren nicht -- Server ziehen damit unsichtbare Decken und
+// Waende ein. None = frei.
+#[must_use]
+pub fn snow_stop(state: u32) -> Option<f32> {
+    if state == crate::STATE_AIR {
+        return None;
+    }
+    let oben = match crate::vanilla_collision::collision_boxes(state) {
+        Some(boxen) => boxen.iter().map(|b| b.max[1]).fold(None, |m: Option<f32>, y| Some(m.map_or(y, |m| m.max(y)))),
+        None => Some(1.0),
+    };
+    let oben = if crate::fluid::fluid_kind(state).is_some() { Some(1.0) } else { oben };
+    oben.filter(|_| crate::block_registry::block_name(state) != Some("barrier")).map(|y| y.clamp(0.05, 1.0))
+}
+
 // Biome.computeTemperature ohne den Rauschanteil (s. Modulkommentar).
 fn temperature_at(climate: BiomeClimate, y: i32) -> f32 {
     let grenze = SEA_LEVEL + 17;

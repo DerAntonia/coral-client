@@ -166,13 +166,15 @@ impl App {
             // Texturen neu hochladen, wenn das Modul umschaltet (s. WeatherTexture::chosen).
             let modul = self.settings.module_weather;
             if self.weather_textures_uploaded != Some(modul) {
+                // Als Teilchen-Blaetter: Kacheln plus schwere Kacheln, Regen grau (s. weather_sheet).
                 let [r, s] = &self.weather_textures;
-                gpu.block_renderer.set_weather_textures(
-                    &gpu.device,
-                    &gpu.queue,
-                    weather_texture_part(r.chosen(modul)),
-                    weather_texture_part(s.chosen(modul)),
-                );
+                let blatt = |t: Option<&assets::DecodedTexture>, grau: bool| {
+                    let (rgba, w, h) = weather_texture_part(t);
+                    precipitation::weather_sheet(rgba, w, h, grau)
+                };
+                let (regen, schnee) = (blatt(r.chosen(modul), true), blatt(s.chosen(modul), false));
+                gpu.block_renderer.set_weather_textures(&gpu.device, &gpu.queue, sheet_part(regen.as_ref()), sheet_part(schnee.as_ref()));
+                self.weather_layouts = [regen.as_ref().map_or_else(Default::default, |b| b.3), schnee.as_ref().map_or_else(Default::default, |b| b.3)];
                 self.weather_textures_uploaded = Some(modul);
             }
             gpu.block_renderer.set_weather_vertices(&gpu.queue, &self.weather_vertices, regen, schnee);
@@ -414,4 +416,9 @@ impl App {
         let verlauf = (t.powi(4) * std::f32::consts::PI).sin();
         self.hurt_cam_side * verlauf * HURT_CAM_MAX_DEGREES * self.settings.hurt_cam_strength as f32 / 100.0
     }
+}
+
+// Bild eines Wetterblatts fuer set_weather_textures; ohne Blatt ein durchsichtiger Pixel.
+fn sheet_part(b: Option<&(Vec<u8>, u32, u32, precipitation::SheetLayout)>) -> (&[u8], u32, u32) {
+    b.map_or((&[0u8, 0, 0, 0][..], 1, 1), |b| (&b.0[..], b.1, b.2))
 }

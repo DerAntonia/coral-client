@@ -551,8 +551,14 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleWeather => umschalten(settings.module_weather),
         ButtonAction::WeatherRadiusPrev
         | ButtonAction::WeatherRadiusNext
-        | ButtonAction::WeatherRadiusInnerPrev
-        | ButtonAction::WeatherRadiusInnerNext => UiSound::Step,
+        | ButtonAction::WeatherSnowRadiusPrev
+        | ButtonAction::WeatherSnowRadiusNext
+        | ButtonAction::WeatherSnowRadiusMaxPrev
+        | ButtonAction::WeatherSnowRadiusMaxNext
+        | ButtonAction::WeatherDensityPrev
+        | ButtonAction::WeatherDensityNext
+        | ButtonAction::WeatherSnowSpeedPrev
+        | ButtonAction::WeatherSnowSpeedNext => UiSound::Step,
         ButtonAction::ToggleModuleGhostTolerance => umschalten(settings.module_ghost_tolerance),
         ButtonAction::ToggleModuleCrystalOptimizer => umschalten(settings.module_crystal_optimizer),
         ButtonAction::ToggleModuleConsumableOptimizer => umschalten(settings.module_consumable_optimizer),

@@ -1,6 +1,6 @@
 // Das Modul-Menue: Zeilen, Kacheln, Layout und Modul-Aktionen.
 
-use crate::{ego_name, toteming, App, ModuleRow, ShieldColor, ButtonAction, ModuleId, HitboxVariant, hsv_to_rgb, hitbox_kinds, ColorTarget, HITBOX_DENSITY_MIN, HITBOX_DENSITY_MAX, teams, ARROW_EMPTY_FEEDBACK_NAMES, TRAIL_HOLD_MAX_TENTHS, TRAIL_FADE_MAX_TENTHS, HudElement, session_info, pick_two, SHIELD_SELF_MODE_NAMES, ShieldMark, sky_time_label, SKY_TIME_DAY, SKY_TIME_STEP, SkyMode, precipitation, COLOR_SATURATION_MAX, discord_rpc, BLOCK_OUTLINE_WIDTH_MIN, BLOCK_OUTLINE_WIDTH_MAX, VoiceKnob, VoiceFlag, voicechat, FREELOOK_VIEW_NAMES, ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX, ZOOM_SENS_MIN, ZOOM_SENS_MAX, EAT_HOLD_THROUGH_MAX, NO_TOOL_BREAK_MIN_RESERVE, NO_TOOL_BREAK_MAX_RESERVE, SATURATION_BAR_HEIGHT_MIN, SATURATION_BAR_HEIGHT_MAX, EGO_SPEED_MIN, EGO_SPEED_MAX, volume_text, AUTOCLICKER_CPS_MIN, AUTOCLICKER_CPS_MAX, LAG_DELAY_MAX_MS, GHOST_TOLERANCE_MIN_MS, GHOST_TOLERANCE_MAX_MS, GpuState, MODULE_DETAIL_PX_HEAD, MODULE_DETAIL_PX_FOOT, SETTINGS_ROW_H, MODULE_TILE_NAME_PX, SETTINGS_SCROLL_ROWS_PER_NOTCH, Rect, MODULE_DETAIL_PX_W, MODULE_DETAIL_PX_PAD, SETTINGS_FIRST_Y, SETTINGS_LABEL_X, AppMode, MenuScreen, ModuleDetailLayout, STEPPER_BTN_W, SETTINGS_CTRL_H, Button, UI_SCALE_SMALL, ModuleCategory, theme, pick_buttons, i18n, UiRect, UiText, TOGGLE_W, STEPPER_GAP, push_slider_unit, SliderKey, COLOR_GRID_LINE, styled_button, mix_color, HITBOX_DENSITY_STEP, ConnStatus, FREELOOK_VIEW_FRONT, ZOOM_FACTOR_STEP, ZOOM_SENS_STEP, EAT_HOLD_THROUGH_STEP, Instant, ARROW_OPACITY_STEP, ARROW_OPACITY_MIN, TRAIL_TENTHS_STEP, lod, COLOR_SATURATION_STEP, adjust_shield_color, ThemeNameDialog, text_field, EGO_ALIAS_MAX, NameDialogPurpose, GHOST_TOLERANCE_STEP_MS, LAG_DELAY_STEP_MS, adjust_sky_time, ui_sound};
+use crate::{ego_name, toteming, App, ModuleRow, ShieldColor, ButtonAction, ModuleId, HitboxVariant, hsv_to_rgb, hitbox_kinds, ColorTarget, HITBOX_DENSITY_MIN, HITBOX_DENSITY_MAX, teams, ARROW_EMPTY_FEEDBACK_NAMES, TRAIL_HOLD_MAX_TENTHS, TRAIL_FADE_MAX_TENTHS, HudElement, session_info, pick_two, SHIELD_SELF_MODE_NAMES, ShieldMark, sky_time_label, SKY_TIME_DAY, SKY_TIME_STEP, SkyMode, precipitation, WeatherMode, COLOR_SATURATION_MAX, discord_rpc, BLOCK_OUTLINE_WIDTH_MIN, BLOCK_OUTLINE_WIDTH_MAX, VoiceKnob, VoiceFlag, voicechat, FREELOOK_VIEW_NAMES, ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX, ZOOM_SENS_MIN, ZOOM_SENS_MAX, EAT_HOLD_THROUGH_MAX, NO_TOOL_BREAK_MIN_RESERVE, NO_TOOL_BREAK_MAX_RESERVE, SATURATION_BAR_HEIGHT_MIN, SATURATION_BAR_HEIGHT_MAX, EGO_SPEED_MIN, EGO_SPEED_MAX, volume_text, AUTOCLICKER_CPS_MIN, AUTOCLICKER_CPS_MAX, LAG_DELAY_MAX_MS, GHOST_TOLERANCE_MIN_MS, GHOST_TOLERANCE_MAX_MS, GpuState, MODULE_DETAIL_PX_HEAD, MODULE_DETAIL_PX_FOOT, SETTINGS_ROW_H, MODULE_TILE_NAME_PX, SETTINGS_SCROLL_ROWS_PER_NOTCH, Rect, MODULE_DETAIL_PX_W, MODULE_DETAIL_PX_PAD, SETTINGS_FIRST_Y, SETTINGS_LABEL_X, AppMode, MenuScreen, ModuleDetailLayout, STEPPER_BTN_W, SETTINGS_CTRL_H, Button, UI_SCALE_SMALL, ModuleCategory, theme, pick_buttons, i18n, UiRect, UiText, TOGGLE_W, STEPPER_GAP, push_slider_unit, SliderKey, COLOR_GRID_LINE, styled_button, mix_color, HITBOX_DENSITY_STEP, ConnStatus, FREELOOK_VIEW_FRONT, ZOOM_FACTOR_STEP, ZOOM_SENS_STEP, EAT_HOLD_THROUGH_STEP, Instant, ARROW_OPACITY_STEP, ARROW_OPACITY_MIN, TRAIL_TENTHS_STEP, lod, COLOR_SATURATION_STEP, adjust_shield_color, ThemeNameDialog, text_field, EGO_ALIAS_MAX, NameDialogPurpose, GHOST_TOLERANCE_STEP_MS, LAG_DELAY_STEP_MS, adjust_sky_time, ui_sound};
 
 impl App {
     // Der Hauptschalter des gerade gezeigten Moduls. Er steht ZWEIMAL im Menue: klein am
@@ -145,23 +145,61 @@ impl App {
             }
             ModuleId::Weather => {
                 rows.push(ModuleRow::Choice { label: "Wetter".to_string(), action: ButtonAction::CycleWeatherMode, text: set.weather_mode.label().to_string() });
+                // Regler je nach dem, was fallen kann: bei "Server" Regen und Schnee.
+                let (regen, schnee) = match set.weather_mode {
+                    WeatherMode::Server => (true, true),
+                    WeatherMode::Clear => (false, false),
+                    WeatherMode::Rain => (true, false),
+                    WeatherMode::Snow => (false, true),
+                };
+                if regen {
+                    rows.push(ModuleRow::Stepper {
+                        label: "Regenradius".to_string(),
+                        prev: ButtonAction::WeatherRadiusPrev,
+                        next: ButtonAction::WeatherRadiusNext,
+                        text: format!("{} Blöcke", set.weather_radius),
+                        can_prev: set.weather_radius > precipitation::RADIUS_MIN,
+                        can_next: set.weather_radius < precipitation::RADIUS_MAX,
+                        slider: Some((f64::from(set.weather_radius), f64::from(precipitation::RADIUS_MIN), f64::from(precipitation::RADIUS_MAX))),
+                    });
+                }
+                if schnee {
+                    rows.push(ModuleRow::Stepper {
+                        label: "Schneeradius".to_string(),
+                        prev: ButtonAction::WeatherSnowRadiusPrev,
+                        next: ButtonAction::WeatherSnowRadiusNext,
+                        text: format!("{} Blöcke", set.weather_snow_radius),
+                        can_prev: set.weather_snow_radius > precipitation::SNOW_RADIUS_MIN,
+                        can_next: set.weather_snow_radius < precipitation::SNOW_RADIUS_MAX,
+                        slider: Some((f64::from(set.weather_snow_radius), f64::from(precipitation::SNOW_RADIUS_MIN), f64::from(precipitation::SNOW_RADIUS_MAX))),
+                    });
+                    rows.push(ModuleRow::Stepper {
+                        label: "Maximaler Schneeradius".to_string(),
+                        prev: ButtonAction::WeatherSnowRadiusMaxPrev,
+                        next: ButtonAction::WeatherSnowRadiusMaxNext,
+                        text: format!("{} Blöcke", set.weather_snow_radius_max),
+                        can_prev: set.weather_snow_radius_max > set.weather_snow_radius,
+                        can_next: set.weather_snow_radius_max < precipitation::SNOW_RADIUS_OUTER_MAX,
+                        slider: Some((f64::from(set.weather_snow_radius_max), f64::from(precipitation::SNOW_RADIUS_MIN), f64::from(precipitation::SNOW_RADIUS_OUTER_MAX))),
+                    });
+                }
                 rows.push(ModuleRow::Stepper {
-                    label: "Von".to_string(),
-                    prev: ButtonAction::WeatherRadiusInnerPrev,
-                    next: ButtonAction::WeatherRadiusInnerNext,
-                    text: format!("{} Blöcke", set.weather_radius_inner),
-                    can_prev: set.weather_radius_inner > 0,
-                    can_next: set.weather_radius_inner + 1 < set.weather_radius,
-                    slider: Some((f64::from(set.weather_radius_inner), 0.0, f64::from(set.weather_radius.saturating_sub(1)))),
+                    label: "Menge".to_string(),
+                    prev: ButtonAction::WeatherDensityPrev,
+                    next: ButtonAction::WeatherDensityNext,
+                    text: format!("{} %", set.weather_density),
+                    can_prev: set.weather_density > precipitation::DENSITY_MIN,
+                    can_next: set.weather_density < precipitation::DENSITY_MAX,
+                    slider: Some((f64::from(set.weather_density), f64::from(precipitation::DENSITY_MIN), f64::from(precipitation::DENSITY_MAX))),
                 });
                 rows.push(ModuleRow::Stepper {
-                    label: "Bis".to_string(),
-                    prev: ButtonAction::WeatherRadiusPrev,
-                    next: ButtonAction::WeatherRadiusNext,
-                    text: format!("{} Blöcke", set.weather_radius),
-                    can_prev: set.weather_radius > precipitation::RADIUS_MIN.max(set.weather_radius_inner + 1),
-                    can_next: set.weather_radius < precipitation::RADIUS_MAX,
-                    slider: Some((f64::from(set.weather_radius), f64::from(precipitation::RADIUS_MIN), f64::from(precipitation::RADIUS_MAX))),
+                    label: "Schneetempo".to_string(),
+                    prev: ButtonAction::WeatherSnowSpeedPrev,
+                    next: ButtonAction::WeatherSnowSpeedNext,
+                    text: format!("{},{} m/s", set.weather_snow_speed / 10, set.weather_snow_speed % 10),
+                    can_prev: set.weather_snow_speed > precipitation::SNOW_SPEED_MIN,
+                    can_next: set.weather_snow_speed < precipitation::SNOW_SPEED_MAX,
+                    slider: Some((f64::from(set.weather_snow_speed), f64::from(precipitation::SNOW_SPEED_MIN), f64::from(precipitation::SNOW_SPEED_MAX))),
                 });
             }
             ModuleId::TotemWarning | ModuleId::TotemSlots | ModuleId::PopSounds | ModuleId::PopVisuals => {
@@ -1742,16 +1780,41 @@ impl App {
             ButtonAction::SkyTimeNext => adjust_sky_time(&mut self.settings, 1),
             ButtonAction::ToggleModuleWeather => self.settings.module_weather = !self.settings.module_weather,
             ButtonAction::CycleWeatherMode => self.settings.weather_mode = self.settings.weather_mode.next(),
-            ButtonAction::WeatherRadiusPrev => {
-                let set = &mut self.settings;
-                set.weather_radius = set.weather_radius.saturating_sub(1).max(precipitation::RADIUS_MIN).max(set.weather_radius_inner + 1);
-            }
-            ButtonAction::WeatherRadiusInnerPrev => self.settings.weather_radius_inner = self.settings.weather_radius_inner.saturating_sub(1),
-            ButtonAction::WeatherRadiusInnerNext => {
-                let set = &mut self.settings;
-                set.weather_radius_inner = (set.weather_radius_inner + 1).min(set.weather_radius.saturating_sub(1));
-            }
+            ButtonAction::WeatherRadiusPrev => self.settings.weather_radius = self.settings.weather_radius.saturating_sub(1).max(precipitation::RADIUS_MIN),
             ButtonAction::WeatherRadiusNext => self.settings.weather_radius = (self.settings.weather_radius + 1).min(precipitation::RADIUS_MAX),
+            ButtonAction::WeatherSnowRadiusPrev => {
+                let set = &mut self.settings;
+                set.weather_snow_radius = set.weather_snow_radius.saturating_sub(1).max(precipitation::SNOW_RADIUS_MIN);
+            }
+            ButtonAction::WeatherSnowRadiusNext => {
+                let set = &mut self.settings;
+                set.weather_snow_radius = (set.weather_snow_radius + 1).min(precipitation::SNOW_RADIUS_MAX);
+                set.couple_snow_radius();
+            }
+            ButtonAction::WeatherSnowRadiusMaxPrev => {
+                let set = &mut self.settings;
+                set.weather_snow_radius_max = set.weather_snow_radius_max.saturating_sub(1).max(set.weather_snow_radius);
+            }
+            ButtonAction::WeatherSnowRadiusMaxNext => {
+                let set = &mut self.settings;
+                set.weather_snow_radius_max = (set.weather_snow_radius_max + 1).min(precipitation::SNOW_RADIUS_OUTER_MAX);
+            }
+            ButtonAction::WeatherDensityPrev => {
+                let set = &mut self.settings;
+                set.weather_density = set.weather_density.saturating_sub(precipitation::DENSITY_STEP).max(precipitation::DENSITY_MIN);
+            }
+            ButtonAction::WeatherSnowSpeedPrev => {
+                let set = &mut self.settings;
+                set.weather_snow_speed = set.weather_snow_speed.saturating_sub(precipitation::SNOW_SPEED_STEP).max(precipitation::SNOW_SPEED_MIN);
+            }
+            ButtonAction::WeatherSnowSpeedNext => {
+                let set = &mut self.settings;
+                set.weather_snow_speed = (set.weather_snow_speed + precipitation::SNOW_SPEED_STEP).min(precipitation::SNOW_SPEED_MAX);
+            }
+            ButtonAction::WeatherDensityNext => {
+                let set = &mut self.settings;
+                set.weather_density = (set.weather_density + precipitation::DENSITY_STEP).min(precipitation::DENSITY_MAX);
+            }
             ButtonAction::ToggleModuleBlockOutline => self.settings.module_block_outline = !self.settings.module_block_outline,
             // Oeffnet das Farbfenster, schon beim Klick (s. color_target_of).
             ButtonAction::BlockOutlineEditor => {}

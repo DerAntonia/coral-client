@@ -95,6 +95,7 @@ impl App {
             weather_vertices: Vec::new(),
             weather_textures: load_weather_textures(&mut installation),
             weather_textures_uploaded: None,
+            weather_layouts: [precipitation::SheetLayout { rows: 0, offsets: [[0.0; 2]; 20] }; 2],
             hud_latched_widths: Default::default(),
             held_items: held_item::HeldItems::new(),
             last_inventory_click: None,

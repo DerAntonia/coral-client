@@ -26,16 +26,21 @@ fn feste_uhrzeit_laeuft_im_kreis() {
 }
 
 // PvP-Packs machen rain.png/snow.png voll durchsichtig: ohne Modul bleibt das so, mit
-// Modul springt Vanillas Bild ein. Ein Pack mit echtem Bild behaelt es immer.
+// Modul springt das naechste Bild darunter ein, das etwas zeigt (ein tieferes Pack, sonst
+// Vanilla). Ein Pack mit echtem Bild behaelt es immer.
 #[test]
 fn leere_pack_wettertextur_nur_mit_modul_ersetzt() {
     let bild = |alpha: u8| Some(assets::DecodedTexture { width: 1, height: 2, rgba: vec![255, 255, 255, 0, 255, 255, 255, alpha] });
-    let leer = WeatherTexture { pack: bild(0), vanilla: bild(200) };
+    let leer = WeatherTexture { pack: bild(0), below: bild(200) };
     assert!(leer.pack_is_empty());
     assert_eq!(leer.chosen(false).unwrap().rgba[7], 0, "ohne Modul gilt der Pack");
-    assert_eq!(leer.chosen(true).unwrap().rgba[7], 200, "mit Modul Vanilla");
-    let eigen = WeatherTexture { pack: bild(90), vanilla: bild(200) };
+    assert_eq!(leer.chosen(true).unwrap().rgba[7], 200, "mit Modul das Bild darunter");
+    let eigen = WeatherTexture { pack: bild(90), below: bild(90) };
     assert_eq!(eigen.chosen(true).unwrap().rgba[7], 90, "ein echtes Pack-Bild bleibt");
+    // Oberstes Pack leer, das darunter auch, das dritte zeigt etwas: das gilt, nicht Vanilla.
+    let reihe = [bild(0), bild(0), bild(120), bild(200)].into_iter().flatten();
+    assert_eq!(crate::gpu_state::first_visible(reihe).unwrap().rgba[7], 120);
+    assert!(crate::gpu_state::first_visible([bild(0), bild(0)].into_iter().flatten()).is_none(), "alles leer: nichts");
 }
 
 // Die Standard-Ruestung laeuft jetzt ueber Vanillas Equipment-Dateien: jede Ebene, die sie
@@ -62,17 +67,15 @@ fn vanilla_equipment_dateien_passen_zum_atlas() {
 fn wetter_modul_einstellungen() {
     let mut set = Settings::base();
     assert!(!set.module_weather && set.weather_mode == WeatherMode::Server && set.weather_radius == precipitation::RADIUS_DEFAULT);
-    assert_eq!(set.weather_radius_inner, 0, "Vorgabe wie Vanilla: von der Kamera an");
     assert_eq!(WeatherMode::Snow.next(), WeatherMode::Server, "Auswahl laeuft im Kreis");
     assert!(MODULE_IDS.contains(&ModuleId::Weather));
     set.module_weather = true;
     set.weather_mode = WeatherMode::Snow;
     set.weather_radius = 5;
-    set.weather_radius_inner = 3;
     let zurueck = Settings::parse_onto(Settings::base(), &set.serialize());
     assert_eq!(
-        (zurueck.module_weather, zurueck.weather_mode, zurueck.weather_radius_inner, zurueck.weather_radius),
-        (true, WeatherMode::Snow, 3, 5)
+        (zurueck.module_weather, zurueck.weather_mode, zurueck.weather_radius),
+        (true, WeatherMode::Snow, 5)
     );
     // Unsinniger Modus: Vorgabe; der Radius bleibt, wie er dasteht.
     let kaputt = Settings::parse_onto(Settings::base(), "weather_mode=hagel\nweather_radius=99\n");

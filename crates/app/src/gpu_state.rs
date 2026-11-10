@@ -387,13 +387,14 @@ pub(crate) fn load_glint_textures(installation: &mut assets::MinecraftInstallati
 }
 
 // Vanillas Niederschlags-Texturen (WeatherEffectRenderer: environment/rain.png, snow.png),
-// je Art die des obersten Packs und die von Vanilla. Viele PvP-Packs schalten das Wetter ab,
-// indem sie beide Bilder voll durchsichtig machen -- das respektiert der Client, solange das
-// Modul "Wetter" aus ist. Ist es an, will man den Niederschlag sehen: dann ersetzt Vanillas
-// Bild ein leeres aus dem Pack (s. WeatherTexture::chosen).
+// je Art die des obersten Packs und die oberste nicht leere darunter (ein tieferes Pack, sonst
+// Vanilla). Viele PvP-Packs schalten das Wetter ab, indem sie beide Bilder voll durchsichtig
+// machen -- das respektiert der Client, solange das Modul "Wetter" aus ist. Ist es an, will man
+// den Niederschlag sehen: dann ersetzt ein leeres Bild das naechste darunter, das etwas zeigt
+// (s. WeatherTexture::chosen).
 pub(crate) struct WeatherTexture {
     pub(crate) pack: Option<assets::DecodedTexture>,
-    pub(crate) vanilla: Option<assets::DecodedTexture>,
+    pub(crate) below: Option<assets::DecodedTexture>,
 }
 
 impl WeatherTexture {
@@ -402,8 +403,13 @@ impl WeatherTexture {
     }
 
     pub(crate) fn chosen(&self, module: bool) -> Option<&assets::DecodedTexture> {
-        if module && self.pack_is_empty() { self.vanilla.as_ref() } else { self.pack.as_ref() }
+        if module && self.pack_is_empty() { self.below.as_ref() } else { self.pack.as_ref() }
     }
+}
+
+// Das erste Bild der Reihe (oberstes Pack zuerst), das nicht ganz durchsichtig ist.
+pub(crate) fn first_visible(bilder: impl Iterator<Item = assets::DecodedTexture>) -> Option<assets::DecodedTexture> {
+    bilder.into_iter().find(|t| t.rgba.chunks_exact(4).any(|p| p[3] != 0))
 }
 
 pub(crate) fn load_weather_textures(installation: &mut assets::MinecraftInstallation) -> [WeatherTexture; 2] {
@@ -414,9 +420,10 @@ pub(crate) fn load_weather_textures(installation: &mut assets::MinecraftInstalla
             let (width, height) = img.dimensions();
             Some(assets::DecodedTexture { width, height, rgba: img.into_raw() })
         };
-        // load_layers: Vanilla zuerst, das oberste Pack zuletzt.
-        let vanilla = installation.load_layers(&pfad).first().and_then(|b| dekodiert(b));
-        WeatherTexture { pack: installation.load_texture(&pfad).ok(), vanilla }
+        // load_layers: Vanilla zuerst, das oberste Pack zuletzt. Von oben das erste Bild, das
+        // nicht ganz durchsichtig ist.
+        let below = first_visible(installation.load_layers(&pfad).iter().rev().filter_map(|b| dekodiert(b)));
+        WeatherTexture { pack: installation.load_texture(&pfad).ok(), below }
     });
     let zustand = |t: &WeatherTexture| match &t.pack {
         None => "fehlt".to_string(),

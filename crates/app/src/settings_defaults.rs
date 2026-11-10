@@ -397,8 +397,11 @@ impl Settings {
             module_sky_time: 6000,
             module_weather: false,
             weather_mode: WeatherMode::Server,
-            weather_radius_inner: 0,
             weather_radius: precipitation::RADIUS_DEFAULT,
+            weather_snow_radius: precipitation::SNOW_RADIUS,
+            weather_snow_radius_max: precipitation::SNOW_RADIUS_OUTER,
+            weather_density: precipitation::DENSITY_DEFAULT,
+            weather_snow_speed: precipitation::SNOW_SPEED_DEFAULT,
             // Der Tageshimmel liegt bei HSV 216/53/95. Die Stepper laufen in Schritten von
             // 10 (Ton) bzw. 5 (Rest) -- ein Startwert daneben waere mit den Pfeilen nie wieder
             // genau zu treffen. Deshalb der naechste Wert AUF dem Raster.

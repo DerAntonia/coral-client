@@ -302,8 +302,14 @@ impl App {
             | ButtonAction::CycleWeatherMode
             | ButtonAction::WeatherRadiusPrev
             | ButtonAction::WeatherRadiusNext
-            | ButtonAction::WeatherRadiusInnerPrev
-            | ButtonAction::WeatherRadiusInnerNext
+            | ButtonAction::WeatherSnowRadiusPrev
+            | ButtonAction::WeatherSnowRadiusNext
+            | ButtonAction::WeatherSnowRadiusMaxPrev
+            | ButtonAction::WeatherSnowRadiusMaxNext
+            | ButtonAction::WeatherDensityPrev
+            | ButtonAction::WeatherDensityNext
+            | ButtonAction::WeatherSnowSpeedPrev
+            | ButtonAction::WeatherSnowSpeedNext
             | ButtonAction::ToggleModuleBlockOutline
             | ButtonAction::BlockOutlineEditor
             | ButtonAction::BlockOutlineWidthPrev

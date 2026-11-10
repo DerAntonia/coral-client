@@ -78,6 +78,8 @@ pub(crate) struct App {
     // Some(true) = mit Vanilla-Ersatz fuer leere Pack-Bilder, None = noch nichts/neu laden.
     pub(crate) weather_textures: [WeatherTexture; 2],
     pub(crate) weather_textures_uploaded: Option<bool>,
+    // Aufteilung der hochgeladenen Regen- und Schneeblaetter (s. precipitation::weather_sheet).
+    pub(crate) weather_layouts: [precipitation::SheetLayout; 2],
     // Eingerastete Breiten wechselnder HUD-Texte (s. latched_width): je Schluessel die groesste
     // je gemessene Breite. RefCell, weil das HUD in &self gebaut wird.
     pub(crate) hud_latched_widths: std::cell::RefCell<std::collections::HashMap<&'static str, f32>>,

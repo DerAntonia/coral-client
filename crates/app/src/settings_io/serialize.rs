@@ -247,11 +247,14 @@ impl Settings {
             self.module_sky_time
         ));
         body.push_str(&format!(
-            "module_weather={}\nweather_mode={}\nweather_radius_inner={}\nweather_radius={}\n",
+            "module_weather={}\nweather_mode={}\nweather_radius={}\nweather_snow_radius={}\nweather_snow_radius_max={}\nweather_density={}\nweather_snow_speed={}\n",
             self.module_weather,
             self.weather_mode.key(),
-            self.weather_radius_inner,
-            self.weather_radius
+            self.weather_radius,
+            self.weather_snow_radius,
+            self.weather_snow_radius_max,
+            self.weather_density,
+            self.weather_snow_speed
         ));
         body.push_str(&format!(
             "hotbar_durability_absolute={}\nhotbar_durability_points={}\nhotbar_air_bar={}\nhotbar_glide_ms={}\n",

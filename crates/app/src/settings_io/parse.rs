@@ -1400,9 +1400,25 @@ impl Settings {
                     settings.weather_radius = v;
                 }
             }
-            "weather_radius_inner" => {
+            "weather_snow_radius" => {
                 if let Ok(v) = value.parse::<u32>() {
-                    settings.weather_radius_inner = v;
+                    settings.weather_snow_radius = v.clamp(precipitation::SNOW_RADIUS_MIN, precipitation::SNOW_RADIUS_MAX);
+                    settings.weather_snow_radius_max = settings.weather_snow_radius_max.max(settings.weather_snow_radius);
+                }
+            }
+            "weather_snow_radius_max" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.weather_snow_radius_max = v.clamp(settings.weather_snow_radius, precipitation::SNOW_RADIUS_OUTER_MAX);
+                }
+            }
+            "weather_snow_speed" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.weather_snow_speed = v.clamp(precipitation::SNOW_SPEED_MIN, precipitation::SNOW_SPEED_MAX);
+                }
+            }
+            "weather_density" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.weather_density = v.clamp(precipitation::DENSITY_MIN, precipitation::DENSITY_MAX);
                 }
             }
             "module_sky_time" => {

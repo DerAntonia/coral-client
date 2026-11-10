@@ -43,11 +43,13 @@ pub struct MapState {
     pub decorations: Vec<MapDecoration>,
     // Erhoeht sich bei jeder Aenderung -- wer ein Bild daraus hat, erkennt so, dass es veraltet ist.
     pub revision: u32,
+    // Kein Pixel durchsichtig: im Rahmen verdeckt die Karte dann das Brett dahinter ganz.
+    pub opaque: bool,
 }
 
 impl Default for MapState {
     fn default() -> Self {
-        Self { colors: vec![0; MAP_SIZE * MAP_SIZE], scale: 0, locked: false, decorations: Vec::new(), revision: 0 }
+        Self { colors: vec![0; MAP_SIZE * MAP_SIZE], scale: 0, locked: false, decorations: Vec::new(), revision: 0, opaque: false }
     }
 }
 
@@ -75,6 +77,7 @@ impl Maps {
                 }
             }
         }
+        m.opaque = m.colors.iter().all(|&c| color_rgba(c)[3] == 255);
         m.revision = m.revision.wrapping_add(1);
     }
 

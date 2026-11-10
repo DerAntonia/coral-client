@@ -505,10 +505,16 @@ pub(crate) struct Settings {
     // Vorgabe-Radius. Der Radius ist Vanillas Option "Wetterradius" (Bloecke um die Kamera).
     pub(crate) module_weather: bool,
     pub(crate) weather_mode: WeatherMode,
-    // Von/Bis als Kugeln um die Kamera (alle drei Achsen): in der inneren faellt nichts (nicht
-    // vor der Nase), bis zur aeusseren reicht der Niederschlag. Immer inner < radius.
-    pub(crate) weather_radius_inner: u32,
+    // Radius der Kugel um die Kamera (alle drei Achsen), in der Regen faellt.
     pub(crate) weather_radius: u32,
+    // Schnee: Bloecke mit hoechstens so viel freier Strecke zum Auge, und nie weiter als der
+    // maximale Schneeradius (nie kleiner als der Schneeradius, s. couple_snow_radius).
+    pub(crate) weather_snow_radius: u32,
+    pub(crate) weather_snow_radius_max: u32,
+    // Menge der Regentropfen und Flocken in Prozent (s. precipitation::DENSITY_DEFAULT).
+    pub(crate) weather_density: u32,
+    // Fallgeschwindigkeit des Schnees in Zehntel Bloecken je Sekunde (s. precipitation).
+    pub(crate) weather_snow_speed: u32,
     pub(crate) module_sky_color_hue: u32,
     pub(crate) module_sky_color_saturation: u32,
     pub(crate) module_sky_color_value: u32,
@@ -871,6 +877,12 @@ pub(crate) const AZURE_CLIENT_ID: &str = "4e36a581-063a-4bbf-98bb-77b91766d32c";
 pub(crate) static ACTIVE_CONFIG: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 impl Settings {
+    // Maximaler Schneeradius nie kleiner als der Schneeradius: ein groesserer Schneeradius schiebt
+    // ihn mit, kleiner gezogen haelt er am Schneeradius an.
+    pub(crate) fn couple_snow_radius(&mut self) {
+        self.weather_snow_radius_max = self.weather_snow_radius_max.max(self.weather_snow_radius);
+    }
+
     // Partikel-Stufe und -Anpassung der eigenen (true) oder der anderen Partikel.
     pub(crate) fn particles_mode_of(&mut self, own: bool) -> &mut u8 {
         if own { &mut self.particles_mode_own } else { &mut self.particles_mode }

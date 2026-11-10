@@ -291,7 +291,21 @@ pub struct World {
     // traegt dabei moving_piston ohne eigene Form; wo der Block steht, haengt am Fortschritt
     // der Bewegung -- deshalb jeden Tick neu gesetzt statt aus der Formtabelle gelesen.
     pub moving_boxes: Vec<MovingBox>,
+    // Fuer die Schneekarte (s. app::precipitation): je Spalte ein Stand, der hochzaehlt, wenn
+    // sich dort etwas aendert, das Schnee aufhaelt -- ein solcher Block (s. weather::snow_stop)
+    // wird gesetzt oder verschwindet; ausserdem beim Laden und Entladen der Spalte. Wird nie geleert (nur
+    // mit der Welt); ein Leser vergleicht mit dem Stand, den er sich gemerkt hat.
+    snow_revisions: HashMap<(i32, i32), u64>,
+    snow_revision_next: u64,
+    // Die letzten Aenderungen dazu: Stand danach, Spalte und der Block (None: die ganze Spalte,
+    // geladen oder entladen). Damit muss ein Leser nach einem gesetzten Block nicht alles neu
+    // berechnen (s. snow_changes_since). Hoechstens SNOW_LOG Eintraege; `snow_log_floor` ist der
+    // Stand, bis zu dem Eintraege schon fehlen.
+    snow_log: std::collections::VecDeque<(u64, (i32, i32), Option<(i32, i32, i32)>)>,
+    snow_log_floor: u64,
 }
+
+const SNOW_LOG: usize = 1024;
 
 // Eine Box (Weltkoordinaten) eines vom Kolben bewegten Blocks. `noclip`: die Bewegungsrichtung
 // (Richtungs-Index 0..6 wie Vanillas 3D-Datenwert), solange der Block noch faehrt -- wen der
@@ -324,6 +338,10 @@ impl World {
             voxel_cleared: false,
             border: Default::default(),
             moving_boxes: Vec::new(),
+            snow_revisions: HashMap::default(),
+            snow_revision_next: 0,
+            snow_log: std::collections::VecDeque::new(),
+            snow_log_floor: 0,
         }
     }
 
@@ -401,6 +419,7 @@ impl World {
         let sky = crate::light::default_sky(sections.len());
         self.columns.insert((x, z), Arc::new(ChunkColumn { sections, min_y: self.min_y, sky }));
         self.column_generation = self.column_generation.wrapping_add(1);
+        self.bump_snow_revision((x, z), None);
         self.dirty.insert((x, z));
         self.voxel_dirty.insert((x, z));
         // Die schon geladenen Nachbarn ebenfalls neu meshen: deren Rand wurde bisher
@@ -435,6 +454,7 @@ impl World {
         }
         self.beds.retain(|pos, _| pos.0.div_euclid(SECTION_SIZE) != x || pos.2.div_euclid(SECTION_SIZE) != z);
         self.column_generation = self.column_generation.wrapping_add(1);
+        self.bump_snow_revision((x, z), None);
         self.dirty.remove(&(x, z));
         self.voxel_dirty.insert((x, z));
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
@@ -518,11 +538,79 @@ impl World {
     // sieht diese Bloecke ohnehin nicht (s. Feldkommentar), gezeichnet werden sie als
     // Geisterblock ueber pending_blocks().
     pub fn set_pending_block(&mut self, x: i32, y: i32, z: i32, state: u32) {
+        let vorher = self.block_at(x, y, z);
         self.pending.insert((x, y, z), state);
+        self.note_snow_change(x, y, z, vorher);
     }
 
     pub fn clear_pending_block(&mut self, x: i32, y: i32, z: i32) {
+        let vorher = self.block_at(x, y, z);
         self.pending.remove(&(x, y, z));
+        self.note_snow_change(x, y, z, vorher);
+    }
+
+    // Stand der Schneekarte fuer die Spalte (s. Feld `snow_revisions`); 0 = nie geaendert.
+    #[must_use]
+    pub fn snow_revision(&self, x: i32, z: i32) -> u64 {
+        self.snow_revisions.get(&(x, z)).copied().unwrap_or(0)
+    }
+
+    fn bump_snow_revision(&mut self, key: (i32, i32), block: Option<(i32, i32, i32)>) {
+        self.snow_revision_next += 1;
+        self.snow_revisions.insert(key, self.snow_revision_next);
+        if self.snow_log.len() >= SNOW_LOG {
+            if let Some((stand, ..)) = self.snow_log.pop_front() {
+                self.snow_log_floor = stand;
+            }
+        }
+        self.snow_log.push_back((self.snow_revision_next, key, block));
+    }
+
+    // Die Bloecke, deren Aenderung den Stand der Spalte seit `since` hochgezaehlt hat. None, wenn
+    // das nicht (mehr) bekannt ist oder die ganze Spalte geladen oder entladen wurde -- dann
+    // kann sich in ihr alles geaendert haben.
+    #[must_use]
+    pub fn snow_changes_since(&self, x: i32, z: i32, since: u64) -> Option<Vec<(i32, i32, i32)>> {
+        if since < self.snow_log_floor {
+            return None;
+        }
+        self.snow_log.iter().filter(|&&(stand, spalte, _)| stand > since && spalte == (x, z)).map(|&(_, _, block)| block).collect()
+    }
+
+    // Nach einer Aenderung an (x, y, z): ein Block, der Schnee aufhaelt, kam hinzu oder ist weg
+    // (oder seine Oberkante ist jetzt eine andere) -- dann zaehlt der Stand der Spalte hoch. Auch
+    // auf festem Boden (frueher nur ueber freiem Platz: dann fielen Flocken in den neuen Block);
+    // der Leser rechnet dafuer nur noch nach, was sich wirklich aendert (s. snow_changes_since).
+    fn note_snow_change(&mut self, x: i32, y: i32, z: i32, vorher: u32) {
+        let jetzt = self.block_at(x, y, z);
+        if crate::weather::snow_stop(vorher) != crate::weather::snow_stop(jetzt) {
+            self.bump_snow_revision((x.div_euclid(SECTION_SIZE), z.div_euclid(SECTION_SIZE)), Some((x, y, z)));
+        }
+    }
+
+    // Y des hoechsten Blocks der Spalte, der Schnee aufhaelt (s. weather::snow_stop), mit den
+    // vorhergesagten Bloecken; None ohne einen solchen oder wenn die Spalte nicht geladen ist.
+    // Sections aus lauter Luft (bzw. lauter freien Bloecken) werden am Stueck uebersprungen.
+    #[must_use]
+    pub fn snow_top(&self, x: i32, z: i32) -> Option<i32> {
+        let key = (x.div_euclid(SECTION_SIZE), z.div_euclid(SECTION_SIZE));
+        let column = self.columns.get(&key)?;
+        let stop = |s: u32| crate::weather::snow_stop(s).is_some();
+        let top = column.min_y + column.sections.len() as i32 * SECTION_SIZE - 1;
+        if self.pending.keys().any(|&(px, _, pz)| px == x && pz == z) {
+            return (column.min_y..=top).rev().find(|&y| stop(self.block_at(x, y, z)));
+        }
+        let (lx, lz) = (x.rem_euclid(SECTION_SIZE), z.rem_euclid(SECTION_SIZE));
+        for (index, section) in column.sections.iter().enumerate().rev() {
+            if section.uniform().is_some_and(|s| !stop(s)) {
+                continue;
+            }
+            let base = column.min_y + index as i32 * SECTION_SIZE;
+            if let Some(y) = (0..SECTION_SIZE).rev().find(|&ly| stop(section.get(lx, ly, lz))) {
+                return Some(base + y);
+            }
+        }
+        None
     }
 
     // Der vorhergesagte Zustand an dieser Stelle, falls es einen gibt.
@@ -615,6 +703,10 @@ impl World {
         let state = crate::block_registry::normalize_air(state, crate::block_registry::air_variants());
         let vorher = column.sections[index].get(local_x, local_y, local_z);
         Arc::make_mut(column).sections[index].set(local_x, local_y, local_z, state);
+        // Liegt an der Stelle eine Vorhersage, sieht man den Server-Block (noch) nicht.
+        if !self.pending.contains_key(&(x, y, z)) {
+            self.note_snow_change(x, y, z, vorher);
+        }
         if self.light_remesh
             && (crate::light::luminance(vorher) != crate::light::luminance(state) || crate::light::opacity(vorher) != crate::light::opacity(state))
         {
@@ -721,6 +813,11 @@ impl World {
         self.voxel_cleared = true;
         // Offene Vorhersagen gehoeren zur alten Welt -- ihre Bestaetigung kommt nie mehr.
         self.pending.clear();
+        self.snow_revisions.clear();
+        // Was vorher war, ist nicht mehr nachzuvollziehen.
+        self.snow_log.clear();
+        self.snow_log_floor = self.snow_revision_next;
+        self.snow_revision_next += 1;
         self.border = Default::default();
         self.moving_boxes.clear();
     }
@@ -736,6 +833,76 @@ mod tests {
 
     fn stein_section() -> ChunkSection {
         ChunkSection::from_states(vec![1u32; SECTION_VOLUME])
+    }
+
+    fn state_of(block: &str) -> u32 {
+        (0..crate::block_registry::state_count() as u32).find(|&s| crate::block_registry::block_name(s) == Some(block)).expect("Block unbekannt")
+    }
+
+    // Stand fuer die Schneekarte: zaehlt, wenn ein Block, der Schnee aufhaelt, kommt oder geht,
+    // und beim Laden/Entladen.
+    #[test]
+    fn schneestand_nur_bei_dach_aenderungen() {
+        let mut welt = World::new();
+        let (stein, fackel, barriere) = (state_of("stone"), state_of("torch"), state_of("barrier"));
+        // Unterste Section voll Stein (-64..-49), darueber eine leere.
+        welt.insert_column(0, 0, vec![stein_section(), ChunkSection::from_states(vec![STATE_AIR; SECTION_VOLUME])]);
+        let geladen = welt.snow_revision(0, 0);
+        assert!(geladen > 0, "Laden zaehlt");
+
+        welt.set_block(3, -45, 3, stein);
+        let s1 = welt.snow_revision(0, 0);
+        assert!(s1 > geladen, "ueber Luft gesetzt");
+        welt.set_block(5, -45, 5, fackel);
+        welt.set_block(6, -45, 6, barriere);
+        assert_eq!(welt.snow_revision(0, 0), s1, "Fackel und Barriere halten keinen Schnee auf");
+        welt.set_block(3, -45, 3, STATE_AIR);
+        let s2 = welt.snow_revision(0, 0);
+        assert!(s2 > s1, "Abbau ueber Luft zaehlt auch");
+
+        welt.set_pending_block(4, -40, 4, stein);
+        let s3 = welt.snow_revision(0, 0);
+        assert!(s3 > s2, "vorhergesagt gesetzt");
+        welt.clear_pending_block(4, -40, 4);
+        let s4 = welt.snow_revision(0, 0);
+        assert!(s4 > s3, "Vorhersage zurueckgenommen");
+        welt.set_block(9, -48, 9, stein);
+        assert!(welt.snow_revision(0, 0) > s4, "auch direkt auf dem Boden");
+
+        assert_eq!(welt.snow_revision(1, 0), 0, "andere Spalte unberuehrt");
+        // Welche Bloecke es waren: seit dem Laden fuenf, seit s2 die zwei der Vorhersage und der am Boden.
+        assert_eq!(welt.snow_changes_since(0, 0, geladen), Some(vec![(3, -45, 3), (3, -45, 3), (4, -40, 4), (4, -40, 4), (9, -48, 9)]));
+        assert_eq!(welt.snow_changes_since(0, 0, s2), Some(vec![(4, -40, 4), (4, -40, 4), (9, -48, 9)]));
+        assert_eq!(welt.snow_changes_since(1, 0, 0), Some(vec![]), "andere Spalte: nichts");
+        assert_eq!(welt.snow_changes_since(0, 0, 0), None, "mit dem Laden: alles moeglich");
+        let vor = welt.snow_revision(0, 0);
+        welt.remove_column(0, 0);
+        assert!(welt.snow_revision(0, 0) > vor, "Entladen zaehlt");
+        assert_eq!(welt.snow_changes_since(0, 0, vor), None, "entladen: alles moeglich");
+        // Mehr Aenderungen, als gemerkt werden: was davor war, ist unbekannt.
+        welt.insert_column(0, 0, vec![stein_section(), ChunkSection::from_states(vec![STATE_AIR; SECTION_VOLUME])]);
+        let neu = welt.snow_revision(0, 0);
+        for i in 0..SNOW_LOG as i32 + 5 {
+            welt.set_block(8, -45, 8, if i % 2 == 0 { stein } else { STATE_AIR });
+        }
+        assert_eq!(welt.snow_changes_since(0, 0, neu), None);
+        assert_eq!(welt.snow_changes_since(0, 0, welt.snow_revision(0, 0) - 3).map(|l| l.len()), Some(3));
+        welt.clear();
+        assert_eq!(welt.snow_changes_since(0, 0, neu), None, "neue Welt");
+    }
+
+    #[test]
+    fn schneehoehe_der_spalte() {
+        let mut welt = World::new();
+        welt.insert_column(0, 0, vec![stein_section(), ChunkSection::from_states(vec![STATE_AIR; SECTION_VOLUME])]);
+        assert_eq!(welt.snow_top(2, 2), Some(-49));
+        welt.set_block(2, -40, 2, state_of("barrier"));
+        assert_eq!(welt.snow_top(2, 2), Some(-49), "Barriere zaehlt nicht");
+        welt.set_block(2, -38, 2, state_of("stone"));
+        assert_eq!(welt.snow_top(2, 2), Some(-38));
+        welt.set_pending_block(2, -35, 2, state_of("stone"));
+        assert_eq!(welt.snow_top(2, 2), Some(-35), "mit Vorhersage");
+        assert_eq!(welt.snow_top(20, 2), None, "nicht geladen");
     }
 
     // Der Bug vom 2026-09-22: die Welt-Untergrenze war als -64 festverdrahtet. Auf einer

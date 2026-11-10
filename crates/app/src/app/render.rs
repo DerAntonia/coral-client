@@ -376,7 +376,12 @@ impl App {
         let karte = e.item.and_then(|h| h.map_id);
         if !e.invisible {
             let modell = format!("block/{}{}", if leuchtend { "glow_item_frame" } else { "item_frame" }, if karte.is_some() { "_map" } else { "" });
+            let start = out.len();
             self.held_items.emit_model_raw(&modell, basis.then(Affine::translation([-0.5, -0.5, -0.5])), ENTITY_BRIGHTNESS, out);
+            // Eine Karte ohne durchsichtige Pixel deckt die Vorderseite des Bretts ganz ab.
+            if karte.and_then(|id| self.maps.get(id)).is_some_and(|m| m.opaque) {
+                keep_frame_triangles(out, start, schritt, |vorn| !vorn);
+            }
         }
         let Some(item) = e.item else { return };
         let innen = basis.then(Affine::translation([0.0, 0.0, if e.invisible { 0.5 } else { 0.4375 }]));
@@ -394,7 +399,75 @@ impl App {
             let drehung = e.frame_rotation.rem_euclid(8) as f32 * 45.0;
             let m = innen.then(rotation_z_deg(drehung)).then(Affine::scale([0.5; 3]));
             self.held_items.set_skull(self.held_skull_texture(&item));
+            let start = out.len();
             self.held_items.emit_fixed(item.model_id, m, ENTITY_BRIGHTNESS, out);
+            // Weit weg nur noch die Vorderseite des Items, ohne Kanten und Seitenflaechen.
+            let abstand_sq = feet.iter().map(|v| v * v).sum::<f32>();
+            if abstand_sq > ITEM_FRAME_LOD_DISTANCE * ITEM_FRAME_LOD_DISTANCE {
+                keep_frame_triangles(out, start, schritt, |vorn| vorn);
+            }
         }
+    }
+}
+
+// Ab hier zeichnet ein Rahmen vom Item nur die Vorderseite (in Bloecken).
+const ITEM_FRAME_LOD_DISTANCE: f32 = 128.0;
+
+// Behaelt von den Dreiecken ab `start` die, fuer die `behalten` ja sagt. "Vorn" heisst: parallel
+// zur Wand und in der vordersten solchen Ebene, gemessen entlang `richtung` (aus der Wand heraus).
+// Dreiecke quer zur Wand zaehlen nie als vorn.
+fn keep_frame_triangles(out: &mut Vec<world::BlockVertex>, start: usize, richtung: [f32; 3], behalten: impl Fn(bool) -> bool) {
+    let r = Vec3::from(richtung);
+    let rest: Vec<world::BlockVertex> = out.drain(start..).collect();
+    let ebene: Vec<Option<f32>> = rest
+        .chunks_exact(3)
+        .map(|t| {
+            let [a, b, c] = [0, 1, 2].map(|i| Vec3::from(t[i].position));
+            let n = (b - a).cross(c - a);
+            let laenge = n.length();
+            (laenge > 1e-12 && (n / laenge).dot(r).abs() > 0.99).then(|| ((a + b + c) / 3.0).dot(r))
+        })
+        .collect();
+    let vorderste = ebene.iter().flatten().fold(f32::MIN, |m, &d| m.max(d));
+    for (t, d) in rest.chunks_exact(3).zip(&ebene) {
+        if behalten(d.is_some_and(|d| d > vorderste - 1e-3)) {
+            out.extend_from_slice(t);
+        }
+    }
+    out.extend_from_slice(rest.chunks_exact(3).remainder());
+}
+
+#[cfg(test)]
+mod frame_cull_tests {
+    use super::keep_frame_triangles;
+
+    fn v(p: [f32; 3]) -> world::BlockVertex {
+        world::BlockVertex { position: p, color: [1.0; 3], uv: [0.0; 2] }
+    }
+
+    // Rahmen schaut nach Sueden (+z): Brett hinten (z 0), Vorderseite (z 0.1), eine Kante quer.
+    fn dreiecke() -> Vec<world::BlockVertex> {
+        vec![
+            v([0.0, 0.0, 0.0]), v([1.0, 0.0, 0.0]), v([0.0, 1.0, 0.0]),
+            v([0.0, 0.0, 0.1]), v([0.0, 1.0, 0.1]), v([1.0, 0.0, 0.1]),
+            v([0.0, 0.0, 0.0]), v([0.0, 0.0, 0.1]), v([0.0, 1.0, 0.0]),
+        ]
+    }
+
+    #[test]
+    fn nur_vorderseite_bleibt() {
+        let mut out = vec![v([9.0; 3])];
+        out.extend(dreiecke());
+        keep_frame_triangles(&mut out, 1, [0.0, 0.0, 1.0], |vorn| vorn);
+        assert_eq!(out.len(), 4);
+        assert!(out[1..].iter().all(|p| (p.position[2] - 0.1).abs() < 1e-6));
+    }
+
+    #[test]
+    fn vorderseite_faellt_weg() {
+        let mut out = dreiecke();
+        keep_frame_triangles(&mut out, 0, [0.0, 0.0, 1.0], |vorn| !vorn);
+        assert_eq!(out.len(), 6);
+        assert!(out.iter().all(|p| p.position[2] < 0.1 || p.position[0] == 0.0));
     }
 }

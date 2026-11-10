@@ -99,42 +99,26 @@ impl App {
         (self.rain_gradient, self.thunder_gradient * self.rain_gradient)
     }
 
-    // Wo Niederschlag faellt. Ohne Modul wie Vanilla (Quader, 10 Bloecke); mit Modul zwischen
-    // zwei Kugeln um die Kamera (Von/Bis).
+    // Wo Niederschlag faellt: Kugeln um die Kamera. Mit Modul die eingestellten Radien, ohne
+    // Regen DISTANCE_DEFAULT und Schnee SNOW_RADIUS bis SNOW_RADIUS_OUTER.
     pub(crate) fn weather_bounds(&self) -> precipitation::Bounds {
         let set = &self.settings;
         if set.module_weather {
-            precipitation::Bounds {
-                inner: set.weather_radius_inner.min(set.weather_radius.saturating_sub(1)),
-                outer: set.weather_radius,
-                sphere: true,
-            }
+            precipitation::Bounds { rain: set.weather_radius, snow: set.weather_snow_radius, snow_max: set.weather_snow_radius_max.max(set.weather_snow_radius) }
         } else {
-            precipitation::Bounds { inner: 0, outer: precipitation::RADIUS_DEFAULT, sphere: false }
+            precipitation::Bounds { rain: precipitation::DISTANCE_DEFAULT, snow: precipitation::SNOW_RADIUS, snow_max: precipitation::SNOW_RADIUS_OUTER }
         }
     }
 
-    // Niederschlag, einmal pro Tick: die Daecher um die Kamera vermessen (nur solange etwas
-    // faellt). Bewusst anders als Vanilla: Barrieren halten ihn nicht auf -- Server ziehen
-    // damit unsichtbare Decken und Waende ein, und Schnee, der in der Luft an einer
-    // unsichtbaren Flaeche endet, sieht kaputt aus (Nutzerwunsch). Nur fuers Bild; der
-    // Dreizack fragt weiter Vanillas Heightmap (s. touching_water_or_rain).
+    // Niederschlag, einmal pro Tick: die Daecher um die Kamera vermessen und die Teilchen
+    // bewegen und erzeugen (s. precipitation). Bewusst anders als Vanilla: Barrieren halten ihn
+    // nicht auf -- Server ziehen damit unsichtbare Decken und Waende ein, und Schnee, der in der
+    // Luft an einer unsichtbaren Flaeche endet, sieht kaputt aus (Nutzerwunsch). Nur fuers Bild;
+    // der Dreizack fragt weiter Vanillas Heightmap (s. touching_water_or_rain).
     pub(crate) fn tick_weather(&mut self) {
-        let (regen, _, _) = self.visual_weather();
-        let radius = self.weather_bounds().outer;
-        let p = self.camera.position;
-        let mitte = (p.x.floor() as i32, p.z.floor() as i32);
-        let (welt, formen) = (&self.world, &self.block_shapes);
-        self.precipitation.tick(mitte, radius, regen > 0.0, |x, z| {
-            welt.motion_blocking_top_except(x, z, formen, |state| world::block_registry::block_name(state) == Some("barrier"))
-        });
-    }
-
-    // Niederschlag, einmal pro Frame: die Quads um die aktuelle Kamera.
-    pub(crate) fn build_weather_vertices(&mut self) -> [u32; 2] {
-        let (regen, _, fest) = self.visual_weather();
+        let (regen, gewitter, fest) = self.visual_weather();
         let grenzen = self.weather_bounds();
-        let (welt, klima) = (&self.world, &self.biome_climate);
+        let (welt, formen, klima, palette) = (&self.world, &self.block_shapes, &self.biome_climate, &self.biome_palette);
         let art = |x: i32, y: i32, z: i32| {
             fest.or_else(|| match world::weather::precipitation(*klima.get(welt.biome_at(x, y, z) as usize)?, y) {
                 world::weather::Precipitation::None => None,
@@ -142,8 +126,36 @@ impl App {
                 world::weather::Precipitation::Snow => Some(precipitation::Kind::Snow),
             })
         };
+        // Regenfarbe: hell, mit einem Hauch der Wasserfarbe des Bioms.
+        let farbe = |x: i32, y: i32, z: i32| {
+            let wasser = palette.colors_of(welt.biome_at(x, y, z)).water;
+            std::array::from_fn(|i| 1.0 + (wasser[i] - 1.0) * 0.15)
+        };
+        self.precipitation.tick(self.camera.position, grenzen, self.settings.weather_density, self.settings.weather_snow_speed, regen, gewitter, art, farbe, |x, z| {
+            welt.motion_blocking_top_except(x, z, formen, |state| world::block_registry::block_name(state) == Some("barrier"))
+        }, |x, y, z| {
+            // Was Flocken aufhaelt (s. weather::snow_stop).
+            world::weather::snow_stop(welt.block_at(x, y, z))
+        }, |x, z| welt.snow_top(x, z), WorldSnowChanges(welt));
+    }
+
+    // Niederschlag, einmal pro Frame: die Quads der Teilchen um die aktuelle Kamera.
+    pub(crate) fn build_weather_vertices(&mut self) -> [u32; 2] {
+        let grenzen = self.weather_bounds();
+        let rechts = self.camera.right();
+        let oben = rechts.cross(self.camera.view_forward());
         let mut out = std::mem::take(&mut self.weather_vertices);
-        let anzahl = self.precipitation.build(self.camera.position, self.tick_progress(), grenzen, regen, art, &mut out);
+        let anzahl = self.precipitation.build(
+            self.camera.position,
+            self.tick_progress(),
+            self.physics.vel.as_vec3(),
+            rechts,
+            oben,
+            grenzen,
+            1.0,
+            self.weather_layouts,
+            &mut out,
+        );
         self.weather_vertices = out;
         anzahl
     }
@@ -211,18 +223,36 @@ impl App {
         };
     }
 
-    pub(crate) fn sky_clear_color(&self) -> wgpu::Color {
-        let srgb = if self.sky_color_module_active() {
+    // Die Himmelsfarbe in sRGB (s. sky_clear_color).
+    pub(crate) fn sky_srgb(&self) -> [f32; 3] {
+        if self.sky_color_module_active() {
             self.settings.sky_color_rgb()
         } else {
             let (regen, gewitter) = self.sky_weather();
             world::sky::weather_sky(world::sky::time_of_day_sky(SKY_DAY_SRGB, self.sky_day_time()), regen, gewitter)
-        };
+        }
+    }
+
+    pub(crate) fn sky_clear_color(&self) -> wgpu::Color {
+        let srgb = self.sky_srgb();
         wgpu::Color {
             r: f64::from(world::sky::srgb_to_linear(srgb[0])),
             g: f64::from(world::sky::srgb_to_linear(srgb[1])),
             b: f64::from(world::sky::srgb_to_linear(srgb[2])),
             a: 1.0,
         }
+    }
+}
+
+// Was sich fuer die Schneekarte in der Welt geaendert hat (s. precipitation::SnowChanges).
+struct WorldSnowChanges<'a>(&'a world::World);
+
+impl precipitation::SnowChanges for WorldSnowChanges<'_> {
+    fn revision(&self, cx: i32, cz: i32) -> u64 {
+        self.0.snow_revision(cx, cz)
+    }
+
+    fn since(&self, cx: i32, cz: i32, stand: u64) -> Option<Vec<(i32, i32, i32)>> {
+        self.0.snow_changes_since(cx, cz, stand)
     }
 }

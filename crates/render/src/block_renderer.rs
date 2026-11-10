@@ -126,9 +126,9 @@ pub struct ParticleDraws {
 // sind 6 Vertices. Drei Blaetter teilen sich hier einen Puffer, rund 3,5 MB.
 pub const PARTICLE_VERTEX_CAPACITY: usize = 16_384 * 6;
 
-// Regen und Schnee (s. app::precipitation): ein Quad je Blockspalte um die Kamera, bei
-// hoechstens 16 Bloecken Radius 33 x 33 Spalten.
-pub const WEATHER_VERTEX_CAPACITY: usize = 33 * 33 * 6;
+// Regen und Schnee (s. app::precipitation): ein Quad je Teilchen, hoechstens 4300 Teilchen
+// (1500 bei 70 % Menge, bis 200 %).
+pub const WEATHER_VERTEX_CAPACITY: usize = 4300 * 6;
 
 // 6 x f32 -- der augenrelative Versatz einer Spalte in ganzen Bloecken und der Nachkomma-
 // Anteil des Auges (s. update_column_offsets, block.wgsl::column_relative).
