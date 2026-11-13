@@ -9,6 +9,9 @@ mit MangoHud. Ryzen 7 9700X, RX 9060 XT, Linux.
 |---|---|---|---|
 | Horizon | 799 | 414 | 272 |
 | **Coral** | **969** | **577** | **384** |
+| Fabulously Optimized (Prism, Java) | 571 | 214 | 155 |
+
+Fabulously Optimized: Prism-Instanz mit kopierter Horizon-`options.txt`, `-Xmx4096m`, 30 s mit MangoHud, GPU 50 % / 43 W. Gleicher Standort und gleiche Einstellungen wie bei Horizon und Coral.
 
 | Client | RAM | VRAM |
 |---|---|---|
