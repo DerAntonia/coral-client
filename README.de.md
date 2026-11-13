@@ -126,6 +126,12 @@ Version 1.0 ist das erste stabile Release. Vieles funktioniert wie in Vanilla, m
 noch oder sieht anders aus. Gebaut und getestet wird der Client gegen 1.21.11. Andere Versionen
 werden nicht unterstützt.
 
+### Benchmarks
+
+Gemessen gegen Horizon und Fabulously Optimized in derselben Testwelt, mit MangoHud:
+
+- [Coral Client vs. Horizon](benchmarks/vergleich-horizon-2026-11-13.md) (2026-11-13)
+
 ### Selbst bauen
 
 Du brauchst eine aktuelle Rust-Toolchain (stable). Unter Linux brauchst du außerdem die

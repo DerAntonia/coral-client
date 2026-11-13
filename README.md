@@ -125,6 +125,12 @@ Version 1.0 is the first stable release. A lot works like Vanilla; some things a
 missing or look different. The client is built and tested against 1.21.11. Other versions are
 not supported.
 
+### Benchmarks
+
+Measured against Horizon and Fabulously Optimized in the same test world, with MangoHud:
+
+- [Coral Client vs. Horizon](benchmarks/horizon-comparison-2026-11-13.md) (2026-11-13)
+
 ### Building it yourself
 
 You need a current Rust toolchain (stable). On Linux you also need the ALSA development files
