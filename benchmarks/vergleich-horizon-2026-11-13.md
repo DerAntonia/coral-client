@@ -5,6 +5,11 @@ Bildrate und Speicher im selben Testserver, gemessen mit MangoHud. Die Logs lieg
 
 ## Aufbau
 
+![Testwelt](mangohud-2026-11-13/perfwelt.png)
+
+*Die Testwelt. Der Screenshot ist außerhalb der Messung entstanden, die FPS-Anzeige im Bild gehört
+nicht zu den Ergebnissen.*
+
 - **System:** AMD Ryzen 7 9700X, AMD Radeon RX 9060 XT, 16 GB RAM, Linux Mint 22.3,
   Kernel 7.0.0-38, Mesa 26.2.5.
 - **Server:** Fabric 1.21.11 mit ViaFabric/ViaVersion. Die Testwelt ist voll mit Entities,
