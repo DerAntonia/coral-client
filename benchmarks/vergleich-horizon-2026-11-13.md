@@ -1,7 +1,7 @@
 # Vergleich Coral Client – Horizon, 2026-11-13
 
 Bildrate und Speicher im selben Testserver, gemessen mit MangoHud. Die Logs liegen in
-`mangohud-2026-11-13/`.
+`mangohud-2026-11-13/`. Englische Fassung: `horizon-comparison-2026-11-13.md`.
 
 ## Aufbau
 
@@ -33,8 +33,7 @@ nicht zu den Ergebnissen.*
 | Client | Log | Ø FPS | Median | p99 | 1-%-Low | 0,1-%-Low | längster Frame | GPU-Last / Leistung |
 |---|---|---|---|---|---|---|---|---|
 | Horizon | `horizon-client_…_20-53-26` | 799 | 1,187 ms | 2,118 ms | 414 FPS | 272 FPS | 6,18 ms | 55 % / 53 W |
-| Coral, Motion Blur an | `coral-client-…_20-57-45` | 909 | 1,046 ms | 1,673 ms | 494 FPS | 321 FPS | 6,67 ms | 80 % / 60 W |
-| Coral, Motion Blur aus | `coral-client-…_21-02-43` | 969 | 0,985 ms | 1,491 ms | 577 FPS | 384 FPS | 3,80 ms | 69 % / 54 W |
+| Coral | `coral-client-…_21-02-43` | 969 | 0,985 ms | 1,491 ms | 577 FPS | 384 FPS | 3,80 ms | 69 % / 54 W |
 
 So sind die Werte gerechnet:
 - **Ø FPS:** Anzahl der Frames geteilt durch die Summe der Frametimes.
@@ -43,7 +42,7 @@ So sind die Werte gerechnet:
 
 Die `_summary.csv` von MangoHud rechnet anders und zeigt deshalb leicht abweichende Werte.
 
-Coral ohne Motion Blur liefert 21 % mehr Bilder im Schnitt als Horizon und 39 % mehr beim
+Coral liefert 21 % mehr Bilder im Schnitt als Horizon und 39 % mehr beim
 1-%-Low.
 
 ## Speicher
@@ -66,3 +65,14 @@ Horizon lief bei der Messung erst 32 Sekunden und war damit wohl noch nicht eing
   und liefen nicht unter den Bedingungen von oben.
 - **OneClient 2.5.1 (Fabric 1.21.11, Sodium):** Im Spiel waren 300–400 FPS zu sehen. Ein sauberes
   MangoHud-Log kam nicht zustande, deshalb fehlt der Client in der Tabelle.
+
+## Coral mit Motion Blur
+
+Alle drei Motion-Blur-Arten an (Hand, Entities, Kamera), sonst wie oben. Der Wert gehört nicht
+zum Vergleich mit Horizon, er zeigt nur, was Motion Blur kostet.
+
+| Log | Ø FPS | Median | p99 | 1-%-Low | 0,1-%-Low | längster Frame | GPU-Last / Leistung |
+|---|---|---|---|---|---|---|---|
+| `coral-client-…_22-16-19` | 505 | 1,866 ms | 3,463 ms | 271 FPS | 225 FPS | 6,99 ms | 100 % / 171 W |
+
+Die GPU ist dabei voll ausgelastet, die Bildrate hängt hier also an der GPU.
