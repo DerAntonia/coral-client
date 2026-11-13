@@ -2,9 +2,8 @@
 name = "launcher"
 edition.workspace = true
 version.workspace = true
-# Anders als der Rest des Projekts gemeinfrei (CC0), damit der Launcher frei weitergegeben
-# werden kann -- s. LICENSE in diesem Ordner und den Abschnitt Lizenz im README.
-license = "CC0-1.0"
+# Nur die gebaute Launcher-Datei ist gemeinfrei (CC0), nicht der Quellcode -- s. den
+# Abschnitt Lizenz im README.
 
 [[bin]]
 name = "coral-client-launcher"
