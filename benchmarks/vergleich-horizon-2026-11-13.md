@@ -18,6 +18,12 @@ Fabulously Optimized: Prism-Instanz mit kopierter Horizon-`options.txt`, `-Xmx40
 | Horizon | 832 MiB | 396 MiB |
 | Coral | 957 MiB | 658 MiB |
 
+| Client | GPU-Strom | GPU-Last | CPU-Last (gesamt) |
+|---|---|---|---|
+| Horizon | 53 W | 55 % | 13 % |
+| Coral | 54 W | 69 % | 11 % |
+| Fabulously Optimized | 43 W | 50 % | 12 % |
+
 Coral mit allem Motion Blur an (Hand, Entities, Kamera): 505 FPS im Schnitt, 271 FPS 1-%-Low.
 
 Logs: `mangohud-2026-11-13/`

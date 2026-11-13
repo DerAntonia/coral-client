@@ -18,6 +18,12 @@ Fabulously Optimized: Prism instance with Horizon's options.txt copied in, `-Xmx
 | Horizon | 832 MiB | 396 MiB |
 | Coral | 957 MiB | 658 MiB |
 
+| Client | GPU power | GPU load | CPU load (total) |
+|---|---|---|---|
+| Horizon | 53 W | 55 % | 13 % |
+| Coral | 54 W | 69 % | 11 % |
+| Fabulously Optimized | 43 W | 50 % | 12 % |
+
 Coral with all motion blur on (hand, entities, camera): 505 FPS avg, 271 FPS 1 % low.
 
 Logs: `mangohud-2026-11-13/`
