@@ -26,4 +26,6 @@ Fabulously Optimized: Prism instance with Horizon's options.txt copied in, `-Xmx
 
 Coral with all motion blur on (hand, entities, camera): 505 FPS avg, 271 FPS 1 % low.
 
+A YouTube video was playing in the background during the measurements.
+
 Logs: `mangohud-2026-11-13/`

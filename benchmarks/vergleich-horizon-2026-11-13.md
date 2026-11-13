@@ -26,4 +26,6 @@ Fabulously Optimized: Prism-Instanz mit kopierter Horizon-`options.txt`, `-Xmx40
 
 Coral mit allem Motion Blur an (Hand, Entities, Kamera): 505 FPS im Schnitt, 271 FPS 1-%-Low.
 
+Während der Messungen lief im Hintergrund ein YouTube-Video.
+
 Logs: `mangohud-2026-11-13/`
