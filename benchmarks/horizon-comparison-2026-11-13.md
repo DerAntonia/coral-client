@@ -9,7 +9,7 @@ Ryzen 7 9700X, RX 9060 XT, Linux.
 |---|---|---|---|
 | Horizon | 799 | 414 | 272 |
 | **Coral** | **969** | **577** | **384** |
-| Fabulously Optimized (-Xmx4096m, GC) | 571 | 214 | 155 |
+| Fabulously Optimized (Xmx4096) | 571 | 214 | 155 |
 
 Prism instance with Horizon's options.txt copied in, 30 s with MangoHud. Same spot and settings as Horizon and Coral.
 
