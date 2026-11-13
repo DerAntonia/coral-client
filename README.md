@@ -170,8 +170,8 @@ it. That does not make it free to republish.
 
 **Exception, the launcher:** only the finished launcher binary (`coral-client-launcher-*` from the
 releases) is in the public domain under [CC0 1.0](crates/launcher/LICENSE). It may be shared,
-uploaded and passed on freely, including the parts of the `assets` crate it is built with. The
-source code in `crates/launcher/` is not covered by CC0; the rules above apply to it.
+uploaded and passed on freely. The source code in `crates/launcher/` is not covered by CC0; the
+rules above apply to it.
 
 **Pull requests:** by opening a pull request you allow the author to use your contribution in
 this project under any license, including a later open-source license.

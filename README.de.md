@@ -171,8 +171,8 @@ beim Verbessern helfen kannst. Frei weiterveröffentlichen darfst du ihn deshalb
 
 **Ausnahme Launcher:** Nur die fertige Launcher-Datei (`coral-client-launcher-*` aus den Releases)
 ist unter [CC0 1.0](crates/launcher/LICENSE) gemeinfrei. Du darfst sie frei teilen, hochladen und
-weitergeben, einschließlich der Teile des `assets`-Crates, mit denen sie gebaut ist. Der Quellcode
-in `crates/launcher/` fällt nicht unter CC0; für ihn gelten die Regeln oben.
+weitergeben. Der Quellcode in `crates/launcher/` fällt nicht unter CC0; für ihn gelten die Regeln
+oben.
 
 **Pull Requests:** Mit einem Pull Request erlaubst du dem Autor, deinen Beitrag in diesem
 Projekt unter jeder Lizenz zu verwenden, auch unter einer späteren Open-Source-Lizenz.
