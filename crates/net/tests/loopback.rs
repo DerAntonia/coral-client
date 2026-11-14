@@ -220,6 +220,7 @@ async fn join_local_server() {
                 | net::ClientEvent::EntityAnimation { .. }
                 | net::ClientEvent::MobEffectRemoved { .. }
                 | net::ClientEvent::BlockEvent(..)
+                | net::ClientEvent::BlockDestruction { .. }
                 | net::ClientEvent::HeadAt { .. }
                 | net::ClientEvent::WorldTime { .. }
                 | net::ClientEvent::EntitySleeping { .. } => {}

@@ -85,6 +85,9 @@ impl App {
                 if self.settings.module_session_info && self.conn_status == ConnStatus::Connected {
                     self.push_session_info(gpu, &mut rects, &mut texts);
                 }
+                if self.settings.module_clock && self.conn_status == ConnStatus::Connected {
+                    self.push_clock(gpu, &mut texts);
+                }
                 self.build_toteming_hud(gpu, &mut rects, &mut hud_lines, &mut sprites, &mut texts);
                 self.build_gamemode_wheel(gpu, &mut hud_lines, &mut sprites, &mut texts);
                 // Gui.renderHotbarAndDecorations: Herzen, Ruestung, Hunger und Luft nur, wenn
@@ -161,7 +164,16 @@ impl App {
                 self.build_sign_editor(gpu, &mut rects, &mut sprites, &mut texts);
             }
             if self.module_menu_open {
+                // In Menue-Pixeln gebaut, dann in echte umgerechnet (s. GpuState::ui_scale).
+                let s = Self::world_menu_scale(gpu);
+                let ab = (rects.len(), texts.len());
+                let vorher = gpu.ui_scale.replace(s);
                 self.build_module_menu(gpu, &mut rects, &mut texts);
+                // Das Zeilenband der Detailansicht (s. module_detail_band) in echten Pixeln, nur fuer
+                // den Scissor beim Zeichnen.
+                crate::store_module_clip(self.module_detail_cut().then(|| crate::scale_rect(self.module_detail_band(gpu), s)));
+                gpu.ui_scale.set(vorher);
+                crate::scale_ui_tail(&mut rects, &mut texts, ab, s / vorher);
                 // Das Modul-Menue legt sich ueber alles -- dann waere die Figur ein Stueck
                 // 3D-Geometrie mitten darin.
                 doll_split = None;
@@ -248,7 +260,7 @@ impl App {
 
     // Groesste feste Stufe fuer die Plus-Knoepfe der Skalierungen.
     pub(crate) fn max_gui_scale_setting(&self) -> u32 {
-        self.gpu.as_ref().map_or(inventory::GUI_SCALE_MIN_MAX, |g| inventory::max_gui_scale(g.size()))
+        self.gpu.as_ref().map_or(inventory::GUI_SCALE_MIN_MAX, |g| inventory::max_gui_scale(g.real_size()))
     }
 
     // Skalierung des Inventarfensters bzw. der Hotbar -- zwei getrennte Einstellungen, weil

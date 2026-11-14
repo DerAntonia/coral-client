@@ -43,11 +43,20 @@ pub struct Account {
     // hat -- Microsoft nimmt es mit keiner anderen an.
     pub refresh_token: String,
     pub client_id: String,
+    // Hat Mojang dieses Access-Token angenommen (Anmeldung oder Pruefung)? Gespeichert, damit
+    // die Kontenliste schon beim Start weiss, welche Konten sofort gehen (s. usable).
+    pub verified: bool,
 }
 
 impl Account {
     pub fn credentials(&self) -> auth::Credentials {
         auth::Credentials { access_token: self.access_token.clone(), profile_id: self.uuid.clone(), username: self.name.clone() }
+    }
+
+    // Sofort benutzbar: das Access-Token ist bestaetigt und laeuft noch mindestens eine Minute
+    // (wie in App::use_account). Ein Token ohne Ablaufdatum gilt als laufend.
+    pub fn usable(&self, now: u64) -> bool {
+        self.verified && expiry(&self.access_token).is_none_or(|exp| exp > now + 60)
     }
 }
 
@@ -76,12 +85,17 @@ fn same_uuid(a: &str, b: &str) -> bool {
 
 impl Store {
     // Format: eine Zeile je Konto "konto<TAB>quelle<TAB>name<TAB>uuid<TAB>token<TAB>refresh<TAB>
-    // client-id". Tokens und Namen enthalten keine Tabs.
+    // client-id<TAB>bestaetigt (1/0)". Tokens und Namen enthalten keine Tabs. Aeltere Dateien
+    // ohne die letzte Spalte: unbestaetigt.
     pub fn parse(text: &str) -> Self {
         let mut store = Self::default();
         for line in text.lines() {
             let f: Vec<&str> = line.split('\t').collect();
-            if let ["konto", quelle, name, uuid, token, refresh, client_id] = f.as_slice() {
+            let (felder, verified) = match f.as_slice() {
+                [vorne @ .., b] if f.len() == 8 => (vorne, *b == "1"),
+                alle => (alle, false),
+            };
+            if let ["konto", quelle, name, uuid, token, refresh, client_id] = felder {
                 let Some(source) = Source::from_key(quelle) else { continue };
                 if uuid.is_empty() || token.is_empty() {
                     continue;
@@ -93,6 +107,7 @@ impl Store {
                     access_token: token.to_string(),
                     refresh_token: refresh.to_string(),
                     client_id: client_id.to_string(),
+                    verified,
                 });
             }
         }
@@ -104,13 +119,14 @@ impl Store {
         for a in &self.list {
             let feld = |s: &str| s.replace(['\t', '\n', '\r'], "");
             out.push_str(&format!(
-                "konto\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "konto\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 a.source.key(),
                 feld(&a.name),
                 feld(&a.uuid),
                 feld(&a.access_token),
                 feld(&a.refresh_token),
-                feld(&a.client_id)
+                feld(&a.client_id),
+                u8::from(a.verified)
             ));
         }
         out
@@ -120,9 +136,10 @@ impl Store {
         self.list.iter().position(|a| same_uuid(&a.uuid, uuid))
     }
 
-    // Nach einer Anmeldung: Konto anlegen oder auffrischen (Name kann sich geaendert haben).
-    // Mit Refresh-Token wird es ein Microsoft-Konto; ohne behaelt ein vorhandenes seine Quelle
-    // und sein Refresh-Token.
+    // Nach einer Anmeldung oder Pruefung: Konto anlegen oder auffrischen (Name kann sich
+    // geaendert haben). Das Token kommt dann immer von Mojang, ist also bestaetigt. Mit
+    // Refresh-Token wird es ein Microsoft-Konto; ohne behaelt ein vorhandenes seine Quelle und
+    // sein Refresh-Token.
     pub fn upsert(&mut self, creds: &auth::Credentials, msa: Option<(String, String)>, source_without_msa: Source) {
         let neu = if let Some(i) = self.find(&creds.profile_id) { &mut self.list[i] } else {
             self.list.push(Account {
@@ -132,15 +149,28 @@ impl Store {
                 access_token: String::new(),
                 refresh_token: String::new(),
                 client_id: String::new(),
+                verified: false,
             });
             self.list.last_mut().unwrap()
         };
         neu.name = creds.username.clone();
         neu.access_token = creds.access_token.clone();
+        neu.verified = true;
         if let Some((refresh, client_id)) = msa {
             neu.source = Source::Microsoft;
             neu.refresh_token = refresh;
             neu.client_id = client_id;
+        }
+    }
+
+    // Mojang hat das Token abgelehnt. true = geaendert (dann speichern).
+    pub fn mark_unverified(&mut self, uuid_key: &str) -> bool {
+        match self.list.iter_mut().find(|a| key(&a.uuid) == uuid_key) {
+            Some(a) if a.verified => {
+                a.verified = false;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -163,15 +193,16 @@ pub fn now_unix() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-// Restlaufzeit fuer die Anzeige: "noch 23 h", "noch 41 min", "abgelaufen".
+// Restlaufzeit fuer die Anzeige: ab einer Stunde Stunden mit einer Stelle nach dem Komma
+// ("noch 23,4 h", Nutzer 2026-11-11), darunter Minuten ("noch 41 min"), sonst "abgelaufen".
 pub fn remaining_text(exp: u64, now: u64) -> String {
     let rest = exp.saturating_sub(now);
     if rest == 0 {
         "abgelaufen".to_string()
-    } else if rest >= 2 * 86_400 {
-        format!("noch {} Tage", rest / 86_400)
     } else if rest >= 3600 {
-        format!("noch {} h", rest / 3600)
+        // Abgerundet wie die Minuten: 59 min 59 s sind noch keine Stunde, 1,99 h noch 1,9 h.
+        let zehntel = rest / 360;
+        format!("noch {},{} h", zehntel / 10, zehntel % 10)
     } else {
         format!("noch {} min", (rest / 60).max(1))
     }
@@ -236,10 +267,13 @@ mod tests {
         assert_eq!(expiry(&jwt(1_800_000_000)), Some(1_800_000_000));
         assert_eq!(expiry("kein-jwt"), None);
         assert_eq!(remaining_text(1000, 2000), "abgelaufen");
-        assert_eq!(remaining_text(1000 + 23 * 3600 + 59, 1000), "noch 23 h");
+        assert_eq!(remaining_text(1000 + 23 * 3600 + 59, 1000), "noch 23,0 h");
+        assert_eq!(remaining_text(1000 + 23 * 3600 + 24 * 60, 1000), "noch 23,4 h");
+        assert_eq!(remaining_text(1000 + 3600, 1000), "noch 1,0 h");
+        assert_eq!(remaining_text(1000 + 3599, 1000), "noch 59 min");
         assert_eq!(remaining_text(1000 + 41 * 60, 1000), "noch 41 min");
         assert_eq!(remaining_text(1000 + 30, 1000), "noch 1 min");
-        assert_eq!(remaining_text(1000 + 3 * 86_400, 1000), "noch 3 Tage");
+        assert_eq!(remaining_text(1000 + 3 * 86_400, 1000), "noch 72,0 h");
     }
 
     #[test]
@@ -247,10 +281,26 @@ mod tests {
         let mut s = Store::default();
         s.upsert(&creds("DerAntonia", "aa", "t1"), Some(("r1".into(), "cid".into())), Source::Token);
         s.upsert(&creds("uhze", "bb", "t2"), None, Source::Token);
+        s.mark_unverified("bb");
         let t = Store::parse(&s.serialize());
         assert_eq!(t.list, s.list);
         assert_eq!(t.list[0].source, Source::Microsoft);
         assert_eq!(t.list[1].source, Source::Token);
+        assert!(t.list[0].verified && !t.list[1].verified);
+    }
+
+    // Bestaetigt und noch laufend: sofort benutzbar. Alte Dateien ohne die Spalte: unbestaetigt.
+    #[test]
+    fn benutzbar_nur_bestaetigt_und_laufend() {
+        let mut s = Store::default();
+        s.upsert(&creds("a", "aa", &jwt(10_000)), None, Source::Token);
+        assert!(s.list[0].usable(9_000));
+        assert!(!s.list[0].usable(9_950), "laeuft keine Minute mehr");
+        s.mark_unverified("aa");
+        assert!(!s.list[0].usable(9_000));
+        let alt = Store::parse("konto\ttoken\tx\tcc\tt\t\t\n");
+        assert_eq!(alt.list.len(), 1);
+        assert!(!alt.list[0].verified);
     }
 
     #[test]

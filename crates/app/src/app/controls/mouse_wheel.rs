@@ -5,6 +5,7 @@ use super::*;
 impl App {
     // Rohe Maus-Deltas: im Menu-Modus 2D-Cursor, im World-Modus Kamera-Blickrichtung.
     pub(crate) fn handle_mouse_delta(&mut self, delta: (f64, f64)) {
+        self.sync_ui_scale();
         if !self.owns_mouse() {
             return; // Maus gehoert gerade dem Desktop (Alt-Tab / kein Fullscreen)
         }
@@ -133,7 +134,6 @@ impl App {
                     || (self.screen == MenuScreen::SettingsSkin
                         && (self.skin_files.is_some()
                             || [skin_tab::Column::Available, skin_tab::Column::Selected].into_iter().any(|c| skin_column_rect(c).contains(px, py))))
-                    || self.screen == MenuScreen::SettingsParticles
             }
             // Chat, Modul-Menue, Inventar. Im Inventar scrollt Vanilla gar nichts -- auch
             // keine Lautstaerke.
@@ -163,11 +163,12 @@ impl App {
         let bind = Bind::Mouse(if hoch { BindMouse::WheelUp } else { BindMouse::WheelDown });
         let kb = self.settings.keybinds;
         // Liegt die Lautstaerke-Aktion auf dem Rad, gilt sie ueberall, auch im Menue.
-        if kb.binds(KeyBindAction::VolumeUp).any(|b| b == bind) {
+        let unten = |b: Bind| self.binds_down.contains(&b);
+        if kb.matches(KeyBindAction::VolumeUp, bind, unten) {
             self.adjust_volume(1, true);
             return;
         }
-        if kb.binds(KeyBindAction::VolumeDown).any(|b| b == bind) {
+        if kb.matches(KeyBindAction::VolumeDown, bind, unten) {
             self.adjust_volume(-1, true);
             return;
         }
@@ -217,7 +218,7 @@ impl App {
             || self.input_field.is_some()
             || self.server_edit.is_some();
         let kb = self.settings.keybinds;
-        let unten = |a: KeyBindAction| kb.binds(a).any(|b| self.binds_down.contains(&b));
+        let unten = |a: KeyBindAction| kb.held(a, |b| self.binds_down.contains(&b));
         let richtung = match (unten(KeyBindAction::VolumeUp), unten(KeyBindAction::VolumeDown)) {
             (true, false) => Some(1),
             (false, true) => Some(-1),

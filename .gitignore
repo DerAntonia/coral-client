@@ -1,5 +1,8 @@
 /target
 
+# Lokaler Müllordner (Dateien werden mit `mv <path> Trash/` entsorgt)
+/Trash/
+
 # Dekompilierte/extrahierte Minecraft-Klassen (Mojang-Code, nicht einchecken)
 /net/
 

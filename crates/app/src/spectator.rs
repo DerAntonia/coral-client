@@ -11,7 +11,36 @@
 
 use glam::DVec3;
 
-use crate::{physics, App, CrosshairTarget, GAME_MODE_SPECTATOR};
+use crate::{physics, App, CrosshairTarget, KeyBindAction, GAME_MODE_SPECTATOR};
+
+// Die sieben Bewegungstasten, in der Reihenfolge der Felder in App::spectator_swallowed.
+pub const SWALLOW_KEYS: [KeyBindAction; 7] = [
+    KeyBindAction::Forward,
+    KeyBindAction::Backward,
+    KeyBindAction::Left,
+    KeyBindAction::Right,
+    KeyBindAction::Jump,
+    KeyBindAction::Sneak,
+    KeyBindAction::Sprint,
+];
+// Der Hub nach einem Wechsel in den Zuschauermodus: ein Block, in RISE_TICKS Ticks gleichmaessig.
+const RISE_BLOCKS: f64 = 1.0;
+const RISE_TICKS: f64 = 10.0;
+
+// Eine gehaltene Taste, die beim Wechsel schon unten war, bleibt verschluckt, bis sie einmal
+// losgelassen wurde. Erst danach wirkt ein neuer Druck.
+pub fn release_swallowed(swallowed: &mut [bool; 7], held: [bool; 7]) {
+    for (s, h) in swallowed.iter_mut().zip(held) {
+        if !h {
+            *s = false;
+        }
+    }
+}
+
+// Der Hub je Tick: höchstens ein Zehntel Block, und nie mehr als noch offen ist.
+pub fn rise_step(rest: f64) -> f64 {
+    (RISE_BLOCKS / RISE_TICKS).min(rest.max(0.0))
+}
 
 pub const SPEED_STEPS: [u32; 20] = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100];
 // Etwa Vanillas Zuschauerflug geradeaus (Fluggeschwindigkeit 0.05 bei Luftbremse 0.91).
@@ -64,6 +93,49 @@ pub fn flight_step(pos: DVec3, ziel: DVec3) -> (DVec3, bool) {
 }
 
 impl App {
+    fn held_movement_keys(&self) -> [bool; 7] {
+        SWALLOW_KEYS.map(|a| self.action_active(a))
+    }
+
+    // Spielmodus hat gewechselt. In den Zuschauermodus: gehaltene Bewegungstasten verschlucken,
+    // und wenn die Welt schon steht, ein Stueck nach oben. Heraus: alles zuruecksetzen.
+    pub(crate) fn spectator_switch(&mut self, vorher: u8, mode: u8) {
+        if mode == GAME_MODE_SPECTATOR {
+            if vorher != GAME_MODE_SPECTATOR {
+                self.spectator_swallowed = self.held_movement_keys();
+                if self.camera_placed {
+                    self.spectator_rise = RISE_BLOCKS;
+                }
+            }
+        } else {
+            self.spectator_swallowed = [false; 7];
+            self.spectator_rise = 0.0;
+        }
+    }
+
+    // Jeden Tick: losgelassene Tasten geben den Schluck wieder frei.
+    pub(crate) fn spectator_swallow_release(&mut self) {
+        let held = self.held_movement_keys();
+        release_swallowed(&mut self.spectator_swallowed, held);
+    }
+
+    // Den Hub dieses Ticks auf die Fuesse legen (s. rise_step).
+    pub(crate) fn spectator_rise_tick(&mut self) {
+        if self.spectator_rise <= 0.0 {
+            return;
+        }
+        if self.game_mode != GAME_MODE_SPECTATOR {
+            self.spectator_rise = 0.0;
+            return;
+        }
+        let step = rise_step(self.spectator_rise);
+        self.physics.pos.y += step;
+        self.spectator_rise -= step;
+        if self.spectator_rise < 1e-9 {
+            self.spectator_rise = 0.0;
+        }
+    }
+
     pub(crate) fn spectator_speed_step(&mut self, schneller: bool) {
         let neu = step_speed(self.settings.spectator_speed, schneller);
         if neu != self.settings.spectator_speed {
@@ -167,6 +239,29 @@ mod tests {
         assert_eq!(step_speed(10, false), 8);
         assert_eq!(step_speed(100, true), 100);
         assert_eq!(step_speed(1, false), 1);
+    }
+
+    #[test]
+    fn verschluckte_taste_wirkt_erst_nach_dem_loslassen() {
+        // Beim Wechsel gehalten: W (Index 0) verschluckt.
+        let mut schluck = [true, false, false, false, false, false, false];
+        release_swallowed(&mut schluck, [true, false, false, false, false, false, false]);
+        assert!(schluck[0], "noch gehalten: bleibt verschluckt");
+        release_swallowed(&mut schluck, [false; 7]);
+        assert!(!schluck[0], "losgelassen: frei fuer den naechsten Druck");
+    }
+
+    #[test]
+    fn hub_nach_einem_block_in_zehn_ticks() {
+        let mut rest = 1.0;
+        let mut ticks = 0;
+        while rest > 1e-9 {
+            let s = rise_step(rest);
+            assert!(s > 0.0 && s <= 0.1 + 1e-12);
+            rest -= s;
+            ticks += 1;
+        }
+        assert_eq!(ticks, 10);
     }
 
     #[test]

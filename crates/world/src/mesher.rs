@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use crate::biome_palette::BiomePalette;
-use crate::biome_tint::{is_water, tint_kind, TintKind};
+use crate::biome_tint::{is_water, tint_kind_of_state, TintKind};
 use crate::block_registry::block_name;
 use crate::block_shapes::{BlockShapes, ShapeBox};
 use crate::block_uvs::BlockUvs;
@@ -104,10 +104,29 @@ impl BlockVertex {
         Self { color: self.color.map(|c| -1.0 - c), ..self }
     }
 
+    // Kennzeichen "Wasser" (durchscheinender Pass, s. block.wgsl::fs_translucent_water): Farbe
+    // c wird als c + 4 gespeichert, also immer ueber 3,5 -- ueber dem "weiss ueberblenden"
+    // (c + 2) der Entities, das es im Gelaende nicht gibt.
+    #[must_use]
+    pub fn with_water_mark(self) -> Self {
+        Self { color: self.color.map(|c| c + 4.0), ..self }
+    }
+
+    #[must_use]
+    pub fn is_water_marked(&self) -> bool {
+        self.color[0] > 3.5
+    }
+
     // Die Farbe ohne Kennzeichen (fuer alles ausser dem PvP-Shader).
     #[must_use] 
     pub fn plain_color(&self) -> [f32; 3] {
-        if self.color[0] < -0.5 { self.color.map(|c| -1.0 - c) } else { self.color }
+        if self.color[0] < -0.5 {
+            self.color.map(|c| -1.0 - c)
+        } else if self.is_water_marked() {
+            self.color.map(|c| c - 4.0)
+        } else {
+            self.color
+        }
     }
 }
 
@@ -208,6 +227,7 @@ const FACES: [([i32; 3], f32, usize); 6] = [
 // fluid::calculate_corner_height/push_fluid_quads) braucht block_at() auch Positionen, die
 // BEIDE Achsen gleichzeitig verlassen (eine Wasserzelle an einer Spalten-ECKE). None = Nachbar
 // noch nicht geladen, zaehlt als Luft -- wie bei den orthogonalen Nachbarn auch.
+#[derive(Clone)]
 pub struct ColumnNeighbors {
     pub target: Arc<ChunkColumn>,
     pub north: Option<Arc<ChunkColumn>>,     // z - 1
@@ -218,6 +238,39 @@ pub struct ColumnNeighbors {
     pub northwest: Option<Arc<ChunkColumn>>, // x - 1, z - 1
     pub southeast: Option<Arc<ChunkColumn>>, // x + 1, z + 1
     pub southwest: Option<Arc<ChunkColumn>>, // x - 1, z + 1
+}
+
+impl ColumnNeighbors {
+    // Dieselbe Umgebung der Spalte (chunk_x, chunk_z), aber mit den Bloecken aus `blocks`
+    // (Weltposition, Zustand) -- der Stand VOR einer Reihe von Aenderungen (s. World::
+    // take_mesh_request). Kopiert nur die betroffenen Spalten.
+    #[must_use]
+    pub fn with_blocks(&self, chunk_x: i32, chunk_z: i32, blocks: &[crate::BlockChange]) -> Self {
+        let mut out = self.clone();
+        for &((x, y, z), state) in blocks {
+            let (dx, dz) = (x.div_euclid(SECTION_SIZE) - chunk_x, z.div_euclid(SECTION_SIZE) - chunk_z);
+            let spalte = match (dx, dz) {
+                (0, 0) => Some(&mut out.target),
+                (0, -1) => out.north.as_mut(),
+                (0, 1) => out.south.as_mut(),
+                (1, 0) => out.east.as_mut(),
+                (-1, 0) => out.west.as_mut(),
+                (1, -1) => out.northeast.as_mut(),
+                (-1, -1) => out.northwest.as_mut(),
+                (1, 1) => out.southeast.as_mut(),
+                (-1, 1) => out.southwest.as_mut(),
+                _ => None,
+            };
+            let Some(spalte) = spalte else { continue };
+            let index = (y - spalte.min_y).div_euclid(SECTION_SIZE);
+            if index < 0 || index as usize >= spalte.sections.len() {
+                continue;
+            }
+            let ly = (y - spalte.min_y).rem_euclid(SECTION_SIZE);
+            Arc::make_mut(spalte).sections[index as usize].set(x.rem_euclid(SECTION_SIZE), ly, z.rem_euclid(SECTION_SIZE), state);
+        }
+        out
+    }
 }
 
 // Bequemer Wrapper um mesh_column_from_neighbors() fuer Aufrufer mit einer &World zur
@@ -321,6 +374,9 @@ pub struct AoFadeQuad {
 // deshalb hier gegen Vanillas Formel geprueft statt im Spiel geschaetzt.
 // Welche Bloecke ins echte Alpha-Blending gehoeren, entscheidet is_glass -- eine falsche
 // Antwort hier ist im Spiel sofort sichtbar (Glas wird deckend oder verschwindet ganz).
+#[cfg(test)]
+mod flick_tests;
+
 #[cfg(test)]
 mod glass_tests;
 

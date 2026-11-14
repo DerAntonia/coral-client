@@ -94,8 +94,17 @@ impl App {
         // Hier liegt nur noch etwas, wenn tick_item_use vor dem Benutzen-Block ausgestiegen ist
         // (Bildschirm/Chat offen) -- dort wie bisher. Zurueckgestellter Tausch und Wegwerfen
         // bleiben fuer den naechsten Tick liegen.
+        //
+        // Ebenso ein Angriff, den tick_item_use zurueckgestellt hat, weil Grim uns nach dem
+        // lokalen Fertigessen noch fuer essend haelt und das RELEASE erst im naechsten Tick
+        // kommt. ECHTER BUG gewesen (MultiActionsB/E mit Verzoegerung 500 ms, Nutzer
+        // 2026-11-12, im Interaktions-Log: start_destroy_block einen Tick VOR dem RELEASE):
+        // diese Schleife schickte den zurueckgestellten Klick noch im selben Tick ab.
+        let grim_isst = self.grim_sees_eating();
         for action in std::mem::take(&mut self.pending_input_actions) {
             match action {
+                PendingInputAction::Attack if grim_isst && self.eat_release_wait > 0 => self.pending_input_actions.push(action),
+                PendingInputAction::Attack if grim_isst => {}
                 PendingInputAction::Attack => self.send_attack(),
                 _ => self.pending_input_actions.push(action),
             }
@@ -194,7 +203,9 @@ impl App {
 
     // MinecraftClient.handleBlockBreaking.
     pub(crate) fn handle_block_breaking(&mut self, breaking: bool, ziel: CrosshairTarget) {
-        if self.using_item || self.outgoing_tx.is_none() || self.conn_status != ConnStatus::Connected {
+        // Auch nicht, solange Grim uns nach dem lokalen Fertigessen noch fuer essend haelt (s.
+        // grim_sees_eating) -- sonst MultiActionsB ("Breaking blocks while using an item").
+        if self.using_item || self.grim_sees_eating() || self.outgoing_tx.is_none() || self.conn_status != ConnStatus::Connected {
             return;
         }
         // Zuschauer bauen nichts ab, ihr Linksklick teleportiert (s. send_attack).
@@ -557,6 +568,106 @@ impl App {
     // Ebenso fuer das Warten auf die Bestaetigung eines ausgeleerten Eimers (s. bucket_ack_wait).
     pub(crate) const BUCKET_ACK_WAIT_MAX_TICKS: u32 = 20;
 
+    // Server meldet "benutzt Item" (LIVING_FLAGS): LocalPlayer.startUsingItem, nur mit einem
+    // Item in dieser Hand.
+    pub(crate) fn adopt_server_use(&mut self, nebenhand: bool) {
+        let slot = if nebenhand {
+            inventory::PLAYER_OFFHAND
+        } else {
+            inventory::PLAYER_HOTBAR_START + self.inventory.held_slot.min(8)
+        };
+        if self.hand_stack(slot).is_some() {
+            self.using_item = true;
+            self.eat_held_through = false;
+            // Neue bzw. beendete Benutzung: der Zaehler der Ess-/Spannhaltung faengt neu an. Sonst
+            // erbte ein Bissen, der im selben Tick auf den vorigen folgt, dessen Stand (der
+            // Apfel sprang fuer ein Bild zurueck und stand danach sofort am Mund).
+            self.own_use_ticks = 0;
+            self.using_offhand = nebenhand;
+            self.using_item_id = self.hand_stack(slot).map(|st| st.item_id);
+        }
+    }
+
+    // Aggressive Prediction: nach dem lokalen Fertigessen ein RELEASE_USE_ITEM, solange der
+    // Server sein "fertig" noch nicht gemeldet hat.
+    //
+    // Warum: GrimAC haelt uns fuer essend (slowedByUsingItem), bis die Ping-Antwort auf
+    // Event 9 bzw. das Flag "benutzt aus" eintrifft -- eine volle Rundreise nach dem Ende beim
+    // Server. Wir laufen ab dem lokalen Ende unverlangsamt; bei 500 ms Ping war das fast eine
+    // Sekunde NoSlow-Flags und ein Zurueckziehen je Bissen. Ein RELEASE raeumt Grims Zustand
+    // beim Eintreffen sofort (PacketPlayerDigging), also schon nach dem halben Weg.
+    //
+    // Nicht frueher als der naechste Bissen (EAT_RELEASE_AFTER = 33 Ticks nach dem USE): ein
+    // RELEASE, das beim Server vor seinem letzten Ess-Tick ankommt, bricht das Essen ab wie
+    // ein zu fruehes USE (gegen Paper gemessen: 31 Ticks abgebrochen, 32 gegessen) -- ein
+    // Tick Puffer gegen Schwankungen im Netz.
+    //
+    // Auch mit gehaltener Taste oder gemerktem Klick: liess das RELEASE dafuer aus, ging ein
+    // Rechtsklick aufs Bett mit Armschwung raus, waehrend Grim noch "isst" -- MultiActionsE.
+    // Die Benutzungen dieses Ticks warten dafuer einen Tick (Rueckgabe true, s. tick_item_use):
+    // ein USE/Platzieren hinter dem RELEASE im selben Tick waere Grims PacketOrderI. Der naechste
+    // Bissen mit gehaltener Taste geht damit 34 statt 33 Ticks nach dem vorigen raus.
+    pub(crate) fn tick_eat_release(&mut self) -> bool {
+        if self.eat_release_wait == 0 {
+            return false;
+        }
+        self.eat_release_wait -= 1;
+        if self.eat_release_wait > 0 {
+            return false;
+        }
+        let senden = !self.using_item && self.consumable.waiting(Instant::now());
+        if !senden {
+            return false;
+        }
+        self.eat_released = true;
+        if let Some(tx) = &self.outgoing_tx {
+            interaktions_log("release_use_item (nach lokalem Fertigessen)");
+            let _ = tx.send(protocol::packets::player_action_payload(protocol::packets::PLAYER_ACTION_RELEASE_USE_ITEM));
+        }
+        true
+    }
+
+    // Haelt GrimAC uns noch fuer essend, obwohl wir lokal fertig sind? Lokal fertig, der
+    // Server hat sein "fertig" noch nicht gemeldet (consumable.waiting), und unser RELEASE
+    // ist nicht raus. Vanilla isst in dieser Zeit noch (completeUsingItem nur beim Server)
+    // und schickt weder Schlag noch Abbau.
+    pub(crate) fn grim_sees_eating(&self) -> bool {
+        !self.eat_released && self.consumable.waiting(Instant::now())
+    }
+
+    // Usage-Optimizer "No Shield Lock": laeuft gerade das Blocken mit der NEBENhand, waehrend
+    // die Haupthand etwas haelt, dessen Benutzung jetzt angenommen wuerde? Dann hat das Schild
+    // den Rechtsklick "aufgegessen" (etwa nach einem Slotwechsel beim Blocken) -- ohne Schild
+    // liefe laengst die Haupthand. Dieselben Pruefungen wie in der Hand-Schleife von
+    // tick_item_use.
+    pub(crate) fn shield_locks_main_hand(&self) -> bool {
+        if !self.settings.no_shield_lock || !self.consumable_optimizer_active() || !self.using_item || !self.using_offhand {
+            return false;
+        }
+        let blockt = self.own_hand_stack(protocol::packets::HAND_OFF).is_some_and(|st| world::item_behavior::blocks_attacks(st).is_some());
+        if !blockt {
+            return false;
+        }
+        let Some(st) = self.own_hand_stack(protocol::packets::HAND_MAIN) else { return false };
+        let Some(item) = world::item_registry::item_name(st.item_id) else { return false };
+        if self.item_cooldowns.is_cooling_down(st) {
+            return false;
+        }
+        let rakete_gleitend = item == "firework_rocket" && self.physics.gliding;
+        if !world::item_behavior::item_use_accepted(st, self.pick_block().is_some()) && !rakete_gleitend {
+            return false;
+        }
+        if item == "trident" && (will_break_next_use(st) || (self.trident_spin_strength(st) > 0.0 && !self.touching_water_or_rain())) {
+            return false;
+        }
+        let spannt = item == "bow" || (item == "crossbow" && !st.is_charged());
+        if spannt && self.game_mode != GAME_MODE_CREATIVE && self.projectile_for(item).is_none() {
+            return false;
+        }
+        let unverwundbar = self.game_mode == GAME_MODE_CREATIVE || self.game_mode == GAME_MODE_SPECTATOR;
+        !(world::item_behavior::needs_hunger(st) && self.food_level >= 20 && !unverwundbar)
+    }
+
     pub(crate) fn queue_use_click(&mut self) {
         if self.mode != AppMode::World || self.screen_overlay_open() || self.chat_input.is_some() {
             return;
@@ -602,7 +713,21 @@ impl App {
         // Vanilla-Client NIE schickt: nach jedem Perlenwurf, jedem Blocksetzen, jedem
         // Kristall ging ein RELEASE_USE_ITEM raus. Unnoetige Pakete sind genau das, was
         // Grims PacketOrder-Pruefungen auswerten.
-        let was_using = self.using_item;
+        // Unter Aggressive Prediction aufgeschobene Server-Meldung "benutzt" (s. EntityMeta),
+        // lokal laeuft keine Benutzung. NICHT uebernehmen -- verlangsamen darf allein die
+        // Vorhersage (beim Bogen hielte das Durchdruecken die uebernommene Benutzung sogar
+        // fest). Nur die Pakete wie Vanilla, das hier isUsingItem() haette: bei oben
+        // liegender Taste ein RELEASE (raeumt Grims slowedByUsingItem vor dem
+        // Bewegungspaket dieses Ticks) und die gepufferten Klicks verwerfen.
+        let server_meldet = self.server_use_report.take().is_some() && !self.using_item && !self.use_held;
+        if server_meldet {
+            if let Some(tx) = &self.outgoing_tx {
+                interaktions_log("release_use_item (Server-Meldung)");
+                let _ = tx.send(protocol::packets::player_action_payload(protocol::packets::PLAYER_ACTION_RELEASE_USE_ITEM));
+            }
+        }
+        let ess_release = !server_meldet && self.tick_eat_release();
+        let was_using = self.using_item || server_meldet;
         // Vanilla gibt die Benutzung frei, wenn isUsingItem() gilt und die Taste oben ist --
         // ausgeloest von isUsingItem(), NICHT davon, ob wir selbst die Benutzung begonnen haben.
         // Seit die Metadaten eine Benutzung auch STARTEN koennen (s. EntityMeta), kann using_item
@@ -618,7 +743,15 @@ impl App {
         if durchhalten {
             self.eat_held_through = true;
         }
-        if !self.use_held && self.using_item && !durchhalten {
+        // Usage-Optimizer "No Shield Lock": das Schild haelt den Rechtsklick fest, die Haupthand
+        // koennte ihn aber nutzen -- Blocken beenden wie beim Loslassen. Die Benutzung der
+        // Haupthand beginnt fruehestens im naechsten Tick ueber die gehaltene Taste (im selben
+        // Tick nach dem RELEASE waere es Grims PacketOrderI, s.o.).
+        let schild_los = self.use_held && self.shield_locks_main_hand();
+        if schild_los {
+            interaktions_log("no shield lock: Schild beendet");
+        }
+        if (!self.use_held || schild_los) && self.using_item && !durchhalten {
             // Fuer den Dreizack unten: welcher Stack gerade benutzt wurde, und wie lange.
             let benutzte_hand = if self.using_offhand { protocol::packets::HAND_OFF } else { protocol::packets::HAND_MAIN };
             let benutzt = self.own_hand_stack(benutzte_hand).cloned();
@@ -714,8 +847,16 @@ impl App {
         // Tick berechnet (gameRenderer.pick) und von Angriff und Benutzen gemeinsam genutzt. Ein
         // Angriff, der einen Block sofort abbaut, darf den Strahl der Benutzung nicht umlenken.
         // Zurueckgestellter Tausch/Wegwerfen (s. flush_input_actions) bleibt liegen.
+        //
+        // Haelt Grim uns nach dem lokalen Fertigessen noch fuer essend (s. grim_sees_eating),
+        // ginge ein Schlag als MultiActionsA/E durch. Kommt das RELEASE im naechsten Tick,
+        // warten die Klicks bis dahin; sonst verwerfen wie Vanilla, das bis zum "fertig" des
+        // Servers isst.
+        let grim_isst = self.grim_sees_eating();
         for action in std::mem::take(&mut self.pending_input_actions) {
             match action {
+                PendingInputAction::Attack if grim_isst && self.eat_release_wait > 0 => self.pending_input_actions.push(action),
+                PendingInputAction::Attack if grim_isst => {}
                 PendingInputAction::Attack => self.send_attack(),
                 _ => self.pending_input_actions.push(action),
             }
@@ -776,6 +917,14 @@ impl App {
                 self.use_cooldown = self.use_cooldown.saturating_sub(1);
                 return;
             }
+        }
+        // Aggressive Prediction: bis das RELEASE nach dem lokalen Fertigessen raus ist, haelt
+        // Grim uns fuer essend -- ein Rechtsklick (Bett, Block) schwaenge den Arm, MultiActionsE.
+        // Auch ohne Essbares in der Hand (letzter Apfel gegessen). Im Tick des RELEASE warten
+        // die Benutzungen ebenfalls (s. tick_eat_release).
+        if ess_release || (self.eat_release_wait > 0 && self.grim_sees_eating()) {
+            self.use_cooldown = self.use_cooldown.saturating_sub(1);
+            return;
         }
         // Mit "Benutzen beim Abbauen" doch noch ein PacketOrderI: Grims `digging` setzt JEDES
         // Start-, Ende- und Abbruch-Paket, geraeumt wird es erst vom naechsten Tick-Paket. Ein
@@ -1087,7 +1236,7 @@ impl App {
                 // MinecartEntity.interact geben clientseitig SUCCESS): Arm schwingen, fertig --
                 // sonst ginge noch ein USE_ITEM fuer das Item in der Hand hinterher, und ein
                 // Eimer schoepfte neben dem Boot Wasser.
-                if self.click_boards_vehicle(id) {
+                if self.click_boards_vehicle(id) || self.click_uses_item_frame(id, stack.is_some()) {
                     self.swing_arm();
                     return;
                 }
@@ -1428,6 +1577,7 @@ impl App {
     // Schwung nicht an einen selbst zurueck, s. ClientEvent::EntityAnimation).
     pub(crate) fn swing_arm(&mut self) {
         if let Some(tx) = &self.outgoing_tx {
+            interaktions_log("swing");
             let _ = tx.send(protocol::packets::swing_payload());
         }
         self.own_swing_ticks = restart_swing(self.own_swing_ticks, self.own_swing_duration());
@@ -1444,6 +1594,8 @@ impl App {
             vorhanden.sequence = sequence;
             return;
         }
+        // MESSUNG (voruebergehend).
+        eprintln!("[flick] Uhr {}: vorhergesagt {pos:?}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() % 1_000_000));
         self.pending_blocks.push(PendingBlock { pos, sequence, aufloesung, entfernt: None, placed_at: std::time::Instant::now() });
     }
 
@@ -1723,6 +1875,8 @@ impl App {
         let Some(pending) = self.pending_blocks.iter_mut().find(|p| p.pos == (x, y, z)) else {
             return false;
         };
+        // MESSUNG (voruebergehend, s. world_mesh.rs).
+        eprintln!("[flick] Uhr {}: Server-Block {:?} nach {} ms: Zustand {state}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() % 1_000_000), pending.pos, pending.placed_at.elapsed().as_millis());
         pending.aufloesung = state;
         true
     }
@@ -1742,15 +1896,11 @@ impl App {
             return;
         }
         let welt = &mut self.world;
-        let quellen = &mut self.ao_fade_sources;
         self.ghosts_awaiting_mesh.retain(|g| {
             if g.column != column {
                 return true;
             }
             welt.clear_pending_block(g.pos.0, g.pos.1, g.pos.2);
-            // Der Schatten dieses Blocks ist jetzt eingeblendet -- spaetere Meshes (z.B. ein
-            // gleich aufgeladener Anker) sollen ihn nicht noch einmal einblenden.
-            quellen.retain(|(p, _, _)| *p != g.pos);
             false
         });
     }
@@ -1776,7 +1926,12 @@ impl App {
     // "nachher" (s. AoFade), am Ende genau der neue Mesh. Abgelaufene Quellen fallen weg.
     pub(crate) fn step_ao_fades(&mut self) {
         let jetzt = Instant::now();
-        self.ao_fade_sources.retain(|(_, _, t)| jetzt.duration_since(*t) < AO_FADE_SOURCE_TTL);
+        // Eine Quelle lebt, bis ihr Einblenden durch ist (ab dem ersten Mesh, das sie zeigt) --
+        // kommt gar kein Mesh, faellt sie nach AO_FADE_SOURCE_TTL weg.
+        self.ao_fade_sources.retain(|(_, _, t, beginn)| match beginn {
+            Some(b) => jetzt.duration_since(*b) < AO_FADE,
+            None => jetzt.duration_since(*t) < AO_FADE_SOURCE_TTL,
+        });
         if self.ao_fades.is_empty() {
             return;
         }
@@ -1819,6 +1974,8 @@ impl App {
             let vorhergesagt = self.world.pending_block_at(x, y, z);
             // Der Zustand VOR der Platzierung -- fuers Einblenden des Schattens (s. AoFade).
             let vorher = self.world.chunk_block_at(x, y, z);
+            // MESSUNG (voruebergehend, s. world_mesh.rs).
+            eprintln!("[flick] {} ms Ack {:?} nach {} ms: vorher {vorher}, Aufloesung {}, vorhergesagt {vorhergesagt:?}", crate::mess_ms(), p.pos, p.placed_at.elapsed().as_millis(), p.aufloesung);
             self.world.set_block(x, y, z, p.aufloesung);
             // Bestaetigt der Server GENAU das, was wir vorhergesagt haben, bleibt der Geist
             // stehen, bis der neue Mesh da ist -- sonst klafft an der Stelle ein paar Frames
@@ -1827,7 +1984,7 @@ impl App {
             // stehen zu lassen hiesse, einen Block zu zeigen, den es gar nicht gibt.
             if vorhergesagt == Some(p.aufloesung) {
                 if self.settings.smooth_lighting_percent > 0 && vorher != p.aufloesung {
-                    self.ao_fade_sources.push((p.pos, vorher, Instant::now()));
+                    self.ao_fade_sources.push((p.pos, vorher, Instant::now(), None));
                 }
                 self.ghosts_awaiting_mesh.push(GhostAwaitingMesh {
                     pos: p.pos,

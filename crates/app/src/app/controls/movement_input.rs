@@ -38,6 +38,8 @@ impl App {
             right: self.cursor_fx.tint(jetzt),
             circle: self.settings.cursor_circle,
             width: self.settings.cursor_width as f32 / 100.0,
+            outline: self.settings.cursor_outline as f32 / 100.0,
+            fill_alpha: 1.0 - self.settings.cursor_fill_transparency.min(100) as f32 / 100.0,
         }
     }
 
@@ -61,7 +63,9 @@ impl App {
 
     pub(crate) fn move_cursor(&mut self, delta: (f64, f64)) {
         let (w, h) = self.gpu.as_ref().map_or((1920.0, 1080.0), super::super::super::GpuState::size);
-        let faktor = self.settings.cursor_sensitivity;
+        // Der Zeiger laeuft in echten Pixeln so schnell wie eingestellt, egal in welchem
+        // Massstab das Menue rechnet (s. GpuState::ui_scale).
+        let faktor = self.settings.cursor_sensitivity / self.gpu.as_ref().map_or(1.0, |g| g.ui_scale.get());
         self.cursor_pos.0 = (self.cursor_pos.0 + delta.0 as f32 * faktor).clamp(0.0, w);
         self.cursor_pos.1 = (self.cursor_pos.1 + delta.1 as f32 * faktor).clamp(0.0, h);
         // Die Drehung haengt an der Zeigerbewegung, nicht an den Maus-Deltas: geklemmt am
@@ -119,17 +123,20 @@ impl App {
         let (forward, backward) = self.snap_tap_pair(KeyBindAction::Forward, KeyBindAction::Backward);
         let (left, right) = self.snap_tap_pair(KeyBindAction::Left, KeyBindAction::Right);
         let open = self.screen_overlay_open() || self.mode != AppMode::World;
-        let gate = |pressed: bool| pressed && !open;
+        // Verschluckt (s. spectator.rs, SWALLOW_KEYS): nach einem Wechsel in den Zuschauermodus
+        // zaehlt eine schon gehaltene Taste nicht, bis sie einmal losgelassen wurde.
+        let swallowed = self.spectator_swallowed;
+        let gate = |i: usize, pressed: bool| pressed && !open && !swallowed[i];
         // Was Addons dazu druecken (s. Call::SetInput) -- auch bei offenem Bildschirm.
         let a = self.addon_input();
         (
-            gate(forward) || a.forward,
-            gate(backward) || a.back,
-            gate(left) || a.left,
-            gate(right) || a.right,
-            gate(self.jump_held) || a.jump,
-            gate(self.sneak_held) || a.sneak,
-            gate(self.sprint_held) || a.sprint,
+            gate(0, forward) || a.forward,
+            gate(1, backward) || a.back,
+            gate(2, left) || a.left,
+            gate(3, right) || a.right,
+            gate(4, self.jump_held) || a.jump,
+            gate(5, self.sneak_held) || a.sneak,
+            gate(6, self.sprint_held) || a.sprint,
         )
     }
 }

@@ -25,6 +25,7 @@ impl GpuState {
     // upload_pack_icon).
     pub(crate) fn upload_server_icon(&mut self, slot: usize, rgba: &[u8]) {
         let mut rund = rgba.to_vec();
+        bleed_icon_edges(&mut rund, server_status::ICON_SIZE);
         round_icon_corners(&mut rund, server_status::ICON_SIZE, 6.0 * server_status::ICON_SIZE as f32 / server_icon_px());
         let mut atlas = self.server_icons.take();
         self.upload_icon(&mut atlas, "server icons", SERVER_ICON_GRID, server_status::ICON_SIZE, slot, &rund);
@@ -36,6 +37,7 @@ impl GpuState {
     // Bildschirm) -- ein Sprite selbst kennt keine runden Ecken.
     pub(crate) fn upload_pack_icon(&mut self, slot: usize, rgba: &[u8]) {
         let mut rund = rgba.to_vec();
+        bleed_icon_edges(&mut rund, skin_tab::ICON_PX);
         let anzeige = skin_icon_rect(skin_tile_rect(skin_tab::Column::Available, 0.0)).w.max(1.0);
         round_icon_corners(&mut rund, skin_tab::ICON_PX, 6.0 * skin_tab::ICON_PX as f32 / anzeige);
         let mut atlas = self.pack_icons.take();
@@ -89,6 +91,10 @@ impl GpuState {
             wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(s * 4), rows_per_image: Some(s) },
             wgpu::Extent3d { width: s, height: s, depth_or_array_layers: 1 },
         );
+    }
+
+    pub(crate) fn set_panorama(&mut self, bild: Option<&wallpaper::Decoded>) {
+        self.panorama = bild.map(|b| self.upload_background("panorama", b, wgpu::TextureFormat::Rgba8UnormSrgb));
     }
 
     pub(crate) fn set_wallpaper(&mut self, bild: Option<&wallpaper::Decoded>) {

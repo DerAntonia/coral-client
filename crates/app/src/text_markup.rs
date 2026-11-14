@@ -345,6 +345,24 @@ pub(crate) fn smooth_scale_marker(t: &UiText) -> Option<bool> {
     }
 }
 
+// Ab hier Grossbuchstaben stehen lassen, auch wenn "Grossbuchstaben" (Schrift-Tab, Stil) aus
+// ist (Code -41), bzw. wieder wie eingestellt (-42). Fuer Tastennamen auf den Belegungsknoepfen.
+// Wer misst, setzt dafuer GpuState::keep_capitals mit (s. App::build_menu_ui).
+pub(crate) fn push_keep_capitals_marker(texts: &mut Vec<UiText>, an: bool) {
+    texts.push(UiText { text: String::new(), x: 0.0, y: 0.0, color: [0.0, 0.0, 0.0, if an { -41.0 } else { -42.0 }], scale: 1.0 });
+}
+
+pub(crate) fn keep_capitals_marker(t: &UiText) -> Option<bool> {
+    if !t.text.is_empty() {
+        return None;
+    }
+    match t.color[3] {
+        -41.0 => Some(true),
+        -42.0 => Some(false),
+        _ => None,
+    }
+}
+
 pub(crate) fn plain_numbers_marker(t: &UiText) -> Option<bool> {
     if !t.text.is_empty() {
         return None;
@@ -415,7 +433,7 @@ pub(crate) fn text_border_quad(
     halb: bool,
     farbe: [f32; 4],
     screen_px: (f32, f32),
-) -> [TextVertex; 6] {
+) -> [TextVertex; 4] {
     // Bei den weichen Raendern darf die Staerke ueber 1 gehen (s. Settings::shadow_strength),
     // font.wgsl begrenzt die Deckung.
     let grenze = if matches!(stil, TextShadow::Below | TextShadow::Around) { 100.0 / SOFT_SHADOW_FULL_PERCENT } else { 1.0 };
@@ -686,11 +704,15 @@ pub(crate) fn selection_text(runs: &[TextRun], sel: &[(usize, std::ops::Range<us
     text.trim_end().to_string()
 }
 
-// Der gesetzte Verlauf des offenen Chats (s. App::chat_wrapped_all): Schluessel (Generation,
-// Breite, Groesse, Schrift), Nummer der ersten Nachricht (s. App::chat_pushed), Zeilen je
-// Nachricht und alle Zeilen hintereinander.
+// Der gesetzte Verlauf eines Chats (s. App::chat_wrap_update): Schluessel, Nummer der ersten
+// Nachricht (s. App::chat_pushed), Zeilen je Nachricht und alle Zeilen hintereinander.
+// Alles, wovon der Umbruch abhaengt: Chat-Generation, Breite, Groesse (Bits), Schrift,
+// Glyphen-Generation, Grossbuchstaben, Ziffern ohne Platzhalter, Zaehler der Ziffernbreiten (s.
+// stable_numbers), Menuemassstab, Sprache (s. i18n::tr_state).
+pub(crate) type ChatWrapKey = (u64, u32, u32, u8, u64, bool, bool, u64, u32, (u8, bool, bool));
+
 pub(crate) struct ChatWrapCache {
-    pub(crate) key: (u64, u32, u32, u8),
+    pub(crate) key: ChatWrapKey,
     pub(crate) first: u64,
     pub(crate) counts: std::collections::VecDeque<usize>,
     pub(crate) lines: std::rc::Rc<Vec<ChatLine>>,
@@ -861,6 +883,15 @@ pub(crate) fn white_veil(alpha: f32) -> [f32; 4] {
 // Was das Disconnect-Fenster zeigt: nur die Meldung des Servers, ohne die Vorsaetze, die
 // der Netz-Task fuers Log davorsetzt. Ohne Servermeldung (IO-Fehler, Timeout) bleibt der
 // ganze Text -- er sagt dann selbst, was passiert ist.
+// Das Disconnect-Fenster ist doppelt so gross (Flaeche) wie ein gewoehnlicher Dialog: jede
+// Seite, jeder Abstand und die Schrift mal Wurzel 2.
+pub(crate) const DISCONNECT_POPUP_SCALE: f32 = std::f32::consts::SQRT_2;
+
+// Ein Grund mit Paragraphen-Codes (s. net::disconnect_message) als reiner Text -- fuer Log und Addons.
+pub(crate) fn strip_legacy_codes(text: &str) -> String {
+    protocol::nbt::legacy_to_spans(text, None).into_iter().map(|s| s.text).collect()
+}
+
 pub(crate) fn disconnect_popup_text(reason: &str) -> &str {
     let r = reason.strip_prefix("Protokoll-Fehler: ").unwrap_or(reason);
     if let Some(grund) = r.strip_prefix("Server hat Login abgelehnt: ") {

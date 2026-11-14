@@ -156,6 +156,7 @@ impl Entities {
                 armor_stand_poses: ARMOR_STAND_DEFAULT_POSES,
             },
         );
+        self.anim_log_pos(id, "spawn", None);
     }
 
     // Set Entity Data anwenden -- bislang nur die Pose, weil nur sie die Trefferbox aendert.
@@ -324,6 +325,9 @@ impl Entities {
                     *pose = neu;
                 }
             }
+            if anim_debug::anim_debug_an() && update.armor_stand_poses.iter().any(Option::is_some) {
+                anim_debug::anim_log(format_args!("armorstand_pose id={id} alter={} posen={:?}", e.age_ticks, update.armor_stand_poses));
+            }
         }
         let Some(kind) = display_kind(e.entity_type) else { return };
         let display = e.display.get_or_insert_with(|| {
@@ -333,26 +337,34 @@ impl Entities {
                 DisplayKind::Block => DisplayContent::Block(0),
             })
         });
-        // DisplayEntity.tick: START_INTERPOLATION legt den Beginn auf Alter + Verzoegerung;
-        // eine Transformations-Aenderung startet bei Dauer != 0 von der GERADE gezeigten Lage.
+        // Display.tick: eine Transformations-Aenderung startet bei Dauer != 0 von der GERADE
+        // gezeigten Lage -- der Lage beim zuletzt gezeichneten Fortschritt, mit dem ALTEN Start
+        // und der ALTEN Dauer (lastProgress). Deshalb zuerst die Ausgangslage, dann Start/Dauer.
         let alter = e.age_ticks;
+        let aendert = update.display_translation.is_some()
+            || update.display_scale.is_some()
+            || update.display_left_rotation.is_some()
+            || update.display_right_rotation.is_some();
+        let jetzt = aendert.then(|| display.transform_with(display.last_progress.get()));
         if let Some(v) = update.display_interp_duration {
             display.interp_duration = v;
         }
         if let Some(v) = update.display_teleport_duration {
             display.teleport_duration = v;
         }
+        // Vanilla uebernimmt START_INTERPOLATION erst im naechsten Display.tick, nach dessen
+        // tickCount++: Beginn = (Alter nach dem naechsten Tick) + Verzoegerung. Einen Tick
+        // frueher war eine Animation, die jeden Tick neu startet, beim ersten Bild schon am
+        // Ziel -- sie sprang von Stufe zu Stufe statt zu gleiten.
         if let Some(v) = update.display_interp_start {
-            display.interp_start = alter + v as f32;
+            display.interp_start = alter + 1.0 + v as f32;
         }
-        let aendert = update.display_translation.is_some()
-            || update.display_scale.is_some()
-            || update.display_left_rotation.is_some()
-            || update.display_right_rotation.is_some();
-        if aendert {
-            let jetzt = display.transform_at(alter);
+        if let Some(jetzt) = jetzt {
             display.interp_from = (display.interp_duration != 0).then_some(jetzt);
         }
+        let log = anim_debug::anim_debug_an()
+            && (aendert || update.display_interp_start.is_some() || update.display_interp_duration.is_some() || update.display_teleport_duration.is_some());
+        let alter_ziel = display.target();
         if let Some(v) = update.display_translation {
             display.translation = v;
         }
@@ -364,6 +376,25 @@ impl Entities {
         }
         if let Some(v) = update.display_right_rotation {
             display.right_rotation = v;
+        }
+        if log {
+            let von = display.interp_from.map_or("-".into(), |f| format!("{} L{}", anim_debug::fmt3(f.translation), anim_debug::fmt4(f.left_rotation)));
+            anim_debug::anim_log(format_args!(
+                "display_transform id={id} typ={} alter={alter} start_delta={:?} dauer={:?} tp_dauer={:?} -> start={} dauer={} letzter_fortschritt={:.3} von={von} altes_ziel={} L{} neues_ziel={} L{} S{} R{}",
+                entity_type_name(e.entity_type).unwrap_or("?"),
+                update.display_interp_start,
+                update.display_interp_duration,
+                update.display_teleport_duration,
+                display.interp_start,
+                display.interp_duration,
+                display.last_progress.get(),
+                anim_debug::fmt3(alter_ziel.translation),
+                anim_debug::fmt4(alter_ziel.left_rotation),
+                anim_debug::fmt3(display.translation),
+                anim_debug::fmt4(display.left_rotation),
+                anim_debug::fmt3(display.scale),
+                anim_debug::fmt4(display.right_rotation),
+            ));
         }
         if let Some(v) = update.display_billboard {
             display.billboard = v;

@@ -17,6 +17,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(target_os = "linux")]
+mod bundled_pack;
 mod desktop_entry;
 mod hero;
 mod i18n;
@@ -255,6 +256,12 @@ impl Launcher {
         launcher.rescan();
         launcher.check_for_update(ctx);
         launcher.auto_extract(ctx);
+        // Das mitgelieferte Resourcepack still im Hintergrund aktuell halten (s. bundled_pack).
+        std::thread::spawn(|| match bundled_pack::update() {
+            Ok(true) => eprintln!("[launcher] CPVP Aesthetic aktualisiert"),
+            Ok(false) => {}
+            Err(e) => eprintln!("[launcher] CPVP Aesthetic nicht geladen: {e}"),
+        });
         launcher
     }
 
@@ -1226,6 +1233,7 @@ const DEBUG_FLAGS: &[(&str, &str, &str)] = &[
     ("CORAL_ITEM_DEBUG", "Items in der Hand", "Loggen, als was ein gehaltenes Item aufgeloest wird und mit welcher Haltung."),
     ("CORAL_INTERACT_DEBUG", "Interaktionen", "Jedes gesendete Interaktions- und Tick-Paket in Sendereihenfolge loggen (GrimAC-Paketreihenfolge)."),
     ("CORAL_NET_DEBUG", "Bewegungspakete", "Gesendete Bewegungspakete loggen (Grim Simulation/GroundSpoof)."),
+    ("CORAL_ANIM_DEBUG", "Animationen", "Positions-, Mitfahr- und Transformations-Pakete von Displays und Armorstaenden loggen, dazu jeden Sprung von einem Bild zum naechsten."),
     ("CORAL_POSE_DEBUG", "Posenwechsel", "Posenwechsel je Tick loggen."),
     ("CORAL_SNEAK_DEBUG", "Schleichen", "Schleich-Eingabe und Posen-Aufloesung je Tick loggen."),
     ("CORAL_SWIM_DEBUG", "Schwimmen", "Schwimm-Zustand je Tick loggen."),

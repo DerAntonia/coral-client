@@ -12,9 +12,9 @@ impl App {
             // In den Einstellungen liegt die Tafel im verschobenen Inhalt (s. content_offset).
             let (dx, dy) = self.content_offset();
             let (qx, qy) = (px - dx, py - dy);
-            let hit = buttons.iter().find(|b| b.enabled && b.hits(qx, qy)).map(|b| b.action);
+            let hit = buttons.iter().find(|b| b.enabled && self.module_hit(b, qx, qy)).map(|b| b.action);
             if let Some(t) = hit.and_then(Self::color_target_of) {
-                let r = buttons.iter().find(|b| b.enabled && b.hits(qx, qy)).map_or(Rect { x: qx, y: qy, w: 0.0, h: 0.0 }, |b| b.rect);
+                let r = buttons.iter().find(|b| b.enabled && self.module_hit(b, qx, qy)).map_or(Rect { x: qx, y: qy, w: 0.0, h: 0.0 }, |b| b.rect);
                 self.play_ui_sound(ui_sound::UiSound::Click);
                 self.open_color_popup(t, Rect { x: r.x + dx, y: r.y + dy, ..r });
                 return;
@@ -28,7 +28,7 @@ impl App {
                 // einen ABGEBLENDETEN Knopf geklickt nicht. Ohne das gab es hier gar keine
                 // Rueckmeldung -- die Spalte eines abgeschalteten Moduls wirkte dadurch
                 // kaputt statt gesperrt.
-                if buttons.iter().any(|b| !b.enabled && b.hits(qx, qy)) {
+                if buttons.iter().any(|b| !b.enabled && self.module_hit(b, qx, qy)) {
                     self.play_ui_sound(ui_sound::UiSound::Denied);
                 }
                 return;
@@ -38,13 +38,13 @@ impl App {
             }
             // Auswahl ab drei Werten: Liste aufklappen statt weiterschalten.
             if let Some(c) = Self::choice_of(action) {
-                let r = buttons.iter().find(|b| b.enabled && b.hits(qx, qy)).map_or(Rect { x: qx, y: qy, w: 0.0, h: 0.0 }, |b| b.rect);
+                let r = buttons.iter().find(|b| b.enabled && self.module_hit(b, qx, qy)).map_or(Rect { x: qx, y: qy, w: 0.0, h: 0.0 }, |b| b.rect);
                 self.toggle_dropdown(c, Rect { x: r.x + dx, y: r.y + dy, ..r });
                 return;
             }
             // Schieberegler: Klick setzt den Wert unter den Zeiger, Ziehen fuehrt weiter (wie
             // in handle_menu_click).
-            if let Some(sl) = buttons.iter().find(|b| b.enabled && b.hits(qx, qy)).and_then(|b| b.slider) {
+            if let Some(sl) = buttons.iter().find(|b| b.enabled && self.module_hit(b, qx, qy)).and_then(|b| b.slider) {
                 self.play_ui_sound(ui_sound::UiSound::Click);
                 if sl.value_box().contains(qx, qy) {
                     self.begin_step_edit(sl.prev);
@@ -161,7 +161,7 @@ impl App {
     pub(crate) fn run_menu_action(&mut self, action: ButtonAction) {
         // Das Fenster "Erweitert" schliesst sich bei allem, was nicht zu ihm gehoert (z.B. ein
         // Klick in die Kategorienleiste).
-        if !matches!(action, ButtonAction::Rebind(..) | ButtonAction::OpenKeybindAdvanced(_) | ButtonAction::CloseKeybindAdvanced | ButtonAction::Nothing) {
+        if !matches!(action, ButtonAction::Rebind(..) | ButtonAction::RebindModifier(..) | ButtonAction::OpenKeybindAdvanced(_) | ButtonAction::CloseKeybindAdvanced | ButtonAction::Nothing) {
             self.keybind_advanced = None;
         }
         // Alles ausser Tab-Wechsel und Verbindungs-Aktionen veraendert Einstellungen und
@@ -186,6 +186,7 @@ impl App {
                 | ButtonAction::Disconnect
                 | ButtonAction::ToggleTearFree
                 | ButtonAction::Rebind(..)
+                | ButtonAction::RebindModifier(..)
                 | ButtonAction::OpenKeybindAdvanced(_)
                 | ButtonAction::CloseKeybindAdvanced
                 | ButtonAction::Respawn
@@ -197,6 +198,7 @@ impl App {
                 | ButtonAction::ReloadSkins
                 | ButtonAction::OpenConfigFolder
                 | ButtonAction::ServerLinks
+                | ButtonAction::PauseDialog
                 // Configs speichern selbst (s. switch_config); ein Speichern danach schriebe
                 // nur dieselben Werte noch einmal.
                 | ButtonAction::SelectConfig(_)
@@ -235,11 +237,9 @@ impl App {
             | ButtonAction::SelectModuleCategory(_)
             | ButtonAction::ModuleBack
             | ButtonAction::ToggleModuleHitbox
-            | ButtonAction::ToggleModuleHitboxSmoothed
-            | ButtonAction::ToggleModuleHitboxRaw
+            | ButtonAction::HitboxPlayerRaw(_)
             | ButtonAction::ToggleModuleHitboxDotted
-            | ButtonAction::ToggleModuleHitboxVisibleEdges
-            | ButtonAction::ToggleModuleHitboxItems
+            | ButtonAction::HitboxLines(_)
             | ButtonAction::ToggleModuleHitboxSelf
             | ButtonAction::HitboxDensityPrev
             | ButtonAction::HitboxDensityNext
@@ -255,7 +255,7 @@ impl App {
             | ButtonAction::EatHoldThroughPrev
             | ButtonAction::EatHoldThroughNext
             | ButtonAction::ToggleEatSlotLock
-            | ButtonAction::ToggleEatAggressivePrediction
+            | ButtonAction::ToggleNoShieldLock
             | ButtonAction::ToggleModuleUseTimer
             | ButtonAction::ToggleModuleNoToolBreak
             | ButtonAction::ToggleModuleBotcheckPass
@@ -329,10 +329,12 @@ impl App {
             | ButtonAction::TeamDotted(_)
             | ButtonAction::ToggleModuleKeystrokes
             | ButtonAction::ToggleModuleSessionInfo
+            | ButtonAction::ToggleModuleClock
             | ButtonAction::ToggleSessionLine(_)
             | ButtonAction::ResetSession
             | ButtonAction::ToggleArrowIndicator
             | ButtonAction::ToggleArrowWhite
+            | ButtonAction::ToggleArrowCritTrail
             | ButtonAction::ToggleArrowEmptySound
             | ButtonAction::ToggleArrowTrail
             | ButtonAction::TrailHoldPrev
@@ -353,6 +355,11 @@ impl App {
             | ButtonAction::ToggleModuleDiscordStatus
             | ButtonAction::ToggleModuleInputLog
             | ButtonAction::ToggleModuleCoralRecord
+            | ButtonAction::ToggleModuleCoralClip
+            | ButtonAction::ClipSecondsPrev
+            | ButtonAction::ClipSecondsNext
+            | ButtonAction::ClipCheckpointsPrev
+            | ButtonAction::ClipCheckpointsNext
             | ButtonAction::ToggleModuleColor
             | ButtonAction::ToggleModuleSustainability
             | ButtonAction::ToggleSustainBackground
@@ -447,6 +454,7 @@ impl App {
             ButtonAction::Back => self.navigate_back(),
             ButtonAction::Connect => self.go_connect(),
             ButtonAction::Disconnect => self.disconnect(),
+            ButtonAction::Quit => self.quit_requested = true,
             ButtonAction::Reconnect => self.reconnect(),
             ButtonAction::MicrosoftLogin => self.start_microsoft_login(),
             ButtonAction::OpenInputField(kind) => {
@@ -551,6 +559,10 @@ impl App {
             ButtonAction::CursorSizeDown => set.cursor_size = set.cursor_size.saturating_sub(CURSOR_SIZE_STEP).max(CURSOR_SIZE_MIN),
             ButtonAction::CursorSizeUp => set.cursor_size = (set.cursor_size + CURSOR_SIZE_STEP).min(CURSOR_SIZE_MAX),
             ButtonAction::CursorWidthDown => set.cursor_width = set.cursor_width.saturating_sub(CURSOR_WIDTH_STEP).max(CURSOR_WIDTH_MIN),
+            ButtonAction::CursorOutlineDown => set.cursor_outline = set.cursor_outline.saturating_sub(CURSOR_OUTLINE_STEP),
+            ButtonAction::CursorOutlineUp => set.cursor_outline = (set.cursor_outline + CURSOR_OUTLINE_STEP).min(CURSOR_OUTLINE_MAX),
+            ButtonAction::CursorFillDown => set.cursor_fill_transparency = set.cursor_fill_transparency.saturating_sub(CURSOR_FILL_STEP),
+            ButtonAction::CursorFillUp => set.cursor_fill_transparency = (set.cursor_fill_transparency + CURSOR_FILL_STEP).min(100),
             ButtonAction::CursorWidthUp => set.cursor_width = (set.cursor_width + CURSOR_WIDTH_STEP).min(CURSOR_WIDTH_MAX),
             ButtonAction::HoldConfirmDown => set.hold_confirm_ms = set.hold_confirm_ms.saturating_sub(HOLD_CONFIRM_STEP),
             ButtonAction::HoldConfirmUp => set.hold_confirm_ms = (set.hold_confirm_ms + HOLD_CONFIRM_STEP).min(HOLD_CONFIRM_MAX),
@@ -614,6 +626,8 @@ impl App {
             }
             // Das Laden danach, unten -- es braucht ganz self.
             ButtonAction::CycleWallpaper => set.wallpaper = (set.wallpaper + 1) % wallpaper::WallpaperMode::ALL.len() as u8,
+            ButtonAction::PanoramaSpeedPrev => set.panorama_speed = (set.panorama_speed - crate::panorama::SPEED_STEP).max(crate::panorama::SPEED_MIN),
+            ButtonAction::PanoramaSpeedNext => set.panorama_speed = (set.panorama_speed + crate::panorama::SPEED_STEP).min(crate::panorama::SPEED_MAX),
             ButtonAction::CycleLanguage(row) => {
                 let bereiche = [&mut set.lang_ui, &mut set.lang_items, &mut set.lang_effects, &mut set.lang_chat];
                 if row == 0 {
@@ -753,6 +767,8 @@ impl App {
             ButtonAction::ChatStyle(b) => set.chat_bedrock = b,
             ButtonAction::ToggleCrosshairOutline => set.crosshair_outline = !set.crosshair_outline,
             ButtonAction::ToggleCrosshairRingOutline => set.crosshair_ring_outline = !set.crosshair_ring_outline,
+            ButtonAction::CrosshairRingRadiusPrev => set.crosshair_ring_radius = set.crosshair_ring_radius.saturating_sub(1).max(SHIELD_RING_RADIUS_MIN_PX),
+            ButtonAction::CrosshairRingRadiusNext => set.crosshair_ring_radius = (set.crosshair_ring_radius + 1).min(SHIELD_RING_RADIUS_MAX_PX),
             ButtonAction::CrosshairSizePrev => set.step_crosshair_size(-1),
             ButtonAction::CrosshairSizeNext => set.step_crosshair_size(1),
             ButtonAction::OpenCrosshairPainter => {
@@ -771,6 +787,7 @@ impl App {
             ButtonAction::OpenParticleSettings(own) => {
                 self.screen = MenuScreen::SettingsParticles;
                 self.particle_screen_own = own;
+                crate::PARTICLE_SCREEN_OWN.store(own, std::sync::atomic::Ordering::Relaxed);
                 self.particle_scroll = Default::default();
             }
             ButtonAction::OpenAnimSettings => {
@@ -804,7 +821,9 @@ impl App {
                                 if hoch { (t.opacity_pct + PARTICLE_OPACITY_STEP).min(100) } else { t.opacity_pct.saturating_sub(PARTICLE_OPACITY_STEP).max(PARTICLE_OPACITY_STEP) }
                         }
                         2 => t.speed_pct = step_in(&PARTICLE_SPEED_STEPS, t.speed_pct, hoch),
-                        // Die vierte Spalte ist Menge oder Intervall, je nach Art.
+                        3 => t.size_pct = step_in(&PARTICLE_SIZE_STEPS, t.size_pct, hoch),
+                        4 => t.spread_pct = step_in(&PARTICLE_SPREAD_STEPS, t.spread_pct, hoch),
+                        // Der letzte Regler ist Menge oder Intervall, je nach Art (s. particle_slider_rows).
                         _ if particles::KINDS[i].spawn.has_interval() => t.interval_pct = step_in(&PARTICLE_INTERVAL_STEPS, t.interval_pct, hoch),
                         _ => t.amount_pct = step_in(&PARTICLE_AMOUNT_STEPS, t.amount_pct, hoch),
                     }
@@ -869,6 +888,17 @@ impl App {
                     self.settings.hud_effects_detail_y = (y / sh).clamp(0.0, 1.0);
                 }
             }
+            ButtonAction::ScoreboardAlign(align) => {
+                // Die Leiste bleibt stehen, nur die feste Ecke wechselt (wie bei EffectsAlign).
+                if let Some(gpu) = self.gpu.as_ref() {
+                    let r = self.hud_scoreboard_rect(gpu);
+                    let (sw, sh) = gpu.size();
+                    let (x, y) = scoreboard_anchor(r, align);
+                    self.settings.scoreboard_align = align;
+                    self.settings.hud_scoreboard_x = (x / sw).clamp(0.0, 1.0);
+                    self.settings.hud_scoreboard_y = (y / sh).clamp(0.0, 1.0);
+                }
+            }
             ButtonAction::HudDeselect => self.hud_selected = None,
             ButtonAction::ArmorHudLayout(l) => self.settings.armor_hud_layout = l,
             ButtonAction::ArmorHudGapPrev => self.settings.armor_hud_gap = (self.settings.armor_hud_gap - 1).max(armor_hud::GAP_MIN),
@@ -896,7 +926,9 @@ impl App {
             ButtonAction::ShoulderOffsetPrev => self.settings.shoulder_offset_cm = (self.settings.shoulder_offset_cm - SHOULDER_OFFSET_STEP).max(SHOULDER_OFFSET_MIN),
             ButtonAction::ShoulderOffsetNext => self.settings.shoulder_offset_cm = (self.settings.shoulder_offset_cm + SHOULDER_OFFSET_STEP).min(SHOULDER_OFFSET_MAX),
             ButtonAction::ToggleArmorTrims => self.settings.armor_trims = !self.settings.armor_trims,
+            ButtonAction::ToggleRenderOrder(zeile, spalte) => self.settings.render_order.toggle(usize::from(zeile), usize::from(spalte)),
             ButtonAction::ToggleViewModel => self.settings.modified_view_model = !self.settings.modified_view_model,
+            ButtonAction::ToggleViewModelBobbing => self.settings.view_model_bobbing = !self.settings.view_model_bobbing,
             ButtonAction::ToggleAnimFlag(bit) => self.settings.anim_flags ^= bit,
             ButtonAction::ToggleAnims => self.settings.anims_enabled = !self.settings.anims_enabled,
             ButtonAction::HurtCamStrengthPrev => self.settings.hurt_cam_strength = self.settings.hurt_cam_strength.saturating_sub(5),
@@ -940,6 +972,7 @@ impl App {
                     HudElement::Armor => &mut self.settings.hud_armor_scale,
                     HudElement::Keystrokes => &mut self.settings.hud_keys_scale,
                     HudElement::Session => &mut self.settings.hud_session_scale,
+                    HudElement::Clock => &mut self.settings.hud_clock_scale,
                     _ => return,
                 };
                 *wert = if groesser { *wert + HUD_SCALE_PCT_STEP } else { wert.saturating_sub(HUD_SCALE_PCT_STEP) }
@@ -973,6 +1006,16 @@ impl App {
             ButtonAction::SmoothLightingUp => {
                 set.smooth_lighting_percent = (set.smooth_lighting_percent + SMOOTH_LIGHTING_STEP).min(SMOOTH_LIGHTING_MAX);
             }
+            ButtonAction::ParticleDistanceDown => set.particle_distance = set.particle_distance.saturating_sub(PARTICLE_DISTANCE_STEP).max(PARTICLE_DISTANCE_MIN),
+            ButtonAction::ParticleDistanceUp => set.particle_distance = (set.particle_distance + PARTICLE_DISTANCE_STEP).min(PARTICLE_DISTANCE_MAX),
+            ButtonAction::ParticleFadeDown => set.particle_fade_out_ms = set.particle_fade_out_ms.saturating_sub(PARTICLE_FADE_STEP_MS),
+            ButtonAction::ParticleFadeUp => set.particle_fade_out_ms = (set.particle_fade_out_ms + PARTICLE_FADE_STEP_MS).min(PARTICLE_FADE_MAX_MS),
+            ButtonAction::EntityNearDown => set.entity_near_dither_cm = set.entity_near_dither_cm.saturating_sub(ENTITY_NEAR_STEP_CM),
+            ButtonAction::MipSharpnessDown => set.mip_sharpness_pct = set.mip_sharpness_pct.saturating_sub(MIP_SHARPNESS_STEP),
+            ButtonAction::MipSharpnessUp => set.mip_sharpness_pct = (set.mip_sharpness_pct + MIP_SHARPNESS_STEP).min(MIP_SHARPNESS_MAX),
+            ButtonAction::EntityNearUp => set.entity_near_dither_cm = (set.entity_near_dither_cm + ENTITY_NEAR_STEP_CM).min(ENTITY_NEAR_MAX_CM),
+            ButtonAction::ChunkFadeDown => set.chunk_fade_ms = set.chunk_fade_ms.saturating_sub(CHUNK_FADE_STEP_MS),
+            ButtonAction::ChunkFadeUp => set.chunk_fade_ms = (set.chunk_fade_ms + CHUNK_FADE_STEP_MS).min(CHUNK_FADE_MAX_MS),
             ButtonAction::SlotHoverFadeDown => set.slot_hover_fade_ms = set.slot_hover_fade_ms.saturating_sub(SLOT_HOVER_FADE_STEP),
             ButtonAction::SlotHoverFadeUp => set.slot_hover_fade_ms = (set.slot_hover_fade_ms + SLOT_HOVER_FADE_STEP).min(SLOT_HOVER_FADE_MAX),
             ButtonAction::SwapAnimDown => set.swap_anim_ms = set.swap_anim_ms.saturating_sub(SWAP_ANIM_STEP),
@@ -998,7 +1041,14 @@ impl App {
             ButtonAction::ToggleSneakEdgeProtection => set.sneak_edge_protection_enabled = !set.sneak_edge_protection_enabled,
             // Wartet auf den naechsten Tastendruck -- ausgewertet in window_event(), nicht
             // hier: ein Mausklick ist kein Tastendruck, wir muessen den ERST NOCH abwarten.
-            ButtonAction::Rebind(target, slot) => self.awaiting_keybind = Some((target, slot)),
+            ButtonAction::Rebind(target, slot) => {
+                self.awaiting_keybind = Some((target, slot));
+                self.awaiting_modifier = false;
+            }
+            ButtonAction::RebindModifier(target, slot) => {
+                self.awaiting_keybind = Some((target, slot));
+                self.awaiting_modifier = true;
+            }
             ButtonAction::OpenKeybindAdvanced(aktion) => {
                 self.awaiting_keybind = None;
                 self.keybind_advanced = Some(aktion);
@@ -1024,7 +1074,7 @@ impl App {
                 self.restore_held_controls();
             }
             // Tatsaechlich behandelt NACH dem match (braucht &mut self).
-            ButtonAction::OpenSkinFolder | ButtonAction::ReloadSkins | ButtonAction::OpenConfigFolder | ButtonAction::ServerLinks => {}
+            ButtonAction::OpenSkinFolder | ButtonAction::ReloadSkins | ButtonAction::OpenConfigFolder | ButtonAction::ServerLinks | ButtonAction::PauseDialog => {}
             ButtonAction::ToggleSkinAutoUnzip => set.skin_auto_unzip = !set.skin_auto_unzip,
         }
 
@@ -1039,6 +1089,11 @@ impl App {
         }
         if action == ButtonAction::ServerLinks {
             self.open_server_links();
+        }
+        if action == ButtonAction::PauseDialog {
+            if let Some((id, _)) = self.pause_dialog() {
+                self.show_dialog_ref(protocol::packets::DialogRef::Registry(id as i32));
+            }
         }
         if action == ButtonAction::CycleWallpaper {
             self.request_wallpaper(true);

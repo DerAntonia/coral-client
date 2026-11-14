@@ -142,7 +142,20 @@ pub(super) async fn join_session(
     let mitte = Box::new(move |id| {
         let _ = melder.send(ClientEvent::RecordingStarted(id));
     });
-    conn.rec = Some(record::PacketRecorder::new(kopf, events.record.clone()).on_mid_start(mitte));
+    let mut rec = record::PacketRecorder::new(kopf, events.record.clone()).on_mid_start(mitte);
+    if let Some(link) = events.clip.clone() {
+        let melder = events.clone();
+        rec = rec.with_clip(
+            link,
+            Box::new(move |e| {
+                let _ = melder.send(match e {
+                    record::ClipEvent::Started { session, from_join, t_ms } => ClientEvent::ClipStarted { session, from_join, t_ms },
+                    record::ClipEvent::Checkpoint { session, seq, t_ms } => ClientEvent::ClipCheckpoint { session, seq, t_ms },
+                });
+            }),
+        );
+    }
+    conn.rec = Some(rec);
     log(events, "Konfiguration ...");
     if let Some(ziel) = do_configuration(conn, events, outgoing).await? {
         return Ok(ziel);

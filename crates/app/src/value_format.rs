@@ -136,6 +136,15 @@ pub(crate) const EAT_HOLD_THROUGH_STEP: u32 = 50;
 // Zoom-Modul (s. ModuleId::Zoom): Staerke in Zehnteln (Sichtfeld geteilt durch), Faktor auf
 // die Maus-Empfindlichkeit in Prozent, und wie schnell der Zoom ein- und ausfaehrt
 // (Zeitkonstante der Annaeherung).
+// Modul coral-clip: Dauer des Clips in Sekunden.
+pub(crate) const CLIP_SECONDS_MIN: u32 = 10;
+pub(crate) const CLIP_SECONDS_MAX: u32 = 300;
+pub(crate) const CLIP_SECONDS_STEP: u32 = 10;
+pub(crate) const CLIP_SECONDS_DEFAULT: u32 = 30;
+// Haltepunkte je Clip-Dauer (s. Settings::clip_checkpoints).
+pub(crate) const CLIP_CHECKPOINTS_MIN: u32 = 1;
+pub(crate) const CLIP_CHECKPOINTS_MAX: u32 = 10;
+pub(crate) const CLIP_CHECKPOINTS_DEFAULT: u32 = 4;
 pub(crate) const ZOOM_FACTOR_MIN: u32 = 15;
 pub(crate) const ZOOM_FACTOR_MAX: u32 = 150;
 pub(crate) const ZOOM_FACTOR_STEP: u32 = 5;
@@ -311,7 +320,7 @@ pub(crate) fn format_audio_buffer(info: Option<&audio::BufferInfo>) -> String {
 pub(crate) const ORBIT_TEST_SOUND: &str = "kenney-interface/click_001";
 
 pub(crate) const MASTER_VOLUME_TOOLTIP: &str =
-    "Lautstärke aller Weltgeräusche (Schritte, Blöcke, Kreaturen, Explosionen), die der Server schickt. Wirkt bewusst NICHT auf die Klänge der Oberfläche -- die haben ihren eigenen, aufeinander abgestimmten Pegel.";
+    "Lautstärke aller Geräusche: Weltgeräusche (Schritte, Blöcke, Kreaturen, Explosionen), die der Server schickt, und die Klänge der Oberfläche.";
 
 pub(crate) const SPATIAL_TEST_TOOLTIP: &str =
     "Lässt einen Klick in drei Sekunden einmal um den Kopf wandern: vorne, rechts, hinten, links. Damit lässt sich prüfen, ob die Ortung ankommt -- der Klick erreicht das nahe Ohr bis zu 0,66 ms früher und das ferne leiser und dumpfer. Am deutlichsten mit KOPFHÖRERN; über Lautsprecher hört man vor allem die Lautstärke. Vorne und hinten klingen gleich, das ist so gewollt (dafür bräuchte es gemessene Ohrmuschel-Daten).";
@@ -394,8 +403,8 @@ pub(crate) const DEFAULT_MESH_COLUMNS_PER_FRAME: usize = 6;
 pub(crate) const MESH_COLUMNS_MAX: usize = 32;
 
 // Client-seitige Render-Limiter (s. App::enforce_render_limits) -- zusaetzlich zu, nicht
-// statt protocol::REQUESTED_VIEW_DISTANCE: der Server schickt weiterhin bis zu 32 Chunks
-// Sichtweite, diese beiden Regler entscheiden nur, wie viele davon TATSAECHLICH GEMESHT UND
+// statt protocol::REQUESTED_VIEW_DISTANCE: der Server schickt weiterhin, was er bei dieser
+// Anfrage hergibt (Vanilla hoechstens 32), diese beiden Regler entscheiden nur, wie viele davon TATSAECHLICH GEMESHT UND
 // GEZEICHNET werden (Block-Daten bleiben trotzdem geladen, kein Loch in der Welt, wenn man
 // sich wieder naehert).
 // Obergrenze der Distanz = REQUESTED_VIEW_DISTANCE: mehr zu erlauben waere wirkungslos, der

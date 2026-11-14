@@ -138,3 +138,30 @@ fn titel_untertitel_und_effekte_sind_eigene_elemente() {
     assert!(!g.show_effects_hud && !g.show_effects_inventory);
     assert!(Settings::base().show_effects_hud && Settings::base().show_effects_inventory);
 }
+
+// Scoreboard: die gewaehlte Ecke bleibt stehen, die Leiste waechst von ihr weg; die Ecke
+// ueberlebt Speichern und Laden.
+#[test]
+fn scoreboard_feste_ecke() {
+    let r = Rect { x: 100.0, y: 50.0, w: 80.0, h: 120.0 };
+    for ecke in 0..SCOREBOARD_ALIGNS.len() as u8 {
+        let anker = scoreboard_anchor(r, ecke);
+        assert_eq!(scoreboard_origin(anker, r.w, r.h, ecke), (r.x, r.y), "Ecke {ecke}");
+        // Hoeher geworden: unten verankert waechst sie nach oben, oben verankert nach unten.
+        let (_, y) = scoreboard_origin(anker, r.w, r.h + 40.0, ecke);
+        assert_eq!(y, if ecke >= 2 { r.y - 40.0 } else { r.y }, "Ecke {ecke}");
+    }
+    assert_eq!(scoreboard_anchor(r, 3), (180.0, 170.0));
+    let set = Settings { scoreboard_align: 3, ..Settings::base() };
+    assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).scoreboard_align, 3);
+    assert_eq!(Settings::parse_onto(Settings::base(), "scoreboard_align=9\n").scoreboard_align, 3);
+}
+
+// Leiste oben beim Pausieren: startet ganz ueber dem Bildrand, steht nach der Einblendzeit.
+#[test]
+fn pausenleiste_gleitet_herein() {
+    assert_eq!(pause_bar_slide_dy(0.0), -TOPBAR_H);
+    assert!(pause_bar_slide_dy(PAUSE_BAR_SLIDE_SECS / 2.0) > -TOPBAR_H / 4.0, "abbremsend: zur Haelfte fast da");
+    assert_eq!(pause_bar_slide_dy(PAUSE_BAR_SLIDE_SECS), 0.0);
+    assert_eq!(pause_bar_slide_dy(5.0), 0.0);
+}

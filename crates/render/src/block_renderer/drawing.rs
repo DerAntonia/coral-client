@@ -26,12 +26,25 @@ impl BlockRenderer {
     // koennen: beim perfekten Geradeausgucken gab es dann oft Luecken zwischen
     // den Meshes -- entlang einer Achse liegen die Spaltengrenzen genau waagerecht bzw.
     // senkrecht im Bild, und die Abweichung fehlt dann als ganze Pixelzeile.
+    // Eine Spalte, die gerade ihr erstes Mesh bekam, ueber `sekunden` einblenden (s.
+    // block.wgsl::chunk_fade_discard). 0 = sofort ganz da.
+    pub fn start_column_fade(&mut self, key: (i32, i32), sekunden: f32) {
+        if sekunden > 0.0 {
+            self.column_fade.insert(key, (std::time::Instant::now(), sekunden));
+        }
+    }
+
     pub fn update_column_offsets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, eye: DVec3) {
         let mut data = std::mem::take(&mut self.column_offset_scratch);
         data.clear();
         let mut slot = 0u32;
+        // Dahinter je Spalte, wie weit sie noch ausgeblendet ist (s. start_column_fade).
+        let jetzt = std::time::Instant::now();
+        self.column_fade.retain(|_, (start, dauer)| jetzt.duration_since(*start).as_secs_f32() < *dauer);
+        let fade = &self.column_fade;
         let mut versatz = |key: &(i32, i32), min_y: i32| {
             data.extend_from_slice(&column_offset(*key, min_y, eye));
+            data.push(fade.get(key).map_or(0.0, |(start, dauer)| 1.0 - jetzt.duration_since(*start).as_secs_f32() / dauer));
             slot += 1;
             slot - 1
         };
@@ -193,6 +206,7 @@ impl BlockRenderer {
             proj: camera.proj_matrix(aspect).to_cols_array_2d(),
             params: [f32::from(camera.projection), half_fov_tan, aspect, self.daylight],
             hitbox: self.hitbox_params,
+            near: [self.entity_near_dither, self.mip_bias, 0.0, 0.0],
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
@@ -217,7 +231,8 @@ impl BlockRenderer {
         wgpu::RenderPassDepthStencilAttachment {
             view: &self.depth_view,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store }),
-            stencil_ops: None,
+            // Stencil der Render-Order (s. crate::render_order): leer anfangen.
+            stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store }),
         }
     }
 
@@ -229,13 +244,18 @@ impl BlockRenderer {
         wgpu::RenderPassDepthStencilAttachment {
             view: &self.depth_view,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store }),
-            stencil_ops: None,
+            stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store }),
         }
     }
 
     // Die Tiefe des Welt-Durchgangs (nur mit keep_depth nach dem Durchgang noch gueltig).
     pub const fn depth_view(&self) -> &wgpu::TextureView {
         &self.depth_view
+    }
+
+    // Dieselbe Tiefe zum Lesen als Textur (ohne den Stencil).
+    pub const fn depth_sample_view(&self) -> &wgpu::TextureView {
+        &self.depth_sample_view
     }
 
     // Welche Spalten gezeichnet werden (Sichtkegel, Richtungsgruppen, Reihenfolge), hat
@@ -356,12 +376,66 @@ impl BlockRenderer {
             pass.draw(0..self.crumbling_vertex_count, 0..1);
         }
 
-        // Opake Partikel vor dem Wasser: sie schreiben Tiefe wie jede andere opake Geometrie.
         let d = self.particle_draws;
         let particle_bytes = |from: u32, count: u32| {
             let size = std::mem::size_of::<ParticleVertex>() as u64;
             self.particle_buffer.slice(u64::from(from) * size..u64::from(from + count) * size)
         };
+        // Render-Order (s. crate::render_order): erst alles, was "immer ueber" etwas liegen
+        // kann -- Entities und Hitbox-Kanten schreiben in den Stencil, was sie verdecken --,
+        // danach das Verdeckbare (Partikel, Wasser/Glas, Flammen), das diese Pixel auslaesst.
+        // Vorher liefen die Entities NACH dem Wasser, damit es sie nicht blau einfaerbt
+        // (Nutzerwunsch); dasselbe Bild liefert jetzt die Vorgabe "ueber Wasser".
+        let order = self.render_order;
+        let hat_entities = self.entity_vertex_count > 0 || self.skinning.has_draws();
+        // Shader-Pfad mit Licht je Vertex, sofern es fuer alle Vertices vorliegt.
+        let beleuchtet = lit && self.entity_light_count == self.entity_vertex_count;
+        let hitboxen = self.hitbox_vertex_count > 0;
+        let kanten_vor_spielern = order.hitbox_over_players();
+        if hat_entities {
+            mark(pass, "Entities");
+            // Entities sampeln den ENTITY-Atlas, nicht den Block-Atlas -- Skins und
+            // Mob-Texturen liegen dort (s. new()).
+            pass.set_bind_group(1, &self.entity_bind_group, &[]);
+            self.draw_entity_class(pass, render_order::CLASS_OTHER, beleuchtet);
+            self.draw_entity_class(pass, render_order::CLASS_BLOCK_ENTITY, beleuchtet);
+        }
+        // Hitboxen "ueber Spielern": VOR den Spielern, die diese Pixel dann auslassen -- gegen
+        // die Tiefe von Welt, Blockentities und Mobs. Mit Bewegungsunschaerfe hier nur der
+        // Stencil; die Farbe kommt scharf nach ihr (s. render_hitboxes).
+        if hitboxen && kanten_vor_spielern {
+            mark(pass, "Sonstiges");
+            self.draw_hitboxes(pass, self.keep_depth);
+        }
+        if hat_entities {
+            mark(pass, "Entities");
+            pass.set_bind_group(1, &self.entity_bind_group, &[]);
+            self.draw_entity_class(pass, render_order::CLASS_PVP, beleuchtet);
+            // Glint verzauberter Items/Ruestung -- solange der Entity-Atlas noch gebunden ist
+            // (die Maske sampelt ihn).
+            pass.set_stencil_reference(0);
+            self.draw_glint(pass, &self.entity_glint);
+            self.skinning.draw_glint(pass, &self.glint_bind_group);
+        }
+        // Hitbox-Anzeige (Modul): zeichnet gar keine Textur, die Farbe kommt aus dem Vertex
+        // (s. fs_hitbox). Die Kanten werden NACH der Projektion auf Pixelbreite gebracht und
+        // testen gegen die fertige Tiefe von Welt und Entities.
+        // Mit Bewegungsunschaerfe erst nach ihr (s. render_hitboxes), damit sie scharf bleiben.
+        if hitboxen && !kanten_vor_spielern && !self.keep_depth {
+            mark(pass, "Sonstiges");
+            self.draw_hitboxes(pass, false);
+        }
+        if hat_entities {
+            // Die Flammen brennender Entities: verdeckbar, also nach allen Verdeckern.
+            pass.set_bind_group(1, &self.entity_bind_group, &[]);
+            self.draw_entity_class(pass, render_order::CLASS_FLAME, beleuchtet);
+        }
+        // Ab hier nur noch Verdeckbares: Referenz 0 (s. render_order::stencil_under).
+        pass.set_stencil_reference(0);
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(1, self.atlas_group(), &[]);
+
+        // Opake Partikel vor dem Wasser: sie schreiben Tiefe wie jede andere opake Geometrie.
         if d.opaque > 0 {
             mark(pass, "Partikel");
             pass.set_pipeline(&self.particle_opaque_pipeline);
@@ -375,59 +449,45 @@ impl BlockRenderer {
         // Pipeline-Wechsel, sonst identischer Ablauf (dieselben Bind-Groups gelten weiter).
         if !self.translucent_meshes.is_empty() {
             mark(pass, "Wasser/Glas");
-            pass.set_pipeline(if lit { &self.lit_terrain_translucent_pipeline } else { &self.terrain_translucent_pipeline });
             // Von HINTEN nach VORN (s. prepare_terrain_draws). Index- und Versatz-Puffer muessen
             // neu gesetzt werden: Geister, Risse und Partikel davor binden eigene Puffer.
             pass.set_index_buffer(self.quad_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(1, self.column_offset_buffer.slice(..));
-            self.translucent_draws.draw(pass, &self.translucent_arena.pages, self.multi_draw);
+            if lit {
+                pass.set_pipeline(&self.lit_terrain_translucent_pipeline);
+                self.translucent_draws.draw(pass, &self.translucent_arena.pages, self.multi_draw);
+            } else if order.single_translucent_pass() {
+                pass.set_pipeline(&self.terrain_translucent_pipeline);
+                self.translucent_draws.draw(pass, &self.translucent_arena.pages, self.multi_draw);
+            } else {
+                // Wasser und Glas wirken auf einen Verdecker verschieden: Wasser und Rest
+                // brauchen verschiedene Masken, also zwei Zuege ueber dieselben Daten (der
+                // Shader verwirft jeweils die andere Art). Zwischen Wasser und Glas stimmt die
+                // Reihenfolge dann nicht mehr -- Glas liegt ueber Wasser.
+                pass.set_pipeline(&self.terrain_translucent_water_pipeline);
+                self.translucent_draws.draw(pass, &self.translucent_arena.pages, self.multi_draw);
+                pass.set_pipeline(&self.terrain_translucent_rest_pipeline);
+                self.translucent_draws.draw(pass, &self.translucent_arena.pages, self.multi_draw);
+            }
         }
 
-        if self.entity_vertex_count > 0 || self.skinning.has_draws() {
+        // Durchscheinende Entity-Teile (Windkugeln, ausblendende Teile, der eigene Spieler nah
+        // an der Schulterkamera): gemischt ueber Wasser und Glas. Sie verdecken wie Spieler.
+        let kopf = self.entity_head_translucent;
+        if self.entity_vertex_count > 0 && (self.entity_translucent_count > 0 || kopf > 0) {
             mark(pass, "Entities");
-            // NACH dem Wasser: das mischt ohne Tiefe zu schreiben und hat Spieler und Mobs
-            // darunter/dahinter blau eingefaerbt (Nutzerwunsch: nicht einfaerben). Die Tiefe der
-            // opaken Welt verdeckt Entities weiter korrekt.
-            // Entities sampeln den ENTITY-Atlas, nicht den Block-Atlas -- Skins und
-            // Mob-Texturen liegen dort (s. new()). Danach wieder zurueckbinden, damit die
-            // Partikel unten wieder die Blocktextur treffen.
-            pass.set_bind_group(1, &self.entity_bind_group, &[]);
-            // Eigene Pipeline: die Schadens-Faerbung mischt NACH dem Texturzugriff und laesst
-            // sich deshalb nicht ueber die Vertexfarbe der Block-Pipeline machen
-            // (s. block.wgsl::fs_entity).
-            // Shader-Pfad mit Licht je Vertex, sofern es fuer alle Vertices vorliegt.
-            // Die festen Modelle per Skinning zuerst: deckend wie der Hauptteil unten, also vor
-            // allem Durchscheinenden. Sie setzen Pipeline, Gruppe 2 und Puffer selbst.
-            self.skinning.draw(pass);
-            let beleuchtet = lit && self.entity_light_count == self.entity_vertex_count;
             let deckend = self.entity_vertex_count - self.entity_translucent_count;
-            let kopf = self.entity_head_translucent;
-            if self.entity_vertex_count > 0 {
-                pass.set_pipeline(if beleuchtet { &self.lit_entity_pipeline } else { &self.entity_pipeline });
-                let bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<BlockVertex>() as u64;
-                let tint_bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<[f32; 4]>() as u64;
-                pass.set_vertex_buffer(0, self.entity_buffer.slice(..bytes));
-                pass.set_vertex_buffer(1, self.entity_tint_buffer.slice(..tint_bytes));
-                if beleuchtet {
-                    let light_bytes = u64::from(self.entity_vertex_count) * std::mem::size_of::<u32>() as u64;
-                    pass.set_vertex_buffer(2, self.entity_light_buffer.slice(..light_bytes));
-                }
-                pass.draw(kopf..deckend, 0..1);
+            pass.set_bind_group(1, &self.entity_bind_group, &[]);
+            pass.set_pipeline(if beleuchtet { &self.lit_entity_translucent_pipeline } else { &self.entity_translucent_pipeline });
+            pass.set_stencil_reference(u32::from(order.of_class(render_order::CLASS_PVP)));
+            self.set_entity_buffers(pass, beleuchtet);
+            if kopf > 0 {
+                pass.draw(0..kopf, 0..1);
             }
-            if self.entity_vertex_count > 0 && (self.entity_translucent_count > 0 || kopf > 0) {
-                pass.set_pipeline(if beleuchtet { &self.lit_entity_translucent_pipeline } else { &self.entity_translucent_pipeline });
-                if kopf > 0 {
-                    pass.draw(0..kopf, 0..1);
-                }
-                if self.entity_translucent_count > 0 {
-                    pass.draw(deckend..self.entity_vertex_count, 0..1);
-                }
+            if self.entity_translucent_count > 0 {
+                pass.draw(deckend..self.entity_vertex_count, 0..1);
             }
-
-            // Glint verzauberter Items/Ruestung -- gleich danach, solange der Entity-Atlas
-            // noch gebunden ist (die Maske sampelt ihn).
-            self.draw_glint(pass, &self.entity_glint);
-            self.skinning.draw_glint(pass, &self.glint_bind_group);
+            pass.set_stencil_reference(0);
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(1, self.atlas_group(), &[]);
         }
@@ -447,19 +507,6 @@ impl BlockRenderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(1, self.atlas_group(), &[]);
-        }
-
-        // Hitbox-Anzeige (Modul): zeichnet gar keine Textur, die Farbe kommt aus dem Vertex
-        // (s. fs_hitbox). Sie steht hier, weil die Kanten NACH der Projektion auf Pixelbreite
-        // gebracht werden und dafuer gegen die fertige Tiefe der Welt testen muessen.
-        // Nach dem Wasser, damit es sie nicht blau einfaerbt (wie bei den Entities oben).
-        // Mit Bewegungsunschaerfe erst nach ihr (s. render_hitboxes), damit sie scharf bleiben.
-        if self.hitbox_vertex_count > 0 && !self.keep_depth {
-            mark(pass, "Sonstiges");
-            pass.set_pipeline(&self.hitbox_pipeline);
-            let bytes = u64::from(self.hitbox_vertex_count) * std::mem::size_of::<HitboxVertex>() as u64;
-            pass.set_vertex_buffer(0, self.hitbox_buffer.slice(..bytes));
-            pass.draw(0..self.hitbox_vertex_count, 0..1);
         }
 
         // Durchscheinende Partikel zuletzt, ueber dem Wasser: sie schreiben keine Tiefe und
@@ -499,5 +546,57 @@ impl BlockRenderer {
                 pass.set_bind_group(1, self.atlas_group(), &[]);
             }
         }
+    }
+    // Tint- (und im Shader-Pfad Licht-) Puffer der Entity-Vertices binden.
+    fn set_entity_buffers<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, beleuchtet: bool) {
+        let n = u64::from(self.entity_vertex_count);
+        pass.set_vertex_buffer(0, self.entity_buffer.slice(..n * std::mem::size_of::<BlockVertex>() as u64));
+        pass.set_vertex_buffer(1, self.entity_tint_buffer.slice(..n * std::mem::size_of::<[f32; 4]>() as u64));
+        if beleuchtet {
+            pass.set_vertex_buffer(2, self.entity_light_buffer.slice(..n * std::mem::size_of::<u32>() as u64));
+        }
+    }
+
+    // Die deckenden Entities einer Klasse der Render-Order: die Instanzen (GPU-Skinning) und
+    // die Vertex-Bereiche, mit dem Stencil-Wert der Klasse. Flammen sind keine Verdecker: sie
+    // laufen mit Referenz 0 durch die verdeckbare Pipeline. Der Entity-Atlas muss gebunden sein.
+    // Eigene Pipeline: die Schadens-Faerbung mischt NACH dem Texturzugriff und laesst sich
+    // deshalb nicht ueber die Vertexfarbe der Block-Pipeline machen (s. block.wgsl::fs_entity).
+    fn draw_entity_class<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, class: u8, beleuchtet: bool) {
+        let flamme = class == render_order::CLASS_FLAME;
+        pass.set_stencil_reference(if flamme { 0 } else { u32::from(self.render_order.of_class(class)) });
+        if !flamme {
+            self.skinning.draw(pass, class);
+        }
+        if self.entity_vertex_count == 0 {
+            return;
+        }
+        let deckend = self.entity_head_translucent..self.entity_vertex_count - self.entity_translucent_count;
+        let bereiche = self.entity_class_ranges(deckend, class);
+        if bereiche.is_empty() {
+            return;
+        }
+        pass.set_pipeline(if beleuchtet {
+            &self.lit_entity_pipeline
+        } else if flamme {
+            &self.entity_flame_pipeline
+        } else {
+            &self.entity_pipeline
+        });
+        self.set_entity_buffers(pass, beleuchtet);
+        for r in bereiche {
+            pass.draw(r, 0..1);
+        }
+    }
+
+    // Die Hitbox-Kanten mit ihrem Stencil-Wert samt Merker. `nur_stencil`: ohne Farbe (s.
+    // hitbox_mark_pipeline).
+    fn draw_hitboxes<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, nur_stencil: bool) {
+        pass.set_pipeline(if nur_stencil { &self.hitbox_mark_pipeline } else { &self.hitbox_pipeline });
+        pass.set_stencil_reference(u32::from(self.render_order.of_hitbox() | cover::MARK));
+        let bytes = u64::from(self.hitbox_vertex_count) * std::mem::size_of::<HitboxVertex>() as u64;
+        pass.set_vertex_buffer(0, self.hitbox_buffer.slice(..bytes));
+        pass.draw(0..self.hitbox_vertex_count, 0..1);
+        pass.set_stencil_reference(0);
     }
 }

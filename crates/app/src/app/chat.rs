@@ -1,6 +1,6 @@
 // Chat: Zeilen, Eingabe, Auswahl, Zwischenablage, Befehle und Chat-Sitzung.
 
-use crate::{App, GpuState, Rect, ChatLine, FontKind, wrap_chat_message, Instant, chat_fade_alpha, UiRect, UiText, ChatHit, COLOR_WHITE, rgb_to_rgba, push_span_shadow, wrap_label_lines, split_label_lines, cut_ui_under, CHAT_CARET_OFFSET_X, UI_SCALE_NORMAL, ChatGap, chat_input, CARET_WIDTH_PX, chat_scroll_layout, selection_boundary, CHAT_RECALL, ease_out, push_typed_marker, theme, UI_SCALE_SMALL, text_field, SELECTION_FLASH_ALPHA, SELECTION_GLOW_W, SELECTION_SLICE, mix_color, ui_sound, selection_text, SelectionGlide, mix_rect, CARET_GLIDE, Duration, SELECTION_FADE, HoverAnim, CaretAnim, caret_alpha, ChatRecall, ChatSlide, ego_name, chat_log, linkify_chat, ShadowArea, CHAT_MAX_MESSAGES, SelectionContext, AppMode, MenuScreen, TextRun, select_in_runs_by_unit, select_in_runs, TextSelection, MULTI_CLICK_MS, MULTI_CLICK_PX, CHAT_AUTOSCROLL_MAX_LINES, SELECTION_DRAG_MIN, notifications, ConnStatus, save_chat_history, inventory, AuthEvent, uuid_bytes_from_hex};
+use crate::{App, GpuState, Rect, ChatLine, FontKind, wrap_chat_message, Instant, chat_fade_alpha, UiRect, UiText, ChatHit, COLOR_WHITE, rgb_to_rgba, push_span_shadow, wrap_label_lines, split_label_lines, cut_ui_under, CHAT_CARET_OFFSET_X, UI_SCALE_NORMAL, ChatGap, chat_input, CARET_WIDTH_PX, chat_scroll_layout, selection_boundary, CHAT_RECALL, ease_out, push_typed_marker, theme, UI_SCALE_SMALL, text_field, SELECTION_FLASH_ALPHA, SELECTION_GLOW_W, SELECTION_SLICE, mix_color, ui_sound, selection_text, SelectionGlide, mix_rect, CARET_GLIDE, Duration, SELECTION_FADE, HoverAnim, CaretAnim, caret_alpha, ChatRecall, ChatSlide, ego_name, chat_log, linkify_chat, ShadowArea, CHAT_MAX_MESSAGES, SelectionContext, AppMode, MenuScreen, TextRun, select_in_runs_by_unit, select_in_runs, TextSelection, MULTI_CLICK_MS, MULTI_CLICK_PX, CHAT_AUTOSCROLL_MAX_LINES, SELECTION_DRAG_MIN, notifications, ConnStatus, save_chat_history, inventory, AuthEvent, uuid_bytes_from_hex, ServerField, server_dialog_layout, server_card_rect};
 
 impl App {
     // Zeilenhoehe des Chats: Oberlaenge + UNTERLAENGE + ein Pixel Luft, je Font-Pixel mal
@@ -77,18 +77,36 @@ impl App {
     }
 
     // Alle Nachrichten gesetzt, aelteste zuerst -- fuer den geoeffneten Chat, der durch den
-    // ganzen Verlauf blaettern kann. Zwischengespeichert: neu gesetzt wird nur, wenn eine
-    // Nachricht dazukam oder sich Breite, Groesse oder Schrift geaendert haben.
+    // ganzen Verlauf blaettern kann (s. chat_wrap_update).
     pub(crate) fn chat_wrapped_all(&self, gpu: &GpuState, width: f32, scale: f32) -> std::rc::Rc<Vec<ChatLine>> {
+        let mut speicher = self.chat_wrap_cache.borrow_mut();
+        self.chat_wrap_update(gpu, &mut speicher, width, scale).lines.clone()
+    }
+
+    // Den gesetzten Verlauf in `speicher` auf den Stand bringen. Neu gesetzt wird nur, wenn
+    // eine Nachricht dazukam oder sich etwas geaendert hat, wovon das Messen abhaengt (s.
+    // ChatWrapKey).
+    fn chat_wrap_update<'a>(&self, gpu: &GpuState, speicher: &'a mut Option<crate::ChatWrapCache>, width: f32, scale: f32) -> &'a crate::ChatWrapCache {
         let schrift = FontKind::ALL.iter().position(|&k| k == gpu.layout_atlas().kind()).unwrap_or(0) as u8;
-        let key = (self.chat_generation, width.to_bits(), scale.to_bits(), schrift);
+        let key = (
+            self.chat_generation,
+            width.to_bits(),
+            scale.to_bits(),
+            schrift,
+            font_atlas::glyph_generation(),
+            gpu.keep_capitals.get(),
+            gpu.plain_numbers.get(),
+            gpu.stable_numbers.borrow().generation(),
+            gpu.ui_scale.get().to_bits(),
+            crate::i18n::tr_state(),
+        );
         let messwerk = |t: &str| gpu.measure_text(t, scale);
         let erste = self.chat_pushed - self.chat_messages.len() as u64;
-        let mut speicher = self.chat_wrap_cache.borrow_mut();
         // Gleicher Schluessel: nur nachziehen, was sich seitdem geaendert hat -- vorne die
         // weggefallenen Nachrichten abschneiden, hinten die neuen setzen. Vorher setzte jede
         // neue Nachricht den ganzen Verlauf neu, auf vollen Servern mehrmals je Sekunde.
-        if let Some(c) = speicher.as_mut().filter(|c| c.key == key && c.first <= erste) {
+        if speicher.as_ref().is_some_and(|c| c.key == key && c.first <= erste) {
+            let c = speicher.as_mut().expect("eben geprueft");
             let zeilen = std::rc::Rc::make_mut(&mut c.lines);
             while c.first < erste {
                 let n = c.counts.pop_front().unwrap_or(0);
@@ -100,7 +118,7 @@ impl App {
                 c.counts.push_back(neu.len());
                 zeilen.extend(neu);
             }
-            return c.lines.clone();
+            return c;
         }
         let mut counts = std::collections::VecDeque::with_capacity(self.chat_messages.len());
         let mut lines = Vec::new();
@@ -109,9 +127,7 @@ impl App {
             counts.push_back(neu.len());
             lines.extend(neu);
         }
-        let lines = std::rc::Rc::new(lines);
-        *speicher = Some(crate::ChatWrapCache { key, first: erste, counts, lines: lines.clone() });
-        lines
+        speicher.insert(crate::ChatWrapCache { key, first: erste, counts, lines: std::rc::Rc::new(lines) })
     }
 
     // Die juengsten `n` Zeilen fuer den geschlossenen Chat -- von hinten gesetzt, bis genug
@@ -134,21 +150,27 @@ impl App {
 
     // Wie chat_wrapped_tail, aber fuer den geschlossenen Chat im Spiel: je Zeile die Deckkraft
     // ihrer Nachricht (s. chat_fade_alpha). Schon ausgeblendete Nachrichten fallen weg --
-    // und mit ihnen alle aelteren, die sind ja noch frueher abgelaufen.
+    // und mit ihnen alle aelteren, die sind ja noch frueher abgelaufen. Aus einem eigenen
+    // gemerkten Verlauf (s. chat_wrap_update): vorher wurde jede sichtbare Nachricht in jedem
+    // Frame neu umbrochen und Wort fuer Wort gemessen.
     pub(crate) fn chat_wrapped_tail_faded(&self, gpu: &GpuState, width: f32, scale: f32, n: usize) -> (Vec<ChatLine>, Vec<f32>) {
-        let messwerk = |t: &str| gpu.measure_text(t, scale);
         let jetzt = Instant::now();
         let mut zeilen: Vec<ChatLine> = Vec::new();
         let mut deckkraft: Vec<f32> = Vec::new();
-        for (msg, zeit) in self.chat_messages.iter().zip(&self.chat_times).rev() {
+        let mut speicher = self.chat_tail_wrap_cache.borrow_mut();
+        let c = self.chat_wrap_update(gpu, &mut speicher, width, scale);
+        let mut ende = c.lines.len();
+        for (zeit, &anzahl) in self.chat_times.iter().rev().zip(c.counts.iter().rev()) {
             let alpha = chat_fade_alpha(jetzt.duration_since(*zeit).as_secs_f32(), self.settings.chat_fade_secs);
             if alpha <= 0.0 {
                 break;
             }
-            for zeile in wrap_chat_message(msg, width, messwerk).into_iter().rev() {
-                zeilen.push(zeile);
+            let anfang = ende.saturating_sub(anzahl);
+            for zeile in c.lines[anfang..ende].iter().rev() {
+                zeilen.push(zeile.clone());
                 deckkraft.push(alpha);
             }
+            ende = anfang;
             if zeilen.len() >= n {
                 break;
             }
@@ -1179,33 +1201,40 @@ impl App {
         }
     }
 
-    // Ein blosser Klick in die Chat-Eingabe: den Cursor an die naechste Zeichengrenze setzen.
-    pub(crate) fn chat_click_cursor(&mut self, pos: (f32, f32)) {
-        let Some(gpu) = self.gpu.as_ref() else { return };
-        let Some(feld) = self.chat_input.as_ref() else { return };
+    // Die Zeichengrenze der Chat-Eingabe, die `pos` am naechsten liegt -- None ausserhalb des
+    // Eingabefeldes.
+    pub(crate) fn chat_input_index_at(&self, pos: (f32, f32)) -> Option<usize> {
+        let gpu = self.gpu.as_ref()?;
+        let feld = self.chat_input.as_ref()?;
         let rect = self.chat_input_rect(gpu);
         if !rect.contains(pos.0, pos.1) {
-            return;
+            return None;
         }
         let _schrift = self.area_font_scope(gpu, ShadowArea::Chat);
         let text = feld.text();
         let zeilen = self.chat_input_lines(gpu, text);
-        let Some(letzte) = zeilen.len().checked_sub(1) else { return };
+        let letzte = zeilen.len().checked_sub(1)?;
         let line_h = Self::chat_input_line_h(gpu);
         let i = (((pos.1 - rect.y - 3.0) / line_h).floor().max(0.0) as usize).min(letzte);
         let zeile = zeilen[i];
         let start = zeile.as_ptr() as usize - text.as_ptr() as usize;
         let caret_x = self.chat_line_end(gpu, text, i);
-        let ziel = zeile
-            .char_indices()
-            .map(|(k, _)| k)
-            .chain([zeile.len()])
-            .min_by(|&a, &b| {
-                let x = |k: usize| (caret_x - gpu.measure_raw(&zeile[k..], UI_SCALE_NORMAL) - pos.0).abs();
-                x(a).total_cmp(&x(b))
-            })
-            .map_or(start, |k| start + k);
-        drop(_schrift);
+        Some(
+            zeile
+                .char_indices()
+                .map(|(k, _)| k)
+                .chain([zeile.len()])
+                .min_by(|&a, &b| {
+                    let x = |k: usize| (caret_x - gpu.measure_raw(&zeile[k..], UI_SCALE_NORMAL) - pos.0).abs();
+                    x(a).total_cmp(&x(b))
+                })
+                .map_or(start, |k| start + k),
+        )
+    }
+
+    // Ein blosser Klick in die Chat-Eingabe: den Cursor an die naechste Zeichengrenze setzen.
+    pub(crate) fn chat_click_cursor(&mut self, pos: (f32, f32)) {
+        let Some(ziel) = self.chat_input_index_at(pos) else { return };
         let Some(feld) = self.chat_input.as_mut() else { return };
         let vorher = (feld.cursor(), feld.keyboard_selection().is_some());
         feld.set_cursor(ziel);
@@ -1362,14 +1391,45 @@ impl App {
         if text.is_empty() {
             return;
         }
-        // Die primaere Auswahl gibt es nur unter X11/Wayland -- Windows kennt sie nicht.
+        self.set_primary(text);
+    }
+
+    // Text in die PRIMAERE Auswahl legen. Die gibt es nur unter X11/Wayland -- Windows kennt
+    // sie nicht.
+    fn set_primary(&mut self, text: String) {
         #[cfg(target_os = "linux")]
         if let Some(cb) = self.clipboard() {
             use arboard::SetExtLinux;
-            let _ = cb.set().clipboard(arboard::LinuxClipboardKind::Primary).text(text);
+            let _ = cb.set().clipboard(arboard::LinuxClipboardKind::Primary).text(text.clone());
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = text;
+        self.primary_sent = text;
+    }
+
+    // Was gerade in einem Eingabefeld markiert ist, egal ob mit Tastatur (Shift+Pfeil, Strg+A)
+    // oder Maus: im Buch, in der Chat-Eingabe (Tastaturmarkierung; eine Mausmarkierung im Chat
+    // legt selection_release ab), sonst im aktiven Feld eines Fensters (Server, Suche,
+    // Quick Connect, Namensfeld, Dialog des Servers). Leer = nichts markiert.
+    fn field_selection_text(&mut self) -> String {
+        if let Some(e) = self.book_edit.as_ref().filter(|e| !e.signing) {
+            return e.selected_text().to_string();
+        }
+        if let Some(c) = self.chat_input.as_ref() {
+            return c.keyboard_selection().map(|r| c.text()[r].to_string()).unwrap_or_default();
+        }
+        self.active_text_field().map(|f| f.selected_text().to_string()).unwrap_or_default()
+    }
+
+    // Nach jeder Taste und jedem Mausdruck: eine neue Markierung in einem Eingabefeld kommt in
+    // die primaere Auswahl, wie ueberall unter Linux. Dieselbe Markierung nur einmal; wird
+    // sie aufgehoben, darf dieselbe spaeter wieder hinein (ein anderes Programm kann die
+    // Auswahl inzwischen uebernommen haben).
+    pub(crate) fn sync_primary_selection(&mut self) {
+        let text = self.field_selection_text();
+        if text.is_empty() {
+            self.primary_sent.clear();
+        } else if text != self.primary_sent {
+            self.set_primary(text);
+        }
     }
 
     // Strg+C: die Auswahl in die normale Zwischenablage. false = es gab nichts zu kopieren.
@@ -1398,8 +1458,82 @@ impl App {
         #[cfg(not(target_os = "linux"))]
         let text: Option<String> = None;
         if let Some(text) = text {
-            self.paste_into_focus(&text);
+            if !self.paste_at_pointer(&text) {
+                self.paste_into_focus(&text);
+            }
         }
+    }
+
+    // Mittelklick AUF ein Eingabefeld: der Text kommt an die Zeichengrenze unter dem Zeiger,
+    // wie unter Linux; ein Feld des Server-Fensters oder eines Server-Dialogs bekommt dabei den
+    // Fokus. Eine Markierung wird nicht ersetzt (meist ist sie selbst die primaere Auswahl),
+    // sie endet. true = eingefuegt.
+    fn paste_at_pointer(&mut self, text: &str) -> bool {
+        let pos = self.cursor_pos;
+        let Some(gpu) = self.gpu.as_ref() else { return false };
+        // Buch mit Feder (nicht beim Signieren).
+        if self.book_edit.as_ref().is_some_and(|e| !e.signing) {
+            let (tx, ty, s) = self.book_edit_text_origin(gpu);
+            let feld = Rect { x: tx - 4.0 * s, y: ty - 4.0 * s, w: 122.0 * s, h: 134.0 * s };
+            if !feld.contains(pos.0, pos.1) {
+                return false;
+            }
+            let breite = |c: char| gpu.advance(c);
+            if let Some(e) = self.book_edit.as_mut() {
+                e.click((pos.0 - tx) / s, (pos.1 - ty) / s, false, false, &breite);
+                e.insert(text, &breite);
+            }
+            self.book_edit_since = Instant::now();
+            return true;
+        }
+        // Chat-Eingabe.
+        if self.chat_input.is_some() {
+            let Some(i) = self.chat_input_index_at(pos) else { return false };
+            self.text_selection = None;
+            let Some(feld) = self.chat_input.as_mut() else { return false };
+            feld.set_cursor(i);
+            if feld.push_str(text) {
+                self.play_ui_sound(ui_sound::UiSound::Type);
+                self.request_command_suggestions();
+            }
+            return true;
+        }
+        if self.dialog.is_some() {
+            return self.dialog_paste_at(pos, text);
+        }
+        // Einzeilige Felder der Menue-Fenster: Feld unter dem Zeiger, Zeichengrenze darin.
+        let mass = |t: &str| gpu.measure_raw(t, UI_SCALE_NORMAL);
+        let mut fokus: Option<ServerField> = None;
+        let treffer: Option<usize> = if let Some(edit) = self.server_edit.as_ref() {
+            let (_, adresse, name, _, _) = server_dialog_layout();
+            let feld = [(adresse, ServerField::Address), (name, ServerField::Name)].into_iter().find(|(r, _)| r.contains(pos.0, pos.1));
+            feld.map(|(r, f)| {
+                fokus = Some(f);
+                text_field::index_at(edit.field(f).text(), pos.0 - r.x - 12.0, mass)
+            })
+        } else if let Some(d) = self.theme_name_dialog.as_ref() {
+            let (_, feld, _, _) = Self::quick_connect_layout();
+            feld.contains(pos.0, pos.1).then(|| text_field::index_at(d.field.text(), pos.0 - feld.x - 12.0, mass))
+        } else if self.quick_typing() {
+            let (_, feld, _, _) = Self::quick_connect_layout();
+            feld.contains(pos.0, pos.1).then(|| text_field::index_at(self.quick_field.text(), pos.0 - feld.x - 12.0, mass))
+        } else if let Some(suche) = self.server_search.as_ref().filter(|_| self.server_search_typing()) {
+            // Wie gezeichnet (s. build_server_list): an der Stelle der ersten Karte.
+            let r = server_card_rect(0, self.server_scroll.stand);
+            let feld = Rect { x: r.x + 16.0, y: r.y, w: r.w - 32.0, h: r.h };
+            feld.contains(pos.0, pos.1).then(|| text_field::index_at(suche.text(), pos.0 - feld.x - 12.0, mass))
+        } else {
+            None
+        };
+        let Some(i) = treffer else { return false };
+        if let (Some(f), Some(edit)) = (fokus, self.server_edit.as_mut()) {
+            edit.focus = f;
+        }
+        let Some(feld) = self.active_text_field() else { return false };
+        feld.press(i, false);
+        feld.insert(text);
+        self.play_ui_sound(ui_sound::UiSound::Type);
+        true
     }
 
     // Text ins aktive Eingabefeld -- dieselbe Vorrangreihenfolge wie beim Tippen: Chat, dann

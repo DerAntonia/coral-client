@@ -8,6 +8,7 @@ impl App {
     pub(crate) fn reset_world(&mut self) {
         self.reset_dialogs();
         self.server_links.clear();
+        self.pause_dialogs.clear();
         // Verbindungs-Warnungen gehoeren zur Verbindung.
         if let Some(id) = self.packet_gap_note.take() {
             self.notifications.dismiss(id, Instant::now());
@@ -65,6 +66,7 @@ impl App {
         // raeumt die Vorhersage-Schicht selbst).
         self.pending_blocks.clear();
         self.ghosts_awaiting_mesh.clear();
+        self.others_breaking.clear();
         self.lod_save_dirty();
         self.world.clear();
         self.pistons.clear(&mut self.world);
@@ -100,6 +102,18 @@ impl App {
     // ClientPlayNetworkHandler.tick -> setPlayerLoaded: einmal, sobald der Chunk unter der
     // (vom Server geschickten) Position geladen ist.
     pub(crate) fn tick_player_loaded(&mut self) {
+        // Wiedergabe: kein Server, dem man einen Ladeablauf vorspielen muss -- sofort geladen.
+        // ECHTER BUG gewesen (Clip von coral-clip, Nutzer 2026-11-12): ein Clip beginnt mitten
+        // im Spiel, das Game Event INITIAL_CHUNKS_COMING kommt darin nie. Mit Botcheck-Pass
+        // lief der Client-Tick deshalb erst nach der 30-s-Notfrist (s. vanilla_level_ready) --
+        // bis dahin standen alle Entities still.
+        if self.replay_active() {
+            if self.player_loaded_pending {
+                self.player_loaded_pending = false;
+                self.client_loaded = true;
+            }
+            return;
+        }
         if !self.player_loaded_pending || !self.player_loaded_have_pos {
             return;
         }

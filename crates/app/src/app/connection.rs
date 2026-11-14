@@ -28,6 +28,20 @@ impl App {
         }
         self.connect_view_taken = false;
         self.connect_view_first_at = None;
+        // Wird gerade auf ein anderes Konto gewechselt und sein Token ist noch nicht da, nicht
+        // mit dem alten anmelden: der Verbindungsbildschirm wartet, verbunden wird erst, wenn
+        // die Anmeldung durch ist (s. drain_auth_events, LoggedIn/Failed).
+        if replay.is_none() {
+            if let Some(name) = self.switching_account().map(|a| a.name.clone()) {
+                if let Some(alt) = previous {
+                    alt.abort();
+                }
+                self.connect_after_login = true;
+                self.push_log(format!("Warte auf die Anmeldung als {name} ..."));
+                return;
+            }
+        }
+        self.connect_after_login = false;
 
         let address = replay.as_ref().map_or_else(|| self.server_address.clone(), |r| r.2.clone());
         self.server_packs.set_address(&address);
@@ -86,7 +100,8 @@ impl App {
         .with_raw(std::sync::Arc::clone(&self.addon_raw_in))
         .with_background(hinten)
         // coral-record: die Verbindung meldet hier ihre Sitzung (s. app/record.rs).
-        .with_record(std::sync::Arc::clone(&self.tabs[self.active_tab].record_slot));
+        .with_record(std::sync::Arc::clone(&self.tabs[self.active_tab].record_slot))
+        .with_clip(std::sync::Arc::clone(&self.tabs[self.active_tab].clip_link));
         // Angemeldet -> echtes Konto (Online-Mode). Sonst Offline-Mode mit "Player" (wie
         // bisher, fuer den lokalen Test-Server mit online-mode=false).
         let credentials = self.credentials.clone();
@@ -376,6 +391,13 @@ impl App {
         }
     }
 
+    // Das gewaehlte Konto steht in der Liste, sein Token ist aber nicht bereit (unbestaetigt
+    // oder abgelaufen, s. Account::usable): oben rechts der Ladekreis statt des Kopfs.
+    pub(crate) fn active_account_waiting(&self) -> bool {
+        let jetzt = accounts::now_unix();
+        self.credentials.as_ref().and_then(|c| self.accounts.find(&c.profile_id)).is_some_and(|i| !self.accounts.list[i].usable(jetzt))
+    }
+
     // Das Konto, auf das gerade gewechselt wird.
     pub(crate) fn switching_account(&self) -> Option<&accounts::Account> {
         let (k, _) = self.account_switching.as_ref()?;
@@ -388,11 +410,12 @@ impl App {
         self.check_accounts();
     }
 
-    // Alle gespeicherten Konten pruefen: das Token beim Profil-Endpunkt vorzeigen; ist das
-    // des aktiven Kontos abgelaufen, wird es erneuert. Fremde Konten mit abgelaufenem Token
-    // erneuert erst der Wechsel (use_account) -- jede Erneuerung laeuft ueber Mojangs knapp
-    // begrenzte Anmeldung (login_with_xbox), und alle auf einmal reissen das Limit. Darum auch
-    // nacheinander, das aktive zuerst. Ein Konto hoechstens einmal je ACCOUNT_RECHECK.
+    // Alle gespeicherten Konten pruefen: das Token beim Profil-Endpunkt vorzeigen; ist es
+    // abgelaufen, wird es ueber das Refresh-Token erneuert (Nutzer 2026-11-11: alle, damit der
+    // Acc-Manager zu jedem Konto etwas sagt). Jede Erneuerung laeuft ueber Mojangs knapp
+    // begrenzte Anmeldung (login_with_xbox), darum nacheinander, das aktive zuerst; stoesst
+    // eine ans Limit, versucht account_retry_at es spaeter erneut. Ein Konto hoechstens einmal
+    // je ACCOUNT_RECHECK.
     pub(crate) fn check_accounts(&mut self) {
         let jetzt = accounts::now_unix();
         let mut reihe = Vec::new();
@@ -410,9 +433,6 @@ impl App {
                 continue;
             }
             let aktiv = self.is_active_account(&a);
-            if abgelaufen && !aktiv {
-                continue;
-            }
             self.account_checks.insert(key, (accounts::Check::Checking, Instant::now()));
             if aktiv {
                 reihe.insert(0, a);
@@ -552,6 +572,10 @@ impl App {
                     self.login_busy = false;
                     self.account_switching = None;
                     self.push_log(format!("Login fehlgeschlagen: {msg}"));
+                    // Ein wartendes Verbinden endet wie ein Rauswurf, mit dem Grund im Fenster.
+                    if std::mem::take(&mut self.connect_after_login) {
+                        let _ = self.events_tx.send(net::ClientEvent::Disconnected(format!("Login fehlgeschlagen: {msg}")));
+                    }
                     self.notify(notifications::Notification::error("Login fehlgeschlagen", msg));
                 }
                 AuthEvent::LoggedIn { credentials, msa, source } => {
@@ -564,6 +588,10 @@ impl App {
                     self.account_checks.insert(accounts::key(&credentials.profile_id), (accounts::Check::Valid, Instant::now()));
                     self.persist_accounts();
                     self.set_active_account(credentials);
+                    // Verbinden wartete auf dieses Konto (s. start_session): jetzt los.
+                    if std::mem::take(&mut self.connect_after_login) {
+                        self.start_connect();
+                    }
                 }
                 // Token-Export auskommentiert, vorerst abgeschaltet.
                 // AuthEvent::TokenExported { key, result } => {
@@ -606,13 +634,20 @@ impl App {
                             }
                             accounts::Check::Valid
                         }
-                        // Am Anmeldelimit sagt das nichts ueber das Konto: ungeprueft lassen.
+                        // Am Anmeldelimit sagt das nichts ueber das Konto: ungeprueft lassen und
+                        // spaeter erneut versuchen.
                         Err(e) if e.rate_limited() => {
                             self.push_log(e.to_string());
                             self.account_checks.remove(&key);
+                            self.account_retry_at = Some(Instant::now() + ACCOUNT_RECHECK);
                             continue;
                         }
-                        Err(e) => accounts::Check::Invalid(e.to_string()),
+                        Err(e) => {
+                            if self.accounts.mark_unverified(&key) {
+                                self.persist_accounts();
+                            }
+                            accounts::Check::Invalid(e.to_string())
+                        }
                     };
                     self.account_checks.insert(key, (check, Instant::now()));
                 }
@@ -628,7 +663,8 @@ impl App {
     pub(crate) fn go_connect(&mut self) {
         // Ohne Konto nur der eigene Rechner (s. net::is_local_address). Hier abfangen, damit
         // man im Menue bleibt und gleich sieht, was fehlt; net::join prueft es noch einmal.
-        if self.credentials.is_none() && !net::is_local_address(&self.server_address) {
+        // Ein laufender Kontowechsel zaehlt schon als angemeldet: das Verbinden wartet auf ihn.
+        if self.credentials.is_none() && self.account_switching.is_none() && !net::is_local_address(&self.server_address) {
             self.push_log("Ohne Anmeldung geht nur ein Server auf diesem Rechner (localhost).");
             self.notify(notifications::Notification::error("Nicht angemeldet", "Bitte zuerst mit Microsoft anmelden."));
             return;
@@ -656,7 +692,7 @@ impl App {
     // Reconnect-Taste: nach der Bestaetigungsdauer neu verbinden. Danach erst wieder, wenn die
     // Taste losgelassen wurde.
     pub(crate) fn tick_reconnect_hold(&mut self) {
-        if self.reconnect_needs_release && !self.settings.keybinds.binds(KeyBindAction::Reconnect).any(|b| self.binds_down.contains(&b)) {
+        if self.reconnect_needs_release && !self.settings.keybinds.held(KeyBindAction::Reconnect, |b| self.binds_down.contains(&b)) {
             self.reconnect_needs_release = false;
         }
         if self.reconnect_progress().is_some_and(|f| f >= 1.0) {
@@ -681,6 +717,7 @@ impl App {
     // bricht den Task an seinem naechsten await ab (er haengt fast immer im recv()),
     // wodurch der TcpStream fallengelassen und die Verbindung geschlossen wird.
     pub(crate) fn disconnect(&mut self) {
+        self.connect_after_login = false;
         let Some(task) = self.conn_task.take() else {
             return;
         };

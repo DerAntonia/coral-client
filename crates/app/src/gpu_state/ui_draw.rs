@@ -59,13 +59,13 @@ impl GpuState {
     // Swapchain nach der Hand -- ins verkleinerte Bild gezeichnet laegen sie nie im Schwarzen.
     // Die Vertices kommen in dieselben Puffer hinter die des HUD (`ab`: Text, Flaechen).
     pub(crate) fn draw_hand_debug_ui(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, ui: (&[UiRect], &[UiText]), ab: (u32, u32), cursor: bool) {
-        let screen_px = self.size();
+        let screen_px = self.real_size();
         let (text_ab, quad_ab) = ab;
         let mut flaechen: Vec<Vertex> = ui.0.iter().flat_map(|r| rect_verts(r, screen_px)).collect();
         flaechen.truncate((MAX_UI_RECTS * VERTS_PER_QUAD).saturating_sub(quad_ab as usize));
         let mut glyphen = Vec::new();
         let schriften = self.shape_text(ui.1, screen_px, &mut glyphen);
-        glyphen.truncate((MAX_UI_GLYPHS * VERTS_PER_QUAD).saturating_sub(text_ab as usize));
+        glyphen.truncate((MAX_UI_GLYPHS * TEXT_VERTS_PER_QUAD).saturating_sub(text_ab as usize));
         if !flaechen.is_empty() {
             let versatz = u64::from(quad_ab) * std::mem::size_of::<Vertex>() as u64;
             self.queue.write_buffer(&self.quad_vertex_buffer, versatz, bytemuck::cast_slice(&flaechen));
@@ -93,6 +93,7 @@ impl GpuState {
         if !glyphen.is_empty() {
             pass.set_pipeline(&self.text_pipeline);
             pass.set_vertex_buffer(0, self.text_vertex_buffer.slice(..));
+            pass.set_index_buffer(self.text_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             let n = glyphen.len() as u32;
             let mut von = 0;
             let mut kind = self.font_atlas.kind();
@@ -100,7 +101,7 @@ impl GpuState {
                 let bis = bis.min(n);
                 if bis > von {
                     pass.set_bind_group(0, &self.hud_font(kind).bind_group, &[]);
-                    pass.draw(text_ab + von..text_ab + bis, 0..1);
+                    pass.draw_indexed(text_index_range(text_ab + von..text_ab + bis), 0, 0..1);
                     von = bis;
                 }
                 kind = naechste;
@@ -128,15 +129,16 @@ impl GpuState {
             // Abschnitt fuer Abschnitt mit dem Atlas seiner Schrift (s. shape_text).
             pass.set_pipeline(&self.text_pipeline);
             pass.set_vertex_buffer(0, self.text_vertex_buffer.slice(..));
+            pass.set_index_buffer(self.text_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             let mut von = 0;
             let mut kind = self.font_atlas.kind();
             let clips = self.text_clips.borrow();
-            let screen_px = self.size();
+            let screen_px = self.real_size();
             for &(ab, naechste) in schriften.iter().chain(std::iter::once(&(text.0, kind))) {
                 let ab = ab.min(text.0);
                 if ab > von {
                     pass.set_bind_group(0, &self.hud_font(kind).bind_group, &[]);
-                    draw_clipped(pass, von..ab, &clips, screen_px, |pass, r| pass.draw(r, 0..1));
+                    draw_clipped(pass, von..ab, &clips, screen_px, |pass, r| pass.draw_indexed(text_index_range(r), 0, 0..1));
                     von = ab;
                 }
                 kind = naechste;
@@ -145,7 +147,7 @@ impl GpuState {
         // Gruppe fuer Gruppe (s. overlay_vertices). Die Bereiche sind relativ zum Anfang der
         // Ebene und werden auf das geklemmt, was append_overlay tatsaechlich hochgeladen hat.
         let klemmen = |r: &std::ops::Range<u32>, (von, bis): (u32, u32)| (von + r.start).min(bis)..(von + r.end).min(bis);
-        let screen_px = self.size();
+        let screen_px = self.real_size();
         for g in overlay {
             if !set_scissor(pass, g.clip, screen_px) {
                 continue;
@@ -177,6 +179,7 @@ impl GpuState {
                 // small_label_font) mit ihren UVs auf dem allgemeinen Atlas.
                 pass.set_pipeline(&self.text_pipeline);
                 pass.set_vertex_buffer(0, self.text_vertex_buffer.slice(..));
+                pass.set_index_buffer(self.text_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 let anfang = text.0 + g.text.start;
                 let mut von = t.start;
                 let mut kind = self.font_atlas.kind();
@@ -184,7 +187,7 @@ impl GpuState {
                     let ab = (anfang + ab).clamp(t.start, t.end);
                     if ab > von {
                         pass.set_bind_group(0, &self.hud_font(kind).bind_group, &[]);
-                        pass.draw(von..ab, 0..1);
+                        pass.draw_indexed(text_index_range(von..ab), 0, 0..1);
                         von = ab;
                     }
                     kind = naechste;
@@ -223,7 +226,7 @@ impl GpuState {
             match p.try_finish(&self.device, &self.queue, self.font_atlas.bind_group_layout.clone()) {
                 Ok(None) => continue,
                 Ok(Some(atlas)) => fertig = Some((i, Some(atlas))),
-                Err(()) => {
+                Err(_) => {
                     eprintln!("[font] Zweitschrift {} nicht geladen: Thread ohne Ergebnis beendet", p.kind().label());
                     fertig = Some((i, None));
                 }

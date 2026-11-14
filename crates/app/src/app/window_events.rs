@@ -1,12 +1,13 @@
 // Fensterereignisse: Tastatur, Maus, Fokus.
 
-use crate::{profiler, App, ActiveEventLoop, WindowId, WindowEvent, ElementState, MouseButton, Instant, MouseScrollDelta, WHEEL_PIXELS_PER_NOTCH, ui_sound, AppMode, BindMouse, Bind, MenuScreen, server_panel, server_row_h, SERVER_ROW_GAP, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H, SKIN_FILES_ROWS_PER_NOTCH, SKIN_FILES_ROW_H, skin_tile_h, SKIN_TILE_GAP, CHAT_SCROLL_LINES_PER_NOTCH, inventory, ButtonAction, ui_sound_for_action, connect_cancel_rect, bind_name, Key, NamedKey, PhysicalKey, KeyCode, keycode_name, KeyBindAction, SWALLOW_TEXT_KEY_WINDOW, chat_input, ServerField};
+use crate::{profiler, App, ActiveEventLoop, WindowId, WindowEvent, ElementState, MouseButton, Instant, MouseScrollDelta, WHEEL_PIXELS_PER_NOTCH, ui_sound, AppMode, BindMouse, Bind, MenuScreen, server_panel, server_row_h, SERVER_ROW_GAP, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H, SKIN_FILES_ROWS_PER_NOTCH, SKIN_FILES_ROW_H, skin_tile_h, SKIN_TILE_GAP, CHAT_SCROLL_LINES_PER_NOTCH, inventory, ButtonAction, ui_sound_for_action, connect_cancel_rect, bind_name, Key, NamedKey, PhysicalKey, KeyCode, KeyBindAction, SWALLOW_TEXT_KEY_WINDOW, chat_input, ServerField};
 
 impl App {
     pub(crate) fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if self.gpu.is_none() {
             return;
         }
+        self.sync_ui_scale();
 
         if matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. }) {
             self.selection_sound_deselect = true;
@@ -66,16 +67,19 @@ impl App {
                 }
                 let Some((target, slot)) = self.awaiting_keybind.take() else { return };
                 match BindMouse::from_winit(button) {
-                    Some(mouse) => {
-                        self.settings.keybinds.set_at(target, slot, Bind::Mouse(mouse));
-                        self.persist_settings();
-                        self.push_log(format!("Tastenbelegung: {} → {}", target.label(), mouse.name()));
-                    }
+                    Some(mouse) => self.assign_awaited_bind(target, slot, Bind::Mouse(mouse)),
                     None => self.push_log("Tastenbelegung: diese Maustaste wird nicht unterstützt"),
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
-            WindowEvent::KeyboardInput { event: key_event, .. } => self.on_keyboard_input(key_event, event_loop),
+            // Danach: eine neue Markierung in einem Eingabefeld in die primaere Auswahl.
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.on_mouse_input(state, button);
+                self.sync_primary_selection();
+            }
+            WindowEvent::KeyboardInput { event: key_event, .. } => {
+                self.on_keyboard_input(key_event, event_loop);
+                self.sync_primary_selection();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);
@@ -121,6 +125,10 @@ impl App {
                 // Skin-Plaetze ab, und vorher kamen die Koepfe erst beim Oeffnen der Kontenliste
                 // zurueck. Kostet nichts, solange sie im Atlas stehen (s. request_account_heads).
                 self.request_account_heads();
+                if self.account_retry_at.is_some_and(|t| Instant::now() >= t) {
+                    self.account_retry_at = None;
+                    self.check_accounts();
+                }
                 let timing = match self.mode {
                     // Verbindungsbildschirm mit Bild: wie ein Menue zeichnen, das Bild dahinter
                     // statt der (noch leeren) Welt.
@@ -206,7 +214,9 @@ impl App {
                         let show_last_view = self.last_view_visible();
                         let ui_ms = ui_started.elapsed().as_secs_f32() * 1000.0;
                         self.profiler.add_ms(Phase::Menu, ui_ms);
+                        let panorama_speed = self.settings.panorama_speed;
                         self.gpu.as_mut().and_then(|gpu| {
+                            gpu.panorama_speed.set(panorama_speed);
                             gpu.render_menu(&rects, &texts, &sprites, &overlay, cursor, cursor_fx, show_wallpaper, show_world, show_last_view, None, acquired)
                         })
                     }
@@ -283,9 +293,7 @@ impl App {
             if rasten.abs() > 0.01 {
                 let Some((target, slot)) = self.awaiting_keybind.take() else { return };
                 let rad = if rasten > 0.0 { BindMouse::WheelUp } else { BindMouse::WheelDown };
-                self.settings.keybinds.set_at(target, slot, Bind::Mouse(rad));
-                self.persist_settings();
-                self.push_log(format!("Tastenbelegung: {} → {}", target.label(), rad.name()));
+                self.assign_awaited_bind(target, slot, Bind::Mouse(rad));
             }
             return;
         }
@@ -314,12 +322,6 @@ impl App {
                 let weg = self.wheel_units(delta, 1.0, skin_tile_h() + SKIN_TILE_GAP);
                 self.scroll_skin_column(weg);
             }
-        }
-        // Partikel-Anpassung: durch die Arten.
-        if self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles {
-            let weg = self.wheel_units(delta, SETTINGS_SCROLL_ROWS_PER_NOTCH, SETTINGS_ROW_H);
-            let max = self.particle_max_scroll();
-            self.particle_scroll.push(weg, SETTINGS_SCROLL_ROWS_PER_NOTCH, max);
         }
         // Offener Chat: durch den Verlauf blaettern.
         if self.mode == AppMode::World && self.chat_input.is_some() {
@@ -437,7 +439,7 @@ impl App {
                 ElementState::Released => self.selection_release(),
             }
         }
-        if button == MouseButton::Middle && state == ElementState::Pressed && self.selection_allowed() {
+        if button == MouseButton::Middle && state == ElementState::Pressed && (self.selection_allowed() || self.book_edit.is_some()) {
             self.paste_primary();
         }
         // Gebundene Maustasten (s. Bind) im World-Modus auf ihre Aktion anwenden --
@@ -445,7 +447,9 @@ impl App {
         // Klick doppelt an (einmal roh in about_to_wait, einmal hier).
         if self.mode == AppMode::World && self.raw_mouse.is_none() && self.chat_input.is_none() && self.sign_edit.is_none() {
             if let Some(mouse) = BindMouse::from_winit(button) {
-                if !self.inventory.screen_open {
+                if self.replay_active() {
+                    self.apply_replay_bind(Bind::Mouse(mouse), state == ElementState::Pressed);
+                } else if !self.inventory.screen_open {
                     self.apply_bind(Bind::Mouse(mouse), state == ElementState::Pressed);
                 } else if !matches!(mouse, BindMouse::Left | BindMouse::Right) {
                     self.apply_inventory_mouse_bind(Bind::Mouse(mouse), state == ElementState::Pressed);
@@ -476,6 +480,7 @@ impl App {
             match state {
                 ElementState::Pressed if button == MouseButton::Left && self.drag_scroll_grab(self.dialog_drag_list()) => {}
                 ElementState::Pressed if matches!(button, MouseButton::Left | MouseButton::Right) => self.dialog_press(button == MouseButton::Right),
+                ElementState::Pressed if button == MouseButton::Middle => self.paste_primary(),
                 ElementState::Released => self.dialog_release(),
                 _ => {}
             }
@@ -535,6 +540,8 @@ impl App {
         if state == ElementState::Pressed && self.theme_name_dialog.is_some() {
             if button == MouseButton::Left {
                 self.theme_name_press();
+            } else if button == MouseButton::Middle {
+                self.paste_primary();
             }
             return true;
         }
@@ -664,6 +671,14 @@ impl App {
                 return true;
             }
             let (qx, qy) = self.pointer();
+            // Im Fenster "Erweitert": Rechtsklick auf einen Modifier nimmt nur ihn weg.
+            if let Some((action, slot)) = self.keybind_modifier_at(qx, qy) {
+                self.settings.keybinds.set_modifier_at(action, slot, None);
+                self.persist_settings();
+                self.push_log(format!("Tastenbelegung: {} -- Modifier entfernt", action.label()));
+                self.awaiting_keybind = None;
+                return true;
+            }
             if let Some((action, slot)) = self.keybind_slot_at(qx, qy) {
                 if let Some(removed) = self.settings.keybinds.bind_at(action, slot) {
                     self.settings.keybinds.remove_at(action, slot);
@@ -710,7 +725,9 @@ impl App {
             // Ohne Raw-Maus laeuft auch der Inventar-Klick hier -- dann muss das
             // Loslassen ebenso hier ankommen, sonst bliebe ein Klick mit vollem
             // Zeiger unbeantwortet haengen (s. inventory_release).
-            if self.raw_mouse.is_none() && self.inventory.screen_open {
+            if self.raw_mouse.is_none() && self.replay_active() && self.mode == AppMode::World {
+                self.replay_mouse_left(false);
+            } else if self.raw_mouse.is_none() && self.inventory.screen_open {
                 self.inventory_release(0);
             }
             return true;
@@ -748,6 +765,7 @@ impl App {
             } else if self.book_view.is_some() || self.lectern_book().is_some() {
                 self.book_click();
             } else if self.module_menu_open {
+                self.module_press_begin();
                 if !self.drag_scroll_grab(self.list_drag_list()) {
                     let (px, py) = self.cursor_pos;
                     self.handle_click(px, py);
@@ -755,6 +773,9 @@ impl App {
             } else if self.chat_input.is_some() {
                 let (px, py) = self.cursor_pos;
                 self.chat_click(px, py);
+            } else if self.raw_mouse.is_none() && self.replay_active() {
+                // Wiedergabe: Klick auf die Leiste; im Inventar wird nichts angefasst.
+                self.replay_mouse_left(true);
             } else if self.raw_mouse.is_none() && self.inventory.screen_open {
                 self.inventory_click(0);
             }
@@ -786,12 +807,15 @@ impl App {
             }
         } else if self.drag_scroll_grab(self.list_drag_list()) {
             // In einer Liste: Klick oder Ziehen entscheidet sich beim Loslassen.
-            self.settings_press_begin(false);
+            if !self.settings_press_begin(false) {
+                self.module_press_begin();
+            }
         } else if self.server_bar_press() {
             // Bildlaufleiste der Serverliste: der Griff haengt jetzt am Zeiger.
         } else if self.settings_press_begin(true) {
             // Einstellungsknopf: loest erst beim Loslassen aus (s. settings_press_release).
         } else if !self.server_card_connect() {
+            self.module_press_begin();
             let (px, py) = self.cursor_pos;
             self.handle_click(px, py);
         }
@@ -854,9 +878,7 @@ impl App {
                     if code == KeyCode::Escape {
                         self.push_log("Tastenbelegung: abgebrochen");
                     } else {
-                        self.settings.keybinds.set_at(target, slot, Bind::Key(code));
-                        self.persist_settings();
-                        self.push_log(format!("Tastenbelegung: {} → {}", target.label(), keycode_name(code)));
+                        self.assign_awaited_bind(target, slot, Bind::Key(code));
                     }
                 }
                 self.awaiting_keybind = None;
@@ -898,11 +920,12 @@ impl App {
         // World-Zweig darunter noch durch den winit-Pfad.
         if key_event.state == ElementState::Pressed && !key_event.repeat && self.mode == AppMode::Menu {
             if let PhysicalKey::Code(code) = key_event.physical_key {
-                if self.settings.keybinds.binds(KeyBindAction::ToggleDebugOverlay).any(|b| b == Bind::Key(code)) {
+                let unten = |b: Bind| self.binds_down.contains(&b);
+                if self.settings.keybinds.matches(KeyBindAction::ToggleDebugOverlay, Bind::Key(code), unten) {
                     self.debug_overlay = !self.debug_overlay;
                     return;
                 }
-                if self.settings.keybinds.binds(KeyBindAction::ToggleProfiler).any(|b| b == Bind::Key(code)) {
+                if self.settings.keybinds.matches(KeyBindAction::ToggleProfiler, Bind::Key(code), unten) {
                     self.toggle_profiler();
                     return;
                 }

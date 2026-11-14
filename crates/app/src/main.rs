@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod accounts;
+mod panorama;
 mod addons;
 mod block_anim;
 mod block_place;
@@ -32,6 +33,7 @@ use ::font_atlas;
 mod gpu_timer;
 mod held_item;
 mod hitbox_kinds;
+mod render_order;
 mod teams;
 mod i18n;
 mod inventory;
@@ -250,6 +252,9 @@ impl ApplicationHandler for App {
         // Kopf oben in der Leiste (und der Liste) gleich zeigen, nicht erst beim Oeffnen der
         // Kontenliste -- sonst steht bis dahin der Standard-Skin da.
         self.request_account_heads();
+        // Konten gleich pruefen: oben rechts steht das zuletzt gewaehlte, mit Ladekreis statt
+        // Kopf, bis sein Token bereit ist (s. active_account_waiting).
+        self.check_accounts();
         // Erst jetzt moeglich: der Treiber meldet seine Present-Modi erst mit der Surface.
         self.apply_frame_latency();
         // Nur einmal abfragen, nicht bei jedem Frame -- jeder Aufruf startet einen
@@ -377,6 +382,10 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CursorSizeDown
         | ButtonAction::CursorWidthDown
         | ButtonAction::CursorWidthUp
+        | ButtonAction::CursorOutlineDown
+        | ButtonAction::CursorOutlineUp
+        | ButtonAction::CursorFillDown
+        | ButtonAction::CursorFillUp
         | ButtonAction::HoldConfirmDown
         | ButtonAction::HoldConfirmUp
         | ButtonAction::ReconnectHoldDown
@@ -407,6 +416,8 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::CrosshairBoostNext
         | ButtonAction::CrosshairSizePrev
         | ButtonAction::CrosshairSizeNext
+        | ButtonAction::CrosshairRingRadiusPrev
+        | ButtonAction::CrosshairRingRadiusNext
         | ButtonAction::InventoryScalePrev
         | ButtonAction::InventoryScaleNext
         | ButtonAction::HotbarScalePrev
@@ -417,6 +428,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::ToggleHotbarAirBar
         | ButtonAction::EffectsDetailed(_)
         | ButtonAction::EffectsAlign(_)
+        | ButtonAction::ScoreboardAlign(_)
         | ButtonAction::EffectsNameColor(_)
         | ButtonAction::EffectsTimerStyle(_)
         | ButtonAction::EffectsTimerBlink(_)
@@ -465,6 +477,16 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         | ButtonAction::DamageTintTicksNext
         | ButtonAction::SmoothLightingDown
         | ButtonAction::SmoothLightingUp
+        | ButtonAction::ChunkFadeDown
+        | ButtonAction::ChunkFadeUp
+        | ButtonAction::ParticleFadeDown
+        | ButtonAction::ParticleFadeUp
+        | ButtonAction::EntityNearDown
+        | ButtonAction::EntityNearUp
+        | ButtonAction::MipSharpnessDown
+        | ButtonAction::MipSharpnessUp
+        | ButtonAction::ParticleDistanceDown
+        | ButtonAction::ParticleDistanceUp
         | ButtonAction::MotionBlurDown
         | ButtonAction::MotionBlurUp
         | ButtonAction::EntityBlurDown
@@ -530,11 +552,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleTotem => umschalten(settings.module_totem_indicator),
         ButtonAction::ToggleModuleTotemSound => umschalten(settings.module_totem_sound),
         ButtonAction::ToggleModuleHitbox => umschalten(settings.module_hitbox_enabled),
-        ButtonAction::ToggleModuleHitboxSmoothed => umschalten(settings.module_hitbox_show_smoothed),
-        ButtonAction::ToggleModuleHitboxRaw => umschalten(settings.module_hitbox_show_raw),
         ButtonAction::ToggleModuleHitboxDotted => umschalten(settings.module_hitbox_dotted),
-        ButtonAction::ToggleModuleHitboxVisibleEdges => umschalten(settings.module_hitbox_visible_edges),
-        ButtonAction::ToggleModuleHitboxItems => umschalten(settings.module_hitbox_items),
         ButtonAction::ToggleModuleHitboxSelf => umschalten(settings.module_hitbox_self),
         ButtonAction::ToggleHitboxKind(art) => umschalten(settings.module_hitbox_styles[art.index()].on),
         ButtonAction::ToggleHitboxKindOverride(art) => umschalten(settings.module_hitbox_styles[art.index()].custom),
@@ -563,7 +581,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleCrystalOptimizer => umschalten(settings.module_crystal_optimizer),
         ButtonAction::ToggleModuleConsumableOptimizer => umschalten(settings.module_consumable_optimizer),
         ButtonAction::ToggleEatSlotLock => umschalten(settings.eat_slot_lock),
-        ButtonAction::ToggleEatAggressivePrediction => umschalten(settings.eat_aggressive_prediction),
+        ButtonAction::ToggleNoShieldLock => umschalten(settings.no_shield_lock),
         ButtonAction::ToggleModuleUseTimer => umschalten(settings.module_use_timer),
         ButtonAction::ToggleModuleNoToolBreak => umschalten(settings.module_no_tool_break),
         ButtonAction::ToggleModuleBotcheckPass => umschalten(settings.module_botcheck_pass),
@@ -583,6 +601,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleKeystrokes => umschalten(settings.module_keystrokes),
         ButtonAction::KeysOpacityPrev | ButtonAction::KeysOpacityNext | ButtonAction::SessionOpacity(_) => UiSound::Step,
         ButtonAction::ToggleModuleSessionInfo => umschalten(settings.module_session_info),
+        ButtonAction::ToggleModuleClock => umschalten(settings.module_clock),
         ButtonAction::ToggleSessionLine(bit) => umschalten(settings.session_lines & bit != 0),
         ButtonAction::ResetSession => UiSound::Click,
         ButtonAction::ArmorHudGapPrev
@@ -600,8 +619,11 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleShoulderDecoupled => umschalten(settings.shoulder_decoupled),
         ButtonAction::ToggleModuleFreelook => umschalten(settings.module_freelook),
         ButtonAction::ShoulderOffsetPrev | ButtonAction::ShoulderOffsetNext => UiSound::Step,
+        ButtonAction::PanoramaSpeedPrev | ButtonAction::PanoramaSpeedNext => UiSound::Step,
         ButtonAction::ToggleArmorTrims => umschalten(settings.armor_trims),
+        ButtonAction::ToggleRenderOrder(zeile, spalte) => umschalten(settings.render_order.get(usize::from(zeile), usize::from(spalte))),
         ButtonAction::ToggleViewModel => umschalten(settings.modified_view_model),
+        ButtonAction::ToggleViewModelBobbing => umschalten(settings.view_model_bobbing),
         ButtonAction::HurtCamStrengthPrev | ButtonAction::HurtCamStrengthNext | ButtonAction::FireHeightPrev | ButtonAction::FireHeightNext => UiSound::Step,
         ButtonAction::ToggleModuleShowMarkers => umschalten(settings.module_show_markers),
         ButtonAction::ToggleModuleSoundDebug => umschalten(settings.module_sound_debug),
@@ -611,6 +633,8 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleModuleDiscordStatus => umschalten(settings.module_discord_status),
         ButtonAction::ToggleModuleInputLog => umschalten(settings.module_input_log_enabled),
         ButtonAction::ToggleModuleCoralRecord => umschalten(settings.module_coral_record),
+        ButtonAction::ToggleModuleCoralClip => umschalten(settings.module_coral_clip),
+        ButtonAction::ClipSecondsPrev | ButtonAction::ClipSecondsNext | ButtonAction::ClipCheckpointsPrev | ButtonAction::ClipCheckpointsNext => UiSound::Step,
         ButtonAction::ToggleModuleAutoclicker => umschalten(settings.module_autoclicker),
         ButtonAction::ToggleModuleSaturationHud => umschalten(settings.module_saturation_hud),
         ButtonAction::SaturationHeightPrev | ButtonAction::SaturationHeightNext | ButtonAction::SaturationAlpha(..) => UiSound::Step,
@@ -631,6 +655,7 @@ fn ui_sound_for_action(action: ButtonAction, settings: &Settings) -> ui_sound::U
         ButtonAction::ToggleArmorHudGreen => umschalten(settings.armor_hud_green),
         ButtonAction::ToggleArmorHudRing => umschalten(settings.armor_hud_ring),
         ButtonAction::ToggleArrowWhite => umschalten(settings.arrow_white),
+        ButtonAction::ToggleArrowCritTrail => umschalten(settings.arrow_crit_trail),
         ButtonAction::ToggleArrowEmptySound => umschalten(settings.arrow_empty_sound),
         ButtonAction::ToggleArrowTrail => umschalten(settings.arrow_trail),
         ButtonAction::ToggleShieldCdSelf => umschalten(settings.shield_cd_self),

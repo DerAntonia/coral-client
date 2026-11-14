@@ -49,11 +49,20 @@ pub struct StableNumbers {
     entries: HashMap<String, Entry>,
     last_prune: Option<Instant>,
     enabled: bool,
+    // Zaehlt jede Aenderung, die eine Breite aus layout()/width() aendern kann: ein Muster
+    // wird wechselnd, lernt eine andere Stellenzahl, wird vergessen, oder alles an/aus/leer.
+    // Fuer Caches gemessener Texte (s. LabelLinesEnv).
+    generation: u64,
+    // Arbeitsstand von observe, ueber die Bilder behalten, damit ein Bild ohne neue Muster
+    // nichts anlegt: je Muster (Bildnummer, wie oft in diesem Bild, Index des Textes).
+    gesehen: HashMap<String, (u64, u32, u32)>,
+    bild: u64,
+    muster: String,
 }
 
 impl Default for StableNumbers {
     fn default() -> Self {
-        Self { entries: HashMap::default(), last_prune: None, enabled: true }
+        Self { entries: HashMap::default(), last_prune: None, enabled: true, generation: 0, gesehen: HashMap::default(), bild: 0, muster: String::new() }
     }
 }
 
@@ -101,6 +110,47 @@ fn pattern(chars: &[char], runs: &[Run]) -> Option<String> {
     Some(p)
 }
 
+// Wie runs_of auf den Bytes eines Textes: die Ziffernfolgen als Teilstuecke. Ziffern sind
+// ASCII, also ist jedes Byte einer Folge ein Zeichen.
+fn digit_runs(text: &str) -> impl Iterator<Item = &str> {
+    let b = text.as_bytes();
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        while i < b.len() && !b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        (i > start).then(|| &text[start..i])
+    })
+}
+
+// Wie pattern, in einen vorhandenen Puffer geschrieben. false = nichts zum Festhalten.
+fn pattern_into(text: &str, out: &mut String) -> bool {
+    out.clear();
+    let b = text.as_bytes();
+    let mut folgen = 0;
+    let mut i = 0;
+    let mut von = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            out.push_str(&text[von..i]);
+            out.push(RUN);
+            folgen += 1;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            von = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&text[von..]);
+    folgen > 0 && !(folgen == 1 && out.len() == RUN.len_utf8())
+}
+
 fn has_digits(text: &str) -> bool {
     text.bytes().any(|b| b.is_ascii_digit())
 }
@@ -109,10 +159,18 @@ impl StableNumbers {
     /// Alles vergessen -- etwa nach einem Schriftwechsel, dann stimmen die Breiten nicht mehr.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.generation += 1;
     }
 
     pub const fn set_enabled(&mut self, an: bool) {
+        if self.enabled != an {
+            self.generation += 1;
+        }
         self.enabled = an;
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Breite eines Textes (in der Einheit von `advance`), mit reserviertem Platz.
@@ -176,50 +234,66 @@ impl StableNumbers {
         if !self.enabled {
             return;
         }
-        let mut stapel: HashMap<String, (usize, Vec<String>, Vec<Vec<f32>>)> = HashMap::default();
-        for text in texts {
-            if !has_digits(text) {
+        self.bild += 1;
+        let bild = self.bild;
+        let texts: Vec<&str> = texts.into_iter().collect();
+        // Erst zaehlen, wie oft jedes Muster in diesem Bild vorkommt.
+        for (i, text) in texts.iter().enumerate() {
+            if !has_digits(text) || !pattern_into(text, &mut self.muster) {
                 continue;
             }
-            let chars: Vec<char> = text.chars().collect();
-            let runs = runs_of(&chars);
-            let Some(p) = pattern(&chars, &runs) else { continue };
-            let e = stapel.entry(p).or_insert_with(|| (0, Vec::new(), Vec::new()));
-            e.0 += 1;
-            if e.0 == 1 {
-                e.1 = runs.iter().map(|r| chars[r.start..r.end].iter().collect()).collect();
-                e.2 = runs.iter().map(|r| chars[r.start..r.end].iter().map(|&c| advance(c)).collect()).collect();
+            match self.gesehen.get_mut(self.muster.as_str()) {
+                Some(e) if e.0 == bild => e.1 += 1,
+                Some(e) => *e = (bild, 1, i as u32),
+                None => {
+                    self.gesehen.insert(self.muster.clone(), (bild, 1, i as u32));
+                }
             }
         }
-        for (p, (n, runs, widths)) in stapel {
-            if n != 1 {
+        // Dann die eindeutigen lernen. Angelegt wird nur, was sich geaendert hat.
+        let Self { entries, gesehen, generation, .. } = self;
+        for (p, &(b, n, i)) in gesehen.iter() {
+            if b != bild || n != 1 {
                 continue;
             }
-            match self.entries.get_mut(&p) {
+            let text = texts[i as usize];
+            match entries.get_mut(p.as_str()) {
                 Some(e) => {
-                    if e.runs != runs {
-                        e.varied = true;
+                    let gleich = e.runs.len() == digit_runs(text).count() && e.runs.iter().zip(digit_runs(text)).all(|(a, b)| a == b);
+                    if !gleich {
+                        if !e.varied {
+                            e.varied = true;
+                            *generation += 1;
+                        }
+                        e.runs = digit_runs(text).map(str::to_owned).collect();
                     }
-                    for (alt, neu) in e.widths.iter_mut().zip(widths) {
-                        if alt.len() == neu.len() {
-                            for (a, n) in alt.iter_mut().zip(neu) {
-                                *a = a.max(n);
+                    for (alt, folge) in e.widths.iter_mut().zip(digit_runs(text)) {
+                        if alt.len() == folge.len() {
+                            for (a, c) in alt.iter_mut().zip(folge.chars()) {
+                                *a = a.max(advance(c));
                             }
                         } else {
-                            *alt = neu;
+                            *alt = folge.chars().map(&advance).collect();
+                            *generation += 1;
                         }
                     }
-                    e.runs = runs;
                     e.last_seen = now;
                 }
                 None => {
-                    self.entries.insert(p, Entry { runs, widths, varied: false, last_seen: now });
+                    let runs: Vec<String> = digit_runs(text).map(str::to_owned).collect();
+                    let widths = runs.iter().map(|r| r.chars().map(&advance).collect()).collect();
+                    entries.insert(p.clone(), Entry { runs, widths, varied: false, last_seen: now });
                 }
             }
         }
         if self.last_prune.is_none_or(|t| now.saturating_duration_since(t) >= PRUNE_EVERY) {
             self.last_prune = Some(now);
+            let vorher = self.entries.len();
             self.entries.retain(|_, e| now.saturating_duration_since(e.last_seen) < FORGET_AFTER);
+            self.gesehen.retain(|_, e| e.0 == bild);
+            if self.entries.len() != vorher {
+                self.generation += 1;
+            }
         }
     }
 }
@@ -239,6 +313,37 @@ mod tests {
 
     fn bild(s: &mut StableNumbers, t: Instant, texte: &[&str]) {
         s.observe(texte.iter().copied(), t, adv);
+    }
+
+    // Der Zaehler steigt nur, wenn sich eine Breite aendern kann -- nicht bei jedem neuen Wert.
+    #[test]
+    fn generation_nur_bei_breitenaenderung() {
+        let mut s = StableNumbers::default();
+        let t = Instant::now();
+        bild(&mut s, t, &["Kills: 81"]);
+        bild(&mut s, t, &["Kills: 81"]);
+        assert_eq!(s.generation(), 0);
+        bild(&mut s, t, &["Kills: 82"]);
+        let g = s.generation();
+        assert!(g > 0);
+        bild(&mut s, t, &["Kills: 13"]);
+        assert_eq!(s.generation(), g);
+        bild(&mut s, t, &["Kills: 130"]);
+        assert!(s.generation() > g);
+    }
+
+    // Die Byte-Fassungen fuer observe stimmen mit runs_of/pattern ueberein.
+    #[test]
+    fn byte_fassung_wie_zeichenfassung() {
+        let mut puffer = String::new();
+        for text in ["", "abc", "12", "Kills: 12", "12 von 300", "ä1ö22ü", "x9", "9x", "1.2.3", "€5 €"] {
+            let chars: Vec<char> = text.chars().collect();
+            let runs = runs_of(&chars);
+            let erwartet: Vec<String> = runs.iter().map(|r| chars[r.start..r.end].iter().collect()).collect();
+            assert_eq!(digit_runs(text).collect::<Vec<_>>(), erwartet, "{text}");
+            let p = pattern(&chars, &runs);
+            assert_eq!(pattern_into(text, &mut puffer).then(|| puffer.clone()), p, "{text}");
+        }
     }
 
     #[test]

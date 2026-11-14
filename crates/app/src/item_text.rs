@@ -152,6 +152,12 @@ pub(crate) fn decimal_de(v: f64) -> String {
 
 // So viele Ticks nach dem lokalen Fertigessen wartet der naechste Bissen (s. tick_item_use).
 pub(crate) const EAT_NEXT_USE_DELAY: u32 = 1;
+// Aggressive Prediction: im wievielten Tick nach dem lokalen Fertigessen das RELEASE rausgeht
+// (s. tick_eat_release) -- derselbe Abstand wie der naechste Bissen, also 33 Ticks nach dem USE.
+pub(crate) const EAT_RELEASE_AFTER: u32 = EAT_NEXT_USE_DELAY + 1;
+// So lange nach dem lokalen Fertigessen gehoert ein Event 9 des Servers noch zu DIESEM Essen
+// (s. on_entity_event) -- deutlich ueber jeder spielbaren Rundreise.
+pub(crate) const EAT_CONFIRM_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(2);
 
 // Modul Delay: Grenzen und Schrittweite des Reglers fuer die Verzoegerung je Richtung (s. net::lag).
 pub(crate) const LAG_DELAY_MAX_MS: u32 = 800;
@@ -173,6 +179,14 @@ pub(crate) const BOW_FULL_SHOT_TICKS: u32 = 20;
 // ein Pfeil ueberhaupt fliegt immer; bis zur vollen Kraft, wenn hoechstens `grenze_ms` fehlen.
 pub(crate) const fn bow_hold_through(benutzt: u32, grenze_ms: u32) -> bool {
     benutzt < BOW_MIN_SHOT_TICKS || (benutzt < BOW_FULL_SHOT_TICKS && grenze_ms > 0 && eat_rest_within(BOW_FULL_SHOT_TICKS, benutzt, grenze_ms))
+}
+
+// Dasselbe an der ungeladenen Armbrust: beim Loslassen ruft der Server (LivingEntity.
+// releaseUsingItem, useOnRelease) noch einmal CrossbowItem.onUseTick, und das laedt, sobald
+// die Benutzung die Ladezeit `ladezeit` (mit Schnellladen) erreicht hat. Zu frueh losgelassen
+// bleibt sie leer -- fehlen hoechstens `grenze_ms`, weiterhalten bis dahin.
+pub(crate) const fn crossbow_hold_through(benutzt: u32, ladezeit: u32, grenze_ms: u32) -> bool {
+    benutzt < ladezeit && grenze_ms > 0 && eat_rest_within(ladezeit, benutzt, grenze_ms)
 }
 
 // Hoechsthaltbarkeit eines Stapels, None ohne Haltbarkeit (oder unzerbrechlich, dann zeigt

@@ -23,17 +23,19 @@
 //           "CEND". Fehlt er (Absturz), findet der Leser die Bloecke ueber ihre Koepfe.
 // Zeiten in ms relativ zum Sitzungsstart, die Uhrzeit des Starts steht im Kopf.
 
+mod clip;
 mod read;
 mod replay;
 mod scrub;
 
+pub use clip::{clip_enabled, clip_save, clip_trim, close, now_ms, set_clip_enabled, ClipEvent, ClipLink, ClipSaved};
 pub use read::{BlockInfo, Entry, ReadError, Reader};
 pub use replay::{load_tracks, summary, Next, PacketSource, ReplayClock, Summary, Tracks};
 pub use scrub::{scrub_c2s_play, Scrubbed};
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -112,6 +114,8 @@ pub enum Mark {
     Back = 2,
     // Die aktiven Client-Packs, je Zeile eins.
     Packs = 3,
+    // Haltepunkt im Puffer von coral-clip (u32 Nummer, s. clip). Steht in keiner Datei.
+    Checkpoint = 4,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -208,6 +212,9 @@ fn ms(at: Instant) -> f64 {
 
 enum Msg {
     Open { id: u64, path: PathBuf, header: Header, start: f64 },
+    OpenClip { id: u64, header: Header, start: f64, link: Arc<clip::ClipLink> },
+    ClipTrim { id: u64, seq: u32 },
+    ClipSave { clip: u64, file: u64, dir: PathBuf, seq: u32, reply: mpsc::Sender<Result<ClipSaved, String>> },
     Chunk(Vec<u8>),
     Close(u64),
     Finish(mpsc::Sender<()>),
@@ -330,6 +337,8 @@ pub struct Session {
     producer: Producer,
     // Hier steht die Sitzungsnummer fuer die anderen Erzeuger (Kamera, Maus im Hauptthread).
     slot: Option<Arc<AtomicU64>>,
+    // Puffer von coral-clip statt Datei (s. clip).
+    clip: Option<Arc<clip::ClipLink>>,
 }
 
 impl Session {
@@ -349,7 +358,7 @@ impl Session {
         if let Some(s) = &slot {
             s.store(id, Relaxed);
         }
-        Ok((Self { id, producer: Producer::new(), slot }, path))
+        Ok((Self { id, producer: Producer::new(), slot, clip: None }, path))
     }
 
     #[must_use] 
@@ -372,6 +381,9 @@ impl Drop for Session {
         if let Some(s) = &self.slot {
             let _ = s.compare_exchange(self.id, 0, Relaxed, Relaxed);
         }
+        if let Some(l) = &self.clip {
+            l.release(self.id);
+        }
         self.producer.flush();
         let _ = sender().try_send(Msg::Close(self.id));
     }
@@ -391,12 +403,13 @@ pub struct PacketRecorder {
     play: bool,
     // Zuletzt gesehener Stand des Schalters.
     an: bool,
+    clip: Option<clip::ClipTap>,
 }
 
 impl PacketRecorder {
     #[must_use] 
     pub fn new(header: Header, slot: Option<Arc<AtomicU64>>) -> Self {
-        let mut r = Self { header, slot, session: None, on_mid_start: None, play: false, an: enabled() };
+        let mut r = Self { header, slot, session: None, on_mid_start: None, play: false, an: enabled(), clip: None };
         if r.an {
             r.start(true);
         }
@@ -406,6 +419,13 @@ impl PacketRecorder {
     #[must_use] 
     pub fn on_mid_start(mut self, f: Box<dyn FnMut(u64) + Send>) -> Self {
         self.on_mid_start = Some(f);
+        self
+    }
+
+    // coral-clip: dieselben Pakete zusaetzlich in den Puffer von `link` (s. clip).
+    #[must_use]
+    pub fn with_clip(mut self, link: Arc<ClipLink>, on_event: Box<dyn FnMut(ClipEvent) + Send>) -> Self {
+        self.clip = Some(clip::ClipTap::new(link, on_event, &self.header));
         self
     }
 
@@ -451,18 +471,27 @@ impl PacketRecorder {
         if let Some(s) = &mut self.session {
             s.push(Tag::S, payload);
         }
+        let teleport = self.play && protocol::packets::peek_packet_id(payload).is_ok_and(|id| id == protocol::packets::CB_PLAY_PLAYER_POSITION);
+        if let Some(s) = self.clip.as_mut().and_then(|c| c.sync(&self.header, true, teleport)) {
+            s.push(Tag::S, payload);
+        }
     }
 
     pub fn c2s(&mut self, payload: &[u8]) {
         self.sync();
-        let Some(s) = &mut self.session else { return };
-        if !self.play {
-            return s.push(Tag::C, payload);
-        }
-        match scrub_c2s_play(payload) {
-            Scrubbed::Keep => s.push(Tag::C, payload),
-            Scrubbed::Strip(a, b) => s.push_parts(Tag::C, &[a, &[0], b]),
-            Scrubbed::Drop => {}
+        let play = self.play;
+        let clip = self.clip.as_mut().and_then(|c| c.sync(&self.header, false, false));
+        for s in self.session.iter_mut().chain(clip) {
+            if !play {
+                s.push(Tag::C, payload);
+                continue;
+            }
+            match scrub_c2s_play(payload) {
+                Scrubbed::Keep => s.push(Tag::C, payload),
+                // Die Signatur faellt weg, das Flag davor wird 0 (s. scrub).
+                Scrubbed::Strip(a, b) => s.push_parts(Tag::C, &[a, &[0], b]),
+                Scrubbed::Drop => {}
+            }
         }
     }
 }
@@ -500,6 +529,7 @@ fn writer_loop(rx: Receiver<Msg>) {
         libc::setpriority(libc::PRIO_PROCESS, 0, 10);
     }
     let mut sessions: HashMap<u64, SessionFile> = HashMap::new();
+    let mut clips: HashMap<u64, clip::ClipRing> = HashMap::new();
     loop {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Msg::Open { id, path, header, start }) => {
@@ -507,13 +537,33 @@ fn writer_loop(rx: Receiver<Msg>) {
                     sessions.insert(id, f);
                 }
             }
+            Ok(Msg::OpenClip { id, header, start, link }) => {
+                clips.insert(id, clip::ClipRing::new(header, start, link));
+            }
+            Ok(Msg::ClipTrim { id, seq }) => {
+                if let Some(c) = clips.get_mut(&id) {
+                    c.trim(seq);
+                }
+            }
+            Ok(Msg::ClipSave { clip, file, dir, seq, reply }) => {
+                let ergebnis = match clips.get_mut(&clip) {
+                    Some(c) => c.save_into(&mut sessions, file, seq, &dir),
+                    None => Err("kein Puffer".to_string()),
+                };
+                let _ = reply.send(ergebnis);
+            }
             Ok(Msg::Chunk(buf)) => {
-                demux(&buf, &mut sessions);
+                demux(&buf, &mut sessions, &mut clips);
                 recycle(buf);
             }
             Ok(Msg::Close(id)) => {
+                clips.remove(&id);
                 if let Some(f) = sessions.remove(&id) {
-                    f.finish();
+                    let fertig = f.finish();
+                    // Ein Clip: sein Puffer merkt sich, wo die Datei endet (s. ClipRing::extend).
+                    for c in clips.values_mut() {
+                        c.file_closed(id, &fertig);
+                    }
                 }
             }
             Ok(Msg::Finish(ack)) => {
@@ -536,7 +586,7 @@ fn writer_loop(rx: Receiver<Msg>) {
 }
 
 // Verteilt einen Puffer auf die Sitzungen. Unbekannte (schon geschlossene) fallen weg.
-fn demux(buf: &[u8], sessions: &mut HashMap<u64, SessionFile>) {
+fn demux(buf: &[u8], sessions: &mut HashMap<u64, SessionFile>, clips: &mut HashMap<u64, clip::ClipRing>) {
     let mut i = 0;
     while i + 21 <= buf.len() {
         let session = u64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
@@ -545,14 +595,28 @@ fn demux(buf: &[u8], sessions: &mut HashMap<u64, SessionFile>) {
         let len = u32::from_le_bytes(buf[i + 17..i + 21].try_into().unwrap()) as usize;
         let data = &buf[(i + 21).min(buf.len())..(i + 21 + len).min(buf.len())];
         i += 21 + len;
-        if let (Some(f), Some(tag)) = (sessions.get_mut(&session), Tag::from_byte(tag)) {
+        let Some(tag) = Tag::from_byte(tag) else { continue };
+        if let Some(f) = sessions.get_mut(&session) {
             f.add(t, tag, data);
+        } else if let Some(c) = clips.get_mut(&session) {
+            c.add(t, tag, data);
         }
     }
 }
 
 // Eine offene Aufnahme im Schreib-Thread.
+// Eine abgeschlossene Datei: Pfad, Nullpunkt, Blockliste und wo ihr Index beginnt.
+#[derive(Clone)]
+struct Finished {
+    path: PathBuf,
+    start: f64,
+    index: Vec<(f64, u64)>,
+    pos: u64,
+}
+
 struct SessionFile {
+    // Wo die Datei wirklich liegt (s. try_create: bei gleichem Namen mit Zaehler).
+    path: PathBuf,
     out: BufWriter<File>,
     // Sitzungsstart in ms seit epoch.
     start: f64,
@@ -597,7 +661,7 @@ impl SessionFile {
         out.flush()?;
         let pos = (4 + 2 + 4 + body.len()) as u64;
         let awaiting = (!header.from_join).then(Instant::now);
-        Ok(Self { out, start, pending: Vec::new(), index: Vec::new(), pos, snapshot: Vec::new(), awaiting })
+        Ok(Self { path, out, start, pending: Vec::new(), index: Vec::new(), pos, snapshot: Vec::new(), awaiting })
     }
 
     fn add(&mut self, t: f64, tag: Tag, data: &[u8]) {
@@ -705,15 +769,17 @@ impl SessionFile {
     }
 
     // Rest schreiben, Index anhaengen.
-    fn finish(mut self) {
+    // Schreibt den Rest und den Index. Zurueck kommt, was zum spaeteren Anhaengen noetig ist
+    // (s. reopen); None, wenn das Schreiben scheiterte.
+    fn finish(mut self) -> Option<Finished> {
         self.snapshot_ready(true);
         if !self.snapshot.is_empty() && self.write_snapshot().is_err() {
-            return;
+            return None;
         }
         self.pending.sort_by(|a, b| a.0.total_cmp(&b.0));
         while !self.pending.is_empty() {
             if self.write_next_block().is_err() {
-                return;
+                return None;
             }
         }
         let mut b = vec![INDEX];
@@ -724,7 +790,21 @@ impl SessionFile {
         }
         b.extend_from_slice(&self.pos.to_le_bytes());
         b.extend_from_slice(END);
-        let _ = self.out.write_all(&b).and_then(|()| self.out.flush());
+        self.out.write_all(&b).and_then(|()| self.out.flush()).ok()?;
+        Some(Finished { path: self.path, start: self.start, index: self.index, pos: self.pos })
+    }
+
+    // Oeffnet eine abgeschlossene Datei wieder zum Anhaengen: der Index faellt weg und kommt mit
+    // dem naechsten finish neu.
+    fn reopen(d: &Finished) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new().write(true).open(&d.path)?;
+        if file.metadata()?.len() < d.pos {
+            return Err(std::io::Error::other("Datei ist kuerzer als beim Schliessen"));
+        }
+        file.set_len(d.pos)?;
+        let mut out = BufWriter::new(file);
+        out.seek(SeekFrom::Start(d.pos))?;
+        Ok(Self { path: d.path.clone(), out, start: d.start, pending: Vec::new(), index: d.index.clone(), pos: d.pos, snapshot: Vec::new(), awaiting: None })
     }
 }
 
@@ -840,11 +920,56 @@ mod tests {
         set_client_version("v-test".into());
         set_enabled(true);
         let slot = Arc::new(AtomicU64::new(0));
-        let mut rec = PacketRecorder::new(header(), Some(Arc::clone(&slot)));
+        // coral-clip nebenher: dieselben Pakete in den Puffer, Haltepunkt vor dem zweiten.
+        set_clip_enabled(true);
+        let link = Arc::new(ClipLink::default());
+        let (melde_tx, melde_rx) = mpsc::channel();
+        let melder = Box::new(move |e| {
+            let _ = melde_tx.send(e);
+        });
+        let mut rec = PacketRecorder::new(header(), Some(Arc::clone(&slot))).with_clip(Arc::clone(&link), melder);
         let id = slot.load(Relaxed);
         assert_ne!(id, 0);
+        let puffer = link.session();
+        assert!(matches!(melde_rx.try_recv(), Ok(ClipEvent::Started { session, from_join: true, .. }) if session == puffer));
         rec.s2c(&[0x26, 1, 2]);
         rec.c2s(&[0x00, 9]);
+        link.request();
+        rec.s2c(&[0x30]);
+        let Ok(ClipEvent::Checkpoint { seq, .. }) = melde_rx.try_recv() else { panic!("kein Haltepunkt") };
+        let mut app_clip = Producer::new();
+        app_clip.push(puffer, Tag::K, Instant::now(), b"kc");
+        app_clip.flush();
+        // Die Pakete liegen bis zu FLUSH_EVERY beim Netz-Task; das naechste Paket danach nimmt sie mit.
+        std::thread::sleep(FLUSH_EVERY + Duration::from_millis(20));
+        rec.s2c(&[0x31]);
+        // Ab dem Haltepunkt: die Datei wartet auf Snapshot und close.
+        let (datei, ab_mitte) = clip_save(puffer, seq).unwrap();
+        let mut z = Producer::blocking();
+        z.push(datei, Tag::Z, Instant::now(), b"zustand");
+        z.push(datei, Tag::Z, Instant::now(), &[]);
+        z.flush();
+        close(datei);
+        let ab_mitte = ab_mitte.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert!(ab_mitte.needs_snapshot && !ab_mitte.extended);
+        // Im Spiel setzt jede Teleportation selbst einen Haltepunkt, eine Serie aber nur einen.
+        rec.set_play(true);
+        let teleport = [protocol::packets::CB_PLAY_PLAYER_POSITION as u8];
+        assert!(teleport[0] < 0x80);
+        rec.s2c(&teleport);
+        assert!(matches!(melde_rx.try_recv(), Ok(ClipEvent::Checkpoint { seq: s, .. }) if s == seq + 1));
+        rec.s2c(&teleport);
+        assert!(melde_rx.try_recv().is_err());
+        rec.set_play(false);
+        // Noch ein Clip, der mit dem ersten ueberlappt: dieselbe (schon geschlossene) Datei wird
+        // laenger, nichts steht doppelt.
+        std::thread::sleep(FLUSH_EVERY + Duration::from_millis(20));
+        rec.s2c(&[0x32]);
+        let (_, laenger) = clip_save(puffer, seq).unwrap();
+        let laenger = laenger.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert!(laenger.extended && !laenger.needs_snapshot);
+        assert_eq!(laenger.path, ab_mitte.path);
+        set_clip_enabled(false);
         let mut app = Producer::new();
         app.push(id, Tag::K, Instant::now(), b"k");
         app.flush();
@@ -858,7 +983,22 @@ mod tests {
         drop(rec);
         assert_eq!(slot.load(Relaxed), 0);
         finish(Duration::from_secs(5));
-        let mut dateien: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|d| d.unwrap().path()).collect();
+        assert_eq!(link.session(), 0);
+        let alle = |p: &Path| {
+            let mut r = Reader::open(p).unwrap();
+            let mut v = Vec::new();
+            r.for_each(|e| v.push((e.tag, e.data))).unwrap();
+            (r.header.from_join, r.complete, v)
+        };
+        let (join, fertig, v) = alle(&ab_mitte.path);
+        assert!(!join && fertig);
+        let tp = teleport.to_vec();
+        assert_eq!(
+            v,
+            vec![(Tag::Z, b"zustand".to_vec()), (Tag::S, vec![0x30]), (Tag::K, b"kc".to_vec()), (Tag::S, vec![0x31]), (Tag::S, tp.clone()), (Tag::S, tp), (Tag::S, vec![0x32])]
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().filter(|d| d.as_ref().unwrap().file_name().to_string_lossy().starts_with("clip_")).count(), 1);
+        let mut dateien: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|d| d.unwrap().path()).filter(|p| !p.file_name().unwrap().to_string_lossy().starts_with("clip_")).collect();
         dateien.sort();
         assert_eq!(dateien.len(), 2);
         let lesen = |p: &Path| {
@@ -871,7 +1011,9 @@ mod tests {
         let (r, tags) = lesen(&dateien[0]);
         assert_eq!(r.header.client, "v-test");
         assert!(r.complete && r.header.from_join);
-        assert_eq!(tags, vec![Tag::C, Tag::K, Tag::S]);
+        // Sechs Pakete vom Server: das erste, zwei rund um den Haltepunkt des Puffers, zwei
+        // Teleporte und das vor dem zweiten Clip.
+        assert_eq!(tags, vec![Tag::C, Tag::K, Tag::S, Tag::S, Tag::S, Tag::S, Tag::S, Tag::S]);
         let (r, tags) = lesen(&dateien[1]);
         assert!(r.complete && !r.header.from_join);
         assert_eq!(tags, vec![Tag::S]);

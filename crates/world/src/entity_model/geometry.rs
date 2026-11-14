@@ -64,6 +64,12 @@ pub struct Part {
 }
 
 impl Part {
+    // Nur Name und Lage, ohne Quader und Kinder (s. Skeleton).
+    #[must_use]
+    pub(crate) const fn clone_shallow(&self) -> Self {
+        Self { name: self.name, pivot: self.pivot, rotation: self.rotation, scale: self.scale, cuboids: Vec::new(), children: Vec::new() }
+    }
+
     #[must_use] 
     pub const fn new(name: &'static str, pivot: [f32; 3], cuboids: Vec<Cuboid>) -> Self {
         Self { name, pivot, rotation: [0.0; 3], scale: [1.0; 3], cuboids, children: Vec::new() }

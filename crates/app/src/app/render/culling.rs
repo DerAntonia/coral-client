@@ -72,7 +72,7 @@ impl App {
         }
     }
 
-    fn sight_hidden(&self, ziel: render::sight::SightTarget) -> bool {
+    pub(crate) fn sight_hidden(&self, ziel: render::sight::SightTarget) -> bool {
         self.settings.entity_ray_culling && self.gpu.as_ref().is_some_and(|g| g.block_renderer.sight.hidden(ziel))
     }
 
@@ -115,14 +115,18 @@ impl App {
     // ausserhalb des Sichtkegels oder ist nicht erreichbar. Ein Block Rand, weil Truhendeckel,
     // Betten und Schilder ueber ihre Zelle hinausreichen.
     pub(crate) fn block_entity_culled(&self, pos: (i32, i32, i32)) -> bool {
+        self.cull_frustum.get().is_some() && (self.block_section_culled(pos) || self.sight_hidden(render::sight::SightTarget::Block(pos.0, pos.1, pos.2)))
+    }
+
+    // Der Teil von block_entity_culled, der nur an der Section haengt (Sichtkegel und
+    // Hoehlen-Culling) -- fuer alle Bloecke einer Section im selben Frame derselbe.
+    pub(crate) fn block_section_culled(&self, pos: (i32, i32, i32)) -> bool {
         let Some(kegel) = self.cull_frustum.get() else { return false };
         let (sx, sz) = (pos.0.div_euclid(16) * 16, pos.2.div_euclid(16) * 16);
         let sy = self.world.min_y() + (pos.1 - self.world.min_y()).div_euclid(16) * 16;
         let min = DVec3::new(f64::from(sx) - 1.0, f64::from(sy) - 1.0, f64::from(sz) - 1.0);
         let max = min + DVec3::splat(18.0);
-        !self.box_in_frustum(&kegel, min, max)
-            || !self.section_reachable_at(pos.0, pos.1, pos.2)
-            || self.sight_hidden(render::sight::SightTarget::Block(pos.0, pos.1, pos.2))
+        !self.box_in_frustum(&kegel, min, max) || !self.section_reachable_at(pos.0, pos.1, pos.2)
     }
 }
 

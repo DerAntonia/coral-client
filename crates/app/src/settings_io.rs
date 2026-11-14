@@ -6,16 +6,11 @@ mod parse;
 mod serialize;
 
 impl Settings {
-    // Pegel fuer einen Ton der Kategorie `c`: Hauptlautstaerke mal Kategorie, wie in Vanilla.
-    // Die Oberflaeche haengt nur an ihrem eigenen Regler, ihre Klaenge stehen bewusst
-    // ausserhalb der Hauptlautstaerke (s. master_volume).
+    // Pegel fuer einen Ton der Kategorie `c`: Hauptlautstaerke mal Kategorie, wie in Vanilla --
+    // auch fuer die Oberflaeche (Nutzer 2026-11-11, s. master_volume).
     pub(crate) fn sound_gain(&self, c: protocol::packets::SoundCategory) -> f32 {
         let kategorie = VOLUME_CATEGORIES.iter().position(|v| v.category == c).map_or(1.0, |i| self.category_volume[i] / 100.0);
-        if c == protocol::packets::SoundCategory::Ui {
-            kategorie
-        } else {
-            kategorie * self.master_volume / 100.0
-        }
+        kategorie * self.master_volume / 100.0
     }
 
     // Saettigung fuer den Farb-Durchgang (s. GpuState::render_world): None, solange das Modul
@@ -423,8 +418,18 @@ impl Settings {
 // unbelegten Aktion zu bringen (s. Kommentar bei Settings::parse zum generellen Prinzip).
 // Alle Eingaben einer Aktion als eine Zeile fuer settings.conf -- kommagetrennt. Weder
 // Tasten- noch Maustastennamen enthalten ein Komma, der Trenner ist also eindeutig.
+// Je Belegung ihr Name, mit Modifier als "Modifier+Taste" (kein Tastenname enthaelt "+").
 pub(crate) fn binds_to_str(keybinds: &Keybinds, action: KeyBindAction) -> String {
-    keybinds.binds(action).map(bind_name).collect::<Vec<_>>().join(",")
+    (0..keybinds.count(action))
+        .filter_map(|s| {
+            let bind = bind_name(keybinds.bind_at(action, s)?);
+            Some(match keybinds.modifier_at(action, s) {
+                Some(m) => format!("{}+{bind}", bind_name(m)),
+                None => bind,
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 // Gegenrichtung. Eine Datei aus der Zeit vor den Mehrfachbelegungen enthaelt genau einen
@@ -432,12 +437,18 @@ pub(crate) fn binds_to_str(keybinds: &Keybinds, action: KeyBindAction) -> String
 // Wert heisst "diese Aktion ist unbelegt" (das gibt es jetzt, s. remove_at) und ueberschreibt
 // den Standard deshalb bewusst.
 pub(crate) fn set_keybind_from_str(keybinds: &mut Keybinds, action: KeyBindAction, value: &str) {
-    let parsed: Vec<Bind> = value.split(',').map(str::trim).filter(|n| !n.is_empty()).filter_map(bind_from_name).collect();
+    // "Modifier+Taste" oder nur "Taste"; ein unlesbarer Modifier nimmt die Belegung mit.
+    let eine = |n: &str| match n.split_once('+') {
+        Some((m, b)) => Some((bind_from_name(b.trim())?, Some(bind_from_name(m.trim())?))),
+        None => Some((bind_from_name(n)?, None)),
+    };
+    let parsed: Vec<(Bind, Option<Bind>)> = value.split(',').map(str::trim).filter(|n| !n.is_empty()).filter_map(eine).collect();
     if parsed.is_empty() && !value.trim().is_empty() {
         return; // unlesbarer Wert -> Standard stehen lassen (wie bisher)
     }
     for slot in 0..MAX_BINDS_PER_ACTION {
-        keybinds.slots[action.index()][slot] = parsed.get(slot).copied();
+        keybinds.slots[action.index()][slot] = parsed.get(slot).map(|p| p.0);
+        keybinds.mods[action.index()][slot] = parsed.get(slot).and_then(|p| p.1);
     }
 }
 

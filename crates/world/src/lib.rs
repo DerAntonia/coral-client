@@ -57,19 +57,19 @@ pub use block_offset::{block_xz_offset, has_xz_offset, max_xz_offset, outline_xz
 pub use block_registry::{block_name, state_count};
 pub use block_shapes::{BlockShapes, ModelFace, ShapeBox};
 pub use block_uvs::BlockUvs;
-pub use chunk::{is_solid, ChunkSection, MovingBox, World, MIN_Y, SECTION_SIZE, STATE_AIR};
+pub use chunk::{is_solid, BlockChange, ChunkColumn, ChunkSection, DirtyLog, MovingBox, World, MIN_Y, SECTION_SIZE, STATE_AIR};
 pub use collision::{camera_collision_boxes, collision_boxes, collision_boxes_at, is_suffocating, outline_boxes, slow_movement_multiplier, ShapeContext};
 pub use cross_shapes::CrossBlocks;
 pub use entity::{
-    display_kind, entity_type_name, hit_box_size, is_attackable, is_living, is_player, DisplayContent, DisplayInfo, DisplayKind, DisplayTransform, Entities,
+    anim_debug_an, anim_log, display_kind, entity_type_name, hit_box_size, is_attackable, is_living, is_player, DisplayContent, DisplayInfo, DisplayKind, DisplayTransform, Entities,
     Entity, HeldItem, ItemRenderKind, OrbPlayer, TextDisplay, MAX_HURT_TIME, item_render_kind,
 };
 pub use entity_model::{
     biped_model, cape_angles, cape_model, cape_pose, cow_model, creeper_model, default_skin, elytra_model, elytra_pose, emit as emit_entity_model, emit_two_sided as emit_entity_model_two_sided,
     enderman_model, entity_transform, entity_transform_gliding, entity_transform_leaning, first_person_arm_pose, first_person_arm_transform, lerp_angle_degrees, pig_model,
-    player_arm_model, player_model, rotation_x_deg, sheep_model, slime_model, spider_model, wrap_degrees, Affine, BodyYaw, CapeState,
+    player_arm_model, player_model, rotation_x_deg, rotation_z_deg, sheep_model, slime_model, spider_model, wrap_degrees, Affine, BodyYaw, CapeState,
     Cuboid, Glide, Lean, LimbAnimator, Model, Part, PartPose, Pose, DEFAULT_SKINS, ELYTRA_TEXTURE,
 };
 pub use fluid::{always_wet, flow_velocity as fluid_flow_velocity, fluid_kind, height_at as fluid_height_at, FluidKind};
-pub use terrain_vertex::{group_by_direction, pack_terrain, pack_terrain_lit, FaceGroup, SectionRun, TerrainFadeQuad, TerrainVertex, FACE_GROUPS};
-pub use mesher::{box_vertices, mesh_column, mesh_column_from_neighbors, mesh_column_with_lighting, mesh_column_ao_fading, AoFadeQuad, AoFadeSource, is_marker_block, BlockVertex, ColumnNeighbors};
+pub use terrain_vertex::{group_by_direction, layout_patchable, pack_terrain, pack_terrain_lit, place_quads, plan_patch, FaceGroup, PlacedQuad, SectionRun, TerrainFadeQuad, TerrainVertex, FACE_GROUPS, FREE_QUAD, PATCH_SLACK};
+pub use mesher::{box_vertices, mesh_column, mesh_column_from_neighbors, mesh_column_with_lighting, mesh_column_ao_fading, mesh_column_blocks, block_id, MeshRegion, AoFadeQuad, AoFadeSource, is_marker_block, BlockVertex, ColumnNeighbors};

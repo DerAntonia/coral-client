@@ -286,6 +286,31 @@ pub struct HeldItems {
     vanilla_route: std::cell::Cell<bool>,
     vanilla_bypass: std::cell::Cell<bool>,
     vanilla_out: std::cell::RefCell<Vec<render::vanilla_draw::VanillaVertex>>,
+    // Liegende Items: die Geometrie der GROUND-Haltung im Item-eigenen Raum, je (Item,
+    // Trankfarbe, Helligkeit) gemerkt (s. ground_mesh). Sie haengt nur an Texturen und
+    // Atlas-Plaetzen -- jede Aenderung daran leert den Speicher.
+    ground_cache: std::cell::RefCell<HashMap<(u32, Option<u32>, u32), std::rc::Rc<GroundMesh>>>,
+}
+
+// Geometrie der GROUND-Haltung im Item-eigenen Raum samt der Modellbox, die liegende Items
+// fuer Hoehe und Abstand der Kopien brauchen (s. App::emit_item_entity).
+pub(crate) struct GroundMesh {
+    pub(crate) verts: Vec<BlockVertex>,
+    pub(crate) min_y: f32,
+    pub(crate) min_z: f32,
+    pub(crate) max_z: f32,
+}
+
+impl GroundMesh {
+    fn new(verts: Vec<BlockVertex>) -> Self {
+        let (mut min_y, mut min_z, mut max_z) = (f32::MAX, f32::MAX, f32::MIN);
+        for v in &verts {
+            min_y = min_y.min(v.position[1]);
+            min_z = min_z.min(v.position[2]);
+            max_z = max_z.max(v.position[2]);
+        }
+        Self { verts, min_y, min_z, max_z }
+    }
 }
 
 struct ItemAnimation {
@@ -306,6 +331,7 @@ impl HeldItems {
             vanilla_route: std::cell::Cell::new(false),
             vanilla_bypass: std::cell::Cell::new(false),
             vanilla_out: std::cell::RefCell::new(Vec::new()),
+            ground_cache: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
@@ -346,6 +372,7 @@ impl HeldItems {
         self.items.clear();
         self.models.clear();
         self.animations.clear();
+        self.ground_cache.get_mut().clear();
     }
 
     // Animierte Item-Texturen auf den Stand von Spieltick `tick` bringen (dieselbe Uhr wie die
@@ -408,6 +435,7 @@ impl HeldItems {
         if let Some(Some(Resolved::Special { texture, rect, .. })) = self.items.get_mut(&item_id) {
             if rect.is_none() {
                 *rect = Some(atlas.rect_or_missing(texture));
+                self.ground_cache.get_mut().clear();
             }
             return;
         }
@@ -457,6 +485,7 @@ impl HeldItems {
         if let Some(Some(Resolved::Special { texture, rect, .. })) = self.models.get_mut(model) {
             if rect.is_none() {
                 *rect = Some(atlas.rect_or_missing(texture));
+                self.ground_cache.get_mut().clear();
             }
             return;
         }
@@ -662,6 +691,7 @@ impl HeldItems {
         let rect = [origin.0 as f32 / size, origin.1 as f32 / size, (origin.0 + width) as f32 / size, (origin.1 + height) as f32 / size];
         let mask = SpriteMask::from_rgba(width, height, &rgba);
         self.textures.insert(path.to_string(), LoadedTexture { rect, mask: Some(mask) });
+        self.ground_cache.get_mut().clear();
         Some(origin)
     }
 
@@ -680,6 +710,7 @@ impl HeldItems {
         }
         let (evicted, slot) = self.order.pop_front()?;
         self.textures.remove(&evicted);
+        self.ground_cache.get_mut().clear();
         // Sonst spielte die Animation des Verdraengten im Platz des Nachfolgers weiter.
         self.animations.retain(|a| a.path != evicted);
         self.order.push_back((path.to_string(), slot));
@@ -894,6 +925,29 @@ impl HeldItems {
         self.emit_resolved(resolved, potion, base, brightness, local, out);
     }
 
+    // emit_ground mit IDENTITY, ohne Glint-UVs und am Vanilla-Weg vorbei -- aber gemerkt: ein
+    // flaches Item tastet sonst in JEDEM Frame seine ganze Silhouette ab (bei vielen liegenden
+    // Items der groesste Posten im Main-Thread). Gibt das gemerkte Netz geteilt heraus, ohne
+    // Kopie. Koepfe nicht gemerkt: ihr Skin haengt am Stack (s. set_skull). Leeres wird nicht
+    // gemerkt (None), die Textur kann noch nachkommen.
+    pub(crate) fn ground_mesh(&self, item_id: u32, potion: Option<u32>, brightness: f32) -> Option<std::rc::Rc<GroundMesh>> {
+        let neu = || {
+            let mut out = Vec::new();
+            self.without_vanilla(|| self.emit_ground(item_id, potion, Affine::IDENTITY, brightness, false, &mut out));
+            (!out.is_empty()).then(|| std::rc::Rc::new(GroundMesh::new(out)))
+        };
+        if matches!(self.items.get(&item_id), Some(Some(Resolved::Skull { .. }))) {
+            return neu();
+        }
+        let key = (item_id, potion, brightness.to_bits());
+        if let Some(m) = self.ground_cache.borrow().get(&key) {
+            return Some(m.clone());
+        }
+        let m = neu()?;
+        self.ground_cache.borrow_mut().insert(key, m.clone());
+        Some(m)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn emit_with(
         &self,
@@ -930,9 +984,27 @@ impl HeldItems {
     // zeichnet: flache Items ueber die Pack-Shader (emit_vanilla), Pack-Modelle, Koepfe,
     // Sondermodelle, fehlende Texturen.
     pub(crate) fn rigid_pre(&self, item_id: u32, potion: Option<u32>, pre: Affine, right_hand: bool) -> Option<RigidItem<'_>> {
-        use std::hash::{Hash, Hasher};
         let Some(Some(resolved)) = self.items.get(&item_id) else { return None };
-        let base = hand_base(resolved, pre, right_hand, false);
+        self.rigid_from(resolved, potion, hand_base(resolved, pre, right_hand, false))
+    }
+
+    // Dasselbe starre Netz mit der GROUND-Haltung im Item-eigenen Raum (wie emit_ground mit
+    // IDENTITY): liegende Items und Wurfgeschosse, je Platzierung eine Instanz (s.
+    // App::emit_item_entity).
+    pub(crate) fn rigid_ground(&self, item_id: u32, potion: Option<u32>) -> Option<RigidItem<'_>> {
+        let Some(Some(resolved)) = self.items.get(&item_id) else { return None };
+        let display = match resolved {
+            Resolved::Sprite { display, .. } | Resolved::Block { display, .. } | Resolved::Model { display, .. } | Resolved::Skull { display } | Resolved::Special { display, .. } => display.ground,
+        };
+        let base = Affine::translation(display.translation)
+            .then(Affine::rotation_xyz_deg(display.rotation[0], display.rotation[1], display.rotation[2]))
+            .then(Affine::scale(display.scale))
+            .then(Affine::translation([-0.5, -0.5, -0.5]));
+        self.rigid_from(resolved, potion, base)
+    }
+
+    fn rigid_from(&self, resolved: &Resolved, potion: Option<u32>, base: Affine) -> Option<RigidItem<'_>> {
+        use std::hash::{Hash, Hasher};
         let mut hasher = rustc_hash::FxHasher::default();
         match resolved {
             Resolved::Sprite { texture, layers, .. } => {
@@ -1054,11 +1126,9 @@ impl HeldItems {
                     emit_skull_model(tex, hut, base, brightness, out);
                 }
             }
-            Resolved::Special { kind, rect: Some(tex), .. } => {
-                if !local {
-                    emit_special(*kind, *tex, base, brightness, out);
-                }
-            }
+            // Fuer den Glint dieselbe Geometrie mit den UVs der eigenen Textur (0..1) -- frueher
+            // fehlte sie, die Anzahl stimmte nicht, und der Dreizack in der Hand blieb ohne Glint.
+            Resolved::Special { kind, rect: Some(tex), .. } => emit_special(*kind, if local { GANZ } else { *tex }, base, brightness, out),
             Resolved::Special { rect: None, .. } => {}
         }
     }

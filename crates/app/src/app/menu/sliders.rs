@@ -59,11 +59,8 @@ impl App {
     // jeweilige Stepper. Ohne Speichern -- das macht der Aufrufer (beim Ziehen am Regler erst
     // beim Loslassen).
     pub(crate) fn apply_edit_buffer(&mut self, ev: EditableValue, buf: &str) {
-        // "-1" heisst bei jeder Obergrenze "unbegrenzt" (s. EditableValue::allows_unlimited).
-        // Fuer Renderdistanz/Chunk-Anzahl ist das schlicht ihr jeweiliges Maximum: dort
-        // greift der Limiter ohnehin nie, weil der Server nicht mehr schickt (s.
-        // MAX_RENDER_DISTANCE_MAX) -- ein zusaetzlicher Sonderwert waere eine Unterscheidung
-        // ohne Unterschied.
+        // "-1" heisst bei den Obergrenzen aus EditableValue::allows_unlimited "unbegrenzt".
+        // Die Renderdistanz gehoert nicht dazu: ihr Maximum ist eine echte Chunk-Zahl.
         let unlimited = ev.allows_unlimited() && buf.trim() == UNLIMITED_INPUT;
         match ev {
             EditableValue::MouseSensitivity => {
@@ -129,10 +126,8 @@ impl App {
                 }
             }
             EditableValue::MaxRenderDistance => {
-                if unlimited {
-                    self.settings.max_render_distance = MAX_RENDER_DISTANCE_MAX;
-                } else if let Ok(v) = buf.parse::<u32>() {
-                    self.settings.max_render_distance = v;
+                if let Ok(v) = buf.parse::<u32>() {
+                    self.settings.max_render_distance = v.clamp(MAX_RENDER_DISTANCE_MIN, MAX_RENDER_DISTANCE_MAX);
                 }
             }
             EditableValue::InventoryTransparency => {
@@ -592,6 +587,8 @@ impl App {
                 }
             }
             ButtonAction::ZoomFactorPrev => (&mut set.zoom_factor_tenths).into(),
+            ButtonAction::ClipSecondsPrev => (&mut set.clip_seconds).into(),
+            ButtonAction::ClipCheckpointsPrev => (&mut set.clip_checkpoints).into(),
             ButtonAction::ZoomSensPrev => (&mut set.zoom_sens_percent).into(),
             ButtonAction::EatHoldThroughPrev => (&mut set.eat_hold_through_ms).into(),
             ButtonAction::NoToolBreakReservePrev => (&mut set.no_tool_break_reserve).into(),
@@ -607,6 +604,11 @@ impl App {
             ButtonAction::TearTimingDown => (&mut set.tear_timing_us).into(),
             ButtonAction::TearReserveDown => (&mut set.tear_reserve_us).into(),
             ButtonAction::SmoothLightingDown => (&mut set.smooth_lighting_percent).into(),
+            ButtonAction::ChunkFadeDown => (&mut set.chunk_fade_ms).into(),
+            ButtonAction::ParticleFadeDown => (&mut set.particle_fade_out_ms).into(),
+            ButtonAction::EntityNearDown => (&mut set.entity_near_dither_cm).into(),
+            ButtonAction::MipSharpnessDown => (&mut set.mip_sharpness_pct).into(),
+            ButtonAction::ParticleDistanceDown => (&mut set.particle_distance).into(),
             ButtonAction::MotionBlurDown => (&mut set.motion_blur_percent).into(),
             ButtonAction::EntityBlurDown => (&mut set.motion_blur_entities_percent).into(),
             ButtonAction::HandBlurDown => (&mut set.hand_blur_percent).into(),
@@ -616,6 +618,7 @@ impl App {
             ButtonAction::DamageTintTicksPrev => (&mut set.damage_tint_ticks).into(),
             ButtonAction::ChunkSaverThresholdPrev => (&mut set.chunk_saver_threshold).into(),
             ButtonAction::HurtCamStrengthPrev => (&mut set.hurt_cam_strength).into(),
+            ButtonAction::PanoramaSpeedPrev => (&mut set.panorama_speed).into(),
             ButtonAction::ShoulderOffsetPrev => (&mut set.shoulder_offset_cm).into(),
             ButtonAction::FireHeightPrev => (&mut set.fire_height).into(),
             ButtonAction::ParticleStep(own, i, col, false) => {
@@ -624,8 +627,11 @@ impl App {
                     0 => (&mut t.lifetime_pct).into(),
                     1 => (&mut t.opacity_pct).into(),
                     2 => (&mut t.speed_pct).into(),
-                    _ if particles::KINDS[i].spawn.has_interval() => (&mut t.interval_pct).into(),
-                    _ => (&mut t.amount_pct).into(),
+                    3 => (&mut t.size_pct).into(),
+                    4 => (&mut t.spread_pct).into(),
+                    5 if particles::KINDS[i].spawn.has_interval() => (&mut t.interval_pct).into(),
+                    5 => (&mut t.amount_pct).into(),
+                    _ => return None,
                 }
             }
             ButtonAction::UiPitchDown => (&mut set.ui_pitch_semitones).into(),
@@ -633,7 +639,10 @@ impl App {
             ButtonAction::HoldConfirmDown => (&mut set.hold_confirm_ms).into(),
             ButtonAction::ReconnectHoldDown => (&mut set.reconnect_hold_ms).into(),
             ButtonAction::CursorWidthDown => (&mut set.cursor_width).into(),
+            ButtonAction::CursorOutlineDown => (&mut set.cursor_outline).into(),
+            ButtonAction::CursorFillDown => (&mut set.cursor_fill_transparency).into(),
             ButtonAction::CrosshairBoostPrev => (&mut set.crosshair_brightness_boost).into(),
+            ButtonAction::CrosshairRingRadiusPrev => (&mut set.crosshair_ring_radius).into(),
             ButtonAction::CrosshairSizePrev => {
                 let i = set.crosshair_shape.min(CROSSHAIR_SHAPES.len() - 1);
                 (&mut set.crosshair_sizes[i]).into()
@@ -649,6 +658,7 @@ impl App {
                 HudElement::Armor => (&mut set.hud_armor_scale).into(),
                 HudElement::Keystrokes => (&mut set.hud_keys_scale).into(),
                 HudElement::Session => (&mut set.hud_session_scale).into(),
+                HudElement::Clock => (&mut set.hud_clock_scale).into(),
                 _ => return None,
             },
             ButtonAction::KeysOpacityPrev => (&mut set.keys_opacity).into(),

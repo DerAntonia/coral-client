@@ -285,6 +285,32 @@ pub fn read_block_tags(payload: &[u8]) -> Result<HashMap<String, Vec<u32>>, Read
     read_tags_of(payload, "block")
 }
 
+// Dasselbe Paket, die Dialoge des Tags minecraft:pause_screen_additions (Registry-IDs in der
+// Dialog-Registry). None, wenn das Paket keine Dialog-Tags enthaelt -- dann bleibt der alte Stand.
+pub fn read_pause_screen_dialogs(payload: &[u8]) -> Result<Option<Vec<u32>>, ReadError> {
+    let mut r = PacketReader::new(payload);
+    let _id = r.read_varint()?;
+    let mut out = None;
+    for _ in 0..read_count(&mut r)? {
+        let registry = r.read_string()?;
+        let dialoge = registry.strip_prefix("minecraft:").unwrap_or(&registry) == "dialog";
+        if dialoge {
+            out = Some(Vec::new());
+        }
+        for _ in 0..read_count(&mut r)? {
+            let name = r.read_string()?;
+            let gesucht = dialoge && name.strip_prefix("minecraft:").unwrap_or(&name) == "pause_screen_additions";
+            for _ in 0..read_count(&mut r)? {
+                let id = r.read_varint()?;
+                if gesucht {
+                    out.get_or_insert_with(Vec::new).push(id.max(0) as u32);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn read_tags_of(payload: &[u8], wanted: &str) -> Result<HashMap<String, Vec<u32>>, ReadError> {
     let mut r = PacketReader::new(payload);
     let _id = r.read_varint()?;
@@ -333,6 +359,20 @@ mod tests {
         assert!(e.display.fits_grid(2));
         assert_eq!(e.display.result().first_stack().map(|s| (s.item_id, s.count)), Some((900, 4)));
         assert_eq!(e.requirements, Some(vec![Ingredient::Tag("minecraft:planks".into()), Ingredient::Items(vec![11, 12])]));
+    }
+
+    #[test]
+    fn liest_pause_dialoge() {
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_UPDATE_TAGS).write_varint(2);
+        w.write_string("minecraft:item").write_varint(1).write_string("minecraft:planks").write_varint(1).write_varint(5);
+        w.write_string("minecraft:dialog").write_varint(2);
+        w.write_string("minecraft:quick_actions").write_varint(1).write_varint(0);
+        w.write_string("minecraft:pause_screen_additions").write_varint(1).write_varint(3);
+        assert_eq!(read_pause_screen_dialogs(&w.into_bytes()).unwrap(), Some(vec![3]));
+        let mut w = PacketWriter::new();
+        w.write_varint(CB_PLAY_UPDATE_TAGS).write_varint(0);
+        assert_eq!(read_pause_screen_dialogs(&w.into_bytes()).unwrap(), None);
     }
 
     #[test]

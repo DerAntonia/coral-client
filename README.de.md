@@ -41,6 +41,11 @@ liefert er nicht mit, er liest es aus deiner eigenen Minecraft-Installation.
 2. Ihn starten (unter Linux vorher ausführbar machen) und auf **Client herunterladen** drücken.
 3. Im Launcher die Minecraft-Installation wählen und auf **Spielen** drücken.
 
+Der Launcher lädt außerdem das Resourcepack
+[CPVP Aesthetic](https://modrinth.com/resourcepack/cpvp-aesthetic) von DerAntonia
+(CC BY-NC-SA 4.0) von Modrinth, immer die neueste Version.
+Es steht danach in der Skin-Liste des Clients.
+
 Der Launcher sucht selbst nach Updates. Beta-Versionen zeigt er erst an, wenn
 „Beta-Versionen anzeigen“ eingeschaltet ist.
 
@@ -125,12 +130,6 @@ im Spiel.
 Version 1.0 ist das erste stabile Release. Vieles funktioniert wie in Vanilla, manches fehlt
 noch oder sieht anders aus. Gebaut und getestet wird der Client gegen 1.21.11. Andere Versionen
 werden nicht unterstützt.
-
-### Benchmarks
-
-Gemessen gegen Horizon und Fabulously Optimized in derselben Testwelt, mit MangoHud:
-
-- [Coral Client vs. Horizon](benchmarks/vergleich-horizon-2026-11-13.md) (2026-11-13)
 
 ### Selbst bauen
 

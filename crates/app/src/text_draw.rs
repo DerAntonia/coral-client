@@ -81,7 +81,7 @@ pub(crate) const MAX_LABEL_QUADS: usize = MAX_UI_RECTS / 4;
 // Schildtext (world_text_pipeline).
 pub(crate) fn label_depth_state() -> wgpu::DepthStencilState {
     wgpu::DepthStencilState {
-        format: wgpu::TextureFormat::Depth32Float,
+        format: render::block_renderer::DEPTH_FORMAT,
         depth_write_enabled: false,
         depth_compare: wgpu::CompareFunction::LessEqual,
         stencil: wgpu::StencilState::default(),
@@ -345,7 +345,7 @@ pub(crate) fn text_quad(
     uv_max: [f32; 2],
     color: [f32; 4],
     screen_px: (f32, f32),
-) -> [TextVertex; 6] {
+) -> [TextVertex; 4] {
     text_quad_fx(x0, y0, x1, y1, uv_min, uv_max, color, [0.0; 4], [TEXT_MODE_GLYPH, 0.0, 0.0, 0.0], screen_px)
 }
 
@@ -369,15 +369,22 @@ pub(crate) fn text_quad_fx(
     bounds: [f32; 4],
     mode: [f32; 4],
     screen_px: (f32, f32),
-) -> [TextVertex; 6] {
+) -> [TextVertex; 4] {
     let (w, h) = screen_px;
     let to_ndc = |px: f32, py: f32, u: f32, v: f32| TextVertex { position: [(px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0], uv: [u, v], color, bounds, mode, depth: 0.0 };
     [
         to_ndc(x0, y0, uv_min[0], uv_min[1]),
         to_ndc(x1, y0, uv_max[0], uv_min[1]),
         to_ndc(x1, y1, uv_max[0], uv_max[1]),
-        to_ndc(x0, y0, uv_min[0], uv_min[1]),
-        to_ndc(x1, y1, uv_max[0], uv_max[1]),
         to_ndc(x0, y1, uv_min[0], uv_max[1]),
     ]
+}
+
+// Je Viereck die zwei Dreiecke (a, b, c) und (a, c, d) ueber seine vier Ecken.
+pub(crate) const TEXT_QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
+// Ein Bereich in Text-Ecken (immer ganze Vierecke) als Bereich im Indexpuffer.
+pub(crate) fn text_index_range(r: std::ops::Range<u32>) -> std::ops::Range<u32> {
+    let q = TEXT_VERTS_PER_QUAD as u32;
+    r.start / q * 6..r.end / q * 6
 }

@@ -40,6 +40,11 @@ from your own Minecraft installation.
 2. Start it (on Linux, make it executable first) and click **Client herunterladen** (download client).
 3. Pick your Minecraft installation in the launcher and click **Spielen** (play).
 
+The launcher also downloads the resource pack
+[CPVP Aesthetic](https://modrinth.com/resourcepack/cpvp-aesthetic) by DerAntonia
+(CC BY-NC-SA 4.0) from Modrinth, always the newest version.
+It shows up in the client's skin list.
+
 The launcher looks for updates by itself. It only shows beta versions once
 "Beta-Versionen anzeigen" (show beta versions) is turned on. The launcher itself is in German
 for now; the client's interface can be switched to English.
@@ -124,12 +129,6 @@ in the game.
 Version 1.0 is the first stable release. A lot works like Vanilla; some things are still
 missing or look different. The client is built and tested against 1.21.11. Other versions are
 not supported.
-
-### Benchmarks
-
-Measured against Horizon and Fabulously Optimized in the same test world, with MangoHud:
-
-- [Coral Client vs. Horizon](benchmarks/horizon-comparison-2026-11-13.md) (2026-11-13)
 
 ### Building it yourself
 

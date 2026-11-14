@@ -2,6 +2,9 @@
 
 use super::*;
 
+// Wie lange ein fremder Riss ohne neues Paket stehen bleibt: 400 Ticks (Vanilla).
+const OTHER_BREAK_TTL: std::time::Duration = std::time::Duration::from_secs(20);
+
 impl App {
     // Vanillas getHandSwingProgress fuer den EIGENEN Spieler: 0, solange nicht geschlagen
     // wird, sonst 0..1 ueber die Schwungdauer. Unser Zaehler laeuft rueckwaerts (s.
@@ -31,10 +34,13 @@ impl App {
         if self.hud_hidden || self.game_mode == GAME_MODE_SPECTATOR || self.sign_edit.is_some() {
             return Vec::new();
         }
+        // Blockumriss-Modul aus: gar kein Rahmen (Nutzer 2026-11-11; frueher der von Vanilla).
+        if !self.settings.module_block_outline {
+            return Vec::new();
+        }
         let CrosshairTarget::Block(pos, _) = self.crosshair_target() else { return Vec::new() };
-        // Blockumriss-Modul: beim Abbauen dieses Blocks keinen Rahmen (s.
-        // Settings::block_outline_hide_mining).
-        if self.settings.module_block_outline && self.settings.block_outline_hide_mining && self.breaking_block && self.breaking_pos == Some(pos) {
+        // Beim Abbauen dieses Blocks keinen Rahmen (s. Settings::block_outline_hide_mining).
+        if self.settings.block_outline_hide_mining && self.breaking_block && self.breaking_pos == Some(pos) {
             return Vec::new();
         }
         let state = self.world.block_at(pos.0, pos.1, pos.2);
@@ -50,11 +56,7 @@ impl App {
             b.min[2] += odz;
             b.max[2] += odz;
         }
-        let (color, half_width) = if self.settings.module_block_outline {
-            (self.settings.block_outline_rgba(), self.settings.block_outline_width_px as f32 / 2.0)
-        } else {
-            vanilla_block_outline(self.gpu.as_ref().map_or(1920.0, |g| g.size().0))
-        };
+        let (color, half_width) = (self.settings.block_outline_rgba(), self.settings.block_outline_width_px as f32 / 2.0);
         let eye = self.camera.position;
         let mut out = Vec::new();
         for shape in boxes {
@@ -99,12 +101,28 @@ impl App {
     //
     // AUGENRELATIV wie die Geisterbloecke (s. ghost_vertices): Blockposition minus Auge in
     // f64, erst das Ergebnis nach f32.
+    //
+    // Eigener Abbau und alle fremden, die in den letzten OTHER_BREAK_TTL gemeldet wurden.
+    // Vanilla raeumt einen Riss ohne Update nach 400 Ticks weg (BlockDestructionProgress).
     pub(crate) fn build_crumbling_vertices(&self) -> Vec<world::mesher::BlockVertex> {
-        if !self.breaking_block || self.breaking_progress <= 0.0 {
-            return Vec::new();
+        let mut out = Vec::new();
+        if self.breaking_block && self.breaking_progress > 0.0 {
+            if let Some(pos) = self.breaking_pos {
+                let stage = ((self.breaking_progress * 10.0) as usize).min(assets::DESTROY_STAGE_COUNT - 1);
+                out.extend(self.crumbling_at(pos, stage));
+            }
         }
-        let Some(pos) = self.breaking_pos else { return Vec::new() };
-        let stage = ((self.breaking_progress * 10.0) as usize).min(assets::DESTROY_STAGE_COUNT - 1);
+        let jetzt = Instant::now();
+        for b in self.others_breaking.values() {
+            if jetzt.duration_since(b.seen) < OTHER_BREAK_TTL {
+                out.extend(self.crumbling_at(b.pos, usize::from(b.stage)));
+            }
+        }
+        out
+    }
+
+    // Die Riss-Stufe auf einem Block (leer, wenn dort Luft ist oder die Stufe fehlt).
+    fn crumbling_at(&self, pos: (i32, i32, i32), stage: usize) -> Vec<world::mesher::BlockVertex> {
         let Some(stage_uv) = self.block_uvs.destroy_stage_rect(stage) else { return Vec::new() };
         let state = self.world.block_at(pos.0, pos.1, pos.2);
         if state == world::chunk::STATE_AIR {
@@ -113,6 +131,20 @@ impl App {
         let base = (DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)) - self.camera.position).as_vec3();
         let block_at = |x: i32, y: i32, z: i32| self.world.block_at(x, y, z);
         world::mesher::block_breaking_vertices(base.into(), pos, state, stage_uv, &self.block_shapes, &block_at)
+    }
+
+    // Block Destruction (Vanilla LevelRenderer.destroyBlockProgress): ein anderes Entity baut
+    // ab. Stufe 0..=9 setzt den Riss, -1 oder >= 10 nimmt ihn weg. Den eigenen Abbau schickt der
+    // Server dem Abbauenden nicht zurueck; er kommt also nur lokal (s. build_crumbling_vertices).
+    pub(crate) fn on_block_destruction(&mut self, breaker: i32, pos: (i32, i32, i32), progress: i8) {
+        if Some(breaker) == self.own_entity_id {
+            return;
+        }
+        if (0..10).contains(&progress) {
+            self.others_breaking.insert(breaker, crate::OtherBreak { pos, stage: progress as u8, seen: Instant::now() });
+        } else {
+            self.others_breaking.remove(&breaker);
+        }
     }
 
     // Die Spielerfigur im Inventar -- Vanillas "Puppe" (InventoryScreen.drawEntity).
@@ -161,6 +193,16 @@ impl App {
 
         let (model, tex) = self.own_player_model_and_texture();
         let (main, off) = self.doll_hand_items();
+        // Mit Elytra im Flug die Flughaltung wie in der 3. Person (Nutzer 2026-11-11; Vanilla
+        // zeichnet auch hier das echte Entity): gekippter Koerper, ausgebreitete Fluegel, mit
+        // der Neigung der Puppe; das Einlenken in Kurven aus dem echten Blick.
+        let tick_progress = self.tick_progress();
+        let glide = self.physics.gliding.then_some(world::Glide {
+            ticks: self.own_gliding_ticks as f32 + tick_progress,
+            pitch_deg: pitch,
+            yaw_deg: self.camera.yaw,
+            velocity: self.own_glide_velocity(tick_progress),
+        });
         let pose = world::entity_model::biped_pose_full(
             head_rel,
             pitch,
@@ -181,19 +223,23 @@ impl App {
                 spear_right: is_spear_item(main),
                 spear_left: is_spear_item(off),
                 use_pose: self.use_pose(self.own_using_item_right_arm(), (main, off), true, self.own_use_ticks as f32, false),
+                glide,
                 ..Default::default()
             },
         );
-        let base = world::entity_transform([0.0, 0.0, 0.0], body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE);
+        let base = match &glide {
+            Some(glide) => world::entity_transform_gliding([0.0, 0.0, 0.0], body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE, glide),
+            None => world::entity_transform([0.0, 0.0, 0.0], body_yaw, 1.0, world::entity_model::PLAYER_MODEL_SCALE),
+        };
 
         let mut out = Vec::with_capacity(512);
         world::emit_entity_model_two_sided(model, &pose, base, tex, ENTITY_BRIGHTNESS, &mut out);
         self.emit_armor(&self.own_armor(), &self.armor_models, &pose, base, &mut out, None, None);
         self.emit_held_items((main, off), blocking_arms(self.own_using_item_right_arm(), (main, off)), self.own_using_item_right_arm(), (0.0, true), (world::Affine::IDENTITY, world::Affine::IDENTITY), model, &pose, base, None, &mut out);
         let own_cape = self.own_uuid.and_then(|uuid| self.cape_texture(&uuid));
-        // Fluegel wie in der 3. Person, in Ruhe angelegt; mit ihnen haengt der Umhang als Bild
+        // Fluegel wie in der 3. Person (angelegt, im Flug ausgebreitet); mit ihnen haengt der Umhang als Bild
         // darauf statt am Rumpf (s. emit_elytra).
-        let elytra = self.emit_elytra(&self.own_armor(), own_cape, None, false, base, &mut out);
+        let elytra = self.emit_elytra(&self.own_armor(), own_cape, glide.as_ref(), false, base, &mut out);
         if let Some(cape_tex) = own_cape.filter(|_| !elytra) {
             // Der Umhang haengt in Ruhe gerade nach unten -- alle drei Winkel null.
             let cape_pose = world::cape_pose(&pose, 0.0, 0.0, 0.0);
@@ -232,6 +278,22 @@ impl App {
     // Nur in der Ego-Ansicht, wo es eine Hand gibt.
     pub(crate) fn hand_debug_scale(&self) -> Option<f32> {
         (self.settings.module_hand_debug && self.perspective.is_first_person() && self.mode == AppMode::World).then_some(0.5)
+    }
+
+    // Vanillas View-Bobbing als Lage der Hand. Gehstrecke und Laufgroesse fuehrt schon der
+    // Umhang mit (ClientAvatarState: walkDist, bob). Reitend setzt Vanilla den Wert auf 0.
+    pub(crate) fn hand_bob(&self, tick_progress: f32) -> world::Affine {
+        if !self.settings.view_model_bobbing || self.own_ride.is_some() {
+            return world::Affine::IDENTITY;
+        }
+        let cape = &self.own_cape;
+        // Vanilla rechnet hier mit der ueber den Tick hinaus fortgesetzten, negierten Strecke.
+        let schritt = cape.distance_moved() - cape.last_distance_moved();
+        let g = -(cape.distance_moved() + schritt * tick_progress) * std::f32::consts::PI;
+        let h = cape.lerp_movement(tick_progress);
+        world::Affine::translation([g.sin() * h * 0.5, -(g.cos() * h).abs(), 0.0])
+            .then(world::rotation_z_deg(g.sin() * h * 3.0))
+            .then(world::rotation_x_deg((g - 0.2).cos().abs() * h * 5.0))
     }
 
     pub(crate) fn build_hand_vertices(&self) -> Vec<world::BlockVertex> {
@@ -283,7 +345,9 @@ impl App {
         let zurueck = schirm.then(drehung(blick));
         // Auch der Glint (eigener Puffer, s. push_glint) entsteht in Weltlage.
         let glint_anfang = self.glint_out.borrow().len();
-        let sway = drehung(blick.transpose()).then(sway);
+        // Hand-Bobbing (Settings::view_model_bobbing): Vanillas Wackeln beim Laufen
+        // (GameRenderer.bobView) steht dort vor der ganzen Hand-Kette; hier nur an der Hand.
+        let sway = drehung(blick.transpose()).then(self.hand_bob(tick_progress)).then(sway);
 
         let mut out = Vec::with_capacity(128);
 

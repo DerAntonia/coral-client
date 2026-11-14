@@ -28,32 +28,20 @@ impl App {
         let (inhalt_r, inhalt_t, inhalt_s) = (rects.len(), texts.len(), sprites.len());
         // Seiten mit Seiten-Scroll: Zeilen werden am Zeilenband beschnitten (s. content_clip),
         // die Reiter darueber nicht.
-        // Die Partikel-Anpassung hat ihre eigene gleitende Liste (s. particle_list_band).
-        let partikel = self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles;
-        let band = (self.screen.settings_page().is_some() && self.mode == AppMode::Menu) || partikel;
-        let mut seiten_fade = if partikel {
-            self.particle_list_band().1
-        } else {
-            ScrollFade::new(SETTINGS_CLIP_TOP, settings_rows_bottom(screen_h), SETTINGS_ROW_H, self.page_scroll().stand, self.page_max_scroll() as f32)
-        };
-        // Steht ein Abschnitt genau oben, ist darueber nichts von ihm abgeschnitten: oben kein
-        // Verlauf. Er blendet ueber eine Zeile Abstand zum naechsten Abschnittsanfang ein.
-        if let Some(page) = self.screen.settings_page() {
-            let stand = self.page_scroll().stand;
-            let abstand = page.sections.iter().map(|&(_, row)| (stand - page.section_stand(row)).abs()).fold(stand.abs(), f32::min);
-            seiten_fade.edge_top = 1.0 - (1.0 - crate::SCROLL_FADE_EDGE) * abstand.clamp(0.0, 1.0);
-        }
+        let band = self.screen.settings_page().is_some() && self.mode == AppMode::Menu;
+        let seiten_fade = self.page_fade();
         if band {
             push_clip_marker(&mut rects, &mut texts, true);
             push_fade_marker(&mut rects, &mut texts, Some(seiten_fade));
         }
 
-        // Nach einem Klick auf einen Suchtreffer leuchtet seine Zeile kurz auf.
+        // Nach einem Klick auf einen Suchtreffer leuchtet seine Zeile kurz auf -- im selben Gelb
+        // wie ein per Reiter angesprungener Abschnitt (s. push_section_flash).
         if let Some((SearchPlace::Page(seite, row), seit)) = self.search_flash {
             let k = 1.0 - seit.elapsed().as_secs_f32() / SEARCH_FLASH_SECS;
             if seite == self.screen && k > 0.0 {
                 let r = Rect { x: SETTINGS_LABEL_X - 12.0, y: settings_row_y(row) - 4.0, w: SETTINGS_CTRL_X - SETTINGS_LABEL_X + SLIDER_SPAN_W + 24.0, h: SETTINGS_CTRL_H + 8.0 };
-                rects.push(UiRect::rounded(r, theme::with_alpha(theme::get(theme::Slot::Accent), 0.35 * k.min(1.0)), 6.0));
+                rects.push(UiRect::rounded(r, theme::with_alpha(theme::get(theme::Slot::Warning), 0.35 * k.min(1.0)), 6.0));
             }
         }
         // Nach einem Klick auf einen Reiter leuchtet sein Abschnitt kurz auf.
@@ -132,11 +120,22 @@ impl App {
             if let Some(c) = Self::choice_of(button.action) {
                 let offen = self.dropdown_active().is_some_and(|d| d.choice == c);
                 self.push_dropdown_face(gpu, rect, &button.label, color, button.scale, offen, &mut rects, &mut texts);
-                zoom_pressed(zoom, &mut rects[r0..], &mut texts);
+                crate::zoom_pressed(zoom, &mut rects[r0..], &mut texts);
                 continue;
             }
+            // Tastennamen und H/T auf den Belegungsknoepfen behalten ihre Grossbuchstaben, auch
+            // ohne "Grossbuchstaben" (Nutzer 2026-11-11).
+            let gross = matches!(button.action, ButtonAction::Rebind(..) | ButtonAction::ToggleKeybindMode(_));
+            if gross {
+                gpu.keep_capitals.set(true);
+                push_keep_capitals_marker(&mut texts, true);
+            }
             texts.push(gpu.centered_text(rect, button.label, color, button.scale));
-            zoom_pressed(zoom, &mut rects[r0..], &mut texts);
+            if gross {
+                gpu.keep_capitals.set(false);
+                push_keep_capitals_marker(&mut texts, false);
+            }
+            crate::zoom_pressed(zoom, &mut rects[r0..], &mut texts);
             if ueber_band {
                 push_clip_marker(&mut rects, &mut texts, true);
                 push_fade_marker(&mut rects, &mut texts, Some(seiten_fade));
@@ -208,32 +207,18 @@ impl App {
                 gruppen.insert(0, UiOverlayGroup { rects: r, texts: t, sprites: s, pivot: (0.0, 0.0), angle: 0.0, clip: None });
                 gruppen.insert(0, self.build_server_list(gpu));
             } else {
+                let (r0, t0, s0) = (rects.len(), texts.len(), sprites.len());
                 self.build_chrome(gpu, &mut rects, &mut texts, &mut sprites);
+                // Gerade pausiert: die Leiste gleitet von oben herein.
+                let dy = self.pause_bar_slide.map_or(0.0, |seit| pause_bar_slide_dy(seit.elapsed().as_secs_f32()));
+                if dy != 0.0 {
+                    rects[r0..].iter_mut().for_each(|r| r.rect.y += dy);
+                    texts[t0..].iter_mut().for_each(|t| t.y += dy);
+                    sprites[s0..].iter_mut().flat_map(|sp| sp.corners.iter_mut()).for_each(|c| c[1] += dy);
+                }
             }
         }
 
-        // Kontextabhaengige Hinweiszeile unten. Verschiebemodus zuerst geprueft: raeumt
-        // wirklich ALLES an Text weg (auch diese Zeile), Enter/Escape bestaetigen stumm.
-        let hint = if self.screen == MenuScreen::HudEditor {
-            ""
-        } else {
-            match (self.screen, self.conn_status) {
-                (MenuScreen::Main, ConnStatus::Disconnected) => "Alt+F4 = Beenden",
-                (MenuScreen::Main, _) => "Esc = zurück ins Spiel  |  Alt+F4 = Beenden",
-                (MenuScreen::Connect, _) if self.server_edit.is_some() => {
-                    "Feld anklicken oder Tab zum Wechseln  |  Enter = speichern  |  Esc = abbrechen"
-                }
-                (MenuScreen::Connect, _) => {
-                    "Server anklicken = verbinden  |  ziehen = verschieben  |  Rechtsklick = bearbeiten/löschen"
-                }
-                (MenuScreen::Death, _) => "Respawn zum Wiederbeleben  |  Alt+F4 = Beenden",
-                _ => "Esc = zurück  |  Alt+F4 = Beenden",
-            }
-        };
-        // Einstellungen und Server-Liste kommen ohne Hinweiszeile aus.
-        if !einstellungen && self.screen != MenuScreen::Connect {
-            texts.push(UiText { text: hint.to_string(), x: UI_MARGIN, y: screen_h - 36.0, color: theme::text_3(), scale: UI_SCALE_SMALL });
-        }
         // Perf-Overlay in normalen Menue-Screens mitzeichnen; im HUD-Editor uebernimmt das
         // build_hud_editor (verschiebbare, hervorgehobene Variante).
         if self.screen != MenuScreen::HudEditor {
@@ -366,6 +351,8 @@ impl App {
                     Some(ARMOR_TRIMS_TOOLTIP)
                 } else if settings_row_hover_rect(VIEW_MODEL_ROW).contains(cx, cy) {
                     Some(VIEW_MODEL_TOOLTIP)
+                } else if settings_row_hover_rect(VIEW_MODEL_BOB_ROW).contains(cx, cy) {
+                    Some(VIEW_MODEL_BOB_TOOLTIP)
                 } else if settings_row_hover_rect(DEATH_ANIM_ROW).contains(cx, cy) {
                     Some(DEATH_ANIM_TOOLTIP)
                 } else if settings_row_hover_rect(ANIM_ROW).contains(cx, cy) {
@@ -376,8 +363,14 @@ impl App {
                     Some(ENTITY_DISTANCE_TOOLTIP)
                 } else if settings_row_hover_rect(BLOCK_ENTITY_DISTANCE_ROW).contains(cx, cy) {
                     Some(BLOCK_ENTITY_DISTANCE_TOOLTIP)
-                } else if settings_row_hover_rect(LOD_DETAIL_ROW).contains(cx, cy) {
-                    Some(LOD_DETAIL_TOOLTIP)
+                } else if settings_row_hover_rect(PARTICLE_DISTANCE_ROW).contains(cx, cy) {
+                    Some(PARTICLE_DISTANCE_TOOLTIP)
+                } else if settings_row_hover_rect(PARTICLE_FADE_ROW).contains(cx, cy) {
+                    Some(PARTICLE_FADE_TOOLTIP)
+                } else if settings_row_hover_rect(ENTITY_NEAR_ROW).contains(cx, cy) {
+                    Some(ENTITY_NEAR_TOOLTIP)
+                } else if settings_row_hover_rect(CHUNK_FADE_ROW).contains(cx, cy) {
+                    Some(CHUNK_FADE_TOOLTIP)
                 } else if settings_row_hover_rect(SHOULDER_ROW).contains(cx, cy) || settings_row_hover_rect(SHOULDER_OFFSET_ROW).contains(cx, cy) {
                     Some(SHOULDER_TOOLTIP)
                 } else if settings_row_hover_rect(SHOULDER_CROSSHAIR_ROW).contains(cx, cy) {
@@ -516,6 +509,8 @@ impl App {
                     ControlsRow::CursorSens => Some(CURSOR_SENSITIVITY_TOOLTIP),
                     ControlsRow::CursorSize => Some(CURSOR_SIZE_TOOLTIP),
                     ControlsRow::CursorWidth => Some(CURSOR_WIDTH_TOOLTIP),
+                    ControlsRow::CursorOutline => Some(CURSOR_OUTLINE_TOOLTIP),
+                    ControlsRow::CursorFill => Some(CURSOR_FILL_TOOLTIP),
                     ControlsRow::HoldConfirm => Some(HOLD_CONFIRM_TOOLTIP),
                     ControlsRow::ReconnectHold => Some(RECONNECT_HOLD_TOOLTIP),
                     ControlsRow::CursorCircle => Some(CURSOR_CIRCLE_TOOLTIP),
@@ -535,15 +530,4 @@ impl App {
             _ => None,
         }
     }
-}
-
-// Ende eines gedrueckten Knopfs (s. build_menu_ui): seine Flaechen zur Mitte hin verkleinern,
-// fuer den Text endet der Zoom.
-fn zoom_pressed(zoom: Option<(f32, f32, f32)>, rects: &mut [UiRect], texts: &mut Vec<UiText>) {
-    let Some((mx, my, s)) = zoom else { return };
-    // Marker (leere Flaechen) tragen Daten in x/y, die bleiben.
-    for r in rects.iter_mut().filter(|r| r.rect.w != 0.0 || r.rect.h != 0.0) {
-        r.rect = Rect { x: mx + (r.rect.x - mx) * s, y: my + (r.rect.y - my) * s, w: r.rect.w * s, h: r.rect.h * s };
-    }
-    crate::push_zoom_marker(texts, None);
 }

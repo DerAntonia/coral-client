@@ -656,6 +656,35 @@ impl Inventory {
         Some(Prediction { modified: geaendert, cursor: Some(cursor), hashable })
     }
 
+    // Wuerde ein Doppelklick (PICKUP_ALL) auf `slot` beim Server ueberhaupt etwas einsammeln?
+    //
+    // Getrennt von predict_pickup_all, weil die Vorhersage nur bei Kisten und im eigenen
+    // Inventar rechnet -- in Werkbank, Ofen usw. lieferte sie immer None, und der Doppelklick
+    // fiel dort zum gewoehnlichen Klick zurueck. Diese Pruefung gilt in jedem Menue:
+    // Cursor belegt und nicht voll, geklickter Slot leer, und irgendwo liegt ein passender
+    // Stapel. Ausgenommen die Ergebnisfelder, die Vanilla per canTakeItemForPickAll ausschliesst
+    // (InventoryMenu, CraftingMenu, SmithingMenu, StonecutterMenu, CartographyTableMenu);
+    // beim Handel sammelt Vanilla gar nicht (MerchantMenu).
+    pub fn pickup_all_collects(&self, slot: usize) -> bool {
+        let Some(cursor) = self.cursor.as_ref() else { return false };
+        if self.slot_stack(slot).is_some() || cursor.count >= world::item_components::max_stack(cursor) {
+            return false;
+        }
+        let ergebnis: Option<usize> = match self.open.as_ref().map(|c| c.screen_type) {
+            None | Some(MENU_CRAFTING) => Some(0),
+            Some(MENU_SMITHING) => Some(3),
+            Some(MENU_STONECUTTER) => Some(1),
+            Some(MENU_CARTOGRAPHY) => Some(2),
+            Some(MENU_MERCHANT) => return false,
+            Some(_) => None,
+        };
+        let (_, _, slots) = self.active();
+        slots
+            .iter()
+            .enumerate()
+            .any(|(i, s)| i != slot && Some(i) != ergebnis && s.as_ref().is_some_and(|s| s.stackable_with(cursor)))
+    }
+
     // Vorhersage fuers Stapel-Verschieben (Shift-Klick, SlotActionType.QUICK_MOVE).
     //
     // Ohne sie wartete JEDER Shift-Klick auf die Serverantwort, bevor sich etwas bewegte --
@@ -1059,7 +1088,10 @@ pub const MENU_FURNACE: i32 = 14;
 pub const MENU_GRINDSTONE: i32 = 15;
 pub const MENU_LECTERN: i32 = 17;
 pub const MENU_MERCHANT: i32 = 19;
+pub const MENU_SMITHING: i32 = 21;
 pub const MENU_SMOKER: i32 = 22;
+pub const MENU_CARTOGRAPHY: i32 = 23;
+pub const MENU_STONECUTTER: i32 = 24;
 
 // Handelsbildschirm (MerchantScreen): 276 breit statt 176, links die Angebotsliste, rechts
 // zwei Bezahlslots und das Ergebnis; das Spielerinventar ist um 100 nach rechts gerueckt.
@@ -1574,6 +1606,24 @@ mod tests {
         // Auf einem BELEGTEN Slot sammelt Vanilla nicht ein.
         inv.cursor = Some(ItemStack::new(1, 1));
         assert!(inv.predict_click(PLAYER_MAIN_START as i16, 0, protocol::packets::CLICK_MODE_PICKUP_ALL).is_none());
+    }
+
+    // Werkbank: dort rechnet die Vorhersage nicht, der Doppelklick muss trotzdem greifen --
+    // nur nicht aus dem Ergebnisfeld (CraftingMenu.canTakeItemForPickAll).
+    #[test]
+    fn doppelklick_greift_in_der_werkbank() {
+        let mut inv = Inventory::default();
+        inv.open_screen(3, MENU_CRAFTING, "Werkbank".into());
+        inv.set_content(3, 1, vec![None; 46]);
+        inv.cursor = Some(ItemStack::new(1, 1));
+        let slots = &mut inv.open.as_mut().unwrap().slots;
+        slots[0] = Some(ItemStack::new(1, 4)); // Ergebnisfeld zaehlt nicht
+        assert!(!inv.pickup_all_collects(20), "nur das Ergebnisfeld hat dieselbe Sorte");
+        inv.open.as_mut().unwrap().slots[30] = Some(ItemStack::new(1, 20));
+        assert!(inv.pickup_all_collects(20), "Spielerinventar in der Werkbank");
+        assert!(!inv.pickup_all_collects(30), "belegter Slot sammelt nicht");
+        inv.cursor = None;
+        assert!(!inv.pickup_all_collects(20), "leerer Zeiger sammelt nicht");
     }
 
     // Pfeile mit Trank tragen immer gesetzte Components. Gleiche Components (gleiche Bytes)

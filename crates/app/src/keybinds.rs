@@ -88,6 +88,8 @@ pub(crate) enum KeyBindAction {
     InspectHeld,
     // Debug-Modul Hand-Debug an/aus (s. ModuleId::HandDebug).
     ToggleHandDebug,
+    // coral-clip: die letzten Sekunden als Aufnahme speichern (s. app/clip.rs). Einmal-Aktion.
+    SaveClip,
     // Zuschauer: Fluggeschwindigkeit eine Stufe runter/hoch (s. SPECTATOR_SPEED_STEPS).
     // Standardmaessig unbelegt, das Mausrad tut dasselbe.
     SpectatorSlower,
@@ -101,7 +103,7 @@ pub(crate) enum KeyBindAction {
 }
 
 impl KeyBindAction {
-    pub(crate) const ALL: [Self; 51] = [
+    pub(crate) const ALL: [Self; 52] = [
         Self::Forward,
         Self::Backward,
         Self::Left,
@@ -153,6 +155,7 @@ impl KeyBindAction {
         Self::Reconnect,
         Self::InspectHeld,
         Self::ToggleHandDebug,
+        Self::SaveClip,
     ];
 
     // Aktionen, die NUR bei offenem Inventar/Container gelten. Sie duerfen sich eine Taste
@@ -244,6 +247,7 @@ impl KeyBindAction {
             Self::InspectItem => "Inventar: Item untersuchen",
             Self::InspectHeld => "Item in der Hand ansehen",
             Self::ToggleHandDebug => "Hand-Debug an/aus",
+            Self::SaveClip => "Clip speichern (Modul)",
             Self::PickBlock => "Block auswählen",
             Self::SpectatorSlower => "Zuschauer: langsamer",
             Self::SpectatorFaster => "Zuschauer: schneller",
@@ -288,6 +292,7 @@ impl KeyBindAction {
             Self::InspectItem => "Item untersuchen",
             Self::InspectHeld => "Item ansehen",
             Self::ToggleHandDebug => "Hand-Debug",
+            Self::SaveClip => "Clip",
             Self::SpectatorSlower => "Zuschauer langsamer",
             Self::SpectatorFaster => "Zuschauer schneller",
             Self::Zoom => "Zoom",
@@ -339,6 +344,7 @@ impl KeyBindAction {
             Self::Reconnect => 46,
             Self::InspectHeld => 47,
             Self::ToggleHandDebug => 48,
+            Self::SaveClip => 51,
             Self::Freelook => 49,
             Self::SwapShoulder => 50,
             Self::VoiceMute => 38,
@@ -386,6 +392,7 @@ impl KeyBindAction {
             Self::InspectItem => "inspect_item",
             Self::InspectHeld => "inspect_held",
             Self::ToggleHandDebug => "toggle_hand_debug",
+            Self::SaveClip => "save_clip",
             Self::PickBlock => "pick_block",
             Self::SpectatorSlower => "spectator_slower",
             Self::SpectatorFaster => "spectator_faster",
@@ -421,9 +428,39 @@ pub(crate) struct Keybinds {
     // ueber Aktionen UND Slots indiziert wird -- benannte Felder brauchten dafuer zwei
     // ineinandergeschachtelte match-Bloecke.
     pub(crate) slots: [[Option<Bind>; MAX_BINDS_PER_ACTION]; KeyBindAction::ALL.len()],
+    // Zweite Taste je Belegung (Modifier, im Fenster "Erweitert" rechts neben ihr): steht eine
+    // da, greift die Belegung nur, solange sie zusammen mit ihr unten ist. Gleiche Indizes wie
+    // `slots`; zu einem leeren Slot gehoert nie ein Modifier.
+    pub(crate) mods: [[Option<Bind>; MAX_BINDS_PER_ACTION]; KeyBindAction::ALL.len()],
 }
 
 impl Keybinds {
+    // Belegungen einer Aktion samt Modifier, in Slot-Reihenfolge.
+    fn pairs(&self, action: KeyBindAction) -> impl Iterator<Item = (Bind, Option<Bind>)> + '_ {
+        let i = action.index();
+        self.slots[i].iter().zip(self.mods[i]).filter_map(|(b, m)| b.map(|b| (b, m)))
+    }
+
+    pub(crate) fn modifier_at(&self, action: KeyBindAction, slot: usize) -> Option<Bind> {
+        self.mods[action.index()].get(slot).copied().flatten()
+    }
+
+    // Loest der Druck von `bind` diese Aktion aus? Ja, wenn eine Belegung auf ihr liegt und ihr
+    // Modifier (falls sie einen hat) gerade unten ist.
+    pub(crate) fn matches(&self, action: KeyBindAction, bind: Bind, down: impl Fn(Bind) -> bool) -> bool {
+        self.pairs(action).any(|(b, m)| b == bind && m.is_none_or(&down))
+    }
+
+    // Ist die Aktion gerade gehalten -- eine Belegung samt Modifier unten?
+    pub(crate) fn held(&self, action: KeyBindAction, down: impl Fn(Bind) -> bool) -> bool {
+        self.pairs(action).any(|(b, m)| down(b) && m.is_none_or(&down))
+    }
+
+    // Wurde mit `released` der Modifier einer Belegung losgelassen, deren Haupttaste noch unten
+    // ist? Dann endet die Aktion wie beim Loslassen der Haupttaste.
+    pub(crate) fn modifier_released(&self, action: KeyBindAction, released: Bind, down: impl Fn(Bind) -> bool) -> bool {
+        self.pairs(action).any(|(b, m)| m == Some(released) && down(b))
+    }
     // Alle Eingaben einer Aktion, in Slot-Reihenfolge.
     pub(crate) fn binds(&self, action: KeyBindAction) -> impl Iterator<Item = Bind> + '_ {
         self.slots[action.index()].iter().flatten().copied()
@@ -446,22 +483,48 @@ impl Keybinds {
 
     // Belegt einen Slot. Eine Taste darf mehreren Aktionen gehoeren (apply_bind loest dann
     // alle aus, wie Vanilla). Nur innerhalb derselben Aktion faellt eine doppelte Eingabe weg.
+    // Eine neue Haupttaste behaelt den Modifier des Slots; doppelt ist nur dieselbe Taste mit
+    // demselben Modifier.
     pub(crate) fn set_at(&mut self, action: KeyBindAction, slot: usize, bind: Bind) {
         if slot >= MAX_BINDS_PER_ACTION {
             return;
         }
-        for entry in &mut self.slots[action.index()] {
-            if *entry == Some(bind) {
-                *entry = None;
-            }
-        }
-        self.slots[action.index()][slot] = Some(bind);
+        let i = action.index();
+        let modifier = self.mods[i][slot].filter(|&m| m != bind);
+        self.drop_duplicates(action, slot, bind, modifier);
+        self.slots[i][slot] = Some(bind);
+        self.mods[i][slot] = modifier;
         self.compact(action);
     }
 
+    // Modifier eines belegten Slots setzen oder (None) entfernen. Die Haupttaste selbst kann
+    // nicht ihr eigener Modifier sein.
+    pub(crate) fn set_modifier_at(&mut self, action: KeyBindAction, slot: usize, modifier: Option<Bind>) {
+        let i = action.index();
+        let Some(bind) = self.slots[i].get(slot).copied().flatten() else { return };
+        if modifier == Some(bind) {
+            return;
+        }
+        self.drop_duplicates(action, slot, bind, modifier);
+        self.mods[i][slot] = modifier;
+        self.compact(action);
+    }
+
+    // Andere Slots der Aktion mit genau dieser Taste und diesem Modifier leeren.
+    fn drop_duplicates(&mut self, action: KeyBindAction, slot: usize, bind: Bind, modifier: Option<Bind>) {
+        let i = action.index();
+        for s in (0..MAX_BINDS_PER_ACTION).filter(|&s| s != slot) {
+            if self.slots[i][s] == Some(bind) && self.mods[i][s] == modifier {
+                self.slots[i][s] = None;
+                self.mods[i][s] = None;
+            }
+        }
+    }
+
     pub(crate) fn remove_at(&mut self, action: KeyBindAction, slot: usize) {
-        if let Some(entry) = self.slots[action.index()].get_mut(slot) {
-            *entry = None;
+        if slot < MAX_BINDS_PER_ACTION {
+            self.slots[action.index()][slot] = None;
+            self.mods[action.index()][slot] = None;
         }
         self.compact(action);
     }
@@ -469,9 +532,11 @@ impl Keybinds {
     #[allow(dead_code)] // bleibt fuer den Fall, dass eine Taste wirklich ueberall weg soll
     pub(crate) fn remove_bind_everywhere(&mut self, bind: Bind) {
         for action in KeyBindAction::ALL {
-            for entry in &mut self.slots[action.index()] {
-                if *entry == Some(bind) {
-                    *entry = None;
+            let i = action.index();
+            for s in 0..MAX_BINDS_PER_ACTION {
+                if self.slots[i][s] == Some(bind) {
+                    self.slots[i][s] = None;
+                    self.mods[i][s] = None;
                 }
             }
             self.compact(action);
@@ -481,18 +546,20 @@ impl Keybinds {
     // Luecken schliessen, damit Slot n+1 nie belegt ist, waehrend Slot n frei ist -- die
     // Tabelle zeichnet die Slots der Reihe nach, ein Loch saehe aus wie ein Fehler.
     pub(crate) fn compact(&mut self, action: KeyBindAction) {
-        let row = &mut self.slots[action.index()];
-        let mut packed = [None; MAX_BINDS_PER_ACTION];
-        for (i, bind) in row.iter().flatten().copied().enumerate() {
-            packed[i] = Some(bind);
+        let i = action.index();
+        let (mut slots, mut mods) = ([None; MAX_BINDS_PER_ACTION], [None; MAX_BINDS_PER_ACTION]);
+        for (s, (bind, modifier)) in self.pairs(action).enumerate() {
+            slots[s] = Some(bind);
+            mods[s] = modifier;
         }
-        *row = packed;
+        self.slots[i] = slots;
+        self.mods[i] = mods;
     }
 
     // Kein festes Array mehr ueber ALLE Aktionen: die Inventar-Aktionen haben bewusst keine
     // eigene Standardtaste (s. inventory_fallback), die Liste ist also kuerzer als ALL.
     pub(crate) fn from_defaults<const N: usize>(defaults: [(KeyBindAction, Bind); N]) -> Self {
-        let mut kb = Self { slots: [[None; MAX_BINDS_PER_ACTION]; KeyBindAction::ALL.len()] };
+        let mut kb = Self { slots: [[None; MAX_BINDS_PER_ACTION]; KeyBindAction::ALL.len()], mods: [[None; MAX_BINDS_PER_ACTION]; KeyBindAction::ALL.len()] };
         for (action, bind) in defaults {
             kb.slots[action.index()][0] = Some(bind);
         }
@@ -537,6 +604,8 @@ impl Default for Keybinds {
             (KeyBindAction::InspectHeld, Bind::Key(KeyCode::KeyG)),
             // Bei Vanilla unbelegt, neben dem Frame-Profiler (F6).
             (KeyBindAction::ToggleHandDebug, Bind::Key(KeyCode::F7)),
+            // Bei Vanilla unbelegt, neben dem Hand-Debug (F7).
+            (KeyBindAction::SaveClip, Bind::Key(KeyCode::F8)),
             // Wie bei Simple Voice Chat: M stumm, N taub; Fluestern ab Werk unbelegt.
             (KeyBindAction::VoiceMute, Bind::Key(KeyCode::KeyM)),
             (KeyBindAction::VoiceDeafen, Bind::Key(KeyCode::KeyN)),
@@ -796,6 +865,17 @@ impl BindMouse {
     }
 }
 
+// Fenster "Erweitert" (s. App::keybind_advanced_layout), Bildschirmkoordinaten.
+pub(crate) struct KeybindAdvancedLayout {
+    pub(crate) window: crate::Rect,
+    // Je Belegung ihr Feld und rechts daneben das ihres Modifiers.
+    pub(crate) binds: Vec<crate::Rect>,
+    pub(crate) modifiers: Vec<crate::Rect>,
+    // "+" fuer eine weitere Belegung; None, wenn alle Plaetze voll sind.
+    pub(crate) plus: Option<crate::Rect>,
+    pub(crate) done: crate::Rect,
+}
+
 // Wie viele Eingaben eine Aktion tragen kann. Die Seite zeigt je Aktion nur die erste, alle
 // stehen im Fenster "Erweitert" (s. build_keybind_advanced).
 pub(crate) const MAX_BINDS_PER_ACTION: usize = 5;
@@ -820,6 +900,15 @@ pub(crate) fn bind_label(bind: Bind) -> String {
 // Lesbarer Name fuer die Anzeige: "A" statt "KeyA", "Strg links" statt "ControlLeft".
 // Satzzeichen-Tasten nach deutscher Belegung beschriftet (KeyCode ist die physische Lage, die
 // Bezeichnung auf der Taste haengt am Layout).
+// Eine Belegung zur Anzeige, mit ihrem Modifier davor: "Strg links + E".
+pub(crate) fn slot_display(kb: &Keybinds, action: KeyBindAction, slot: usize) -> Option<String> {
+    let bind = kb.bind_at(action, slot)?;
+    Some(match kb.modifier_at(action, slot) {
+        Some(m) => format!("{} + {}", bind_display(m), bind_display(bind)),
+        None => bind_display(bind),
+    })
+}
+
 pub(crate) fn bind_display(bind: Bind) -> String {
     let Bind::Key(code) = bind else { return bind_label(bind) };
     let name = keycode_name(code);

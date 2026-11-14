@@ -25,7 +25,7 @@ pub const GAP_MAX: i32 = 16;
 // Groesse der Zahl in Prozent ihrer Grundgroesse (Settings::armor_hud_number_scale).
 pub const NUMBER_SCALE_MIN: u32 = 50;
 pub const NUMBER_SCALE_MAX: u32 = 300;
-pub const NUMBER_SCALE_STEP: u32 = 10;
+pub const NUMBER_SCALE_STEP: u32 = 5;
 
 pub const fn is_vertical(layout: u8) -> bool {
     layout == LAYOUT_VERTICAL

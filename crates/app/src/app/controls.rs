@@ -1,6 +1,6 @@
 // Steuerung: Tastenbelegungen, Maus, Hotbar, Klicks im Inventar und im Rezeptbuch, Scrollen.
 
-use crate::{theme, App, AppMode, latency_tuning, ui_sound, MenuScreen, ConnStatus, InputKind, KeyBindAction, KeybindMode, Perspective, Bind, BindMouse, KeyCode, Instant, INVENTORY_DOUBLE_CLICK, CAPS_LOCK_RECHECK, Duration, AUTOCLICK_ACTIONS, SHOULDER_AIM_HOLD, GAME_MODE_CREATIVE, inventory, PendingInputAction, InventoryDrag, quick_craft_button, QuickCraftPending, QUICK_CRAFT_PENDING_MAX, zufallswert, Rect, recipe_book, restart_swing, creative, GAME_MODE_SPECTATOR, VoiceFlag, keycode_name, controls_rows, ControlsRow, keybind_rect, settings_max_first, settings_rows_bottom, smooth_scroll, UI_SCREEN, THEME_TILE_COUNT, SETTINGS_SCROLL_FIRST, SETTINGS_SCROLL_BOTTOM, store_section_starts, SETTINGS_CLIP_TOP, store_content_clip, SETTINGS_SCROLL_ROWS_PER_NOTCH, ScrollList, settings_row_y, SETTINGS_ROW_H, SETTINGS_FIRST_Y, DROPDOWN_MAX_ITEMS, settings_row_pos, DROPDOWN_ITEM_H, scroll_inertia_rate, SettingsPage, zoom_sens_factor, camera_sensitivities, MAX_PITCH, server_panel, skin_tab, skin_column_rect, VOLUME_WHEEL_STEP, VOLUME_DISPLAY_HOLD, VOLUME_DISPLAY_FADE, VOLUME_KEY_REPEAT, VOLUME_KEY_REPEAT_DELAY, UiOverlay, cursor_fx, VOLUME_DISPLAY_ENTER, VOLUME_DISPLAY_W, NOTIFICATION_PADDING, UI_SCALE_SMALL, UI_SCALE_NORMAL, VOLUME_BAR_H, VOLUME_DISPLAY_MARGIN, UiOverlayGroup, UiRect, UiText, volume_text, physics, CursorFxFrame, ZOOM_SMOOTH_SECS, resolve_snap_tap};
+use crate::{theme, App, AppMode, latency_tuning, ui_sound, MenuScreen, ConnStatus, InputKind, KeyBindAction, KeybindMode, Perspective, Bind, BindMouse, KeyCode, Instant, INVENTORY_DOUBLE_CLICK, CAPS_LOCK_RECHECK, Duration, AUTOCLICK_ACTIONS, SHOULDER_AIM_HOLD, GAME_MODE_CREATIVE, inventory, PendingInputAction, InventoryDrag, quick_craft_button, QuickCraftPending, QUICK_CRAFT_PENDING_MAX, zufallswert, Rect, recipe_book, restart_swing, creative, GAME_MODE_SPECTATOR, VoiceFlag, keycode_name, controls_rows, ControlsRow, keybind_rect, settings_max_first, settings_rows_bottom, smooth_scroll, UI_SCREEN, THEME_TILE_COUNT, SETTINGS_SCROLL_FIRST, SETTINGS_SCROLL_BOTTOM, store_section_starts, SETTINGS_CLIP_TOP, store_content_clip, SETTINGS_SCROLL_ROWS_PER_NOTCH, ScrollList, SETTINGS_ROW_H, SETTINGS_FIRST_Y, DROPDOWN_MAX_ITEMS, settings_row_pos, DROPDOWN_ITEM_H, scroll_inertia_rate, SettingsPage, zoom_sens_factor, camera_sensitivities, MAX_PITCH, server_panel, skin_tab, skin_column_rect, VOLUME_WHEEL_STEP, VOLUME_DISPLAY_HOLD, VOLUME_DISPLAY_FADE, VOLUME_KEY_REPEAT, VOLUME_KEY_REPEAT_DELAY, UiOverlay, cursor_fx, VOLUME_DISPLAY_ENTER, VOLUME_DISPLAY_W, NOTIFICATION_PADDING, UI_SCALE_SMALL, UI_SCALE_NORMAL, VOLUME_BAR_H, VOLUME_DISPLAY_MARGIN, UiOverlayGroup, UiRect, UiText, volume_text, physics, CursorFxFrame, ZOOM_SMOOTH_SECS, resolve_snap_tap, Keybinds, bind_name};
 
 mod navigation;
 mod key_actions;
@@ -27,11 +27,43 @@ impl App {
     // CursorMoved schriebe sonst die alte Stelle zurueck. Ohne Fokus nie: dann gehoert der
     // Zeiger dem Desktop, und ein Server, der ein Fenster oeffnet, riss ihn sonst mitten aus
     // einem anderen Programm.
+    // Massstab der Menues an Modus und Fensterhoehe angleichen (s. GpuState::ui_scale), vor
+    // jedem Ereignis: Menues sehen bei jeder Aufloesung gleich aus, auch das Modul-Menue im
+    // Spiel. Das Spiel selbst (HUD, Inventar) und der HUD-Editor, der das HUD in echter Groesse
+    // zeigt, rechnen in echten Pixeln. Der Zeiger bleibt dabei an seiner Stelle auf dem Schirm.
+    pub(crate) fn sync_ui_scale(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let menue = match self.mode {
+            AppMode::Menu => self.screen != MenuScreen::HudEditor,
+            AppMode::World => self.module_menu_open,
+        };
+        let neu = if menue { Self::world_menu_scale(gpu) } else { 1.0 };
+        let alt = gpu.ui_scale.replace(neu);
+        gpu.cursor_scale.set(neu);
+        if alt != neu && self.cursor_pos.0.is_finite() && self.cursor_pos.1.is_finite() {
+            self.cursor_pos = (self.cursor_pos.0 * alt / neu, self.cursor_pos.1 * alt / neu);
+        }
+    }
+
+    // Massstab der Menue-Teile, die im Spiel zwischen das HUD gezeichnet werden (Modul-Menue,
+    // Benachrichtigungen): derselbe wie im Menue.
+    //
+    // Zum Pruefen ohne zweiten Bildschirm: CORAL_MENU_SCALE=1.25 erzwingt einen Massstab, das
+    // Menue rechnet dann wie auf einem entsprechend kleineren Schirm und wird vergroessert
+    // gezeichnet -- alle Umrechnungen (Zeiger, Zuschnitt, Schrift) laufen wie bei QHD.
+    pub(crate) fn world_menu_scale(gpu: &crate::GpuState) -> f32 {
+        static ERZWUNGEN: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+        let erzwungen = *ERZWUNGEN.get_or_init(|| std::env::var("CORAL_MENU_SCALE").ok()?.parse::<f32>().ok().filter(|s| (0.25..=4.0).contains(s)));
+        erzwungen.unwrap_or_else(|| crate::menu_scale_for(gpu.real_size().1))
+    }
+
     pub(crate) fn place_cursor(&mut self, pos: (f32, f32)) {
         self.cursor_pos = pos;
         if self.focused && !self.owns_mouse() {
             if let Some(gpu) = self.gpu.as_ref() {
-                let _ = gpu.window.set_cursor_position(winit::dpi::PhysicalPosition::new(f64::from(pos.0), f64::from(pos.1)));
+                // Das Fenstersystem zaehlt echte Pixel (s. GpuState::ui_scale).
+                let s = gpu.ui_scale.get();
+                let _ = gpu.window.set_cursor_position(winit::dpi::PhysicalPosition::new(f64::from(pos.0 * s), f64::from(pos.1 * s)));
             }
         }
     }

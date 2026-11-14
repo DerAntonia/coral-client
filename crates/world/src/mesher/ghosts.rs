@@ -105,7 +105,7 @@ pub(super) fn rgb_f32(rgb: u32) -> [f32; 3] {
 pub fn block_display_vertices(state: u32, uvs: &BlockUvs, shapes: &BlockShapes, cross: &CrossBlocks) -> Vec<BlockVertex> {
     let name = block_name(state).unwrap_or("");
     let farbe = |rgb: u32| [((rgb >> 16) & 0xff) as f32 / 255.0, ((rgb >> 8) & 0xff) as f32 / 255.0, (rgb & 0xff) as f32 / 255.0];
-    let (tint, nur_oben) = match tint_kind(name) {
+    let (tint, nur_oben) = match tint_kind_of_state(state, name) {
         TintKind::None => ([1.0; 3], false),
         TintKind::GrassTop => (farbe(0x91BD59), true),
         TintKind::GrassAll => (farbe(0x91BD59), false),

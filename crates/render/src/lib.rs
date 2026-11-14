@@ -12,6 +12,7 @@ pub mod hand_blur;
 pub mod lod_renderer;
 pub mod motion_blur;
 pub mod occlusion;
+pub mod render_order;
 pub mod sight;
 pub mod skinning;
 // Shader-Pfad (veraltet, ruht): nur mit Feature shader_path gebaut.

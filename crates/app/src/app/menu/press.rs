@@ -60,6 +60,22 @@ impl App {
         true
     }
 
+    // Modul-Menue: der Knopf unter dem Zeiger zieht sich beim Druck ein wie auf den
+    // Einstellungsseiten; ausgeloest wird dort weiter beim Druck (s. handle_click), das
+    // Loslassen laesst ihn nur zurueckfedern.
+    pub(crate) fn module_press_begin(&mut self) {
+        if !self.module_menu_shown() {
+            return;
+        }
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let (px, py) = self.pointer();
+        let knopf = self.module_menu_buttons(gpu).into_iter().find(|b| self.module_hit(b, px, py)).filter(|b| b.enabled && b.slider.is_none() && b.action != ButtonAction::Nothing);
+        if let Some(b) = knopf {
+            self.settings_press = Some((b.action, false));
+            self.press_anim = Some((b.action, Instant::now(), None));
+        }
+    }
+
     // Linke Taste losgelassen: der Knopf federt zurueck; der aufgeschobene Klick zaehlt nur,
     // wenn der Zeiger noch auf demselben Knopf ist.
     pub(crate) fn settings_press_release(&mut self) {
@@ -91,6 +107,11 @@ impl App {
         if let Some((action, seit, None)) = self.press_anim {
             self.press_anim = Some((action, seit, Some((Instant::now(), press_scale_held(seit.elapsed().as_secs_f32())))));
         }
+    }
+
+    // Zoom fuer push_zoom_marker, solange `action` gedrueckt ist: um die Mitte von `rect`.
+    pub(crate) fn press_zoom(&self, action: ButtonAction, rect: Rect) -> Option<(f32, f32, f32)> {
+        Some(self.press_scale(action)).filter(|&s| s != 1.0).map(|s| (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0, s))
     }
 
     // Groesse eines Knopfs gerade (1 = normal).

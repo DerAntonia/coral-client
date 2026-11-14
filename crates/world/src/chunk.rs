@@ -65,7 +65,7 @@ impl States {
 // Die States einer Section der Reihe nach (Index = (y * 16 + z) * 16 + x), s.
 // ChunkSection::iter_states.
 pub enum StatesIter<'a> {
-    Uniform(std::iter::Take<std::iter::Repeat<u32>>),
+    Uniform(std::iter::RepeatN<u32>),
     Small(std::slice::Iter<'a, u16>),
     Wide(std::slice::Iter<'a, u32>),
 }
@@ -173,7 +173,7 @@ impl ChunkSection {
     #[must_use] 
     pub fn iter_states(&self) -> StatesIter<'_> {
         match &self.states {
-            States::Uniform(s) => StatesIter::Uniform(std::iter::repeat(*s).take(SECTION_VOLUME)),
+            States::Uniform(s) => StatesIter::Uniform(std::iter::repeat_n(*s, SECTION_VOLUME)),
             States::Small(v) => StatesIter::Small(v.iter()),
             States::Wide(v) => StatesIter::Wide(v.iter()),
         }
@@ -252,6 +252,15 @@ pub struct World {
     beds: HashMap<(i32, i32, i32), u32>,
     // Spalten, deren Mesh (neu) gebaut werden muss.
     dirty: HashSet<(i32, i32)>,
+    // Messung: warum Spalten dirty werden (s. DirtyLog). Der Aufrufer liest und leert sie.
+    pub dirty_log: DirtyLog,
+    // Fuers Flicken (s. take_mesh_request): je dirty-Spalte die Blockaenderungen seit ihrem
+    // letzten Mesh-Auftrag -- Position und Zustand VORHER, je Position nur der erste. Reichen
+    // sie aus, um die Spalte auf den neuen Stand zu bringen, braucht es keinen ganzen Neubau.
+    block_changes: HashMap<(i32, i32), Vec<BlockChange>>,
+    // Dirty-Spalten, bei denen die Blockaenderungen NICHT ausreichen (geladen, Nachbar
+    // geladen/entladen, Licht, vom Aufrufer markiert, zu viele Aenderungen).
+    needs_full: HashSet<(i32, i32)>,
     // Zaehlt jede Aenderung der SPALTENMENGE mit (laden/entladen/leeren) -- nicht Aenderungen
     // an Blockdaten innerhalb einer Spalte. Damit koennen Aufrufer teure Arbeit ueber die
     // gesamte Spaltenmenge ueberspringen, solange sich nichts geaendert hat (s.
@@ -323,6 +332,27 @@ impl Default for World {
     }
 }
 
+// Eine Blockaenderung fuers Flicken: Position (Welt) und der Zustand vorher.
+pub type BlockChange = ((i32, i32, i32), u32);
+
+// Mehr Aenderungen je Spalte und Auftrag werden nicht einzeln nachgezogen -- dann ist der
+// ganze Neubau billiger (Explosionen, grosse Kolbenanlagen).
+const MAX_BLOCK_CHANGES: usize = 32;
+
+// Messung, warum Spalten zum Neu-Meshen vorgemerkt werden -- je Ursache ein Zaehler, dazu die
+// gesetzten Blockzustaende (welche Bloecke sich laufend aendern).
+#[derive(Default)]
+pub struct DirtyLog {
+    pub column_loaded: u32,
+    pub column_neighbor: u32,
+    pub block_changed: u32,
+    pub block_same: u32,
+    pub block_neighbor: u32,
+    pub light: u32,
+    pub marked: u32,
+    pub blocks: HashMap<u32, u32>,
+}
+
 impl World {
     #[must_use] 
     pub fn new() -> Self {
@@ -330,6 +360,9 @@ impl World {
             columns: HashMap::default(),
             beds: HashMap::default(),
             dirty: HashSet::default(),
+            dirty_log: DirtyLog::default(),
+            block_changes: HashMap::default(),
+            needs_full: HashSet::default(),
             column_generation: 0,
             pending: HashMap::default(),
             min_y: DEFAULT_MIN_Y,
@@ -421,6 +454,8 @@ impl World {
         self.column_generation = self.column_generation.wrapping_add(1);
         self.bump_snow_revision((x, z), None);
         self.dirty.insert((x, z));
+        self.needs_full.insert((x, z));
+        self.dirty_log.column_loaded += 1;
         self.voxel_dirty.insert((x, z));
         // Die schon geladenen Nachbarn ebenfalls neu meshen: deren Rand wurde bisher
         // gegen "nicht geladen = Luft" gemesht und traegt daher eine komplette Wand
@@ -431,6 +466,8 @@ impl World {
             let neighbor = (x + dx, z + dz);
             if self.columns.contains_key(&neighbor) {
                 self.dirty.insert(neighbor);
+                self.needs_full.insert(neighbor);
+                self.dirty_log.column_neighbor += 1;
             }
         }
     }
@@ -456,11 +493,15 @@ impl World {
         self.column_generation = self.column_generation.wrapping_add(1);
         self.bump_snow_revision((x, z), None);
         self.dirty.remove(&(x, z));
+        self.block_changes.remove(&(x, z));
+        self.needs_full.remove(&(x, z));
         self.voxel_dirty.insert((x, z));
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let neighbor = (x + dx, z + dz);
             if self.columns.contains_key(&neighbor) {
                 self.dirty.insert(neighbor);
+                self.needs_full.insert(neighbor);
+                self.dirty_log.column_neighbor += 1;
             }
         }
         true
@@ -702,6 +743,15 @@ impl World {
         let local_z = z.rem_euclid(SECTION_SIZE);
         let state = crate::block_registry::normalize_air(state, crate::block_registry::air_variants());
         let vorher = column.sections[index].get(local_x, local_y, local_z);
+        // Schickt der Server den Block, der schon da ist, aendert sich nichts -- kein Neu-Meshen
+        // (wie Vanilla: ohne Zustandswechsel kein Neubau der Section). Redstone- und
+        // Kolbenuhren schicken das laufend.
+        if vorher == state {
+            self.dirty_log.block_same += 1;
+            return;
+        }
+        self.dirty_log.block_changed += 1;
+        *self.dirty_log.blocks.entry(state).or_default() += 1;
         Arc::make_mut(column).sections[index].set(local_x, local_y, local_z, state);
         // Liegt an der Stelle eine Vorhersage, sieht man den Server-Block (noch) nicht.
         if !self.pending.contains_key(&(x, y, z)) {
@@ -715,6 +765,8 @@ impl World {
                     let k = (key.0 + dx, key.1 + dz);
                     if self.columns.contains_key(&k) {
                         self.dirty.insert(k);
+                        self.needs_full.insert(k);
+                        self.dirty_log.light += 1;
                     }
                 }
             }
@@ -725,6 +777,7 @@ impl World {
             self.beds.remove(&(x, y, z));
         }
         self.dirty.insert(key);
+        self.note_block_change(key, (x, y, z), vorher);
         self.voxel_dirty.insert(key);
         // Am Spaltenrand geaenderte Bloecke beeinflussen das Culling der Grenzflaeche im
         // Nachbarn (s. insert_column) -- der muss also ebenfalls neu gemesht werden.
@@ -732,6 +785,8 @@ impl World {
             let neighbor = (key.0 + dx, key.1 + dz);
             if self.columns.contains_key(&neighbor) {
                 self.dirty.insert(neighbor);
+                self.note_block_change(neighbor, (x, y, z), vorher);
+                self.dirty_log.block_neighbor += 1;
             }
         };
         if local_x == 0 {
@@ -773,6 +828,8 @@ impl World {
     pub fn mark_dirty(&mut self, x: i32, z: i32) {
         if self.columns.contains_key(&(x, z)) {
             self.dirty.insert((x, z));
+            self.needs_full.insert((x, z));
+            self.dirty_log.marked += 1;
         }
     }
 
@@ -787,6 +844,44 @@ impl World {
     // z.B. fuer block_at()), nur der Mesh-Job entfaellt. Fuer Spalten, die gerade erst als
     // dirty markiert wurden (frisch eingetroffen oder durch einen Nachbar-Update), aber noch
     // nicht gebaut sind.
+    // Eine Blockaenderung fuer die dirty-Spalte `key` vormerken (s. Feld block_changes).
+    fn note_block_change(&mut self, key: (i32, i32), pos: (i32, i32, i32), vorher: u32) {
+        if self.needs_full.contains(&key) {
+            return;
+        }
+        let liste = self.block_changes.entry(key).or_default();
+        if liste.iter().any(|c| c.0 == pos) {
+            return;
+        }
+        if liste.len() >= MAX_BLOCK_CHANGES {
+            self.block_changes.remove(&key);
+            self.needs_full.insert(key);
+            return;
+        }
+        liste.push((pos, vorher));
+    }
+
+    // Womit laesst sich die dirty-Spalte auf den neuen Stand bringen? Some(Aenderungen): es
+    // haben sich nur diese Bloecke geaendert, seit zuletzt hiernach gefragt wurde -- Flicken
+    // genuegt. None: ganz neu bauen. Die Antwort gilt als abgeholt: wer danach doch nicht
+    // mesht, muss die Spalte mit mark_dirty neu einreihen.
+    pub fn take_mesh_request(&mut self, x: i32, z: i32) -> Option<Vec<BlockChange>> {
+        let aenderungen = self.block_changes.remove(&(x, z));
+        if self.needs_full.remove(&(x, z)) {
+            return None;
+        }
+        aenderungen
+    }
+
+    // Eine Spalte erneut in die Mesh-Warteschlange nehmen, OHNE einen ganzen Neubau zu
+    // verlangen: ihr laufender Auftrag war bei einer weiteren Aenderung schon unterwegs. Was
+    // seither dazukam, steht weiter in block_changes bzw. needs_full.
+    pub fn requeue_dirty(&mut self, x: i32, z: i32) {
+        if self.columns.contains_key(&(x, z)) {
+            self.dirty.insert((x, z));
+        }
+    }
+
     pub fn clear_dirty(&mut self, x: i32, z: i32) {
         self.dirty.remove(&(x, z));
     }
@@ -809,6 +904,8 @@ impl World {
         self.beds.clear();
         self.column_generation = self.column_generation.wrapping_add(1);
         self.dirty.clear();
+        self.block_changes.clear();
+        self.needs_full.clear();
         self.voxel_dirty.clear();
         self.voxel_cleared = true;
         // Offene Vorhersagen gehoeren zur alten Welt -- ihre Bestaetigung kommt nie mehr.
@@ -986,6 +1083,19 @@ mod tests {
         world.clear_dirty(0, 0);
         world.mark_dirty(0, 0);
         assert_eq!(world.take_dirty(10), vec![(0, 0)]);
+    }
+
+    // Der Server schickt denselben Block noch einmal (Redstone-/Kolbenuhren): kein Neu-Meshen.
+    // Ein echter Wechsel markiert die Spalte weiterhin.
+    #[test]
+    fn gleicher_block_markiert_nicht_neu() {
+        let mut world = World::new();
+        world.insert_column(0, 0, empty_column());
+        world.clear_dirty(0, 0);
+        world.set_block(5, MIN_Y + 3, 5, STATE_AIR);
+        assert_eq!(world.dirty_count(), 0, "derselbe Zustand darf nicht neu meshen");
+        world.set_block(5, MIN_Y + 3, 5, 1);
+        assert_eq!(world.take_dirty(10), vec![(0, 0)], "ein echter Wechsel muss neu meshen");
     }
 
     #[test]

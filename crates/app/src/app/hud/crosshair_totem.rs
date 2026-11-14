@@ -11,6 +11,7 @@ impl App {
             shape: self.settings.crosshair_shape,
             size: self.settings.crosshair_size(),
             ring_outline: self.settings.crosshair_ring_outline,
+            ring_radius: self.settings.crosshair_ring_radius as f32,
             ..CrosshairExtras::default()
         };
         if self.settings.crosshair_custom {

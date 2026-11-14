@@ -41,7 +41,7 @@ pub fn zip_file_names(path: &std::path::Path) -> Vec<String> {
     javazip::JavaZip::open(path).map(|z| z.names().iter().filter(|n| !n.ends_with('/')).cloned().collect()).unwrap_or_default()
 }
 pub use model_quads::{item_model_quads, ModelQuad};
-pub use pack_unzip::extract_resource_pack;
+pub use pack_unzip::{extract_resource_pack, replace_resource_pack};
 pub use particle_atlas::{build as build_particle_atlas, ParticleAtlas};
 pub use shapes::{
     build as build_shapes, build_ao_disabled, build_model_quads, state_variant_models, build_cross, build_cross_extras, build_random_rotations, build_rotations, default_face_uv, permute_faces_x,

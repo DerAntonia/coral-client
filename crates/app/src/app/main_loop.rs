@@ -8,6 +8,12 @@ impl App {
         if self.gpu.is_none() {
             return;
         }
+        self.sync_ui_scale();
+        // Knopf "Beenden": wie Alt+F4.
+        if self.quit_requested {
+            event_loop.exit();
+            return;
+        }
 
         use profiler::Phase;
         self.profiler.loop_call();
@@ -86,16 +92,22 @@ impl App {
         }
         if self.focused && self.mode == AppMode::World && self.chat_input.is_none() && self.sign_edit.is_none() && !self.text_field_focused() {
             for (code, pressed) in raw_keys {
-                // Wiedergabe: die Tasten steuern sie, der eigene Spieler bekommt nichts.
+                // Wiedergabe: die Tasten steuern sie, der eigene Spieler bekommt nichts --
+                // ausser den Tasten fuers Zuschauen (Perspektive, Freelook, Inventar).
                 if self.replay_active() {
-                    if pressed {
-                        self.replay_key(code);
+                    if !(pressed && self.replay_key(code)) {
+                        self.apply_replay_bind(Bind::Key(code), pressed);
                     }
                     continue;
                 }
                 // input-log (aus, bis im Modul-Menue eingeschaltet): dieselbe Schranke wie
                 // apply_raw_key -- nur echte Spieltasten, kein Chat/Textfeld, nur bei Fokus.
                 self.input_log.key(code, pressed);
+                // Wartet eine Belegung im Modul-Menue auf ihre Taste, gehoert der Druck ihr
+                // (s. window_events), nicht dem Spiel.
+                if pressed && self.awaiting_keybind.is_some() {
+                    continue;
+                }
                 self.apply_raw_key(code, pressed);
             }
         }
@@ -117,8 +129,14 @@ impl App {
                 // Entscheidung faellt in handle_mouse_delta). Frueher wurde die Bewegung hier
                 // verworfen -- der Zeiger im Chat stand still.
                 raw_input::RawMouseEvent::Motion(dx, dy, at) => {
-                    // In der Wiedergabe kommt der Blick aus der Aufnahme.
+                    // In der Wiedergabe kommt der Blick aus der Aufnahme: die Maus fuehrt den
+                    // Zeiger (Leiste, wie in osu) -- im Freelook die freie Kamera.
                     if self.replay_active() && self.mode == AppMode::World && !self.screen_overlay_open() {
+                        if self.freelook_held {
+                            self.handle_mouse_delta((dx, dy));
+                        } else if self.owns_mouse() {
+                            self.move_cursor((dx, dy));
+                        }
                         continue;
                     }
                     self.record_mouse(dx, dy, at);
@@ -137,6 +155,14 @@ impl App {
                 raw_input::RawMouseEvent::Button(button, pressed) => {
                     if self.focused {
                         self.track_bind(Bind::Mouse(BindMouse::from_raw(button)), pressed);
+                    }
+                    // Wiedergabe: links auf der Leiste springen, sonst nur die Zuschau-Tasten.
+                    if self.focused && self.replay_active() && self.mode == AppMode::World && self.chat_input.is_none() {
+                        let links = BindMouse::from_raw(button) == BindMouse::Left;
+                        if !(links && self.replay_mouse_left(pressed)) {
+                            self.apply_replay_bind(Bind::Mouse(BindMouse::from_raw(button)), pressed);
+                        }
+                        continue;
                     }
                     if !tasten_erlaubt {
                         continue;

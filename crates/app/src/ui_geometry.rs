@@ -24,6 +24,7 @@ impl Rect {
 
 // Immediate-Mode-UI-Primitive: eine gefuellte Flaeche bzw. ein Text-Run. Die App baut
 // jeden Frame Listen davon, GpuState zeichnet sie.
+#[derive(Clone, Copy)]
 pub(crate) struct UiRect {
     pub(crate) rect: Rect,
     pub(crate) color: [f32; 4],
@@ -91,6 +92,7 @@ pub(crate) struct UiLine {
     pub(crate) top: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct UiText {
     pub(crate) text: String,
     pub(crate) x: f32,
@@ -161,8 +163,8 @@ pub(crate) fn rotate_ndc(position: [f32; 2], pivot: (f32, f32), angle: f32, scre
 
 // Haengt die Vertices der Overlay-Ebene hinten an `main` an und liefert, wo die normale UI
 // endet. Reicht der Puffer nicht fuer beides, weicht die normale UI: die Overlay-Ebene liegt
-// obenauf und besteht nur aus wenigen Karten. `capacity` ist ein Vielfaches von
-// VERTS_PER_QUAD, das Abschneiden trennt also nie ein Quad.
+// obenauf und besteht nur aus wenigen Karten. `capacity` ist ein Vielfaches der Ecken je
+// Viereck (VERTS_PER_QUAD bzw. TEXT_VERTS_PER_QUAD), das Abschneiden trennt also nie ein Quad.
 // Overlay-Sprites hinter die normalen, soweit der Puffer reicht. Anders als append_overlay
 // wird nichts Normales abgeschnitten: dessen Laeufe zeigen auf feste Stellen.
 pub(crate) fn append_overlay_sprites(main: &mut Vec<TextVertex>, overlay: &[TextVertex]) -> u32 {
@@ -217,21 +219,135 @@ pub(crate) struct CursorFxFrame {
     pub(crate) circle: bool,
     // Breite des Pfeils als Faktor (Settings::cursor_width / 100).
     pub(crate) width: f32,
+    // Dicke der Kontur als Faktor (Settings::cursor_outline / 100), 1 = wie osu.
+    pub(crate) outline: f32,
+    // Deckkraft des schwarzen Inneren (1 - Settings::cursor_fill_transparency / 100).
+    pub(crate) fill_alpha: f32,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct CursorUniform {
-    // Je zwei aufeinanderfolgende Punkte in einem vec4.
-    pub(crate) points: [[f32; 4]; CURSOR_POINTS / 2],
+    // Die vier Punkte des Pfeils, je zwei in einem vec4.
+    pub(crate) points: [[f32; 4]; 2],
+    // xy = Mitte des Rings, zw = Versatz des Schattens (Pixel).
+    pub(crate) ring: [f32; 4],
     // [Kontur, Kern].
     pub(crate) colors: [[f32; 4]; 2],
     // Akzentfarbe beim Druecken (rgb linear, a = wie weit der Kern dorthin gemischt wird).
     pub(crate) additive: [f32; 4],
     // Zeichenflaeche (x0, y0, x1, y1) in Pixeln.
     pub(crate) bounds: [f32; 4],
-    // Bildschirmgroesse in Pixeln (xy), z = Konturdicke, w = Kapselradius (beides Pixel).
+    // Bildschirmgroesse in Pixeln (xy), z = Konturdicke, w = Aussenradius des Rings (Pixel).
     pub(crate) screen: [f32; 4],
+    // x = wie weit die Form ueber die vier Punkte hinausreicht (Pixel), y = Deckkraft des
+    // Schattens.
+    pub(crate) form: [f32; 4],
+}
+
+// Bezugshoehe der Menues: bei dieser Fensterhoehe ist ein Menue-Pixel ein echter. Jede andere
+// Hoehe zeichnet dasselbe Menue um Hoehe / MENU_REF_H groesser oder kleiner (s.
+// GpuState::ui_scale); die Breite folgt dem Fenster, Knoepfe am Rand bleiben am Rand.
+pub(crate) const MENU_REF_H: f32 = 1080.0;
+
+pub(crate) fn menu_scale_for(real_h: f32) -> f32 {
+    (real_h / MENU_REF_H).max(0.25)
+}
+
+pub(crate) fn scale_rect(r: Rect, s: f32) -> Rect {
+    Rect { x: r.x * s, y: r.y * s, w: r.w * s, h: r.h * s }
+}
+
+// Eine Kante aus Menue-Pixeln in echte. Was im Menue auf einem ganzen Pixel steht, steht auch
+// danach auf einem: sonst deckt ein Bild (hart gerastert) einen Pixel weniger als die Flaeche
+// darunter (geglaettet), und die schaut als Streifen hervor (Server-Icons, Nutzer 2026-11-12).
+// Was gerade gleitet (krumme Lage), bleibt stufenlos.
+pub(crate) fn scale_edge(v: f32, s: f32) -> f32 {
+    if v.fract() == 0.0 { (v * s).round() } else { v * s }
+}
+
+// Wie scale_rect, jede der vier Kanten fuer sich (s. scale_edge).
+pub(crate) fn scale_rect_snapped(r: Rect, s: f32) -> Rect {
+    let (x0, y0) = (scale_edge(r.x, s), scale_edge(r.y, s));
+    Rect { x: x0, y: y0, w: scale_edge(r.x + r.w, s) - x0, h: scale_edge(r.y + r.h, s) - y0 }
+}
+
+// Eine Flaeche aus Menue-Pixeln in echte (s. GpuState::render_menu). Marker (leere Flaechen)
+// tragen Daten statt einer Lage: nur der Listenrand-Verlauf hat Pixelwerte (s.
+// push_fade_marker), alle anderen bleiben, wie sie sind.
+pub(crate) fn scale_ui_rect(r: &UiRect, s: f32) -> UiRect {
+    if r.rect.w == 0.0 && r.rect.h == 0.0 {
+        return if r.color[3] == -52.0 {
+            UiRect { rect: Rect { x: r.rect.x * s, y: r.rect.y * s, w: 0.0, h: 0.0 }, color: [r.color[0] * s, r.color[1], r.color[2], r.color[3]], ..*r }
+        } else {
+            *r
+        };
+    }
+    // Ein Rahmen bleibt mindestens einen echten Pixel breit und auf ganzen Pixeln.
+    let border = if r.border > 0.0 { (r.border * s).round().max(1.0) } else { 0.0 };
+    UiRect { rect: scale_rect_snapped(r.rect, s), radius: r.radius * s, border, soft: r.soft * s, ..*r }
+}
+
+// Ein Stueck der HUD-Listen, das in Menue-Pixeln gebaut wurde (ab `ab` in Flaechen und Text),
+// in echte Pixel: Flaechen sofort, Text ueber Marker (s. text_scale_marker).
+pub(crate) fn scale_ui_tail(rects: &mut [UiRect], texts: &mut Vec<UiText>, ab: (usize, usize), s: f32) {
+    if s == 1.0 {
+        return;
+    }
+    for r in &mut rects[ab.0..] {
+        *r = scale_ui_rect(r, s);
+    }
+    texts.insert(ab.1, text_scale_marker(Some(s)));
+    texts.push(text_scale_marker(None));
+}
+
+// Dasselbe fuer eine Overlay-Gruppe; ihr Text wird fuer sich gesetzt, der Marker gilt bis zum Ende.
+pub(crate) fn scale_overlay_group(g: &mut UiOverlayGroup, s: f32) {
+    if s == 1.0 {
+        return;
+    }
+    for r in &mut g.rects {
+        *r = scale_ui_rect(r, s);
+    }
+    for sp in &mut g.sprites {
+        *sp = scale_ui_sprite(sp, s);
+    }
+    g.texts.insert(0, text_scale_marker(Some(s)));
+    g.pivot = (g.pivot.0 * s, g.pivot.1 * s);
+    g.clip = g.clip.map(|c| scale_rect(c, s));
+}
+
+pub(crate) fn scale_ui_sprite(sp: &UiSprite, s: f32) -> UiSprite {
+    UiSprite { corners: sp.corners.map(|[x, y]| [scale_edge(x, s), scale_edge(y, s)]), uv: bild_uv_ohne_nachbarn(sp, s), ..*sp }
+}
+
+// Ein Bild aus einem der eigenen Atlanten (Server-Icon, Pack-Bild) an `feld`: auf ganzen
+// Pixeln. Die Bilder liegen im Atlas Kante an Kante und werden weich abgetastet -- auf einer
+// krummen Lage (die Liste gleitet beim Scrollen) zog die Kante eine Zeile des Nachbarbilds
+// herein, ein heller Streifen am Rand (Nutzer 2026-11-12). Zurueck kommt das Feld, auf dem es
+// liegt, fuer die Flaeche darunter.
+pub(crate) fn image_field(feld: Rect) -> Rect {
+    Rect { x: feld.x.round(), y: feld.y.round(), ..feld }
+}
+
+// Bilder aus den eigenen Atlanten (Server-Icons, Pack-Bilder, Logos) liegen dort Kante an Kante
+// und werden weich abgetastet. In ihrer eigenen Groesse oder kleiner gezeichnet trifft kein
+// Bildschirmpixel den Nachbarn; vergroessert zog der Rand eine Zeile des Nachbarbilds herein
+// (bunte Streifen an den Server-Icons, Nutzer 2026-11-12). Dann einen halben Texel nach innen.
+fn bild_uv_ohne_nachbarn(sp: &UiSprite, s: f32) -> [f32; 4] {
+    let atlas_px = match sp.atlas {
+        SpriteAtlas::ServerIcons => SERVER_ICON_GRID * server_status::ICON_SIZE,
+        SpriteAtlas::PackIcons => skin_tab::ICON_GRID * skin_tab::ICON_PX,
+        SpriteAtlas::Logos => LOGO_GRID * LOGO_PX,
+        _ => return sp.uv,
+    } as f32;
+    let breite = (sp.corners[1][0] - sp.corners[0][0]).abs() * s;
+    let [u0, v0, u1, v1] = sp.uv;
+    if breite <= (u1 - u0).abs() * atlas_px {
+        return sp.uv;
+    }
+    let halb = 0.5 / atlas_px;
+    [u0 + halb, v0 + halb, u1 - halb, v1 - halb]
 }
 
 // Bildschirm-Pixel -> NDC (-1..1, Y nach unten in Pixeln, nach oben in NDC). Gemeinsam von
@@ -384,14 +500,6 @@ pub(crate) const SCROLL_DISTANCE_STEP: u32 = 25;
 
 // Breite der Container-Sheets in GUI-Pixeln (176, wie inventory::INVENTORY_SHEET_W).
 pub(crate) const INVENTORY_GUI_W: f32 = 176.0;
-
-// Vanillas Blockumriss (WorldRenderer.drawBlockOutline): schwarz mit 40 % Deckkraft
-// (ColorHelper 0x66000000), Linienbreite max(2.5, Fensterbreite/1920*2.5) Pixel
-// (RenderLayers.lines). Rueckgabe: (rgba, halbe Breite in Pixeln).
-pub(crate) fn vanilla_block_outline(screen_width: f32) -> ([f32; 4], f32) {
-    let breite = (screen_width / 1920.0 * 2.5).max(2.5);
-    ([0.0, 0.0, 0.0, 0.4], breite / 2.0)
-}
 
 // F3-Graphen (s. App::build_debug_overlay): gruen = Rechner gesamt, pink = Anteil von Coral.
 pub(crate) const GRAPH_GREEN: [f32; 4] = [0.24, 0.86, 0.48, 1.0];

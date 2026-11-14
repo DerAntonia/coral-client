@@ -86,10 +86,10 @@ fn hitbox_arten_ueberleben_speichern_und_laden() {
     let mut set = Settings::base();
     set.module_hitbox_styles[HitboxKind::EnderPearl.index()] = HitboxStyle { on: false, custom: true, hue: 12, saturation: 34, value: 56, alpha: 78 };
     set.module_hitbox_styles[HitboxKind::Water.index()].on = true;
-    set.module_hitbox_items = true;
+    set.module_hitbox_player_raw = true;
     let geladen = Settings::parse_onto(Settings::base(), &set.serialize());
     assert_eq!(geladen.module_hitbox_styles, set.module_hitbox_styles);
-    assert!(geladen.module_hitbox_items);
+    assert!(geladen.module_hitbox_player_raw);
 }
 
 #[test]
@@ -124,16 +124,29 @@ fn schild_modul_einstellungen_ueberleben_speichern_und_laden() {
 // doppelt; alles liegt auf dem Ring und passt in den Puffer.
 #[test]
 fn schild_kreis_segmente() {
-    let voll = crosshair_ring_vertices((100.0, 100.0), 1.0, (200.0, 200.0), false);
+    let voll = crosshair_ring_vertices((100.0, 100.0), SHIELD_RING_RADIUS_PX, 1.0, (200.0, 200.0), false);
     assert_eq!(voll.len(), SHIELD_RING_SEGMENTS * 6);
-    assert_eq!(crosshair_ring_vertices((100.0, 100.0), 0.5, (200.0, 200.0), false).len(), SHIELD_RING_SEGMENTS / 2 * 6);
-    let mit = crosshair_ring_vertices((100.0, 100.0), 1.0, (200.0, 200.0), true);
+    assert_eq!(crosshair_ring_vertices((100.0, 100.0), SHIELD_RING_RADIUS_PX, 0.5, (200.0, 200.0), false).len(), SHIELD_RING_SEGMENTS / 2 * 6);
+    let mit = crosshair_ring_vertices((100.0, 100.0), SHIELD_RING_RADIUS_PX, 1.0, (200.0, 200.0), true);
     assert_eq!(mit.len(), voll.len() * 2);
     assert!(24 + mit.len() <= CROSSHAIR_MAX_VERTICES);
     // Erste Ecke: innen, genau ueber der Mitte (12 Uhr).
     let [u, v] = voll[0].uv;
     let (x, y) = (u * 200.0, v * 200.0);
     assert!((x - 100.0).abs() < 1e-3 && (y - (100.0 - SHIELD_RING_RADIUS_PX + SHIELD_RING_THICKNESS_PX / 2.0)).abs() < 1e-3);
+    // Eingestellter Radius: die Innenkante wandert mit.
+    let gross = crosshair_ring_vertices((100.0, 100.0), 30.0, 1.0, (200.0, 200.0), false);
+    assert!((gross[0].uv[1] * 200.0 - (100.0 - 30.0 + SHIELD_RING_THICKNESS_PX / 2.0)).abs() < 1e-3);
+}
+
+// Ring-Radius: Standard 11 px, Speicherrunde, Datei-Werte auf die Grenzen gekappt.
+#[test]
+fn ring_radius_einstellbar() {
+    assert_eq!(Settings::base().crosshair_ring_radius, 11);
+    let set = Settings { crosshair_ring_radius: 23, ..Settings::base() };
+    assert_eq!(Settings::parse_onto(Settings::base(), &set.serialize()).crosshair_ring_radius, 23);
+    assert_eq!(Settings::parse_onto(Settings::base(), "crosshair_ring_radius=999\n").crosshair_ring_radius, SHIELD_RING_RADIUS_MAX_PX);
+    assert_eq!(Settings::parse_onto(Settings::base(), "crosshair_ring_radius=0\n").crosshair_ring_radius, SHIELD_RING_RADIUS_MIN_PX);
 }
 
 // Die neuen Anzeige-Einstellungen des Schild-Moduls ueberleben eine Speicherrunde.
@@ -315,8 +328,8 @@ fn kategorie_lautstaerke_wird_gespeichert_und_verrechnet() {
     assert_eq!(geladen.master_volume, 50.5);
     assert!((geladen.sound_gain(C::Players) - 0.202).abs() < 1e-6);
     assert!((geladen.sound_gain(C::Blocks) - 0.505).abs() < 1e-6);
-    // Die Oberflaeche haengt nicht an der Hauptlautstaerke.
-    assert!((geladen.sound_gain(C::Ui) - 0.1225).abs() < 1e-6);
+    // Die Oberflaeche haengt auch an der Hauptlautstaerke.
+    assert!((geladen.sound_gain(C::Ui) - 0.1225 * 0.505).abs() < 1e-6);
     // Die Lautstaerke je UI-Klang uebersteht Speichern und Laden.
     let mut set = Settings::base();
     set.ui_sound_volume[ui_sound::UiSound::Erase.index()] = 35.5;

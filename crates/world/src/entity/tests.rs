@@ -214,6 +214,24 @@ fn pfeil_faellt_im_ersten_tick_noch_nicht() {
     assert!((e.pos.1 - (64.0 - 0.05)).abs() < 1e-9, "y={}", e.pos.1);
 }
 
+// Die Krit-Spur liegt hinter dem Pfeil. Im ersten Tick laege sie hinter dem Abschusspunkt
+// (beim eigenen Schuss hinter dem Schuetzen) und faellt deshalb aus; ab dem zweiten reicht
+// sie nicht weiter zurueck als bis dorthin.
+#[test]
+fn krit_spur_beginnt_nicht_hinter_dem_abschusspunkt() {
+    let (welt, formen) = leer();
+    let mut entities = Entities::new();
+    entities.spawn(2, [2u8; 16], typ_index("arrow"), (0.0, 64.0, 0.0), 0.0, 0.0, (0.0, 0.0, 3.0));
+    entities.apply_metadata(2, &protocol::packets::EntityDataUpdate { living_flags: Some(protocol::packets::ARROW_FLAG_CRIT), ..Default::default() });
+    assert!(entities.get(2).expect("Pfeil da").crit_trail().is_none(), "vor dem ersten Tick");
+    entities.tick(&welt, &formen, None);
+    assert!(entities.get(2).expect("Pfeil da").crit_trail().is_none(), "nach einem Tick laege sie hinter dem Start");
+    entities.tick(&welt, &formen, None);
+    let (pos, v) = entities.get(2).expect("Pfeil da").crit_trail().expect("ab dem zweiten Tick");
+    // Das hintere Ende der Spur (zwei Tick-Strecken hinter dem Pfeil) liegt nicht vor z = 0.
+    assert!(pos.2 - 2.0 * v.2 >= 0.0, "pos={pos:?} v={v:?}");
+}
+
 // Ein geworfenes Item fliegt zwischen den (seltenen) Serverpaketen selbst: es faellt, landet
 // auf dem Block darunter und bleibt dort liegen, statt zu versinken.
 #[test]
@@ -832,6 +850,40 @@ fn display_folgt_teleport_duration() {
     assert!((wege[0] - 9.0).abs() < 1e-9, "erster Tick ein Zehntel: {wege:?}");
     assert!((wege[4] - 5.0).abs() < 1e-9, "gleichmaessig: {wege:?}");
     assert_eq!(wege[9], 0.0);
+}
+
+// Eine Transformations-Animation, die jeden Tick neu startet (Dauer 1, Verzoegerung 0), gleitet
+// wie in Vanilla: Beginn erst ab dem naechsten Tick, und jeder Abschnitt startet an der Stelle,
+// die zuletzt zu sehen war -- nicht am Anfang des vorigen Abschnitts.
+#[test]
+fn display_transformation_gleitet_ueber_abschnitte() {
+    let (welt, formen) = leer();
+    let mut entities = Entities::new();
+    entities.spawn(1, [0u8; 16], typ("item_display"), (0.0, 64.0, 0.0), 0.0, 0.0, (0.0, 0.0, 0.0));
+    let schritt = |entities: &mut Entities, y: f32| {
+        entities.apply_metadata(
+            1,
+            &protocol::packets::EntityDataUpdate {
+                display_interp_start: Some(0),
+                display_interp_duration: Some(1),
+                display_translation: Some([0.0, y, 0.0]),
+                ..Default::default()
+            },
+        );
+    };
+    let zeichne = |entities: &Entities, anteil: f32| {
+        let e = entities.get(1).unwrap();
+        e.display.as_ref().unwrap().transform_at(e.age_ticks(anteil)).translation[1]
+    };
+    schritt(&mut entities, 1.0);
+    entities.tick(&welt, &formen, None);
+    assert!((zeichne(&entities, 0.5) - 0.5).abs() < 1e-6, "erster Abschnitt halb: {}", zeichne(&entities, 0.5));
+    // Der naechste Abschnitt kommt, waehrend zuletzt bei 0.5 gezeichnet wurde.
+    schritt(&mut entities, 2.0);
+    assert!((zeichne(&entities, 0.9) - 0.5).abs() < 1e-6, "vor dem Tick bleibt es stehen: {}", zeichne(&entities, 0.9));
+    entities.tick(&welt, &formen, None);
+    let mitte = zeichne(&entities, 0.5);
+    assert!((mitte - 1.25).abs() < 1e-6, "von 0.5 nach 2 zur Haelfte, kein Ruecksprung: {mitte}");
 }
 
 // Ein Display-Entity darf den Angriffs-Raycast nicht abfangen: in Vanilla ist es nicht

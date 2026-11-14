@@ -205,9 +205,15 @@ impl App {
     // Mindestens eine geladene Armbrust irgendwo im Inventar (Hotbar, Reihen, Zweithand): die
     // Pfeil-Zahl wird gelb.
     pub(crate) fn has_loaded_crossbow(&self) -> bool {
-        (inventory::PLAYER_MAIN_START..=inventory::PLAYER_OFFHAND).filter_map(|i| self.inventory.player.get(i).and_then(|s| s.as_ref())).any(|s| {
-            world::item_registry::item_name(s.item_id) == Some("crossbow") && s.is_charged()
-        })
+        self.loaded_crossbows() > 0
+    }
+
+    // Geladene Armbrueste im Inventar: jede zaehlt bei der Pfeil-Zahl einen Schuss mit.
+    pub(crate) fn loaded_crossbows(&self) -> i32 {
+        (inventory::PLAYER_MAIN_START..=inventory::PLAYER_OFFHAND)
+            .filter_map(|i| self.inventory.player.get(i).and_then(|s| s.as_ref()))
+            .filter(|s| world::item_registry::item_name(s.item_id) == Some("crossbow") && s.is_charged())
+            .count() as i32
     }
 
     // Waffe in der Hand, aber keine Munition: die Anzeige zeigt eine 0 (mit Icon ein rot

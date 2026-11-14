@@ -16,6 +16,7 @@ impl App {
         match self.screen {
             MenuScreen::SettingsGeneral => self.settings_scroll,
             MenuScreen::SettingsControls => self.keybind_scroll,
+            MenuScreen::SettingsParticles => self.particle_scroll,
             s => self.page_scrolls.get(s.settings_key()).copied().unwrap_or_default(),
         }
     }
@@ -24,8 +25,23 @@ impl App {
         match self.screen {
             MenuScreen::SettingsGeneral => &mut self.settings_scroll,
             MenuScreen::SettingsControls => &mut self.keybind_scroll,
+            MenuScreen::SettingsParticles => &mut self.particle_scroll,
             s => self.page_scrolls.entry(s.settings_key()).or_default(),
         }
+    }
+
+    // Verlauf am Rand des Zeilenbands der aktuellen Seite. Steht ein Abschnitt genau oben, ist
+    // darueber nichts von ihm abgeschnitten: oben kein Verlauf. Er blendet ueber eine Zeile
+    // Abstand zum naechsten Abschnittsanfang ein.
+    pub(crate) fn page_fade(&self) -> crate::ScrollFade {
+        let h = self.gpu.as_ref().map_or(1080.0, |g| g.size().1);
+        let stand = self.page_scroll().stand;
+        let mut fade = crate::ScrollFade::new(SETTINGS_CLIP_TOP, settings_rows_bottom(h), SETTINGS_ROW_H, stand, self.page_max_scroll() as f32);
+        if let Some(page) = self.screen.settings_page() {
+            let abstand = page.sections.iter().map(|&(_, row)| (stand - page.section_stand(row)).abs()).fold(stand.abs(), f32::min);
+            fade.edge_top = 1.0 - (1.0 - crate::SCROLL_FADE_EDGE) * abstand.clamp(0.0, 1.0);
+        }
+        fade
     }
 
     // Die Zeile, auf die die Seite zulaeuft (in die Seite geklemmt, gerundet).
@@ -54,30 +70,21 @@ impl App {
             let (dx, dy) = self.content_offset();
             let oben = SETTINGS_CLIP_TOP + dy;
             store_content_clip(Some(Rect { x: dx, y: oben, w: w - self.side_strip_w(w) - dx, h: settings_rows_bottom(h) + dy - oben }));
+            crate::store_module_clip(None);
         } else {
             SETTINGS_SCROLL_FIRST.store(0f32.to_bits(), Relaxed);
             SETTINGS_SCROLL_BOTTOM.store(f32::INFINITY.to_bits(), Relaxed);
             store_section_starts(0);
-            // Die Partikel-Anpassung beschneidet ihre gleitende Liste genauso, unter den
-            // Spaltenkoepfen (s. particle_list_band).
-            let partikel = (self.mode == AppMode::Menu && self.screen == MenuScreen::SettingsParticles).then(|| {
-                let (dx, dy) = self.content_offset();
-                let w = self.gpu.as_ref().map_or(1920.0, |g| g.size().0);
-                let band = self.particle_list_band().0;
-                Rect { x: dx, y: band.y + dy, w: w - self.side_strip_w(w) - dx, h: band.h }
+            store_content_clip(None);
+            // Die Detailansicht der Module schneidet am eigenen Zeilenband (s. module_detail_band),
+            // im Inhaltsraum der Einstellungen, auf dem Bildschirm also um content_offset versetzt.
+            let (dx, dy) = self.content_offset();
+            let band = self.gpu.as_ref().filter(|_| self.module_detail_cut()).map(|g| {
+                let b = self.module_detail_band(g);
+                Rect { x: b.x + dx, y: b.y + dy, ..b }
             });
-            store_content_clip(partikel);
+            crate::store_module_clip(band);
         }
-    }
-
-    // Zeilenband der Partikel-Anpassung (Inhaltskoordinaten, nur y und h gelten): von unter den
-    // Spaltenkoepfen bis unter die letzte ganz sichtbare Zeile, mit dem Verlauf an den Raendern.
-    pub(crate) fn particle_list_band(&self) -> (Rect, crate::ScrollFade) {
-        let luecke = (SETTINGS_ROW_H - crate::SETTINGS_CTRL_H) / 2.0;
-        let oben = SETTINGS_FIRST_Y + SETTINGS_ROW_H - luecke;
-        let unten = SETTINGS_FIRST_Y + (self.particle_visible_rows() + 1) as f32 * SETTINGS_ROW_H - luecke;
-        let fade = crate::ScrollFade::new(oben, unten, SETTINGS_ROW_H, self.particle_scroll.stand, self.particle_max_scroll());
-        (Rect { x: 0.0, y: oben, w: 0.0, h: unten - oben }, fade)
     }
 
     // `weg` Zeilen Richtung Seitenende (s. App::wheel_units).
@@ -120,14 +127,6 @@ impl App {
             (panel.contains(qx, qy) && qx >= links).then_some(ScrollList::ModuleMenu)?
         } else if self.mode != AppMode::Menu {
             return None;
-        } else if self.screen == MenuScreen::SettingsParticles {
-            // Die Eintraege unter der festen Kopfzeile (s. header_list_rows_smooth).
-            let sichtbar = self.particle_visible_rows() as f32;
-            let oben = settings_row_y(0) + SETTINGS_ROW_H;
-            if !(qx >= 0.0 && qy >= oben && qy < oben + sichtbar * SETTINGS_ROW_H) {
-                return None;
-            }
-            ScrollList::Particles
         } else if self.screen.settings_page().is_some() {
             let h = self.gpu.as_ref().map_or(1080.0, |g| g.size().1);
             if !(qx >= 0.0 && qy >= SETTINGS_FIRST_Y && qy < settings_rows_bottom(h)) {
@@ -162,7 +161,6 @@ impl App {
                 let px = settings_row_pos(f + 1.0, page.section_starts()) - settings_row_pos(f, page.section_starts());
                 Some((px, SETTINGS_SCROLL_ROWS_PER_NOTCH, self.page_max_scroll() as f32))
             }
-            ScrollList::Particles => menue(MenuScreen::SettingsParticles).then(|| (SETTINGS_ROW_H, SETTINGS_SCROLL_ROWS_PER_NOTCH, self.particle_max_scroll())),
             ScrollList::ModuleMenu => {
                 let gpu = self.gpu.as_ref().filter(|_| self.module_menu_shown())?;
                 let px = if self.module_menu_detail { SETTINGS_ROW_H } else { (Self::MODULE_TILE_H + Self::MODULE_TILE_GAP) * self.module_scale(gpu) };
@@ -196,7 +194,6 @@ impl App {
         let Some((px, raste, max)) = self.drag_scroll_geometry(liste) else { return };
         let s = match liste {
             ScrollList::SettingsPage(_) => self.page_scroll_mut(),
-            ScrollList::Particles => &mut self.particle_scroll,
             ScrollList::ModuleMenu => &mut self.module_menu_scroll,
             ScrollList::Dropdown => match self.dropdown.as_mut() {
                 Some(d) => &mut d.scroll,
@@ -239,7 +236,7 @@ impl App {
             ScrollList::Dropdown if self.dropdown.is_some() => {
                 self.dropdown_press();
             }
-            ScrollList::SettingsPage(_) | ScrollList::Particles | ScrollList::ModuleMenu if self.drag_scroll_geometry(liste).is_some() => {
+            ScrollList::SettingsPage(_) | ScrollList::ModuleMenu if self.drag_scroll_geometry(liste).is_some() => {
                 let (px, py) = self.cursor_pos;
                 self.handle_click(px, py);
             }

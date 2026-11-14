@@ -58,8 +58,11 @@ impl App {
             let uuid = self.credentials.as_ref().and_then(|c| uuid_bytes_from_hex(&c.profile_id)).unwrap_or([0; 16]);
             let k = l.kopf;
             rects.push(UiRect::rounded(Rect { x: k.x - 2.0, y: k.y - 2.0, w: k.w + 4.0, h: k.h + 4.0 }, g(Slot::Border2), 4.0));
-            // Waehrend des Wechsels Ladepunkte statt des Kopfs: die Anmeldung laeuft noch.
-            if let Some((_, seit)) = &self.account_switching {
+            // Waehrend des Wechsels Ladepunkte statt des Kopfs: die Anmeldung laeuft noch. Ebenso,
+            // solange das gewaehlte Konto kein bereites Token hat (Nutzer 2026-11-11), etwa beim
+            // Start, bis seine Pruefung oder Erneuerung durch ist.
+            let laden = self.account_switching.as_ref().map(|(_, seit)| *seit).or_else(|| self.active_account_waiting().then_some(self.app_started));
+            if let Some(seit) = laden {
                 rects.push(UiRect::rounded(k, g(Slot::SurfaceSunken), 3.0));
                 rects.extend(loading_dots(k, seit.elapsed().as_secs_f32(), g(Slot::Accent)));
             } else {
@@ -324,10 +327,10 @@ impl App {
                 // Die Modul-Tafel liegt im Inhalt der Einstellungen, also im Inhaltsraum.
                 let (qx, qy) = self.pointer();
                 let modul = self.gpu.as_ref().map(|gpu| self.module_menu_buttons(gpu)).unwrap_or_default();
-                modul.into_iter().find(|b| b.enabled && b.hits(qx, qy)).map(|b| b.action).or_else(|| treffer(self.buttons()))
+                modul.into_iter().find(|b| b.enabled && self.module_hit(b, qx, qy)).map(|b| b.action).or_else(|| treffer(self.buttons()))
             }
             AppMode::Menu => treffer(self.buttons()),
-            AppMode::World if self.module_menu_open => self.gpu.as_ref().and_then(|gpu| treffer(self.module_menu_buttons(gpu))),
+            AppMode::World if self.module_menu_open => self.gpu.as_ref().and_then(|gpu| self.module_menu_buttons(gpu).into_iter().find(|b| b.enabled && self.module_hit(b, px, py)).map(|b| b.action)),
             AppMode::World => None,
         }
     }

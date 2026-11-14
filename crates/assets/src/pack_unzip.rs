@@ -31,7 +31,7 @@ pub fn extract_resource_pack(zip: &Path, parent: &Path) -> Result<PathBuf, Strin
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp).map_err(|e| format!("alter Zwischenordner {}: {e}", tmp.display()))?;
     }
-    let ergebnis = write_entries(&archiv, &wurzel, &tmp).and_then(|()| std::fs::rename(&tmp, &ziel).map_err(|e| format!("umbenennen: {e}")));
+    let ergebnis = write_entries(&archiv, &wurzel, &tmp, &|_| false).and_then(|()| std::fs::rename(&tmp, &ziel).map_err(|e| format!("umbenennen: {e}")));
     if let Err(e) = ergebnis {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(e);
@@ -39,10 +39,44 @@ pub fn extract_resource_pack(zip: &Path, parent: &Path) -> Result<PathBuf, Strin
     Ok(ziel)
 }
 
-fn write_entries(archiv: &JavaZip, wurzel: &str, tmp: &Path) -> Result<(), String> {
+// Entpackt `zip` genau nach `ziel` und ersetzt ein Pack, das dort schon liegt. `skip` bekommt
+// den Pfad im Pack (etwa "assets/minecraft/textures/...") und laesst den Eintrag weg. Das alte
+// Pack verschwindet erst, wenn das neue fertig ist; bricht es ab, bleibt das alte stehen.
+pub fn replace_resource_pack(zip: &Path, ziel: &Path, skip: &dyn Fn(&str) -> bool) -> Result<(), String> {
+    let archiv = JavaZip::open(zip).map_err(|e| format!("nicht lesbar: {e}"))?;
+    let wurzel = pack_root(archiv.names()).ok_or_else(|| "kein Resourcepack (kein assets/-Ordner)".to_string())?;
+    let name = ziel.file_name().and_then(|s| s.to_str()).unwrap_or("Pack");
+    let parent = ziel.parent().ok_or_else(|| format!("{} hat keinen Elternordner", ziel.display()))?;
+    let tmp = parent.join(format!(".{name}.entpacken"));
+    let alt = parent.join(format!(".{name}.alt"));
+    for rest in [&tmp, &alt] {
+        if rest.exists() {
+            std::fs::remove_dir_all(rest).map_err(|e| format!("alter Zwischenordner {}: {e}", rest.display()))?;
+        }
+    }
+    if let Err(e) = write_entries(&archiv, &wurzel, &tmp, skip) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if ziel.exists() {
+        std::fs::rename(ziel, &alt).map_err(|e| format!("altes Pack beiseite: {e}"))?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, ziel) {
+        let _ = std::fs::rename(&alt, ziel);
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("umbenennen: {e}"));
+    }
+    let _ = std::fs::remove_dir_all(&alt);
+    Ok(())
+}
+
+fn write_entries(archiv: &JavaZip, wurzel: &str, tmp: &Path, skip: &dyn Fn(&str) -> bool) -> Result<(), String> {
     std::fs::create_dir_all(tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     for name in archiv.names() {
         let Some(rest) = name.strip_prefix(wurzel) else { continue };
+        if skip(rest) {
+            continue;
+        }
         let Some(teile) = safe_parts(rest.trim_end_matches('/')) else { continue };
         let Some(daten) = archiv.read(name) else { continue };
         if name.ends_with('/') && daten.is_empty() {
@@ -153,6 +187,23 @@ mod tests {
         zip_bauen(&zip, &[("pack.mcmeta/", b"{\"pack\":{}}"), ("assets/minecraft/a.json", b"{}")]);
         let ziel = extract_resource_pack(&zip, &d).unwrap();
         assert_eq!(std::fs::read(ziel.join("pack.mcmeta")).unwrap(), b"{\"pack\":{}}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn ersetzt_altes_pack_und_laesst_gefiltertes_weg() {
+        let d = arbeitsordner("ersetzen");
+        let zip = d.join("neu.zip");
+        zip_bauen(&zip, &[("H/pack.mcmeta", b"neu"), ("H/assets/gui/panorama_0.png", b"p"), ("H/assets/a.png", b"a")]);
+        let ziel = d.join("Pack");
+        std::fs::create_dir_all(ziel.join("assets")).unwrap();
+        std::fs::write(ziel.join("alt.txt"), b"x").unwrap();
+        replace_resource_pack(&zip, &ziel, &|p| p.contains("panorama_")).unwrap();
+        assert_eq!(std::fs::read(ziel.join("pack.mcmeta")).unwrap(), b"neu");
+        assert!(ziel.join("assets/a.png").exists());
+        assert!(!ziel.join("assets/gui/panorama_0.png").exists());
+        assert!(!ziel.join("alt.txt").exists());
+        assert!(!d.join(".Pack.alt").exists() && !d.join(".Pack.entpacken").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

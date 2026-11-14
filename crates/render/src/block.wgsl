@@ -9,6 +9,9 @@ struct Camera {
     // y = tatsaechlich gezeichnete halbe Breite (>= x, s. HITBOX_MIN_RASTER_HALF_PX),
     // z/w = Bildschirmgroesse in Pixeln.
     hitbox: vec4<f32>,
+    // x = Entities nah an der Kamera rastern ab diesem Abstand in Bloecken, 0 = aus (s.
+    // entity_near_discard). Nur die Welt-Kamera, Hand und Inventar-Puppe haben 0.
+    near: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -91,7 +94,8 @@ fn project(view_pos: vec4<f32>) -> vec4<f32> {
 @group(1) @binding(0) var atlas: texture_2d<f32>;
 @group(1) @binding(1) var atlas_sampler: sampler;
 
-const MIPMAP_LOD_BIAS: f32 = -1.0;
+// Mip-Bias der Block-Texturen: camera.near.y (0 .. -1, Einstellung Mip-Schaerfe; die Kameras
+// von Hand und Inventar-Puppe tragen 0).
 
 // Vertexfarben (Richtungs-Shade, AO, Biom-Toenung, Entity-/Partikelfarben) sind Vanilla-
 // Werte und gelten dort im sRGB-Raum: Vanilla multipliziert die gammakodierten Texel direkt.
@@ -135,7 +139,47 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    // Wie weit die Spalte noch ausgeblendet ist (s. chunk_fade_discard), 0 = ganz da.
+    @location(2) @interpolate(flat) hidden: f32,
 };
+
+// Einblenden einer neu geladenen Spalte (BlockRenderer::start_column_fade): statt sie
+// durchsichtig zu mischen (Vanilla mischt mit der Nebelfarbe, die es hier nicht gibt) fehlt
+// ein Anteil `hidden` ihrer Pixel nach einem festen 4x4-Raster (Bayer) -- dahinter sieht man
+// echt Himmel und Gelaende, ohne Sortierung und ohne Blending.
+fn chunk_fade_discard(frag: vec4<f32>, hidden: f32) -> bool {
+    if (hidden <= 0.0) {
+        return false;
+    }
+    let p = vec2<u32>(frag.xy);
+    let b2 = 2u * ((p.x ^ p.y) & 1u) + (p.y & 1u);
+    let q = p >> vec2<u32>(1u);
+    let b4 = 4u * b2 + 2u * ((q.x ^ q.y) & 1u) + (q.y & 1u);
+    return (f32(b4) + 0.5) / 16.0 < hidden;
+}
+
+// Entities nah an der Kamera (Nutzer 2026-11-11, wie in Bedrock): je Pixel nach seinem
+// Abstand gerastert -- ab camera.near.x Bloecken fehlt ein wachsender Anteil im selben
+// 4x4-Raster wie beim Chunk-Einblenden, an der Kamera alles. So steckt man nicht in einem
+// Spieler, der einem zu nah kommt, und sieht dahinter. Der Abstand ist die Tiefe entlang der
+// Blickrichtung, aus dem Tiefenpuffer-Wert des Pixels (frag.z) zurueckgerechnet -- das geht in
+// jedem Fragment-Shader ohne eigene Vertex-Daten, auch bei den gekruemmten Projektionen (die
+// lassen die Tiefe unveraendert).
+fn entity_near_discard(frag: vec4<f32>) -> bool {
+    let ab = camera.near.x;
+    if (ab <= 0.0) {
+        return false;
+    }
+    let tiefe = camera.proj[3][2] / (frag.z + camera.proj[2][2]);
+    return chunk_fade_discard(frag, 1.0 - tiefe / ab);
+}
+
+// Wie entity_near_discard, ausser fuer Ecken mit Tint-Rot unter -0.5: Block-Entities (Truhen,
+// Betten, Schilder ...) rastern nie, sie sind Teil der Welt wie ein Block (Nutzer 2026-11-12,
+// s. app::entity_vertices OHNE_NAH_RASTER). Die Farbe zaehlt dort nicht, der Anteil ist 0.
+fn entity_near_cut(frag: vec4<f32>, tint: vec4<f32>) -> bool {
+    return tint.r > -0.5 && entity_near_discard(frag);
+}
 
 @vertex
 fn vs_main(
@@ -157,6 +201,7 @@ fn vs_main(
     out.clip_position = project(camera.view * vec4<f32>(column_relative(position, column_offset, eye_frac), 1.0));
     out.color = color;
     out.uv = uv;
+    out.hidden = 0.0;
     return out;
 }
 
@@ -169,8 +214,10 @@ fn vs_terrain(
     @location(2) uv: vec2<u32>,
     @location(3) column_offset: vec3<f32>,
     @location(5) eye_frac: vec3<f32>,
+    @location(6) hidden: f32,
 ) -> VertexOutput {
     var out: VertexOutput;
+    out.hidden = hidden;
     // xyz relativ zur Section in 1/2048 Block, um 8 verschoben; w = Section ab min_y (s.
     // world::TerrainVertex). Der Spaltenversatz zeigt auf die Spaltenecke auf Hoehe min_y.
     let position = vec3<f32>(packed.xyz) * (1.0 / 2048.0) - vec3<f32>(8.0) + vec3<f32>(0.0, f32(packed.w & 31u) * 16.0, 0.0);
@@ -180,6 +227,9 @@ fn vs_terrain(
     // gekennzeichnet, s. fs_main_translucent.
     if (color.a > 0.999) {
         out.color = vec3<f32>(-1.0) - color.rgb;
+    } else if (color.a > 0.994) {
+        // Wasser (world::TerrainVertex::WATER_MARK): Farbe + 4, s. translucent_water.
+        out.color = color.rgb + vec3<f32>(4.0);
     }
     out.uv = vec2<f32>(uv) * (1.0 / 65536.0);
     return out;
@@ -279,7 +329,7 @@ fn fs_terrain_gbuffer(in: GBufferVertexOutput) -> GBufferOutput {
     // drehen, dass sie gegen die Blickrichtung weist -- dann ist das Vorzeichen der
     // Bildschirmachsen egal.
     let n = select(roh, -roh, dot(roh, in.view_pos) > 0.0);
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.5) {
         discard;
     }
@@ -299,7 +349,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Anisotropes Filtern waere die "richtige" Loesung dafuer, ist aber mit dem bewusst
     // Nearest-gesampelten Atlas (scharfe Minecraft-Pixel aus der Naehe) nicht kombinierbar --
     // WebGPU/wgpu verlangt fuer anisotropy_clamp>1 zwingend lineares Mag-/Min-/Mipmap-Filtern.
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    if (chunk_fade_discard(in.clip_position, in.hidden)) {
+        discard;
+    }
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     // Alpha-Test: durchsichtige Texel (Glas-/Laub-Raender) verwerfen statt schwarz zu
     // zeichnen. Kein echtes Alpha-Blending in diesem Pass -- Wasser laeuft ueber
     // fs_main_translucent/eine eigene Pipeline mit echtem Blending (s. render::BlockRenderer).
@@ -319,7 +372,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // Risstextur sollen mitgezeichnet werden.
 @fragment
 fn fs_crumbling(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.1) {
         discard;
     }
@@ -439,8 +492,8 @@ fn vs_entity_skinned(
 
 @fragment
 fn fs_entity(in: EntityOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
-    if (tex.a < 0.5) {
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
+    if (tex.a < 0.5 || entity_near_cut(in.clip_position, in.tint)) {
         discard;
     }
     // Auch die Schadens-Mischung passiert in Vanilla auf gammakodierten Werten.
@@ -453,7 +506,7 @@ fn fs_entity(in: EntityOutput) -> @location(0) vec4<f32> {
 // Texel gehoeren nicht zur Silhouette.
 @fragment
 fn fs_entity_outline(in: EntityOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.1) {
         discard;
     }
@@ -464,7 +517,7 @@ fn fs_entity_outline(in: EntityOutput) -> @location(0) vec4<f32> {
 // deckenden Texel wie fs_entity, gegen die Tiefe der Welt -- nur was man von ihm sieht.
 @fragment
 fn fs_entity_mask(in: EntityOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.5) {
         discard;
     }
@@ -528,8 +581,8 @@ fn vs_entity_lit(
 
 @fragment
 fn fs_entity_lit(in: EntityLitOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
-    if (tex.a < 0.5) {
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
+    if (tex.a < 0.5 || entity_near_cut(in.clip_position, in.tint)) {
         discard;
     }
     let base = linear_to_srgb(tex.rgb) * in.color;
@@ -538,9 +591,9 @@ fn fs_entity_lit(in: EntityLitOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_entity_translucent_lit(in: EntityLitOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     let deckung = entity_fade(in.tint.a);
-    if (tex.a < 0.1 || tex.a * deckung < 0.02) {
+    if (tex.a < 0.1 || tex.a * deckung < 0.02 || entity_near_cut(in.clip_position, in.tint)) {
         discard;
     }
     let base = linear_to_srgb(tex.rgb) * in.color;
@@ -556,7 +609,7 @@ fn entity_fade(tint_a: f32) -> f32 {
 // Die Ego-Hand: Licht an der Augenposition aus dem Hand-Kamera-Uniform (hitbox.x, Bits).
 @fragment
 fn fs_hand_lit(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.5) {
         discard;
     }
@@ -568,9 +621,9 @@ fn fs_hand_lit(in: VertexOutput) -> @location(0) vec4<f32> {
 // wird gemischt statt geschnitten (Windkugel: durchweg Alpha 127).
 @fragment
 fn fs_entity_translucent(in: EntityOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     let deckung = entity_fade(in.tint.a);
-    if (tex.a < 0.1 || tex.a * deckung < 0.02) {
+    if (tex.a < 0.1 || tex.a * deckung < 0.02 || entity_near_cut(in.clip_position, in.tint)) {
         discard;
     }
     let base = linear_to_srgb(tex.rgb) * in.color;
@@ -591,7 +644,7 @@ const GHOST_ALPHA: f32 = 0.5;
 
 @fragment
 fn fs_main_ghost(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.5) {
         discard;
     }
@@ -702,6 +755,11 @@ fn vs_hitbox(
 fn fs_hitbox(in: HitboxOutput) -> @location(0) vec4<f32> {
     let aa = max(fwidth(in.across) * 0.5, 1e-4);
     let coverage = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, abs(in.across));
+    // Nichts zu sehen: verwerfen, damit der Rand um die Kante (und die Luecken der
+    // gestrichelten) nicht in den Stencil der Render-Order schreibt.
+    if (in.color.a * coverage < 0.004) {
+        discard;
+    }
     return vec4<f32>(in.color.rgb, in.color.a * coverage);
 }
 
@@ -751,19 +809,49 @@ fn vs_terrain_lit(
 
 @fragment
 fn fs_terrain_translucent_lit(in: LitVertexOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     return vec4<f32>(min(tint_srgb(tex.rgb, in.color) * in.light, vec3<f32>(1.0)), tex.a);
+}
+
+// Wasser im durchscheinenden Pass (Farbe gekennzeichnet, s. world::BlockVertex::with_water_mark).
+fn translucent_water(color: vec3<f32>) -> bool {
+    return color.r > 3.5;
 }
 
 @fragment
 fn fs_main_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
+    return translucent_color(in);
+}
+
+// Render-Order (s. render_order.rs): Wasser und das uebrige Durchscheinende getrennt, wenn
+// etwas nur ueber einem von beiden liegt -- dieselben Daten, jede Pipeline verwirft die andere Art.
+@fragment
+fn fs_translucent_water(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (!translucent_water(in.color)) {
+        discard;
+    }
+    return translucent_color(in);
+}
+
+@fragment
+fn fs_translucent_rest(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (translucent_water(in.color)) {
+        discard;
+    }
+    return translucent_color(in);
+}
+
+fn translucent_color(in: VertexOutput) -> vec4<f32> {
+    if (chunk_fade_discard(in.clip_position, in.hidden)) {
+        discard;
+    }
     // Negativer Bias verschiebt die von der GPU aus den UV-Ableitungen automatisch gewaehlte
     // Mip-Stufe Richtung schaerfer -- ohne Bias wirkten schon nahe Flaechen (v.a. Boden/Waende
     // in flachem Blickwinkel, wo die Ableitung in eine Achse gross ist) unnoetig verschwommen.
     // Anisotropes Filtern waere die "richtige" Loesung dafuer, ist aber mit dem bewusst
     // Nearest-gesampelten Atlas (scharfe Minecraft-Pixel aus der Naehe) nicht kombinierbar --
     // WebGPU/wgpu verlangt fuer anisotropy_clamp>1 zwingend lineares Mag-/Min-/Mipmap-Filtern.
-    var tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    var tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     // Feuer (Farbe gekennzeichnet, s. world::BlockVertex::with_cutout_mark) wie Vanillas
     // Cutout hart: genau EINE Mip-Stufe, also Alpha 0 oder voll statt halb durchsichtiger
     // Mischung zweier Stufen. Die Stufe richtet sich nach der KLEINEREN Ableitung -- im
@@ -775,8 +863,10 @@ fn fs_main_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     var farbe = in.color;
     if (in.color.r < -0.5) {
         farbe = vec3<f32>(-1.0) - in.color;
-        let stufe = max(floor(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-12)) + MIPMAP_LOD_BIAS + 0.5), 0.0);
+        let stufe = max(floor(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-12)) + camera.near.y + 0.5), 0.0);
         tex = textureSampleLevel(atlas, atlas_sampler, in.uv, stufe);
+    } else if (translucent_water(in.color)) {
+        farbe = in.color - vec3<f32>(4.0);
     }
     return vec4<f32>(tint_srgb(tex.rgb, farbe), tex.a);
 }
@@ -811,7 +901,7 @@ fn vs_particle(
 // OPAQUE_PARTICLE: Cutout, keine Mischung, schreibt Tiefe.
 @fragment
 fn fs_particle_opaque(in: ParticleOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     let a = tex.a * in.color.a;
     if (a < 0.1) {
         discard;
@@ -822,7 +912,7 @@ fn fs_particle_opaque(in: ParticleOutput) -> @location(0) vec4<f32> {
 // TRANSLUCENT_PARTICLE: echte Mischung (Totem, Blockstaub).
 @fragment
 fn fs_particle_translucent(in: ParticleOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     let a = tex.a * in.color.a;
     if (a < 0.1) {
         discard;
@@ -929,6 +1019,7 @@ fn vs_entity_skinned_glint(
     out.clip_position = project(camera.view * vec4<f32>(skin_point(m, position), 1.0));
     out.color = vec3<f32>(uv * tint.x, tint.y * schatten);
     out.uv = rect.xy + uv * (rect.zw - rect.xy);
+    out.hidden = 0.0;
     return out;
 }
 
@@ -937,14 +1028,14 @@ fn fs_glint(in: VertexOutput) -> @location(0) vec4<f32> {
     // Alle Texturzugriffe VOR dem ersten discard: textureSample darf nicht in
     // ungleichmaessigem Kontrollfluss stehen. Aus demselben Grund werden beide Glint-
     // Texturen gelesen und erst danach gewaehlt.
-    let maske = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let maske = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     let p = vec3<f32>(in.color.xy, 1.0);
     let guv = vec2<f32>(dot(glint.row0.xyz, p), dot(glint.row1.xyz, p));
     let a = textureSample(glint_item_texture, glint_sampler, guv);
     let b = textureSample(glint_entity_texture, glint_sampler, guv);
     let c = select(b, a, in.color.z > 0.0);
     // Nur wo das Item selbst gezeichnet wurde -- dieselbe Alpha-Schwelle wie fs_main.
-    if (maske.a < 0.5 || c.a < 0.1) {
+    if (maske.a < 0.5 || c.a < 0.1 || entity_near_discard(in.clip_position)) {
         discard;
     }
     // glint.fsh: color * GlintAlpha, gemischt mit (SRC_COLOR, ONE) -- Vanilla addiert also
@@ -979,13 +1070,14 @@ fn vs_hand_blur(
     out.clip_position = clip;
     out.color = color;
     out.uv = uv;
+    out.hidden = 0.0;
     return out;
 }
 
 // Nur die Tiefe eines Teilbilds, mit derselben Alpha-Schwelle wie fs_main.
 @fragment
 fn fs_hand_blur_depth(in: VertexOutput) {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.5) {
         discard;
     }
@@ -1053,7 +1145,7 @@ fn vs_particle_motion(
 
 @fragment
 fn fs_particle_motion(in: ParticleMotionOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a * in.alpha < 0.1) {
         discard;
     }
@@ -1087,7 +1179,7 @@ fn vs_entity_skinned_motion(
 
 @fragment
 fn fs_entity_motion(in: EntityMotionOutput) -> @location(0) vec4<f32> {
-    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, MIPMAP_LOD_BIAS);
+    let tex = textureSampleBias(atlas, atlas_sampler, in.uv, camera.near.y);
     if (tex.a < 0.5) {
         discard;
     }

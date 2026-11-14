@@ -48,9 +48,11 @@ tab_state! {
     disconnect_popup: Option<String> = None,
     dialog: Option<dialog_screen::OpenDialog> = None,
     dialog_waiting: Option<Instant> = None,
+    dialog_user_action: Option<Instant> = None,
     code_of_conduct: Option<dialog_screen::CodeOfConduct> = None,
     server_links: Vec<protocol::packets::ServerLink> = Vec::new(),
     dialog_registry: Vec<(String, Option<protocol::nbt::NbtValue>)> = Vec::new(),
+    pause_dialogs: Vec<u32> = Vec::new(),
     team_color_log: std::collections::HashMap<[u8; 16], String> = std::collections::HashMap::new(),
     team_facts: std::collections::HashMap<[u8; 16], teams::Facts> = std::collections::HashMap::new(),
     team_color_memory: std::collections::HashMap<[u8; 16], u32> = std::collections::HashMap::new(),
@@ -157,6 +159,9 @@ tab_state! {
     sleeping_at: Option<(i32, i32, i32)> = None,
     camera_entity: Option<i32> = None,
     spectator_flight: Option<DVec3> = None,
+    spectator_swallowed: [bool; 7] = [false; 7],
+    spectator_rise: f64 = 0.0,
+    others_breaking: std::collections::HashMap<i32, crate::app_state::OtherBreak> = std::collections::HashMap::new(),
     last_sent_pos: DVec3 = DVec3::new(8.0, 10.0, -10.0),
     last_sent_yaw_deg: f32 = 0.0,
     last_sent_pitch_deg: f32 = 0.0,
@@ -242,6 +247,8 @@ pub(crate) struct ServerTab {
     pub(crate) background: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // Sitzungsnummer der Aufnahme dieser Verbindung, 0 = keine (s. net::Events::with_record).
     pub(crate) record_slot: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    // Der Puffer von coral-clip fuer diese Verbindung (s. net::Events::with_clip, app/clip.rs).
+    pub(crate) clip_link: std::sync::Arc<record::ClipLink>,
     // Die Fernsicht-Welt (s. lod) und die Server-Packs dieses Tabs, solange er hinten liegt.
     lod_identity: Option<(String, i64)>,
     pub(crate) server_packs: server_packs::ServerPacks,
@@ -255,6 +262,7 @@ impl ServerTab {
             mention: false,
             background: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             record_slot: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            clip_link: std::sync::Arc::default(),
             lod_identity: None,
             server_packs: server_packs::ServerPacks::default(),
         }

@@ -260,9 +260,10 @@ impl MotionBlur {
         let reproject_own = vorher.view_proj * view_proj.inverse();
         let inv_proj = camera.proj_matrix(aspect).inverse();
         let depth = renderer.depth_view();
+        let depth_lesen = renderer.depth_sample_view();
         let skala = (f64::from(display_interval_s) / self.bildzeit_s.max(1e-4)).max(1.0);
         let (faktor, faktor_objekte) = (f64::from(strength) * skala, f64::from(entity_strength) * skala);
-        self.ziele(device, color, depth);
+        self.ziele(device, color, depth_lesen);
         let Some(ziele) = self.ziele.as_ref() else { return false };
         let size = ziele.size;
 
@@ -291,7 +292,7 @@ impl MotionBlur {
         let mit_tiefe = || wgpu::RenderPassDepthStencilAttachment {
             view: depth,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
-            stencil_ops: None,
+            stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
         };
         if eigener {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

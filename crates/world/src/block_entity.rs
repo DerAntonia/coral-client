@@ -274,12 +274,13 @@ pub fn chest_instance(pos: (i32, i32, i32), state: u32, weihnachten: bool) -> Op
     };
     // Die Endertruhe gibt es nur einzeln.
     let half = if basis == "ender" { ChestHalf::Single } else { half };
-    let voll = match half {
-        ChestHalf::Single => format!("entity/chest/{basis}"),
-        ChestHalf::Left => format!("entity/chest/{basis}_left"),
-        ChestHalf::Right => format!("entity/chest/{basis}_right"),
+    // Ohne zusammengesetzten String: das laeuft je Truhe und Bild.
+    let endung = match half {
+        ChestHalf::Single => "",
+        ChestHalf::Left => "_left",
+        ChestHalf::Right => "_right",
     };
-    let texture = CHEST_TEXTURES.iter().copied().find(|t| *t == voll)?;
+    let texture = CHEST_TEXTURES.iter().copied().find(|t| t.strip_prefix("entity/chest/").and_then(|r| r.strip_prefix(basis)) == Some(endung))?;
     let facing = property(state, "facing").unwrap_or("north");
     let yaw_deg = match facing {
         "west" => 90.0,

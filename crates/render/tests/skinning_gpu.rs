@@ -115,7 +115,7 @@ fn skinning_zeichnet_wie_der_cpu_weg() {
         SkinMatrix::extend_from_parts(&mut matrizen, &em::part_matrices(&s.model, &s.pose, s.base));
         instanzen.push((netz, SkinInstance { rect: RECT, color: FARBE, matrix: start, tint: [0.0; 4] }));
     }
-    r.skinning.set_instances(&device, &queue, &instanzen, &matrizen);
+    r.skinning.set_instances(&device, &queue, &instanzen, &[], &matrizen);
     let gpu = rendern(&device, &queue, &r);
 
     // Motion Blur mit Vormatrizen (alles ein Stueck verschoben): der Bewegungs-Durchgang der
@@ -243,7 +243,7 @@ fn glint_der_instanz_wie_glint_der_ecken() {
     let mut matrizen = Vec::new();
     SkinMatrix::extend_from_parts(&mut matrizen, &em::part_matrices(&model, &pose, base));
     let inst = SkinInstance { rect: RECT, color: farbe, matrix: 0, tint: [0.0; 4] };
-    r.skinning.set_instances(&device, &queue, &[(netz, inst)], &matrizen);
+    r.skinning.set_instances(&device, &queue, &[(netz, inst)], &[], &matrizen);
     r.skinning.set_glint_instances(&device, &queue, &[(netz, SkinInstance { tint: [skala, textur, 0.0, 0.0], ..inst })]);
     let gpu = rendern(&device, &queue, &r);
 

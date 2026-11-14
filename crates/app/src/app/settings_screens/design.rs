@@ -17,6 +17,12 @@ impl App {
         let weite = format!("{} %", self.settings.scroll_distance);
         self.draw_editable_value(gpu, stepper_value_rect(SCROLL_DISTANCE_ROW), EditableValue::ScrollDistance, weite, rects, texts);
         texts.push(UiText { text: "Hintergrundbild".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(WALLPAPER_ROW), color: theme::text(), scale: UI_SCALE_SMALL });
+        let panorama_an = wallpaper::WallpaperMode::from_index(self.settings.wallpaper) == wallpaper::WallpaperMode::Panorama;
+        let farbe = if panorama_an { theme::text() } else { theme::text_disabled() };
+        texts.push(UiText { text: "Panorama-Drehung".to_string(), x: SETTINGS_LABEL_X, y: zeile_y(PANORAMA_SPEED_ROW), color: farbe, scale: UI_SCALE_SMALL });
+        let value_rect = stepper_value_rect(PANORAMA_SPEED_ROW);
+        rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(value_rect, format!("{} %", self.settings.panorama_speed), farbe, UI_SCALE_SMALL));
         // Rechts daneben, was gerade gilt. Beim eigenen Bild steht dort der Knopf (s.
         // buttons()), der Hinweis rechts davon.
         let hinweis_x = WALLPAPER_PICK_X + 240.0;
@@ -37,6 +43,13 @@ impl App {
             wallpaper::WallpaperMode::Coral => {
                 if !hero_scene::path().is_some_and(|p| p.is_file()) {
                     let text = "Wird beim nächsten Start gerendert";
+                    texts.push(UiText { text: text.to_string(), x: WALLPAPER_PICK_X, y: zeile_y(WALLPAPER_ROW), color: theme::text_disabled(), scale: UI_SCALE_SMALL });
+                }
+            }
+            // Der Skin steht im Knopf (s. buttons()); ohne Skin mit Panorama nur der Hinweis.
+            wallpaper::WallpaperMode::Panorama => {
+                if crate::panorama::chosen_skin(&self.settings.panorama_skin).is_none() {
+                    let text = "Kein Skin mit Panorama";
                     texts.push(UiText { text: text.to_string(), x: WALLPAPER_PICK_X, y: zeile_y(WALLPAPER_ROW), color: theme::text_disabled(), scale: UI_SCALE_SMALL });
                 }
             }
@@ -230,26 +243,40 @@ impl App {
     }
 
     // Disconnect-Fenster: Ueberschrift mittig, darunter die Meldung (umbrochen, jede Zeile
-    // mittig), ganz unten mittig "Schliessen". Die Hoehe waechst mit der Meldung.
+    // mittig, in ihren Farben), ganz unten mittig "Schliessen". Die Hoehe waechst mit der
+    // Meldung. Alles um DISCONNECT_POPUP_SCALE vergroessert.
     // (Fenster, Schliessen, Zeilen)
-    pub(crate) fn disconnect_popup_layout(&self) -> Option<(Rect, Rect, Vec<String>)> {
+    // Die Schrift dabei auf ganze Faktoren gerundet (Nutzer 2026-11-11): ein Schriftpixel wird
+    // 3x3 statt 2,83x2,83 Bildschirmpixel -- dazwischen sieht die Minecraft-Schrift zerhackt aus.
+    pub(crate) fn disconnect_text_scales() -> (f32, f32) {
+        let k = DISCONNECT_POPUP_SCALE;
+        ((UI_SCALE_SMALL * k).round(), (UI_SCALE_NORMAL * k).round())
+    }
+
+    pub(crate) fn disconnect_popup_layout(&self) -> Option<(Rect, Rect, Vec<Vec<protocol::nbt::TextSpan>>)> {
         let (gpu, meldung) = self.gpu.as_ref().zip(self.disconnect_popup.as_ref())?;
+        let k = DISCONNECT_POPUP_SCALE;
         let (sw, sh) = ui_screen();
-        let w = 560.0_f32.min(sw - 32.0);
-        let zeile_h = gpu.text_height(UI_SCALE_SMALL) + 6.0;
-        let titel_h = gpu.text_height(UI_SCALE_NORMAL);
+        let w = (560.0 * k).min(sw - 32.0);
+        let (klein, gross) = Self::disconnect_text_scales();
+        let zeile_h = gpu.text_height(klein) + 6.0 * k;
+        let titel_h = gpu.text_height(gross);
+        let (rand, abstand, knopf_h) = (24.0 * k, 20.0 * k, 40.0 * k);
         // Hoechstens so viele Zeilen, wie aufs Fenster passen; der Rest steht im Log.
-        let max_zeilen = (((sh - 32.0 - 24.0 - titel_h - 20.0 - 24.0 - 40.0 - 24.0) / zeile_h).floor() as usize).max(1);
-        let mut zeilen: Vec<String> = meldung.lines().flat_map(|absatz| wrap_measured(|t| gpu.measure_raw(t, UI_SCALE_SMALL), absatz, w - 48.0)).collect();
+        let max_zeilen = (((sh - 32.0 - rand - titel_h - abstand - rand - knopf_h - rand) / zeile_h).floor() as usize).max(1);
+        // Die Meldung traegt die Farben des Servers als Paragraphen-Codes (s. net::disconnect_message).
+        let spans = protocol::nbt::legacy_to_spans(meldung, None);
+        let mut zeilen: Vec<Vec<protocol::nbt::TextSpan>> = wrap_spans(&spans, w - 2.0 * rand, |t| gpu.measure_raw(t, klein), 0.0).into_iter().map(|l| l.spans).collect();
         if zeilen.len() > max_zeilen {
             zeilen.truncate(max_zeilen);
             if let Some(letzte) = zeilen.last_mut() {
-                letzte.push_str(" …");
+                letzte.push(protocol::nbt::TextSpan { text: " …".to_string(), ..Default::default() });
             }
         }
-        let h = 24.0 + titel_h + 20.0 + zeilen.len() as f32 * zeile_h + 24.0 + 40.0 + 24.0;
-        let p = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
-        let schliessen = Rect { x: (p.x + (p.w - 140.0) / 2.0).round(), y: p.y + p.h - 24.0 - 40.0, w: 140.0, h: 40.0 };
+        let h = rand + titel_h + abstand + zeilen.len() as f32 * zeile_h + rand + knopf_h + rand;
+        let p = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h: h.round() };
+        let knopf_w = 140.0 * k;
+        let schliessen = Rect { x: (p.x + (p.w - knopf_w) / 2.0).round(), y: (p.y + p.h - rand - knopf_h).round(), w: knopf_w.round(), h: knopf_h.round() };
         Some((p, schliessen, zeilen))
     }
 
@@ -260,23 +287,26 @@ impl App {
         let (Some(gpu), Some((p, schliessen, zeilen))) = (self.gpu.as_ref(), self.disconnect_popup_layout()) else { return };
         use theme::Slot;
         let g = theme::get;
+        let k = DISCONNECT_POPUP_SCALE;
         let (sw, sh) = gpu.size();
         let (cx, cy) = self.cursor_pos;
         let mut rects = vec![
             UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: dialog_dim(), ..UiRect::FLAT },
-            UiRect::shadow(p, 8.0, 12.0, 32.0, 0.6),
-            UiRect::framed(p, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
+            UiRect::shadow(p, 8.0 * k, 12.0 * k, 32.0 * k, 0.6),
+            UiRect::framed(p, g(Slot::BgPanel), 8.0 * k, 1.0, g(Slot::Border1)),
         ];
-        let titel_h = gpu.text_height(UI_SCALE_NORMAL);
-        let titel = Rect { x: p.x, y: p.y + 24.0, w: p.w, h: titel_h };
-        let mut texts = vec![gpu.centered_text(titel, "Disconnected".to_string(), theme::text(), UI_SCALE_NORMAL)];
+        let (klein, gross) = Self::disconnect_text_scales();
+        let titel_h = gpu.text_height(gross);
+        let titel = Rect { x: p.x, y: p.y + 24.0 * k, w: p.w, h: titel_h };
+        let mut texts = vec![gpu.centered_text(titel, "Disconnected".to_string(), theme::text(), gross)];
         // Die Meldung kommt vom Server: nicht uebersetzen, keine Zahlen "lernen".
         push_typed_marker(&mut texts);
-        let zeile_h = gpu.text_height(UI_SCALE_SMALL) + 6.0;
-        let mut y = titel.y + titel_h + 20.0;
+        let zeile_h = gpu.text_height(klein) + 6.0 * k;
+        let mut y = titel.y + titel_h + 20.0 * k;
         for z in zeilen {
-            let breite = gpu.measure_raw(&z, UI_SCALE_SMALL);
-            texts.push(UiText { text: z, x: (p.x + (p.w - breite) / 2.0).round(), y, color: theme::text_2(), scale: UI_SCALE_SMALL });
+            let breite = span_row_width(gpu, &z, klein);
+            let x = (p.x + (p.w - breite) / 2.0).round();
+            push_styled_row(gpu, &z, x, y.round(), theme::text_2(), klein, &mut texts, &mut |r, c| rects.push(UiRect { rect: r, color: c, ..UiRect::FLAT }));
             y += zeile_h;
         }
         let b = Button {
@@ -286,11 +316,11 @@ impl App {
             label: String::new(),
             enabled: true,
             color: g(Slot::Accent),
-            scale: UI_SCALE_SMALL,
+            scale: klein,
         };
         let (flaeche, farbe) = styled_button(&b, self.hover_level(b.rect, schliessen.contains(cx, cy)));
         rects.push(flaeche);
-        texts.push(gpu.centered_text(schliessen, "Schließen".to_string(), farbe, UI_SCALE_SMALL));
+        texts.push(gpu.centered_text(schliessen, "Schließen".to_string(), farbe, klein));
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0, clip: None });
     }
 

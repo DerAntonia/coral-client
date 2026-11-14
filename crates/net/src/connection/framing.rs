@@ -146,11 +146,11 @@ pub(super) async fn do_login(
                 let d = LoginDisconnect::from_payload(&payload).map_err(|_| NetError::Protocol("ungueltiges Disconnect-Packet".into()))?;
                 // Der Login-State schickt JSON, kein NBT -- ausgepackt steht hier die
                 // Meldung des Servers statt einer rohen Zeichenkette voller Stil-Felder
-                // (etwa "You are already online!", das sonst als JSON im Log stand).
-                // Die FARBEN gehen dabei verloren: der Fehlerweg traegt nur Text.
-                let grund: String = protocol::nbt::json_text_to_spans(&d.reason_json).iter().map(|s| s.text.as_str()).collect();
-                let grund = grund.trim();
-                let grund = if grund.is_empty() { d.reason_json } else { grund.to_string() };
+                // (etwa "You are already online!", das sonst als JSON im Log stand). Die
+                // Farben reisen als Paragraphen-Codes mit (s. read_disconnect_reason).
+                let spans = protocol::nbt::json_text_to_spans(&d.reason_json);
+                let leer = spans.iter().all(|s| s.text.trim().is_empty());
+                let grund = if leer { d.reason_json } else { protocol::nbt::spans_to_legacy(&spans) };
                 return Err(NetError::Protocol(format!("Server hat Login abgelehnt: {grund}")));
             }
             0x01 => {
@@ -255,6 +255,11 @@ pub(super) const fn meta_betrifft_anzeige(update: &packets::EntityDataUpdate) ->
         // mcpvp.club nicht schlagen.
         || update.interaction_width.is_some()
         || update.interaction_height.is_some()
+        // Inhalt, Drehung und Wand eines Gegenstandsrahmens -- fehlten, deshalb blieben Karten
+        // und Items in sichtbaren Rahmen leer (dort steht oft nur der Inhalt im Paket).
+        || update.frame_item.is_some()
+        || update.frame_rotation.is_some()
+        || update.hanging_direction.is_some()
 }
 
 // Beantwortet einen Cookie Request -- in JEDEM Zustand, nur mit der passenden Antwort-ID.
@@ -287,5 +292,12 @@ mod meta_filter_neu_tests {
         assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { arrow_in_ground: Some(true), ..Default::default() }));
         assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { interaction_width: Some(3.0), ..Default::default() }));
         assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { interaction_height: Some(3.0), ..Default::default() }));
+    }
+
+    #[test]
+    fn rahmen_inhalt_kommt_durch() {
+        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { frame_item: Some(None), ..Default::default() }));
+        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { frame_rotation: Some(2), ..Default::default() }));
+        assert!(meta_betrifft_anzeige(&packets::EntityDataUpdate { hanging_direction: Some(3), ..Default::default() }));
     }
 }

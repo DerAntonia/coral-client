@@ -713,13 +713,27 @@ impl GpuState {
         });
         let label_text_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("label text vertex buffer"),
-            size: (std::mem::size_of::<TextVertex>() * VERTS_PER_QUAD * MAX_LABEL_GLYPHS) as wgpu::BufferAddress,
+            size: (std::mem::size_of::<TextVertex>() * TEXT_VERTS_PER_QUAD * MAX_LABEL_GLYPHS) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // Fester Indexpuffer fuer alle Text-Vierecke (UI und Weltbeschriftungen), einmal
+        // gefuellt: Viereck q zeigt auf seine Ecken 4q..4q+3 (s. TEXT_QUAD_INDICES).
+        let text_index_buffer = {
+            let indices: Vec<u32> = (0..MAX_UI_GLYPHS.max(MAX_LABEL_GLYPHS) as u32).flat_map(|q| TEXT_QUAD_INDICES.map(|i| q * TEXT_VERTS_PER_QUAD as u32 + i)).collect();
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("text index buffer"),
+                size: std::mem::size_of_val(indices.as_slice()) as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::INDEX,
+                mapped_at_creation: true,
+            });
+            buffer.slice(..).get_mapped_range_mut().copy_from_slice(bytemuck::cast_slice(&indices));
+            buffer.unmap();
+            buffer
+        };
         let text_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("text vertex buffer"),
-            size: (std::mem::size_of::<TextVertex>() * VERTS_PER_QUAD * MAX_UI_GLYPHS) as wgpu::BufferAddress,
+            size: (std::mem::size_of::<TextVertex>() * TEXT_VERTS_PER_QUAD * MAX_UI_GLYPHS) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -916,6 +930,12 @@ impl GpuState {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let panorama_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("panorama vertex buffer"),
+            size: (std::mem::size_of::<TextVertex>() * crate::panorama::MAX_VERTICES) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let (ui_atlas_bind_group, ui_atlas_texture) =
             create_ui_atlas_bind_group(&device, &queue, &sprite_bind_group_layout, &sprite_sampler, ui_atlas_rgba, ui_atlas_size);
 
@@ -997,6 +1017,7 @@ impl GpuState {
             color_bind_group,
             text_pipeline,
             text_vertex_buffer,
+            text_index_buffer,
             label_text_pipeline,
             label_text_buffer,
             label_quad_pipeline,
@@ -1014,11 +1035,15 @@ impl GpuState {
             pack_glyphs,
             layout_font: Default::default(),
             plain_numbers: Default::default(),
+            keep_capitals: Default::default(),
             under_sprites: Default::default(),
             text_shadow_style: TextShadow::Outline,
             text_shadow_strength: 1.0,
             text_shadow_half: false,
             text_runs: Default::default(),
+            ui_scale: std::cell::Cell::new(1.0),
+            draw_scale: std::cell::Cell::new(1.0),
+            cursor_scale: std::cell::Cell::new(1.0),
             text_clips: Default::default(),
             stable_numbers: Default::default(),
             world_label_glyphs: Default::default(),
@@ -1037,6 +1062,10 @@ impl GpuState {
             block_atlas_sprite_bind_group,
             entity_atlas_sprite_bind_group,
             wallpaper: None,
+            panorama: None,
+            panorama_vertex_buffer,
+            panorama_spin: std::cell::Cell::new((0.0, None)),
+            panorama_speed: std::cell::Cell::new(100),
             last_view: None,
             connect_view: None,
             offscreen_world_only: false,

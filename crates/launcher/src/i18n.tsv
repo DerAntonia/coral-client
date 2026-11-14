@@ -108,6 +108,8 @@ Interaktionen	Interactions	Interāctiōnēs
 Jedes gesendete Interaktions- und Tick-Paket in Sendereihenfolge loggen (GrimAC-Paketreihenfolge).	Log every sent interaction and tick packet in send order (GrimAC packet order).	Omnem fasciculum interāctiōnis et ictūs temporis missum ōrdine mittendī in ācta referre (ōrdō fasciculōrum GrimAC).
 Bewegungspakete	Movement packets	Fasciculī mōtūs
 Gesendete Bewegungspakete loggen (Grim Simulation/GroundSpoof).	Log sent movement packets (Grim Simulation/GroundSpoof).	Fasciculōs mōtūs missōs in ācta referre (Grim Simulation/GroundSpoof).
+Animationen	Animations	Animātiōnēs
+Positions-, Mitfahr- und Transformations-Pakete von Displays und Armorstaenden loggen, dazu jeden Sprung von einem Bild zum naechsten.	Log position, riding and transformation packets of displays and armor stands, plus every jump from one frame to the next.	Fasciculōs positiōnis, vectiōnis et trānsfōrmātiōnis dēmōnstrātōrum et statīvōrum armōrum in ācta referre, atque omnem saltum ab imāgine ad imāginem.
 Posenwechsel	Pose changes	Mūtātiōnēs habitūs
 Posenwechsel je Tick loggen.	Log pose changes per tick.	Mūtātiōnēs habitūs per ictum temporis in ācta referre.
 Schleichen	Sneaking	Rēpere

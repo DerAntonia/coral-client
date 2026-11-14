@@ -62,6 +62,8 @@ pub struct Skinning {
     pub(crate) pipeline: wgpu::RenderPipeline,
     // Je Netz die Instanzen dieses Frames (Bereich im Instanzpuffer).
     draws: Vec<(MeshId, std::ops::Range<u32>)>,
+    // Parallel dazu die Klasse jedes Aufrufs (render_order::CLASS_*).
+    draw_classes: Vec<u8>,
     // Motion Blur (s. set_prev_matrices): die Matrizen des vorigen Bildes, gleich lang und in
     // derselben Reihenfolge wie die aktuellen, und die Pipeline ins Bewegungsbild.
     prev_buffer: wgpu::Buffer,
@@ -203,7 +205,7 @@ impl Skinning {
             }),
             primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
             // Wie die Entity-Bewegung: gegen die Tiefe der Welt, nur gelesen.
-            depth_stencil: Some(wgpu::DepthStencilState { depth_write_enabled: false, ..depth_stencil }),
+            depth_stencil: Some(wgpu::DepthStencilState { depth_write_enabled: false, stencil: wgpu::StencilState::default(), ..depth_stencil }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -244,6 +246,7 @@ impl Skinning {
             bind_group,
             pipeline,
             draws: Vec::new(),
+            draw_classes: Vec::new(),
             prev_buffer,
             motion_params,
             motion_layout,
@@ -304,17 +307,30 @@ impl Skinning {
 
     // Nach Netz sortiert und zu Bereichen zusammengefasst (ein Aufruf je Netz).
     fn group(instances: &[(MeshId, SkinInstance)]) -> (Vec<SkinInstance>, Vec<(MeshId, std::ops::Range<u32>)>) {
-        let mut sortiert: Vec<&(MeshId, SkinInstance)> = instances.iter().collect();
-        sortiert.sort_by_key(|(m, _)| m.0);
+        let (daten, draws, _) = Self::group_classes(instances, &[]);
+        (daten, draws)
+    }
+
+    // Wie group, zuerst nach Klasse (`classes` parallel zu `instances`; was fehlt, ist Klasse
+    // 0): ein Aufruf je Klasse und Netz. Dritter Wert: die Klasse jedes Aufrufs.
+    #[allow(clippy::type_complexity)]
+    fn group_classes(instances: &[(MeshId, SkinInstance)], classes: &[u8]) -> (Vec<SkinInstance>, Vec<(MeshId, std::ops::Range<u32>)>, Vec<u8>) {
+        let klasse = |n: usize| classes.get(n).copied().unwrap_or(0);
+        let mut sortiert: Vec<(usize, &(MeshId, SkinInstance))> = instances.iter().enumerate().collect();
+        sortiert.sort_by_key(|(n, (m, _))| (klasse(*n), m.0));
         let mut draws: Vec<(MeshId, std::ops::Range<u32>)> = Vec::new();
-        for (i, (m, _)) in sortiert.iter().enumerate() {
+        let mut draw_classes: Vec<u8> = Vec::new();
+        for (i, (n, (m, _))) in sortiert.iter().enumerate() {
             let i = i as u32;
-            match draws.last_mut() {
-                Some((letztes, bereich)) if letztes == m => bereich.end = i + 1,
-                _ => draws.push((*m, i..i + 1)),
+            match (draws.last_mut(), draw_classes.last()) {
+                (Some((letztes, bereich)), Some(k)) if letztes == m && *k == klasse(*n) => bereich.end = i + 1,
+                _ => {
+                    draws.push((*m, i..i + 1));
+                    draw_classes.push(klasse(*n));
+                }
             }
         }
-        (sortiert.iter().map(|(_, i)| *i).collect(), draws)
+        (sortiert.iter().map(|(_, (_, i))| *i).collect(), draws, draw_classes)
     }
 
     fn bind_motion(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, params: &wgpu::Buffer, matrices: &wgpu::Buffer, prev: &wgpu::Buffer) -> wgpu::BindGroup {
@@ -356,8 +372,10 @@ impl Skinning {
     // Die Instanzen dieses Frames samt ihrer Matrizen (SkinInstance::matrix zeigt hinein).
     // Gleiche Netze werden zu einem Aufruf zusammengefasst; die Reihenfolge innerhalb eines
     // Netzes bleibt.
-    pub fn set_instances(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[(MeshId, SkinInstance)], matrices: &[SkinMatrix]) {
+    // `classes`: je Instanz die Klasse der Render-Order (render_order::CLASS_*), leer = alle 0.
+    pub fn set_instances(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[(MeshId, SkinInstance)], classes: &[u8], matrices: &[SkinMatrix]) {
         self.draws.clear();
+        self.draw_classes.clear();
         self.outline_draws.clear();
         self.glint_draws.clear();
         self.prev_ok = false;
@@ -366,8 +384,9 @@ impl Skinning {
         if matrices.is_empty() {
             return;
         }
-        let (daten, draws) = Self::group(instances);
+        let (daten, draws, draw_classes) = Self::group_classes(instances, classes);
         self.draws = draws;
+        self.draw_classes = draw_classes;
         if !daten.is_empty() {
             wachsen(device, &mut self.instance_buffer, "skin instances", std::mem::size_of_val(daten.as_slice()) as u64, wgpu::BufferUsages::VERTEX);
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&daten));
@@ -488,15 +507,16 @@ impl Skinning {
 
     // Zeichnen. Gruppe 0 und 1 (Kamera, Entity-Atlas) muessen schon gebunden sein; Gruppe 2
     // und die Pipeline setzt das hier selbst.
-    pub(crate) fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        if self.draws.is_empty() {
+    // Nur die Instanzen der Klasse `class` (Render-Order; die Stencil-Referenz setzt der Aufrufer).
+    pub(crate) fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, class: u8) {
+        if !self.draw_classes.contains(&class) {
             return;
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(2, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.mesh_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        for (mesh, instanzen) in &self.draws {
+        for ((mesh, instanzen), _) in self.draws.iter().zip(&self.draw_classes).filter(|(_, k)| **k == class) {
             let (first, count) = self.meshes[mesh.0 as usize];
             pass.draw(first..first + count, instanzen.clone());
         }

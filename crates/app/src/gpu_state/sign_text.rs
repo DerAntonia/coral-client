@@ -127,7 +127,7 @@ impl SignGpu {
             })
         };
         let welt = pipeline(Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
+            format: render::block_renderer::DEPTH_FORMAT,
             depth_write_enabled: false,
             depth_compare: wgpu::CompareFunction::LessEqual,
             stencil: wgpu::StencilState::default(),
@@ -234,7 +234,7 @@ impl GpuState {
             }
         }
         g.draws = vereint;
-        let (sw, sh) = self.size();
+        let (sw, sh) = self.real_size();
         self.queue.write_buffer(&g.frames, 0, bytemuck::cast_slice(&[sw, sh, 0.0, 0.0]));
         self.queue.write_buffer(&g.frames, SIGN_FRAMES_HEADER, bytemuck::cast_slice(&g.matrizen));
     }

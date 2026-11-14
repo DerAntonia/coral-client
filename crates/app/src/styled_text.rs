@@ -366,6 +366,10 @@ pub(crate) const SETTINGS_LABELS: [&str; SETTINGS_ROW_COUNT] = [
     "RAM",
     "Swap",
     "Compositing",
+    "Liegt immer über",
+    "Spieler",
+    "Blockentities",
+    "Hitboxen",
 ];
 pub(crate) const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Begrenzt die Bildrate über einen Timer. Bei selbsttaktenden Present-Modi (Fifo/FifoRelaxed) wirkungslos -- die Zeile blendet dann ab. Zahl anklicken für einen eigenen Wert; 0 = Monitor (Bildrate des Monitors), -1 = unbegrenzt.",
@@ -374,7 +378,7 @@ pub(crate) const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Größe des dedizierten Worker-Pools fürs Chunk-Meshing (nicht das Netzwerk, das läuft getrennt). Mehr Threads bauen Chunks parallel schneller auf, konkurrieren dabei aber mit allem anderen auf der CPU (Physik, Netzwerk-Decoding, Spiel selbst).",
     "Zeichnet nur die 16er-Abschnitte der Welt, die von der Kamera aus durch Luft, Wasser oder Glas überhaupt zu sehen sein können -- Höhlen unter der Oberfläche, und von unten die Oberfläche, fallen weg. Spart GPU-Zeit, ohne dass sich etwas Sichtbares ändert. AUS zum Vergleichen.",
     "Baut Spieler, Mobs und Block-Entities (Truhen, Köpfe, Schilder, ...) nur, wenn man sie sehen kann. Vanilla: nur im Sichtfeld und wenn ihr 16er-Abschnitt nicht vom Höhlen-Culling verdeckt ist, wie in Vanilla. Sichtlinien: zusätzlich wie die Mod EntityCulling -- von der Kamera aus laufen Sichtlinien durch die Blöcke, was hinter Wänden steht, fällt weg (Glas, Laub und Wasser sind durchsichtig; gerechnet auf einem eigenen Thread). Namensschilder bleiben, leuchtende Entities bleiben auch hinter Wänden. Aus zum Vergleichen.",
-    "Verkleinerte Fassungen der Blocktexturen für entfernte Blöcke, wie in Vanilla. AUS nimmt immer die volle Auflösung: in der Ferne flimmert es dann stärker.",
+    "Verkleinerte Fassungen der Blocktexturen für entfernte Blöcke, wie in Vanilla. AUS nimmt immer die volle Auflösung: in der Ferne flimmert es dann stärker. Der Regler daneben ist der Mip-Bias: 0 = weich, kein Moiré-Muster auf feinen Böden in der Ferne; -1 = schärfer, flimmert dort aber eher.",
     "Bewegungsunschärfe der Welt (bewegte Entities eingeschlossen) und der Hand, je mit eigener Stärke -- „Anpassen“ öffnet die Einstellungen. Ohne gespeicherte alte Bilder, also keine zusätzliche Verzögerung; steht alles still, fällt sie ganz weg. Nur mit normaler Projektion.",
     "Farbige Balken, die über den Bildschirm wandern -- macht Tearing (gerissene Bildzeilen) sichtbar, um TearFree und die Riss-Steuerung zu testen. Läuft im Menü und im Spiel.",
     "Globale Anzeigeeinstellung des Grafiktreibers (xrandr) gegen Tearing bei fehlendem Hardware-Flip -- nur bedienbar, wenn der Treiber sie hat (amdgpu, radeon, neuere modesetting; nicht Nvidia).  Gilt nur, während Coral Client im Vordergrund läuft -- danach automatisch zurück auf den Wert von vor dem Start.",
@@ -386,6 +390,10 @@ pub(crate) const SETTINGS_TOOLTIPS: [&str; SETTINGS_ROW_COUNT] = [
     "Belegter und gesamter Arbeitsspeicher des ganzen Rechners (nicht nur des Clients). Belegt zählt ohne den Cache, den das System jederzeit freigeben kann.",
     "Auslagerung auf die Festplatte. Wird hier viel belegt, reicht der Arbeitsspeicher nicht und es kann ruckeln.",
     "Wie das Coral-Fenster gerade auf den Schirm kommt. \"Zusammengesetzt von\": ein Compositor setzt es zusammen und entscheidet, wann ein Bild erscheint -- dann wirken Scanout-Timing und Riss-Timing nicht (Cinnamon: Einstellungen, Allgemein, \"Komposit für Vollbildfenster deaktivieren\" an). Sonst kommt es ohne Compositor per Hardware-Flip oder als Kopie des X-Servers, und dahinter steht, wo der Riss der letzten Bilder lag (gemessen an den Meldungen des X-Servers). Bleibt er bei jeder Einstellung an derselben Stelle, auch wenn man Scanout-Timing und Riss-Timing verstellt, hält der X-Server die Bilder fest -- dann hilft ein Neustart (oder Ab- und wieder Anmelden).",
+    RENDER_ORDER_TOOLTIP,
+    RENDER_ORDER_TOOLTIP,
+    RENDER_ORDER_TOOLTIP,
+    RENDER_ORDER_TOOLTIP,
 ];
 // Zeilen des Render-Tabs (Reihenfolge wie SETTINGS_LABELS), in Abschnitten: Bildrate,
 // Chunks, Effekte, Tearing, System. Sichtweiten, Entity-Weite und Block-Rotation stehen im Video-Tab.
@@ -400,6 +408,8 @@ pub(crate) const CAVE_CULLING_ROW: usize = 4;
 pub(crate) const ENTITY_CULLING_ROW: usize = 5;
 pub(crate) const ENTITY_CULLING_NAMES: [&str; 3] = ["Aus", "Vanilla", "Sichtlinien"];
 pub(crate) const MIPMAPPING_ROW: usize = 6;
+// Mip-Schaerfe (Settings::mip_sharpness_pct): Regler in der Zeile Mipmapping, rechts neben dem Schalter.
+pub(crate) const MIP_SHARPNESS_ROW: usize = MIPMAPPING_ROW;
 // Abschnitt Effekte: Bewegungsunschaerfe (Settings::motion_blur_percent).
 pub(crate) const MOTION_BLUR_ROW: usize = 7;
 pub(crate) const MOTION_BLUR_MAX: u32 = 300;
@@ -429,6 +439,25 @@ pub(crate) const GPU_ROW: usize = 14;
 pub(crate) const RAM_ROW: usize = 15;
 pub(crate) const SWAP_ROW: usize = 16;
 pub(crate) const COMPOSITING_ROW: usize = 17;
+// Abschnitt Render-Order (s. render_order): eine Kopfzeile mit den Spaltennamen, darunter je
+// Zeile der Tabelle eine Zeile mit einem Schalter pro Zelle.
+pub(crate) const RENDER_ORDER_HEAD_ROW: usize = 18;
+pub(crate) const RENDER_ORDER_FIRST_ROW: usize = RENDER_ORDER_HEAD_ROW + 1;
+pub(crate) const RENDER_ORDER_CELL_W: f32 = 96.0;
+pub(crate) const RENDER_ORDER_CELL_GAP: f32 = 8.0;
+// Zelle (Tabellenzeile, Spalte) -- `zeile` 0 ist die erste unter der Kopfzeile.
+pub(crate) fn render_order_cell_rect(zeile: usize, spalte: usize) -> crate::Rect {
+    render_order_col_rect(RENDER_ORDER_FIRST_ROW + zeile, spalte)
+}
+pub(crate) fn render_order_col_rect(row: usize, spalte: usize) -> crate::Rect {
+    crate::Rect {
+        x: crate::SETTINGS_CTRL_X + spalte as f32 * (RENDER_ORDER_CELL_W + RENDER_ORDER_CELL_GAP),
+        y: crate::settings_row_y(row),
+        w: RENDER_ORDER_CELL_W,
+        h: crate::SETTINGS_CTRL_H,
+    }
+}
+pub(crate) const RENDER_ORDER_TOOLTIP: &str = "Welche Grafik immer über welcher liegt, wie zwei Ebenen in einem Malprogramm: AN zeichnet die Zeile über die Spalte, auch wenn die in der Welt davor steht (ein Krit-Partikel direkt vor den Augen verdeckt den Spieler dann nicht mehr). AUS: wie gewohnt nach der Entfernung. Spieler sind alle PvP-Arten des Hitbox-Moduls außer den Mobs. Feuer sind die Flammen an brennenden Entities; Feuerblöcke und Glas liegen immer darunter, nur Blockentities verdecken sie nach der Entfernung. Blöcke verdecken weiterhin alles.";
 pub(crate) const BLOCK_ROTATION_TOOLTIP: &str = "Vanilla dreht/spiegelt die Textur mancher Vollwürfel (Erde, Sand, Stein, Grasblock, ...) pseudozufällig je nach Weltposition, damit sich das Muster nicht sichtbar wiederholt. AUS zeigt stattdessen für jeden Block immer dieselbe Ausrichtung. Änderung baut alle geladenen Chunks neu.";
 pub(crate) const ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Entities gezeichnet werden (Spieler, Mobs, Items, Displays, Namensschilder, Hitboxen), in Blöcken. Weiter entfernte bleiben geladen und anvisierbar, sie werden nur nicht gezeichnet. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
 pub(crate) const BLOCK_ENTITY_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung Block-Entities gezeichnet werden (Truhen, Betten, Shulkerkisten, Köpfe, Statuen, Schilder), in Blöcken. Außerhalb der Render-Distance nie. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";

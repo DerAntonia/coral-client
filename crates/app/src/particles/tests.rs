@@ -45,6 +45,7 @@ fn partikel_mit_bildern() -> Particles {
     Particles {
         rng: JavaRandom::new(7),
         sprites: vec![vec![[0.0, 0.0, 1.0, 1.0]]; pp::PARTICLE_NAMES.len()],
+        visible_frames: Vec::new(),
         block_uvs: HashMap::default(),
         item_uvs: HashMap::default(),
         particles: VecDeque::new(),
@@ -55,6 +56,11 @@ fn partikel_mit_bildern() -> Particles {
         new_unsupported: Vec::new(),
         tuning: [[ParticleTuning::default(); KINDS.len()]; 2],
         credit: [[0.0; KINDS.len()]; 2],
+        fade_out_ms: 0,
+        spawn_distance: VANILLA_SPAWN_DISTANCE,
+        emit_own: None,
+        emit_scaled: false,
+        painted: HashMap::default(),
     }
 }
 
@@ -323,5 +329,335 @@ fn eigene_partikel_haben_ihre_eigene_anpassung() {
         p.set_tuning([ParticleTuning::default(); KINDS.len()], aus);
         p.on_packet(&paket, &ctx);
         assert_eq!(p.pending.len(), erwartet, "Abstand {abstand}");
+    }
+}
+
+// Explosions-Rueckstoss (kein Vanilla): doppelt so stark wie beim Entity, weg vom Zentrum,
+// ausser Reichweite keiner, und ein Block auf dem einzigen Strahl schirmt ganz ab.
+#[test]
+fn explosion_stoesst_partikel_weg_ausser_hinter_bloecken() {
+    let (mut w, _, _) = welt_mit_saeule(false);
+    let shapes = world::BlockShapes::new(vec![None; world::state_count()]);
+    let mitte = DVec3::new(0.5, 10.5, 0.5);
+    let ziel = DVec3::new(4.5, 10.5, 0.5);
+    let stoss = super::ExplosionPush::new(mitte, 4.0, &w, &shapes).at(ziel).expect("in Reichweite");
+    assert!((stoss.x - 2.0 * (1.0 - 4.0 / 8.0)).abs() < 1e-9 && stoss.y.abs() < 1e-9 && stoss.z.abs() < 1e-9, "{stoss:?}");
+    let schraeg = super::ExplosionPush::new(mitte, 4.0, &w, &shapes).at(DVec3::new(-2.0, 13.0, 1.7)).expect("schraeg in Reichweite");
+    assert!(schraeg.x < 0.0 && schraeg.y > 0.0 && schraeg.z > 0.0, "{schraeg:?}");
+    assert!(super::ExplosionPush::new(mitte, 4.0, &w, &shapes).at(DVec3::new(9.0, 10.5, 0.5)).is_none(), "ausser Reichweite");
+    assert!(super::ExplosionPush::new(mitte, 4.0, &w, &shapes).at(mitte).is_none(), "im Zentrum keine Richtung");
+    let stein = (0..world::state_count() as u32).find(|&s| world::block_name(s) == Some("stone")).expect("stone");
+    w.set_block(2, 10, 0, stein);
+    assert!(super::ExplosionPush::new(mitte, 4.0, &w, &shapes).at(ziel).is_none(), "Block dazwischen schirmt ab");
+    assert!(super::ExplosionPush::new(mitte, 4.0, &w, &shapes).at(DVec3::new(0.5, 10.5, 4.5)).is_some(), "andere Richtung frei");
+}
+
+// Messung: was der Explosions-Rueckstoss bei vollem Partikelbestand kostet (release: 1,9 ms
+// ohne, 1,0 ms mit dem Block-Gedaechtnis von ExplosionPush).
+#[test]
+#[ignore]
+fn bench_explosion_push() {
+    let (w, _, _) = welt_mit_saeule(false);
+    let shapes = world::BlockShapes::new(vec![None; world::state_count()]);
+    let mitte = DVec3::new(0.5, 10.5, 0.5);
+    let mut r = JavaRandom::new(3);
+    let punkte: Vec<DVec3> = (0..16_384).map(|_| mitte + DVec3::new(r.next_double() * 12.0 - 6.0, r.next_double() * 12.0 - 6.0, r.next_double() * 12.0 - 6.0)).collect();
+    let t = std::time::Instant::now();
+    let mut n = 0;
+    let mut stoss = super::ExplosionPush::new(mitte, 6.0, &w, &shapes);
+    for p in &punkte {
+        n += usize::from(stoss.at(*p).is_some());
+    }
+    eprintln!("WERT 16384 Partikel: {:.2} ms, {n} gestossen", t.elapsed().as_secs_f64() * 1000.0);
+}
+
+// Totem-Pop durch eine Explosion: der Pop kommt im selben Tick VOR dem Explosionspaket an.
+// Dann bekommen auch die Partikel, die der Emitter erst danach spawnt, den Stoss -- ein Pop,
+// der erst nach der Explosion beginnt, nicht.
+#[test]
+fn totem_pop_durch_explosion_fliegt_ganz_weg() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let body = |_: i32| Some(EmitterBody { pos: DVec3::new(8.5, 10.0, 4.5), width: 0.6, height: 1.8 });
+    let explosion = pp::Explosion {
+        center: (8.5, 10.9, 8.5),
+        radius: 6.0,
+        block_count: 0,
+        knockback: None,
+        particle: ParticleEffect { type_id: pp::PARTICLE_EXPLOSION, options: ParticleOptions::None },
+        sound: None,
+        block_particles: Vec::new(),
+    };
+    let totem = kind_of(pp::PARTICLE_TOTEM_OF_UNDYING).unwrap() as u8;
+    // Geschwindigkeit in z der Totem-Partikel, die im Tick NACH der Explosion entstehen.
+    let spaetere = |pop_zuerst: bool| {
+        let mut p = partikel_mit_bildern();
+        // Feste Saat, sonst schwankt der Mittelwert von Lauf zu Lauf.
+        p.rng = JavaRandom::new(42);
+        if pop_zuerst {
+            p.add_emitter(7, pp::PARTICLE_TOTEM_OF_UNDYING, 30, &body, &ctx);
+            p.on_explosion(&explosion, &ctx);
+        } else {
+            p.on_explosion(&explosion, &ctx);
+            p.add_emitter(7, pp::PARTICLE_TOTEM_OF_UNDYING, 30, &body, &ctx);
+        }
+        p.tick(&body, &ctx);
+        let schon = p.particles.len();
+        p.tick(&body, &ctx);
+        let neu: Vec<f64> = p.particles.iter().skip(schon).filter(|t| t.kind == totem).map(|t| t.vel.z).collect();
+        assert!(!neu.is_empty(), "der Emitter hat nichts gespawnt");
+        neu
+    };
+    // Ohne Stoss fliegen Totem-Partikel in alle Richtungen (bis etwa 0,7 je Tick), im Mittel
+    // also nirgends hin; mit Stoss im Mittel deutlich weg von der Explosion (-z).
+    let mittel = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    let gestossen = spaetere(true);
+    assert!(mittel(&gestossen) < -0.8, "Pop vor der Explosion: {gestossen:?}");
+    let ungestossen = spaetere(false);
+    assert!(mittel(&ungestossen).abs() < 0.4, "Pop nach der Explosion: {ungestossen:?}");
+}
+
+// Ein Totem-Partikel wird erst gezeichnet, wenn er sich einmal bewegt hat; ein von einer
+// Explosion gestossener macht seinen ersten Schritt sofort (und ist damit gleich sichtbar).
+#[test]
+fn totem_erst_sichtbar_wenn_bewegt_und_stoss_bewegt_sofort() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let effekt = ParticleEffect { type_id: pp::PARTICLE_TOTEM_OF_UNDYING, options: ParticleOptions::None };
+    let mut p = partikel_mit_bildern();
+    let start = DVec3::new(8.5, 10.5, 4.5);
+    p.add_client(&effekt, false, false, start, DVec3::ZERO, &ctx);
+    let neu: Vec<Particle> = p.pending.drain(..).collect();
+    p.particles.extend(neu);
+    assert_eq!(p.particles.len(), 1);
+    let mut verts = Vec::new();
+    let zeichnen = |p: &Particles, verts: &mut Vec<ParticleVertex>| p.build_vertices(DVec3::ZERO, Vec3::X, Vec3::Y, 0.5, verts, None);
+    zeichnen(&p, &mut verts);
+    assert!(verts.is_empty(), "noch nicht bewegt, trotzdem gezeichnet");
+    let explosion = pp::Explosion {
+        center: (8.5, 10.5, 8.5),
+        radius: 6.0,
+        block_count: 0,
+        knockback: None,
+        particle: ParticleEffect { type_id: pp::PARTICLE_EXPLOSION, options: ParticleOptions::None },
+        sound: None,
+        block_particles: Vec::new(),
+    };
+    p.on_explosion(&explosion, &ctx);
+    let t = p.particles.iter().find(|t| usize::from(t.kind) == kind_of(pp::PARTICLE_TOTEM_OF_UNDYING).unwrap()).expect("totem");
+    assert_eq!(t.age, 1, "kein sofortiger Schritt");
+    assert!(t.pos.z < start.z - 0.5, "nicht vom Fleck: {:?}", t.pos);
+    zeichnen(&p, &mut verts);
+    assert!(!verts.is_empty(), "bewegt, aber nicht gezeichnet");
+}
+
+// Partikel ausblenden: in den letzten fade_out_ms linear auf 0, vorher voll; ein opakes
+// Partikel wechselt dabei ins durchscheinende Blatt. Auch fuer die, die in Vanilla schon
+// halb ausblenden.
+#[test]
+fn partikel_blenden_am_lebensende_aus() {
+    let mut ps = partikel_mit_bildern();
+    let mut p = Particle::base(&mut JavaRandom::new(1), DVec3::ZERO);
+    p.max_age = 20;
+    p.sheet = Sheet::Opaque;
+    assert_eq!(ps.fade_out(&p, 0.0), 1.0, "aus");
+    ps.fade_out_ms = 250;
+    p.age = 0;
+    assert_eq!(ps.fade_out(&p, 0.0), 1.0);
+    assert_eq!(ps.sheet_at(&p, 0.0), Sheet::Opaque);
+    // Letztes Bild: age == max_age, noch ein Tick = 50 ms von 250.
+    p.age = 20;
+    assert!((ps.fade_out(&p, 0.0) - 0.2).abs() < 1e-6, "{}", ps.fade_out(&p, 0.0));
+    assert!((ps.fade_out(&p, 0.5) - 0.1).abs() < 1e-6);
+    assert_eq!(ps.sheet_at(&p, 0.0), Sheet::Translucent);
+    p.fades_out = true;
+    assert!((ps.fade_out(&p, 0.0) - 0.2).abs() < 1e-6, "auch Vanilla-Ausblender (Totem) blenden ganz aus");
+}
+
+
+// Mit Coral-Ausblenden faellt das Vanilla-Ausblenden (Totem: bis halbe Deckkraft) weg, ohne
+// bleibt es wie in Vanilla.
+#[test]
+fn coral_ausblenden_ersetzt_vanilla_ausblenden() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let ctx = SpawnContext { camera: DVec3::new(8.5, 10.0, 8.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let effekt = ParticleEffect { type_id: pp::PARTICLE_TOTEM_OF_UNDYING, options: ParticleOptions::None };
+    let mut p = partikel_mit_bildern();
+    p.add_client(&effekt, false, false, DVec3::new(8.5, 30.5, 8.5), DVec3::ZERO, &ctx);
+    let neu: Vec<Particle> = p.pending.drain(..).collect();
+    p.particles.extend(neu);
+    // Mitte des Lebens, von Vanilla schon abgedunkelt; das Coral-Ausblenden hat noch nicht begonnen.
+    let t = &mut p.particles[0];
+    t.age = 40;
+    t.max_age = 70;
+    t.color[3] = 0.6;
+    let mut verts = Vec::new();
+    let alpha = |p: &Particles, verts: &mut Vec<ParticleVertex>| {
+        p.build_vertices(DVec3::ZERO, Vec3::X, Vec3::Y, 0.0, verts, None);
+        verts[0].color[3]
+    };
+    assert!((alpha(&p, &mut verts) - 0.6).abs() < 1e-6, "ohne Coral-Ausblenden wie Vanilla");
+    p.fade_out_ms = 250;
+    assert!((alpha(&p, &mut verts) - 1.0).abs() < 1e-6, "mit Coral-Ausblenden voll");
+}
+
+// Endet die Bilderreihe mit durchsichtigen Bildern (Pack kuerzt die Animation), endet das
+// Ausblenden beim ersten davon -- die Animation wird nicht laenger.
+#[test]
+fn ausblenden_endet_beim_ersten_leeren_bild() {
+    // Atlas 4x1: Bilder 0 und 1 sichtbar, 2 fast durchsichtig (unter der Schwelle), 3 leer.
+    let mut rgba = vec![255u8; 16];
+    rgba[2 * 4 + 3] = 20;
+    rgba[3 * 4 + 3] = 0;
+    let list: Vec<[f32; 4]> = (0..4).map(|i| [i as f32 / 4.0, 0.0, (i + 1) as f32 / 4.0, 1.0]).collect();
+    assert_eq!(visible_frames(&list, &rgba, 4), 2);
+    rgba[3] = 0;
+    assert_eq!(visible_frames(&list, &rgba, 4), 2, "nur leere Bilder am Ende zaehlen");
+
+    let mut ps = partikel_mit_bildern();
+    let totem = pp::PARTICLE_TOTEM_OF_UNDYING as usize;
+    ps.sprites[totem] = list;
+    ps.visible_frames = vec![usize::MAX; pp::PARTICLE_NAMES.len()];
+    ps.visible_frames[totem] = 2;
+    ps.fade_out_ms = 100;
+    let mut p = Particle::base(&mut JavaRandom::new(1), DVec3::ZERO);
+    p.max_age = 30;
+    p.animated_sprites = Some(pp::PARTICLE_TOTEM_OF_UNDYING);
+    // Bild 2 kommt ab Alter 20 (20 * 3 / 30); davor ein Tick = 50 ms von 100.
+    assert_eq!(ps.visible_end(&p), 20);
+    assert_eq!(sprite_by_age(&ps.sprites[totem], 19, 30), ps.sprites[totem][1]);
+    assert_eq!(sprite_by_age(&ps.sprites[totem], 20, 30), ps.sprites[totem][2]);
+    p.age = 19;
+    assert!((ps.fade_out(&p, 0.0) - 0.5).abs() < 1e-6, "{}", ps.fade_out(&p, 0.0));
+    p.age = 20;
+    assert_eq!(ps.fade_out(&p, 0.0), 0.0);
+    // Ohne leere Bilder wie bisher bis max_age.
+    ps.visible_frames[totem] = 4;
+    assert_eq!(ps.visible_end(&p), 31);
+}
+
+// Partikel-Distanz: ohne `force` entsteht nichts jenseits von spawn_distance, darunter schon.
+#[test]
+fn partikel_distanz_einstellbar() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let mut ps = partikel_mit_bildern();
+    let krit = ParticleEffect { type_id: pp::PARTICLE_CRIT, options: ParticleOptions::None };
+    let weit = DVec3::new(40.5, 6.0, 0.5);
+    ps.add_client(&krit, false, false, weit, DVec3::ZERO, &ctx);
+    assert!(ps.pending.is_empty() && ps.particles.is_empty(), "40 Bloecke: Vanilla-Grenze 32");
+    ps.spawn_distance = 64.0;
+    ps.add_client(&krit, false, false, weit, DVec3::ZERO, &ctx);
+    assert_eq!(ps.pending.len() + ps.particles.len(), 1, "mit 64 Bloecken entsteht er");
+}
+
+// Krit mit 300 % Menge an einem Gegner direkt neben der eigenen Figur: der Emitter wuerfelt
+// dreimal so oft (jedes Partikel eigene Richtung, keine Haeufchen aus Kopien), und die
+// Partikel zaehlen als fremde, obwohl sie im Bereich der eigenen Figur entstehen.
+#[test]
+fn krit_menge_ohne_haeufchen_und_fremd_neben_einem() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let ich = DVec3::new(8.5, 10.0, 8.5);
+    let ctx = SpawnContext {
+        camera: ich,
+        mode: ParticleMode::All,
+        mode_own: ParticleMode::All,
+        world: &w,
+        shapes: &shapes,
+        biomes: &world::BiomePalette::fallback(),
+        player: Some(NearPlayer { pos: ich, vel_y: 0.0 }),
+    };
+    // Der Gegner steht 0,4 Bloecke neben einem -- mitten im Bereich, der sonst als eigen gilt.
+    let gegner = DVec3::new(8.9, 10.0, 8.5);
+    let body = |id: i32| Some(EmitterBody { pos: if id == 1 { ich } else { gegner }, width: 0.6, height: 1.8 });
+    let krit = kind_of(pp::PARTICLE_CRIT).unwrap();
+    let zaehlen = |menge: u32| {
+        let mut p = partikel_mit_bildern();
+        p.rng = JavaRandom::new(7);
+        let mut t = [ParticleTuning::default(); KINDS.len()];
+        t[krit].amount_pct = menge;
+        p.set_tuning(t, t);
+        p.add_emitter(2, pp::PARTICLE_CRIT, 1, &body, &ctx);
+        p.pending.iter().filter(|t| t.kind as usize == krit).map(|t| (t.own, t.vel)).collect::<Vec<_>>()
+    };
+    let einfach = zaehlen(100);
+    let dreifach = zaehlen(300);
+    assert!(einfach.iter().all(|(own, _)| !own), "Krit am Gegner ist kein eigener");
+    assert!(dreifach.len() > einfach.len() * 2, "{} gegen {}", dreifach.len(), einfach.len());
+    // Keine Haeufchen: kaum zwei Partikel mit fast gleicher Richtung.
+    let nah = |a: DVec3, b: DVec3| (a - b).length() < 0.05;
+    let paare = (0..dreifach.len()).flat_map(|i| (i + 1..dreifach.len()).map(move |j| (i, j))).filter(|&(i, j)| nah(dreifach[i].1, dreifach[j].1)).count();
+    assert!(paare * 10 < dreifach.len(), "{paare} fast gleiche Paare bei {}", dreifach.len());
+    // Der eigene Krit bleibt eigen.
+    let mut p = partikel_mit_bildern();
+    p.add_emitter(1, pp::PARTICLE_CRIT, 1, &body, &ctx);
+    assert!(p.pending.iter().filter(|t| t.kind as usize == krit).all(|t| t.own));
+}
+
+// Krit-Spur eines Pfeils mit 300 % Menge: zwoelf statt vier Partikel, gleichmaessig auf der
+// Strecke eines Ticks verteilt -- nicht vier Haeufchen aus je drei Kopien (Nutzer 2026-11-12).
+#[test]
+fn spur_verteilt_mehr_menge_gleichmaessig() {
+    let (w, shapes, _) = welt_mit_saeule(false);
+    let ctx = SpawnContext { camera: DVec3::new(0.5, 6.0, 0.5), mode: ParticleMode::All, mode_own: ParticleMode::All, world: &w, shapes: &shapes, biomes: &world::BiomePalette::fallback(), player: None };
+    let krit = ParticleEffect { type_id: pp::PARTICLE_CRIT, options: ParticleOptions::None };
+    let art = kind_of(pp::PARTICLE_CRIT).unwrap();
+    let orte = |menge: u32| {
+        let mut p = partikel_mit_bildern();
+        let mut t = [ParticleTuning::default(); KINDS.len()];
+        t[art].amount_pct = menge;
+        p.set_tuning(t, t);
+        p.add_trail(&krit, DVec3::new(2.0, 6.0, 0.5), DVec3::new(3.0, 0.0, 0.0), DVec3::ZERO, 4, &ctx);
+        // `last` ist der Ort vor dem Tick des Konstruktors, also wo es gesetzt wurde.
+        let mut x: Vec<f64> = p.pending.iter().map(|t| t.last.x).collect();
+        x.sort_by(f64::total_cmp);
+        x
+    };
+    assert_eq!(orte(100), vec![2.0, 2.75, 3.5, 4.25]);
+    let dreifach = orte(300);
+    assert_eq!(dreifach.len(), 12);
+    for paar in dreifach.windows(2) {
+        assert!((paar[1] - paar[0] - 0.25).abs() < 1e-9, "{dreifach:?}");
+    }
+    // Weniger Menge: weiter vier Stellen, push laesst welche weg.
+    assert_eq!(orte(50).len(), 2);
+}
+
+// Bemaltes Rechteck eines Bildes als Anteil -- auch bei doppelter Aufloesung derselbe Anteil,
+// und bei gespiegeltem UV von der anderen Seite gezaehlt.
+#[test]
+fn bemaltes_rechteck_als_anteil() {
+    // 4x4-Atlas, ein Bild ueber alles, bemalt nur Spalte 1..=2 in Zeile 2..=3.
+    let bild = |n: usize| {
+        let mut rgba = vec![0u8; n * n * 4];
+        for y in 0..n {
+            for x in 0..n {
+                if (n / 4..3 * n / 4).contains(&x) && y >= n / 2 {
+                    rgba[(y * n + x) * 4 + 3] = 255;
+                }
+            }
+        }
+        rgba
+    };
+    assert_eq!(painted_bounds([0.0, 0.0, 1.0, 1.0], &bild(4), 4), Some([0.25, 0.5, 0.75, 1.0]));
+    assert_eq!(painted_bounds([0.0, 0.0, 1.0, 1.0], &bild(32), 32), Some([0.25, 0.5, 0.75, 1.0]), "HD-Pack: derselbe Anteil");
+    assert_eq!(painted_bounds([0.0, 1.0, 1.0, 0.0], &bild(4), 4), Some([0.25, 0.0, 0.75, 0.5]), "v gespiegelt");
+    assert_eq!(painted_bounds([0.0, 0.0, 1.0, 1.0], &[0u8; 64], 4), None, "leer");
+}
+
+#[test]
+fn emitter_partikel_entstehen_auf_dem_rand_der_hitbox() {
+    let b = EmitterBody { pos: DVec3::new(8.5, 10.0, 4.5), width: 0.6, height: 1.8 };
+    // Zur Seite: an der Seitenwand, auf der Hoehe, die der Strahl aus der Mitte dort hat.
+    let p = spawners::body_edge(b, DVec3::new(0.6, 0.3, 0.0));
+    assert!((p.x - 8.8).abs() < 1e-9 && (p.y - 11.05).abs() < 1e-9 && (p.z - 4.5).abs() < 1e-9, "{p:?}");
+    // Steil nach oben: auf dem Deckel.
+    let p = spawners::body_edge(b, DVec3::new(0.0, 1.0, -0.1));
+    assert!((p.y - 11.8).abs() < 1e-9 && (p.z - 4.41).abs() < 1e-9, "{p:?}");
+    // Jede Richtung landet auf dem Rand, nie innen.
+    for v in [DVec3::new(-0.2, -0.7, 0.4), DVec3::new(0.9, 0.2, 0.9), DVec3::new(0.01, 0.2, -0.5)] {
+        let d = spawners::body_edge(b, v) - DVec3::new(8.5, 10.9, 4.5);
+        let rand = (d.x.abs() / 0.3).max(d.y.abs() / 0.9).max(d.z.abs() / 0.3);
+        assert!((rand - 1.0).abs() < 1e-9, "{v:?} -> {d:?}");
     }
 }

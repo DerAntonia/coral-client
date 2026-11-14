@@ -159,65 +159,82 @@ fn sprite_item_quads(mask: &SpriteMask, tex: TexRect, f: &mut dyn FnMut([f32; 3]
     // Grenze waehlt das Nearest-Sampling bei rechten/unteren Kanten den durchsichtigen
     // Nachbarn, der Alpha-Test verwirft den ganzen Streifen -- und je nach Haltung fehlte dem
     // Item dann jede sichtbare Dicke.
-    for y in 0..mask.height as i32 {
-        for x in 0..mask.width as i32 {
-            if !mask.is_opaque(x, y) {
-                continue;
-            }
-            let (fx, fy) = (x as f32, y as f32);
-            // Links (-X)
-            if !mask.is_opaque(x - 1, y) {
-                sprite_quad(
-                    f,
-                    [-1.0, 0.0, 0.0],
-                    [
-                        ([px(fx), py(fy + 1.0), BACK_Z], uv(fx + 0.5, fy + 1.0 - EDGE_UV_INSET)),
-                        ([px(fx), py(fy + 1.0), FRONT_Z], uv(fx + 0.5, fy + 1.0 - EDGE_UV_INSET)),
-                        ([px(fx), py(fy), FRONT_Z], uv(fx + 0.5, fy + EDGE_UV_INSET)),
-                        ([px(fx), py(fy), BACK_Z], uv(fx + 0.5, fy + EDGE_UV_INSET)),
-                    ],
-                );
-            }
-            // Rechts (+X)
-            if !mask.is_opaque(x + 1, y) {
-                sprite_quad(
-                    f,
-                    [1.0, 0.0, 0.0],
-                    [
-                        ([px(fx + 1.0), py(fy + 1.0), FRONT_Z], uv(fx + 0.5, fy + 1.0 - EDGE_UV_INSET)),
-                        ([px(fx + 1.0), py(fy + 1.0), BACK_Z], uv(fx + 0.5, fy + 1.0 - EDGE_UV_INSET)),
-                        ([px(fx + 1.0), py(fy), BACK_Z], uv(fx + 0.5, fy + EDGE_UV_INSET)),
-                        ([px(fx + 1.0), py(fy), FRONT_Z], uv(fx + 0.5, fy + EDGE_UV_INSET)),
-                    ],
-                );
-            }
-            // Oben im BILD ist +Y im Modell (s. py).
-            if !mask.is_opaque(x, y - 1) {
-                sprite_quad(
-                    f,
-                    [0.0, 1.0, 0.0],
-                    [
-                        ([px(fx), py(fy), BACK_Z], uv(fx + EDGE_UV_INSET, fy + 0.5)),
-                        ([px(fx), py(fy), FRONT_Z], uv(fx + EDGE_UV_INSET, fy + 0.5)),
-                        ([px(fx + 1.0), py(fy), FRONT_Z], uv(fx + 1.0 - EDGE_UV_INSET, fy + 0.5)),
-                        ([px(fx + 1.0), py(fy), BACK_Z], uv(fx + 1.0 - EDGE_UV_INSET, fy + 0.5)),
-                    ],
-                );
-            }
-            // Unten im Bild = -Y im Modell.
-            if !mask.is_opaque(x, y + 1) {
-                sprite_quad(
-                    f,
-                    [0.0, -1.0, 0.0],
-                    [
-                        ([px(fx + 1.0), py(fy + 1.0), BACK_Z], uv(fx + 1.0 - EDGE_UV_INSET, fy + 0.5)),
-                        ([px(fx + 1.0), py(fy + 1.0), FRONT_Z], uv(fx + 1.0 - EDGE_UV_INSET, fy + 0.5)),
-                        ([px(fx), py(fy + 1.0), FRONT_Z], uv(fx + EDGE_UV_INSET, fy + 0.5)),
-                        ([px(fx), py(fy + 1.0), BACK_Z], uv(fx + EDGE_UV_INSET, fy + 0.5)),
-                    ],
-                );
+    // Gleichgerichtete Randkanten, die in einer Spalte bzw. Zeile aneinanderstossen, werden ein
+    // Streifen (wie die Spans aelterer Vanilla-Fassungen): laengs laeuft die UV ueber dieselben
+    // Pixel, das Bild ist gleich, aber im Schnitt gut 40 % weniger Vierecke je Item.
+    let (bw, bh) = (mask.width as i32, mask.height as i32);
+    // Laeufe [a, b) entlang einer Linie, an denen `rand(i)` gilt.
+    let laeufe = |n: i32, rand: &dyn Fn(i32) -> bool, f: &mut dyn FnMut(f32, f32)| {
+        let mut i = 0;
+        while i < n {
+            if rand(i) {
+                let a = i;
+                while i < n && rand(i) {
+                    i += 1;
+                }
+                f(a as f32, i as f32);
+            } else {
+                i += 1;
             }
         }
+    };
+    for x in 0..bw {
+        let fx = x as f32;
+        // Links (-X)
+        laeufe(bh, &|y| mask.is_opaque(x, y) && !mask.is_opaque(x - 1, y), &mut |y0, y1| {
+            sprite_quad(
+                f,
+                [-1.0, 0.0, 0.0],
+                [
+                    ([px(fx), py(y1), BACK_Z], uv(fx + 0.5, y1 - EDGE_UV_INSET)),
+                    ([px(fx), py(y1), FRONT_Z], uv(fx + 0.5, y1 - EDGE_UV_INSET)),
+                    ([px(fx), py(y0), FRONT_Z], uv(fx + 0.5, y0 + EDGE_UV_INSET)),
+                    ([px(fx), py(y0), BACK_Z], uv(fx + 0.5, y0 + EDGE_UV_INSET)),
+                ],
+            );
+        });
+        // Rechts (+X)
+        laeufe(bh, &|y| mask.is_opaque(x, y) && !mask.is_opaque(x + 1, y), &mut |y0, y1| {
+            sprite_quad(
+                f,
+                [1.0, 0.0, 0.0],
+                [
+                    ([px(fx + 1.0), py(y1), FRONT_Z], uv(fx + 0.5, y1 - EDGE_UV_INSET)),
+                    ([px(fx + 1.0), py(y1), BACK_Z], uv(fx + 0.5, y1 - EDGE_UV_INSET)),
+                    ([px(fx + 1.0), py(y0), BACK_Z], uv(fx + 0.5, y0 + EDGE_UV_INSET)),
+                    ([px(fx + 1.0), py(y0), FRONT_Z], uv(fx + 0.5, y0 + EDGE_UV_INSET)),
+                ],
+            );
+        });
+    }
+    for y in 0..bh {
+        let fy = y as f32;
+        // Oben im BILD ist +Y im Modell (s. py).
+        laeufe(bw, &|x| mask.is_opaque(x, y) && !mask.is_opaque(x, y - 1), &mut |x0, x1| {
+            sprite_quad(
+                f,
+                [0.0, 1.0, 0.0],
+                [
+                    ([px(x0), py(fy), BACK_Z], uv(x0 + EDGE_UV_INSET, fy + 0.5)),
+                    ([px(x0), py(fy), FRONT_Z], uv(x0 + EDGE_UV_INSET, fy + 0.5)),
+                    ([px(x1), py(fy), FRONT_Z], uv(x1 - EDGE_UV_INSET, fy + 0.5)),
+                    ([px(x1), py(fy), BACK_Z], uv(x1 - EDGE_UV_INSET, fy + 0.5)),
+                ],
+            );
+        });
+        // Unten im Bild = -Y im Modell.
+        laeufe(bw, &|x| mask.is_opaque(x, y) && !mask.is_opaque(x, y + 1), &mut |x0, x1| {
+            sprite_quad(
+                f,
+                [0.0, -1.0, 0.0],
+                [
+                    ([px(x1), py(fy + 1.0), BACK_Z], uv(x1 - EDGE_UV_INSET, fy + 0.5)),
+                    ([px(x1), py(fy + 1.0), FRONT_Z], uv(x1 - EDGE_UV_INSET, fy + 0.5)),
+                    ([px(x0), py(fy + 1.0), FRONT_Z], uv(x0 + EDGE_UV_INSET, fy + 0.5)),
+                    ([px(x0), py(fy + 1.0), BACK_Z], uv(x0 + EDGE_UV_INSET, fy + 0.5)),
+                ],
+            );
+        });
     }
 }
 
@@ -362,8 +379,8 @@ mod tests {
         let mask = maske(&["....", ".##.", "...."]);
         let mut out = Vec::new();
         emit_sprite_item(&mask, [0.0, 0.0, 1.0, 1.0], Affine::translation([0.0; 3]), 1.0, &mut out);
-        // 2 Flaechen + 6 Aussenkanten (je Pixel 4 Kanten, 2 davon aneinander).
-        assert_eq!(out.len(), 8 * 6);
+        // 2 Flaechen + 4 Streifen: links, rechts, und oben/unten je einer ueber beide Pixel.
+        assert_eq!(out.len(), 6 * 6);
     }
 
     // Ein voellig leeres Sprite darf nur die beiden (durchsichtigen) Flaechen liefern und

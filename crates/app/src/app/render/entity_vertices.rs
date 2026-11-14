@@ -136,16 +136,44 @@ impl App {
     #[allow(clippy::type_complexity)]
     // Letzter Wert: die Vertex-Bereiche je Entity (fuer Motion Blur, s. entity_motion).
     #[allow(clippy::type_complexity)]
+    // Nahe Entities rastern (s. block.wgsl::entity_near_discard): Spieler und Ruestung sind wie in
+    // Vanilla beidseitig, jede Flaeche liegt auch als Rueckseite im Modell. Durch die Rasterloecher
+    // saehe man dann die Innenseite des Hinterkopfs, und in einem Kopf drin steckte man in
+    // sechs Innenseiten (Nutzer 2026-11-11). Darum wird ein Entity, das so nah ist, dass es
+    // gerastert werden kann, einseitig gezeichnet -- das Rueckseiten-Culling nimmt dann alles
+    // Innere weg. Nah heisst: die Kamera ist hoechstens den Raster-Abstand von seiner Trefferbox
+    // entfernt, die um NEAR_SINGLE_SIDED_MARGIN groesser ist (Ruestung, schwingende Arme).
+    pub(crate) fn mark_near_entity(&self, feet: DVec3, width: f64, height: f64) {
+        let ab = f64::from(self.settings.entity_near_dither_cm) / 100.0;
+        let nah = ab > 0.0 && {
+            let auge = self.camera.position;
+            let h = width / 2.0 + NEAR_SINGLE_SIDED_MARGIN;
+            let dx = ((auge.x - feet.x).abs() - h).max(0.0);
+            let dz = ((auge.z - feet.z).abs() - h).max(0.0);
+            let dy = (feet.y - NEAR_SINGLE_SIDED_MARGIN - auge.y).max(auge.y - (feet.y + height + NEAR_SINGLE_SIDED_MARGIN)).max(0.0);
+            dx * dx + dy * dy + dz * dz <= ab * ab
+        };
+        self.near_single_sided.set(nah);
+    }
+
+    // Beidseitig zeichnen, wo Vanilla es tut -- ausser das Entity ist gerade nah (s. mark_near_entity).
+    pub(crate) fn two_sided_here(&self) -> bool {
+        !self.near_single_sided.get()
+    }
+
     pub(crate) fn build_entity_vertices(
         &self,
     ) -> (Vec<world::BlockVertex>, Vec<[f32; 4]>, Vec<u32>, (usize, usize, usize), (Vec<world::BlockVertex>, Vec<[f32; 4]>), Vec<std::ops::Range<u32>>, Vec<(u64, std::ops::Range<usize>)>) {
         // Anteil 0 = Textur unveraendert (s. fs_entity).
         const KEINE_FAERBUNG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+        use super::skin_frame::OHNE_NAH_RASTER;
         // Shader-Pfad: Licht je Vertex, parallel zu `tints` gefuellt. Ein Wert je Entity (an
         // seinen Augen, wie Vanilla), Blockentities je Vertex, Feuer und Spuren unbeleuchtet.
         const UNBELEUCHTET: u32 = 1 << 31;
         let lit = crate::shader_path_on();
         self.prune_anim_smoothing();
+        self.anim_debug_frame();
+        self.near_single_sided.set(false);
         let mut lights: Vec<u32> = Vec::new();
         let tint = self.settings.damage_tint_rgba();
         // Die zweite Faerbung fuer kritische Treffer. None = Modul aus, dann bleibt es bei der
@@ -183,6 +211,9 @@ impl App {
         let mut nur_umriss_farbe: Vec<[f32; 4]> = Vec::new();
         // So viele Vertices am Anfang sind der eigene Spieler (fuers Ausblenden, s. unten).
         let mut eigene = 0;
+        // Render-Order: Vertex-Bereiche in `out` mit ihrer Klasse (s. render::render_order,
+        // BlockRenderer::set_entity_classes); alles uebrige ist CLASS_OTHER.
+        let mut klassen: Vec<(std::ops::Range<u32>, u8)> = Vec::new();
         // Was man lesen koennen soll (Karten in Rahmen, Schilder): diese Bereiche zeichnet die
         // Bewegungsunschaerfe danach noch einmal scharf (s. BlockRenderer::render_sharp_entities).
         let mut scharf: Vec<std::ops::Range<u32>> = Vec::new();
@@ -297,12 +328,13 @@ impl App {
                 Some(glide) => world::entity_transform_gliding(rel(feet), body_yaw, self.physics.body.scale, world::entity_model::PLAYER_MODEL_SCALE, glide),
                 None => world::entity_transform_leaning(rel(feet), body_yaw, self.physics.body.scale, world::entity_model::PLAYER_MODEL_SCALE, &lean),
             };
+            self.mark_near_entity(feet, self.physics.width(), self.physics.current_height());
             let eigener_start = out.len();
             let eigene_umrissfarbe = self.own_glowing.then(|| self.glow_color(self.own_uuid.and_then(|u| self.player_names.get(&u))));
             // Unsichtbar: wie bei Fremden nur Koerper und Umhang weg (s. dort).
             if !self.own_invisible {
                 let start = out.len();
-                defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
+                defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], self.two_sided_here());
                 haut.push(start..out.len());
             } else if let Some(farbe) = eigene_umrissfarbe {
                 let vorher = nur_umriss.len();
@@ -384,6 +416,7 @@ impl App {
                 umriss.push((eigener_start..out.len(), farbe));
             }
             eigene = out.len();
+            klassen.push((0..eigene as u32, render::render_order::CLASS_PVP));
         }
 
         // Frueher stand hier ein `if self.entities.is_empty() { return out; }`. Das war ein
@@ -418,6 +451,14 @@ impl App {
                 continue;
             }
             let feet = rel(DVec3::new(x, y, z));
+            let (breite, hoehe) = e.hit_size();
+            // Nur Spieler werden nah einseitig gezeichnet (Nutzer 2026-11-14): Armorstaende und
+            // Mobs behalten ihre Innenseiten (Helm von hinten), das Raster gilt fuer alle.
+            if is_player_like(e.entity_type) {
+                self.mark_near_entity(DVec3::new(x, y, z), breite, hoehe);
+            } else {
+                self.near_single_sided.set(false);
+            }
             let body_yaw = e.render_yaw(progress);
             let head_rel = e.relative_head_yaw(progress);
             let pitch = e.render_pitch(progress);
@@ -561,12 +602,12 @@ impl App {
                 // unsichtbar und leuchtend NUR als Silhouette.
                 let schluessel = crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id);
                 if !e.invisible && skinning {
-                    self.push_skinned_body(model, &pose, base, tex, true, schluessel);
+                    self.push_skinned_body(model, &pose, base, tex, self.two_sided_here(), schluessel);
                 } else if e.invisible && e.glowing && skinning {
                     self.push_skinned_outline_only(model, &pose, base, tex, true, schluessel, self.entity_glow_color(e));
                 } else if !e.invisible {
                     let start = out.len();
-                    defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
+                    defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], self.two_sided_here());
                     haut.push(start..out.len());
                 } else if e.glowing {
                     let vorher = nur_umriss.len();
@@ -796,12 +837,19 @@ impl App {
                 }
             }
             // Die Instanzen dieses Entities (GPU-Skinning) wie seine Ecken.
+            // Render-Order: Spieler und die anderen PvP-Arten des Hitbox-Moduls bilden eine Klasse.
+            let pvp = hitbox_kinds::HitboxKind::of_entity(e.entity_type).is_some_and(hitbox_kinds::HitboxKind::is_pvp);
+            if pvp {
+                klassen.push((entity_start as u32..out.len() as u32, render::render_order::CLASS_PVP));
+                self.skin_entity_class(skin_start, render::render_order::CLASS_PVP);
+            }
             if self.skin_instance_count() > skin_start {
                 self.finish_skin_entity(skin_start, faerbung, schildfilter, e.glowing.then(|| self.entity_glow_color(e)));
             }
             je_entity.push((crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, *_id), entity_start..out.len()));
         }
         // Das Feuer zieht mit seinem Entity mit, also eigene Bereiche fuer den Motion Blur.
+        let flammen_ab = out.len() as u32;
         for (schluessel, fuesse, breite, hoehe) in feuer {
             let start = out.len();
             self.emit_entity_fire(fuesse, breite, hoehe, &mut out);
@@ -809,6 +857,7 @@ impl App {
                 je_entity.push((k, start..out.len()));
             }
         }
+        klassen.push((flammen_ab..out.len() as u32, render::render_order::CLASS_FLAME));
         self.emit_trails(eye, self.tick_progress(), &mut out);
         tints.resize(out.len(), KEINE_FAERBUNG);
         if lit {
@@ -821,6 +870,7 @@ impl App {
             let deckkraft = b.alphas(progress);
             let alpha = |name: &str| deckkraft.iter().find(|(n, _)| *n == name).map_or(1.0, |(_, a)| *a);
             let feet = DVec3::new(b.feet.0, b.feet.1, b.feet.2);
+            self.mark_near_entity(feet, 0.6 * f64::from(b.scale), 1.8 * f64::from(b.scale));
             let base = world::entity_model::entity_transform(rel(feet), b.yaw, b.scale, world::entity_model::PLAYER_MODEL_SCALE);
             // Nur der Skin, keine Ruestung (s. death_burst). Ausblendende Teile einzeln und
             // durchscheinend, einseitig (sonst schimmerte die Innenseite der hinteren Flaechen
@@ -836,7 +886,7 @@ impl App {
             }
             // Der Rest wie gewohnt deckend.
             let pose = b.pose_of(progress, &|n| alpha(n) >= 1.0);
-            defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
+            defer_model(&mut jobs, &mut out, model, &pose, base, tex, [ENTITY_BRIGHTNESS; 3], self.two_sided_here());
             haut.push(start..out.len());
             je_entity.push((crate::entity_motion::key(crate::entity_motion::KIND_DEATH_BURST, b.entity_id), start..out.len()));
             tints.resize(out.len(), KEINE_FAERBUNG);
@@ -850,6 +900,10 @@ impl App {
         // Ab hier liest wieder jemand Vertices aus `out` (Licht, Umriss): vorher fertig machen.
         self.run_model_jobs(&jobs, &mut out);
         // Betten sind Blockgeometrie im Entity-Puffer, kein Lebewesen -- nie gefaerbt.
+        // Ab hier keine Entities mehr: Puppe, Ego-Hand und Ansichten zeichnen wie Vanilla.
+        self.near_single_sided.set(false);
+        let blockentities_ab = out.len() as u32;
+        let skin_blockentities_ab = self.skin_instance_count();
         self.emit_beds(eye, &mut out);
         self.emit_shulker_boxes(eye, &mut out);
         self.emit_chests(eye, &mut out);
@@ -858,6 +912,11 @@ impl App {
         let start = out.len() as u32;
         self.emit_signs(eye, &mut out);
         scharf.push(start..out.len() as u32);
+        klassen.push((blockentities_ab..out.len() as u32, render::render_order::CLASS_BLOCK_ENTITY));
+        // Dasselbe fuer Blockentities mit Skinning (Truhen, Betten ...).
+        self.skin_entity_class(skin_blockentities_ab, render::render_order::CLASS_BLOCK_ENTITY);
+        let blockentities = blockentities_ab as usize..out.len();
+        *self.entity_classes_out.borrow_mut() = klassen;
         tints.resize(out.len(), KEINE_FAERBUNG);
         if lit {
             for v in &out[lights.len()..] {
@@ -871,6 +930,10 @@ impl App {
             }
             tints = nur_haut;
         }
+        // Block-Entities (Betten, Truhen, Schilder ...) nie nah rastern (Nutzer 2026-11-12): eine
+        // Truhe direkt vor einem ist Teil der Welt wie ein Block. Erst nach "Nur Skin", das die
+        // Liste neu aufbaut.
+        tints[blockentities].fill(OHNE_NAH_RASTER);
         // Erst nach "Nur Skin": der Filter gilt ausdruecklich fuer den GANZEN Spieler samt
         // Umhang, Ruestung und Items. Wo gerade ein Schadensblitz liegt, bleibt der sichtbar.
         {

@@ -12,6 +12,7 @@ use world::{BlockVertex, FaceGroup, SectionRun, TerrainVertex, FACE_GROUPS, SECT
 use crate::camera::Camera;
 use crate::frustum::Frustum;
 use crate::occlusion::OcclusionCulling;
+use crate::render_order::{self, cover};
 use crate::terrain_arena::{ArenaPage, ArenaSlot, TerrainArena};
 
 mod init;
@@ -35,7 +36,8 @@ pub use tiles::*;
 const WORLD_CULL_MIN_Y: i32 = -128;
 const WORLD_CULL_MAX_Y: i32 = 1024;
 
-pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+// Mit Stencil: die Render-Order (s. crate::render_order) maskiert darueber je Pixel.
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 // G-Buffer des Shader-Pfads (s. crate::shader_path): Albedo als sRGB (dunkle Toene behalten
 // ihre Abstufung), Normale im Sichtraum als 10-Bit-Kanaele.
@@ -59,6 +61,10 @@ struct CameraUniform {
     // Hitbox-Anzeige (s. vs_hitbox): x = ungenutzt, y = Mindest-Halbbreite der Geometrie
     // (HITBOX_MIN_RASTER_HALF_PX), z/w = Bildschirmgroesse in Pixeln.
     hitbox: [f32; 4],
+    // x = Entities nah an der Kamera rastern ab diesem Abstand in Bloecken (0 = aus, s.
+    // block.wgsl::entity_near_discard). Nur die Welt-Kamera; Hand und Inventar-Puppe 0.
+    // y = Mip-Bias der Block-Texturen (0 .. -1, s. mip_bias).
+    near: [f32; 4],
 }
 
 // Ein Vertex der Hitbox-Anzeige. Traegt BEIDE Endpunkte der Kante (augenrelativ, identisch
@@ -132,7 +138,7 @@ pub const WEATHER_VERTEX_CAPACITY: usize = 4300 * 6;
 
 // 6 x f32 -- der augenrelative Versatz einer Spalte in ganzen Bloecken und der Nachkomma-
 // Anteil des Auges (s. update_column_offsets, block.wgsl::column_relative).
-const COLUMN_OFFSET_STRIDE: wgpu::BufferAddress = 24;
+const COLUMN_OFFSET_STRIDE: wgpu::BufferAddress = 28;
 
 // Ein Quad sind zwei Dreiecke = 6 Vertices (s. mesher::push_quad_with_uv). Die Sortierung
 // arbeitet auf ganzen Quads, nicht auf Dreiecken -- ein zerrissenes Quad ergaebe Luecken.
@@ -152,6 +158,9 @@ struct TerrainMesh {
     min_y: i32,
     // Wie ChunkMesh::offset_slot -- hier zugleich die Instanz-Nummer im indirekten Aufruf.
     offset_slot: u32,
+    // Flickbare Spalte (s. world::layout_patchable): je Platz im Puffer der Block, der die
+    // Flaeche erzeugt hat, world::FREE_QUAD = frei. None: nur als Ganzes ersetzbar.
+    quad_block: Option<Vec<u32>>,
 }
 
 // Ein Eintrag im indirekten Zeichenpuffer, Layout wie VkDrawIndexedIndirectCommand
@@ -343,6 +352,14 @@ pub struct BlockRenderer {
     // Vertex-Format (HitboxVertex statt BlockVertex) -- die Kanten werden erst im
     // Vertex-Shader auf Pixelbreite gebracht und brauchen dafuer beide Endpunkte je Vertex.
     hitbox_pipeline: wgpu::RenderPipeline,
+    // Nur Stencil bzw. nur auf dem Merker (s. crate::render_order, render_hitboxes).
+    hitbox_mark_pipeline: wgpu::RenderPipeline,
+    hitbox_sharp_pipeline: wgpu::RenderPipeline,
+    // Render-Order (Einstellungen > Render), s. crate::render_order.
+    pub render_order: crate::render_order::RenderOrder,
+    // Klassen der deckenden Entity-Vertices (s. set_entity_classes): aufsteigende,
+    // lueckenlose Bereiche mit ihrer Klasse (render_order::CLASS_*).
+    entity_classes: Vec<(std::ops::Range<u32>, u8)>,
     hitbox_buffer: wgpu::Buffer,
     hitbox_vertex_count: u32,
     // Zuletzt gesetzte Hitbox-Parameter (s. set_hitbox_params) -- update_camera schreibt sie
@@ -352,6 +369,8 @@ pub struct BlockRenderer {
     // Blockumriss im Modus Komplementaer: eigener Durchgang nach der Welt (s. OutlineComplement).
     outline_complement: OutlineComplement,
     depth_view: wgpu::TextureView,
+    // Dieselbe Textur, nur die Tiefe -- zum Lesen als Textur (Bewegungsunschaerfe).
+    depth_sample_view: wgpu::TextureView,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     atlas_bind_group: wgpu::BindGroup,
@@ -389,10 +408,18 @@ pub struct BlockRenderer {
     translucent_arena: TerrainArena,
     translucent_draws: IndirectDraws,
     terrain_translucent_pipeline: wgpu::RenderPipeline,
+    // Nur das Wasser bzw. alles ausser Wasser (Render-Order, s. draw_after_terrain).
+    terrain_translucent_water_pipeline: wgpu::RenderPipeline,
+    terrain_translucent_rest_pipeline: wgpu::RenderPipeline,
     // Dasselbe fuer den Shader-Pfad, beleuchtet (s. render_forward_rest).
     lit_terrain_translucent_pipeline: wgpu::RenderPipeline,
     // Tageslicht 0..1 fuer den Shader-Pfad (Kamera-Uniform params.w, s. block.wgsl).
     pub daylight: f32,
+    // Entities nah an der Kamera rastern ab diesem Abstand in Bloecken, 0 = aus (Kamera-Uniform
+    // near.x, s. block.wgsl::entity_near_discard).
+    pub entity_near_dither: f32,
+    // Mip-Bias der Welt-Texturen, 0 .. -1 (negativ = schaerfer, aber mehr Moire in der Ferne).
+    pub mip_bias: f32,
     // GameTime fuer Vanillas Core-Shader (s. vanilla_draw): Tageszeit 0..1.
     pub vanilla_game_time: f32,
     multi_draw: bool,
@@ -446,6 +473,8 @@ pub struct BlockRenderer {
     column_offset_capacity: u32,
     // Arbeitspuffer fuer die Versaetze, damit pro Frame nichts neu alloziert wird.
     column_offset_scratch: Vec<f32>,
+    // Spalten, die gerade einblenden (s. start_column_fade): Beginn und Dauer in Sekunden.
+    column_fade: HashMap<(i32, i32), (std::time::Instant, f32)>,
     // Ein einzelner Null-Versatz fuer Puffer, die schon augenrelativ ankommen (Entities,
     // Hand, Geisterbloecke). Dieselben Pipelines verlangen den zweiten Vertex-Puffer, also
     // muss auch dort etwas gebunden sein.
@@ -479,6 +508,8 @@ pub struct BlockRenderer {
     // beigemischt wird (s. block.wgsl::fs_entity) -- die Vertexfarbe der Block-Pipeline ist
     // ein Multiplikator und kann nur abdunkeln.
     entity_pipeline: wgpu::RenderPipeline,
+    // Die Flammen an Entities: wie entity_pipeline, aber verdeckbar (Render-Order).
+    entity_flame_pipeline: wgpu::RenderPipeline,
     // GPU-Skinning der festen Entity-Modelle (s. skinning), gezeichnet direkt nach dem
     // deckenden Teil der CPU-Entities.
     pub skinning: crate::skinning::Skinning,

@@ -329,11 +329,11 @@ impl PendingFont {
     }
 
     // Fertig? Dann hochladen. Ok(None) = noch nicht, Err = der Thread ist ohne Ergebnis weg.
-    pub fn try_finish(&self, device: &wgpu::Device, queue: &wgpu::Queue, bind_group_layout: Arc<wgpu::BindGroupLayout>) -> Result<Option<FontAtlas>, ()> {
+    pub fn try_finish(&self, device: &wgpu::Device, queue: &wgpu::Queue, bind_group_layout: Arc<wgpu::BindGroupLayout>) -> Result<Option<FontAtlas>, std::sync::mpsc::TryRecvError> {
         match self.rx.try_recv() {
             Ok(pixels) => Ok(Some(FontAtlas::from_pixels(device, queue, pixels, self.kind, bind_group_layout))),
             Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(()),
+            Err(e @ std::sync::mpsc::TryRecvError::Disconnected) => Err(e),
         }
     }
 }
@@ -520,7 +520,13 @@ impl FontAtlas {
     // auch hat, sonst fiele das Zeichen ganz weg.
     // Ohne Grossbuchstaben (Stil, s. set_capitals) vorher alles klein.
     pub fn display_text<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
-        let text = without_capitals(text);
+        self.display_text_cased(text, false)
+    }
+
+    // Wie display_text; mit `keep_capitals` bleiben die Grossbuchstaben auch ohne sie (Tasten-
+    // namen auf den Belegungsknoepfen, s. App push_keep_capitals_marker).
+    pub fn display_text_cased<'a>(&self, text: &'a str, keep_capitals: bool) -> std::borrow::Cow<'a, str> {
+        let text = if keep_capitals { std::borrow::Cow::Borrowed(text) } else { without_capitals(text) };
         if !self.has_small_capital_s() {
             return text;
         }

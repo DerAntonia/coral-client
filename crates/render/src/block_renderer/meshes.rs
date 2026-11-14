@@ -70,7 +70,7 @@ impl BlockRenderer {
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.depth_view = create_depth_view(device, width, height);
+        (self.depth_view, self.depth_sample_view) = create_depth_view(device, width, height);
     }
 
     // Kompletter Atlas-Austausch (Skin-Tab "Laden", s. App::reload_resource_pack) -- anders
@@ -131,9 +131,10 @@ impl BlockRenderer {
         visibility: Vec<world::visibility::SectionVis>,
         min_y: i32,
         translucent_vertices: &[TerrainVertex],
+        quad_block: Option<Vec<u32>>,
     ) {
         self.occlusion.set_column(key, visibility, min_y);
-        self.set_terrain_mesh(device, queue, key, vertices, groups, runs, min_y);
+        self.set_terrain_mesh(device, queue, key, vertices, groups, runs, min_y, quad_block);
         if let Some(old) = self.translucent_meshes.remove(&key) {
             self.translucent_arena.remove(old.slot);
         }
@@ -273,6 +274,7 @@ impl BlockRenderer {
         self.occlusion.remove_column(key);
         self.sight.remove_column(key);
         self.sort_dirty.remove(&key);
+        self.column_fade.remove(&key);
         self.order_dirty = true;
     }
 
@@ -308,6 +310,7 @@ impl BlockRenderer {
         groups: [FaceGroup; FACE_GROUPS],
         runs: Vec<SectionRun>,
         min_y: i32,
+        quad_block: Option<Vec<u32>>,
     ) {
         if let Some(old) = self.meshes.remove(&key) {
             self.terrain_arena.remove(old.slot);
@@ -315,8 +318,55 @@ impl BlockRenderer {
         self.ensure_quad_indices(device, queue, vertices.len().div_ceil(4) as u32);
         if let Some(slot) = self.terrain_arena.insert(device, queue, vertices) {
             let sections = runs.iter().fold(0u64, |m, r| m | 1u64.checked_shl(u32::from(r.section)).unwrap_or(0));
-            self.meshes.insert(key, TerrainMesh { slot, groups, runs, sections, min_y, offset_slot: 0 });
+            self.meshes.insert(key, TerrainMesh { slot, groups, runs, sections, min_y, offset_slot: 0, quad_block });
         }
+    }
+
+    // Laesst sich die Spalte flicken (s. patch_column)?
+    pub fn column_patchable(&self, key: (i32, i32)) -> bool {
+        self.meshes.get(&key).is_some_and(|m| m.quad_block.is_some())
+    }
+
+    // Flaechen einer flickbaren Spalte austauschen: alle Flaechen der Bloecke `removed`
+    // (aufsteigend sortierte Kennungen, s. world::block_id) verschwinden, `added` kommt dazu --
+    // jede neue Flaeche auf einen freien Platz ihres Laufs (Richtung x Section), damit Rueckseiten-
+    // und Hoehlen-Culling weiter stimmen. false, ohne irgendetwas zu aendern, wenn die Spalte
+    // nicht flickbar ist oder ein Lauf keinen Platz mehr hat: dann baut der Aufrufer die Spalte
+    // neu. `visibility`: Sichtverbindungen der Sections nach der Aenderung.
+    pub fn patch_column(
+        &mut self,
+        queue: &wgpu::Queue,
+        key: (i32, i32),
+        removed: &[u32],
+        added: &[world::PlacedQuad],
+        visibility: Vec<world::visibility::SectionVis>,
+    ) -> bool {
+        let Some(mesh) = self.meshes.get_mut(&key) else { return false };
+        let Some(quad_block) = mesh.quad_block.as_mut() else { return false };
+        let weg = |block: u32| block != world::FREE_QUAD && removed.binary_search(&block).is_ok();
+        let Some(ziel) = world::plan_patch(&mesh.runs, quad_block, removed, added) else { return false };
+        // Ab hier wird geschrieben. Erst die alten Flaechen leeren, die keinen Nachfolger
+        // bekommen, dann die neuen an ihre Plaetze.
+        let leer = [TerrainVertex { pos: [0; 4], color: [0; 4], uv: [0; 2] }; 4];
+        for (platz, block) in quad_block.iter_mut().enumerate() {
+            if weg(*block) {
+                *block = world::FREE_QUAD;
+                if !ziel.contains(&(platz as u32)) {
+                    self.terrain_arena.write(queue, mesh.slot, platz as u32 * 4, &leer);
+                }
+            }
+        }
+        for (q, &platz) in added.iter().zip(&ziel) {
+            quad_block[platz as usize] = q.block;
+            self.terrain_arena.write(queue, mesh.slot, platz * 4, &q.verts);
+            // Die Ebenen der Gruppe nur weiten, nie verengen: zu weit zeichnet hoechstens
+            // etwas Abgewandtes mit, zu eng liesse Sichtbares weg.
+            let g = &mut mesh.groups[q.group as usize];
+            g.plane_min = g.plane_min.min(q.plane);
+            g.plane_max = g.plane_max.max(q.plane);
+        }
+        self.occlusion.set_column(key, visibility, mesh.min_y);
+        true
     }
 
     // Der gemeinsame Index-Puffer muss fuer `quads` Flaechen reichen.

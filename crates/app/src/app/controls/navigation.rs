@@ -104,6 +104,7 @@ impl App {
             AppMode::World => {
                 self.mode = AppMode::Menu;
                 self.screen = MenuScreen::Main;
+                self.pause_bar_slide = Some(Instant::now());
                 self.clear_controls();
                 // Der Zeiger erscheint immer in der Bildschirmmitte, nicht dort, wo er beim
                 // letzten Menue stand.

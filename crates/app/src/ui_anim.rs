@@ -186,6 +186,9 @@ pub(crate) const ABSORPTION_FADE_RISE: f32 = 4.0;
 pub(crate) const COLOR_AIR_BAR: [f32; 3] = [0.25, 0.6, 1.0];
 
 pub(crate) const VERTS_PER_QUAD: usize = 6;
+// Text (UI und Weltbeschriftungen) hat je Viereck nur seine vier Ecken; die zwei Dreiecke
+// kommen aus dem festen Indexpuffer (s. text_index_range, GpuState::text_index_buffer).
+pub(crate) const TEXT_VERTS_PER_QUAD: usize = 4;
 // Reichlich: der offene Chat bringt Unterstriche fuer Links mit, die Textauswahl eine
 // Markierung je ausgewaehltem Textstueck.
 pub(crate) const MAX_UI_RECTS: usize = 4096;
@@ -202,15 +205,6 @@ pub(crate) const MAX_UI_GLYPHS: usize = 32768; // Schatten zeichnet jedes Zeiche
 // Texturierte UI-Quads pro Frame (s. UiSprite): der Inventar-Screen ist der Spitzenwert --
 // Hintergrund-Sheet + 46 Slots à bis zu drei Wuerfelseiten + Hotbar.
 pub(crate) const MAX_UI_SPRITES: usize = 1024;
-// Die beiden Fluegelspitzen (unten rechts, s. CURSOR_KITE[1]/[3]) sind abgerundet: Radius im
-// 100x130-Raum und wie viele Punkte je Bogen. Die Spitze oben bleibt spitz, sie ist der
-// Klickpunkt.
-pub(crate) const CURSOR_WING_RADIUS: f32 = 5.0;
-pub(crate) const CURSOR_WING_ARC_POINTS: usize = 7;
-// Pfeil-Umriss (Spitze, Bogen, Kerbe, Bogen) + Kapsel-Enden (2 Punkte) -- die Punktzahl, die
-// cursor.wgsl erwartet (dort KITE_N = CURSOR_KITE_POINTS).
-pub(crate) const CURSOR_KITE_POINTS: usize = 2 + 2 * CURSOR_WING_ARC_POINTS;
-pub(crate) const CURSOR_POINTS: usize = CURSOR_KITE_POINTS + 2;
 // Rand um die Bounding-Box des Zeigers: die Kantenglaettung braucht Platz bis ~0.5 px
 // ausserhalb der Form, sonst wird genau der geglaettete Saum weggeschnitten.
 pub(crate) const CURSOR_AA_PADDING_PX: f32 = 2.0;

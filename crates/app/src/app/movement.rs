@@ -101,6 +101,7 @@ impl App {
         // statt dass sie sich aufheben (s. Settings::snap_tap_enabled). Ohne den Schalter
         // bleibt es bei Vanillas Verhalten -- beide gedrueckt heisst Stillstand. Bildschirm-
         // Gate steckt mit drin (s. movement_input_flags).
+        self.spectator_swallow_release();
         let (move_forward, move_backward, move_left, move_right, jump, sneak, sprint) = self.movement_input_flags();
         // PlayerEntity.isImmobile() ist `super.isImmobile() || isSleeping()`, und Vanillas
         // tickMovement nullt daraufhin forwardSpeed/sidewaysSpeed/jumping. travel() laeuft
@@ -242,7 +243,13 @@ impl App {
             if std::mem::take(&mut self.attack_hand_changed) {
                 self.ticks_since_last_attack = 0;
             }
-            self.flush_input_actions();
+            // Wiedergabe: keine eigenen Eingaben -- Benutzen, Slot und Schwung kommen aus der
+            // Aufnahme (L). Liefe tick_item_use hier mit, beendete es das aufgenommene Essen
+            // sofort wieder (Taste ist ja nicht unten), der naechste L-Eintrag setzte es zurueck:
+            // der Apfel flackerte (Nutzer 2026-11-13).
+            if !self.replay_active() {
+                self.flush_input_actions();
+            }
             // Vanilla bemerkt den Itemwechsel erst im Spieler-Tick, NACH den Eingaben dieses
             // Ticks: Slottaste und Klick im selben Tick stechen also noch mit der Aufladung des
             // alten Items (Lunge-Swap auf den Speer). Unsere Slottasten wechseln schon beim
@@ -299,6 +306,7 @@ impl App {
             // Laufen ausschlaegt, unabhaengig von der Geschwindigkeit.
             let laufgroesse = if self.physics.on_ground && !self.is_dead && !self.physics.raw_swimming { waagerecht.min(0.1) } else { 0.0 };
             self.own_cape.tick_movement(laufgroesse);
+            self.spectator_rise_tick();
             if self.own_ride.is_some() {
                 // Reitend bewegt sich nicht der Spieler, sondern (falls man lenkt) das
                 // Fahrzeug; der Spieler landet nach dem Entity-Tick auf seinem Sitz.
@@ -452,8 +460,11 @@ impl App {
             };
             self.own_use_ticks = if self.own_using_item_right_arm().is_some() { self.own_use_ticks.saturating_add(1) } else { 0 };
             self.own_eating_particles(false);
-            self.tick_aggressive_use_cancel();
-            self.tick_consumable_optimizer();
+            // Wiedergabe: Ende und Abbruch der Benutzung stehen in der Aufnahme (s. oben).
+            if !self.replay_active() {
+                self.tick_aggressive_use_cancel();
+                self.tick_consumable_optimizer();
+            }
             self.own_body_yaw.set_blocking(blockt.is_some_and(|b| self.own_use_ticks >= world::entity::block_delay_ticks(&b)));
             self.own_body_yaw.tick(
                 self.camera.yaw,
@@ -604,6 +615,15 @@ impl App {
         }
         let Some(typ) = self.entities.get(id).and_then(|e| world::entity_type_name(e.entity_type)) else { return false };
         world::riding::boat_kind(typ).is_some() || (typ == "minecart" && !self.entities.has_passengers(id))
+    }
+
+    // ItemFrame.interact auf dem Client: SUCCESS, sobald Rahmen oder Hand ein Item hat -- dann
+    // geht fuer die Nebenhand nichts mehr raus. Fehlte, deshalb drehte der Server je Klick zweimal.
+    pub(crate) fn click_uses_item_frame(&self, id: i32, hand_item: bool) -> bool {
+        if self.game_mode == GAME_MODE_SPECTATOR {
+            return false;
+        }
+        self.entities.get(id).is_some_and(|e| world::entity::is_item_frame(e.entity_type) && (e.item.is_some() || hand_item))
     }
 
     // EntityPassengersSetS2CPacket fuer den eigenen Spieler (ClientPlayNetworkHandler.

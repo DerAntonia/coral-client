@@ -231,56 +231,70 @@ impl App {
         Some(Some(HoverTarget::SkinTile(c, i, bild)))
     }
 
-    // Linke Taste auf einer Kachel: nur vormerken. Ob es ein Klick oder ein Ziehen wird,
-    // entscheidet die Bewegung bis zum Loslassen (s. skin_drag_release).
+    // Linke Taste auf einer Kachel. Links (verfuegbar) wirkt der Klick sofort, gezogen wird
+    // dort nicht (Nutzer 2026-11-11). Rechts nur vormerken: ob es ein Klick oder ein Ziehen
+    // wird, entscheidet die Bewegung bis zum Loslassen (s. skin_drag_release).
     pub(crate) fn skin_tile_press(&mut self) -> bool {
         if self.mode != AppMode::Menu || self.screen != MenuScreen::SettingsSkin {
             return false;
         }
         let (x, y) = self.pointer();
         let Some((column, index, _, _)) = self.skin_tiles().into_iter().find(|t| skin_clip(t.3).is_some_and(|r| r.contains(x, y))) else { return false };
+        if column == skin_tab::Column::Available {
+            self.skin_tile_click(column, index);
+            return true;
+        }
         self.skin_drag = Some(SkinDrag { column, index, press: self.cursor_pos, moved: std::cell::Cell::new(false) });
         true
     }
 
-    pub(crate) fn skin_drag_release(&mut self) {
+    // Klick auf eine Kachel: aufs Bild die Einstellungen des Packs, sonst in die andere Spalte,
+    // dort oben. Vanilla und das Server-Pack wechseln nicht die Spalte.
+    fn skin_tile_click(&mut self, column: skin_tab::Column, index: usize) {
         use skin_tab::Column;
+        let (x, y) = self.pointer();
+        let kachel = self.skin_tiles().into_iter().find(|t| t.0 == column && t.1 == index);
+        let auf_bild = kachel.as_ref().filter(|t| self.skin_has_settings(&t.2) && skin_icon_rect(t.3).contains(x, y)).map(|t| t.2.clone());
+        if let Some(name) = auf_bild {
+            self.play_ui_sound(ui_sound::UiSound::Open);
+            if name == skin_tab::SERVER {
+                self.open_server_pack_files();
+            } else {
+                self.open_skin_files(name);
+            }
+            return;
+        }
+        if kachel.as_ref().is_some_and(|t| skin_tab::is_marker(&t.2)) {
+            return;
+        }
+        let ziel = (if column == Column::Available { Column::Selected } else { Column::Available }, 0);
+        self.skin_move((column, index), ziel);
+    }
+
+    // Eine Kachel verschieben und den neuen Stand merken.
+    fn skin_move(&mut self, von: (skin_tab::Column, usize), ziel: (skin_tab::Column, usize)) {
+        let (mut links, mut rechts) = self.skin_columns();
+        skin_tab::move_skin(&mut links, &mut rechts, von, ziel);
+        self.selected_skins = rechts;
+        self.settings.skin_order = links;
+        self.remember_server_pack_position();
+        self.play_ui_sound(ui_sound::UiSound::Click);
+        self.persist_settings();
+    }
+
+    pub(crate) fn skin_drag_release(&mut self) {
         let gezogen = self.skin_drag_active().is_some();
         let ziel = self.skin_drop_slot();
         let Some(d) = self.skin_drag.take() else { return };
         if self.mode != AppMode::Menu || self.screen != MenuScreen::SettingsSkin {
             return;
         }
-        let (mut links, mut rechts) = self.skin_columns();
-        let ziel = if gezogen {
-            let Some(ziel) = ziel else { return };
-            ziel
-        } else {
-            // Klick aufs Bild: Einstellungen des Packs. Sonst in die andere Spalte, dort oben.
-            let (x, y) = self.pointer();
-            let kachel = self.skin_tiles().into_iter().find(|t| t.0 == d.column && t.1 == d.index);
-            let auf_bild = kachel.as_ref().filter(|t| self.skin_has_settings(&t.2) && skin_icon_rect(t.3).contains(x, y)).map(|t| t.2.clone());
-            if let Some(name) = auf_bild {
-                self.play_ui_sound(ui_sound::UiSound::Open);
-                if name == skin_tab::SERVER {
-                    self.open_server_pack_files();
-                } else {
-                    self.open_skin_files(name);
-                }
-                return;
-            }
-            // Vanilla und das Server-Pack wechseln nicht die Spalte.
-            if kachel.as_ref().is_some_and(|t| skin_tab::is_marker(&t.2)) {
-                return;
-            }
-            (if d.column == Column::Available { Column::Selected } else { Column::Available }, 0)
-        };
-        skin_tab::move_skin(&mut links, &mut rechts, (d.column, d.index), ziel);
-        self.selected_skins = rechts;
-        self.settings.skin_order = links;
-        self.remember_server_pack_position();
-        self.play_ui_sound(ui_sound::UiSound::Click);
-        self.persist_settings();
+        if !gezogen {
+            self.skin_tile_click(d.column, d.index);
+            return;
+        }
+        let Some(ziel) = ziel else { return };
+        self.skin_move((d.column, d.index), ziel);
     }
 
     // Was in diesen Packs ausgeschaltet ist (s. Settings::skin_exclusions).

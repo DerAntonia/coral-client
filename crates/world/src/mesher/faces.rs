@@ -19,12 +19,31 @@ pub(super) fn push_face_quad(out: &mut Vec<BlockVertex>, min: [f32; 3], max: [f3
 // Wie push_face_quad, aber mit einem Helligkeitsfaktor JE ECKE (weiche Beleuchtung). Die
 // Faktoren stehen in derselben Reihenfolge wie face_quad_corners -- beide Funktionen
 // muessen dieselbe Eckreihenfolge benutzen, deshalb gibt es sie nur einmal.
+//
+// Die Teilung in zwei Dreiecke laeuft ueber das DUNKLERE Eckenpaar (s. ao_diagonal_gedreht):
+// mit fester Diagonale saehe der Schatten um einen Block an zwei seiner vier Ecken anders aus
+// als an den anderen beiden -- eine schraege Kante quer durch den Schatten.
 pub(super) fn push_face_quad_ao(out: &mut Vec<BlockVertex>, min: [f32; 3], max: [f32; 3], dir: [i32; 3], color: [f32; 3], ao: [f32; 4], uv: [f32; 4]) {
+    push_face_quad_ao_geteilt(out, min, max, dir, color, ao, uv, ao_diagonal_gedreht(ao));
+}
+
+// Ob die Dreiecksteilung ueber die Ecken 1-3 statt 0-2 laufen soll: ueber das Paar mit der
+// kleineren Helligkeitssumme. Bei Gleichstand bleibt es bei 0-2.
+pub(super) fn ao_diagonal_gedreht(ao: [f32; 4]) -> bool {
+    ao[1] + ao[3] < ao[0] + ao[2]
+}
+
+// Wie push_face_quad_ao mit vorgegebener Teilung -- fuers Einblenden (s. AoFadeQuad): die
+// Fassung "vorher" muss dieselbe Eckreihenfolge haben wie die endgueltige.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn push_face_quad_ao_geteilt(out: &mut Vec<BlockVertex>, min: [f32; 3], max: [f32; 3], dir: [i32; 3], color: [f32; 3], ao: [f32; 4], uv: [f32; 4], gedreht: bool) {
     let corners = face_quad_corners(min, max, dir);
     let [u0, v0, u1, v1] = uv;
     let corner_uv = [[u0, v1], [u0, v0], [u1, v0], [u1, v1]];
     let vert = |i: usize| BlockVertex { position: corners[i], color: [color[0] * ao[i], color[1] * ao[i], color[2] * ao[i]], uv: corner_uv[i] };
-    out.extend_from_slice(&[vert(0), vert(1), vert(2), vert(0), vert(2), vert(3)]);
+    // Zyklisch weitergezaehlt: die Wicklung bleibt, nur die Diagonale wechselt.
+    let [a, b, c, d] = if gedreht { [1, 2, 3, 0] } else { [0, 1, 2, 3] };
+    out.extend_from_slice(&[vert(a), vert(b), vert(c), vert(a), vert(c), vert(d)]);
 }
 
 // Die vier Eckpunkte einer Quaderseite, in der Reihenfolge, in der push_quad_with_uv sie zu
@@ -326,4 +345,26 @@ pub(super) fn push_quad_with_uv(out: &mut Vec<BlockVertex>, corners: [[f32; 3]; 
     let corner_uv = [[u0, v1], [u0, v0], [u1, v0], [u1, v1]];
     let vert = |i: usize| BlockVertex { position: corners[i], color, uv: corner_uv[i] };
     out.extend_from_slice(&[vert(0), vert(1), vert(2), vert(0), vert(2), vert(3)]);
+}
+
+#[cfg(test)]
+mod ao_diagonal_tests {
+    use super::*;
+
+    // Eine einzelne dunkle Ecke liegt immer AUF der Diagonale -- egal an welcher der vier
+    // Ecken. Sonst saehe der Schatten um einen Block an zwei Ecken anders aus als an den
+    // anderen beiden.
+    #[test]
+    fn dunkle_ecke_liegt_auf_der_diagonale() {
+        for dunkel in 0..4 {
+            let mut ao = [1.0; 4];
+            ao[dunkel] = 0.5;
+            let mut out = Vec::new();
+            push_face_quad_ao(&mut out, [0.0; 3], [1.0; 3], [0, 1, 0], [1.0; 3], ao, [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(out.len(), 6);
+            // Die Diagonale sind die beiden Ecken, die in beiden Dreiecken vorkommen.
+            assert!(out[0].position == out[3].position && out[2].position == out[4].position);
+            assert!(out[0].color[0] < 1.0 || out[2].color[0] < 1.0, "Ecke {dunkel}: dunkle Ecke nicht auf der Diagonale");
+        }
+    }
 }

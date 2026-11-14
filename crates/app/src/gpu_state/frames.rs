@@ -9,7 +9,7 @@ impl GpuState {
     // label_text_buffer und label_quad_buffer. Rueckgabe: Ecken der Hintergruende und die
     // Glyphen-Abschnitte je Schrift.
     fn prepare_occluded_labels(&self, screen_px: (f32, f32)) -> (u32, Vec<(std::ops::Range<u32>, FontKind)>) {
-        let grenze = MAX_LABEL_GLYPHS * VERTS_PER_QUAD;
+        let grenze = MAX_LABEL_GLYPHS * TEXT_VERTS_PER_QUAD;
         let mut glyphen = std::mem::take(&mut *self.occluded_label_glyphs.borrow_mut());
         glyphen.truncate(grenze);
         let allgemein = self.font_atlas.kind();
@@ -160,7 +160,62 @@ impl GpuState {
         FrameTiming { idle_ms, encode_ms, submit_ms, present_ms, present_ns, gpu_done_ns, ready_ns }
     }
 
+    // Ein Menue-Bild. Die Listen stehen in den Pixeln, in denen das Menue rechnet (s. ui_scale);
+    // hier, an EINER Stelle, werden sie in echte Pixel umgerechnet: Flaechen, Sprites, Overlay,
+    // Zuschnitt und Zeiger. Text rechnet shape_text_in um (draw_scale), weil der Schriftfaktor
+    // an der Schrift haengt (s. menu_text_scale).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_menu(
+        &mut self,
+        rects: &[UiRect],
+        texts: &[UiText],
+        sprites: &[UiSprite],
+        overlay: &UiOverlay,
+        cursor: Option<(f32, f32)>,
+        cursor_fx: CursorFxFrame,
+        show_wallpaper: bool,
+        show_world: Option<f32>,
+        show_last_view: bool,
+        show_connect_view: Option<f32>,
+        acquired: (wgpu::SurfaceTexture, f32),
+    ) -> Option<FrameTiming> {
+        let s = self.ui_scale.get();
+        if s == 1.0 {
+            return self.render_menu_real(rects, texts, sprites, overlay, cursor, cursor_fx, show_wallpaper, show_world, show_last_view, show_connect_view, acquired);
+        }
+        let rects: Vec<UiRect> = rects.iter().map(|r| scale_ui_rect(r, s)).collect();
+        let sprites: Vec<UiSprite> = sprites.iter().map(|sp| scale_ui_sprite(sp, s)).collect();
+        let overlay = UiOverlay {
+            groups: overlay
+                .groups
+                .iter()
+                .map(|g| UiOverlayGroup {
+                    rects: g.rects.iter().map(|r| scale_ui_rect(r, s)).collect(),
+                    texts: g.texts.clone(),
+                    sprites: g.sprites.iter().map(|sp| scale_ui_sprite(sp, s)).collect(),
+                    pivot: (g.pivot.0 * s, g.pivot.1 * s),
+                    angle: g.angle,
+                    clip: g.clip.map(|c| scale_rect(c, s)),
+                })
+                .collect(),
+        };
+        let cursor = cursor.map(|(x, y)| (x * s, y * s));
+        let cursor_fx = CursorFxFrame { scale: cursor_fx.scale * s, ..cursor_fx };
+        let band = content_clip();
+        store_content_clip(band.map(|c| scale_rect(c, s)));
+        let modul_band = module_clip();
+        store_module_clip(modul_band.map(|c| scale_rect(c, s)));
+        self.ui_scale.set(1.0);
+        self.draw_scale.set(s);
+        let timing = self.render_menu_real(&rects, texts, &sprites, &overlay, cursor, cursor_fx, show_wallpaper, show_world, show_last_view, show_connect_view, acquired);
+        self.draw_scale.set(1.0);
+        self.ui_scale.set(s);
+        store_content_clip(band);
+        store_module_clip(modul_band);
+        timing
+    }
+
+    fn render_menu_real(
         &mut self,
         rects: &[UiRect],
         texts: &[UiText],
@@ -193,7 +248,7 @@ impl GpuState {
         let (frame, wait_ms) = acquired;
         let work_started = Instant::now();
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let screen_px = self.size();
+        let screen_px = self.real_size();
 
         let mut quad_data: Vec<Vertex> = Vec::with_capacity(rects.len() * VERTS_PER_QUAD);
         let mut quad_clips: Vec<(u32, bool)> = Vec::new();
@@ -222,7 +277,7 @@ impl GpuState {
 
         let mut text_data: Vec<TextVertex> = Vec::new();
         let schriften = self.shape_text(texts, screen_px, &mut text_data);
-        let text_split = append_overlay(&mut text_data, &ov.text, MAX_UI_GLYPHS * VERTS_PER_QUAD);
+        let text_split = append_overlay(&mut text_data, &ov.text, MAX_UI_GLYPHS * TEXT_VERTS_PER_QUAD);
         if !text_data.is_empty() {
             self.queue.write_buffer(&self.text_vertex_buffer, 0, bytemuck::cast_slice(&text_data));
         }
@@ -259,6 +314,29 @@ impl GpuState {
             };
             sprite_data.extend_from_slice(&[vertex(0), vertex(1), vertex(2), vertex(0), vertex(2), vertex(3)]);
         }
+        // Panorama: nur ohne anderes Hintergrundbild davor (Weltbild, letzter Blick).
+        let panorama = match &self.panorama {
+            Some((bind_group, groesse)) if show_wallpaper && hintergrund.is_none() => {
+                let jetzt = std::time::Instant::now();
+                let (mut spin, zuletzt) = self.panorama_spin.get();
+                // Laengere Pausen (Menue zu, Fenster verdeckt) nicht nachholen.
+                let dt = zuletzt.map_or(0.0, |t| jetzt.duration_since(t).as_secs_f32().min(0.25));
+                spin = (spin + dt * crate::panorama::DEG_PER_SEC * self.panorama_speed.get() as f32 / 100.0).rem_euclid(360.0);
+                self.panorama_spin.set((spin, Some(jetzt)));
+                let mut verts = Vec::with_capacity(crate::panorama::MAX_VERTICES / 2);
+                crate::panorama::vertices(spin, screen_px, *groesse, &mut verts);
+                verts.truncate(crate::panorama::MAX_VERTICES);
+                if !verts.is_empty() {
+                    self.queue.write_buffer(&self.panorama_vertex_buffer, 0, bytemuck::cast_slice(&verts));
+                }
+                Some((bind_group, verts.len() as u32))
+            }
+            _ => {
+                let (spin, _) = self.panorama_spin.get();
+                self.panorama_spin.set((spin, None));
+                None
+            }
+        };
         let sprite_runs = Self::shape_sprites(sprites, screen_px, &mut sprite_data);
         let sprite_split = append_overlay_sprites(&mut sprite_data, &ov.sprites);
         if !sprite_data.is_empty() {
@@ -293,6 +371,12 @@ impl GpuState {
                 pass.set_vertex_buffer(0, self.sprite_vertex_buffer.slice(..));
                 pass.set_bind_group(0, bind_group, &[]);
                 pass.draw(0..VERTS_PER_QUAD as u32, 0..1);
+            }
+            if let Some((bind_group, anzahl)) = panorama.filter(|(_, n)| *n > 0) {
+                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_vertex_buffer(0, self.panorama_vertex_buffer.slice(..));
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.draw(0..anzahl, 0..1);
             }
             if quad_split > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
@@ -489,7 +573,7 @@ impl GpuState {
         let frustum = render::Frustum::from_view_proj(camera.cull_view_proj_matrix(aspect));
         self.block_renderer.prepare_terrain_draws(&self.device, &self.queue, &frustum, eye, camera.view_position());
 
-        let screen_px = self.size();
+        let screen_px = self.real_size();
         // Projizierte Text-Displays zuerst (unter dem HUD-Text), hoechstens die Haelfte des
         // Puffers -- der HUD-Text darf nie wegen Hologrammen fehlen.
         // Die Overlay-Ebene zuerst (s. overlay_vertices).
@@ -498,7 +582,7 @@ impl GpuState {
         // Beschneidungen des letzten Aufrufs, und die gehoeren dem HUD.
         let (label_quad_len, label_runs) = self.prepare_occluded_labels(screen_px);
         let mut text_data: Vec<TextVertex> = std::mem::take(&mut *self.world_label_glyphs.borrow_mut());
-        text_data.truncate(MAX_UI_GLYPHS / 2 * VERTS_PER_QUAD);
+        text_data.truncate(MAX_UI_GLYPHS / 2 * TEXT_VERTS_PER_QUAD);
         let label_len = text_data.len() as u32;
         let mut schriften = self.shape_text(texts, screen_px, &mut text_data);
         // Die Text-Displays vorn in der Schrift des Bereichs Nametags, ab dem HUD-Text wieder
@@ -509,7 +593,7 @@ impl GpuState {
         // Schildtext fuer den Welt-Durchgang, schon im VRAM (s. App::build_sign_texts).
         let sign_len = self.sign_gpu.borrow().draws.len();
         let sign_kind = self.sign_font.get().unwrap_or(self.font_atlas.kind());
-        let text_split = append_overlay(&mut text_data, &ov.text, MAX_UI_GLYPHS * VERTS_PER_QUAD);
+        let text_split = append_overlay(&mut text_data, &ov.text, MAX_UI_GLYPHS * TEXT_VERTS_PER_QUAD);
         if !text_data.is_empty() {
             self.queue.write_buffer(&self.text_vertex_buffer, 0, bytemuck::cast_slice(&text_data));
         }
@@ -529,8 +613,23 @@ impl GpuState {
         quad_data.truncate(MAX_UI_RECTS / 4 * VERTS_PER_QUAD);
         let welt_quads = quad_data.len() / VERTS_PER_QUAD;
         quad_data.reserve(rects.len() * VERTS_PER_QUAD);
+        // Clip- und Verlaufsmarker wie im Menue (s. render_menu_real): im Spiel nur die
+        // Modul-Detailansicht setzt sie (s. App::module_detail_band).
+        let mut quad_clips: Vec<(u32, bool)> = Vec::new();
+        let mut fade = None;
         for r in rects.iter().take(MAX_UI_RECTS.saturating_sub(welt_quads)) {
-            quad_data.extend_from_slice(&rect_verts(r, screen_px));
+            if let Some(an) = clip_marker_rect(r) {
+                quad_clips.push((quad_data.len() as u32, an));
+                continue;
+            }
+            if let Some(f) = fade_marker_rect(r) {
+                fade = f;
+                continue;
+            }
+            match fade {
+                Some(f) => fade_quad_verts(&rect_verts(r, screen_px), f, screen_px.1, &mut quad_data),
+                None => quad_data.extend_from_slice(&rect_verts(r, screen_px)),
+            }
         }
         let quad_split = append_overlay(&mut quad_data, &ov.quads, MAX_UI_RECTS * VERTS_PER_QUAD);
         if !quad_data.is_empty() {
@@ -787,9 +886,10 @@ impl GpuState {
             if !label_runs.is_empty() {
                 pass.set_pipeline(&self.label_text_pipeline);
                 pass.set_vertex_buffer(0, self.label_text_buffer.slice(..));
+                pass.set_index_buffer(self.text_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 for (bereich, art) in &label_runs {
                     pass.set_bind_group(0, &self.hud_font(*art).bind_group, &[]);
-                    pass.draw(bereich.clone(), 0..1);
+                    pass.draw_indexed(text_index_range(bereich.clone()), 0, 0..1);
                 }
             }
         }
@@ -872,7 +972,7 @@ impl GpuState {
             if quad_split > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
                 pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-                pass.draw(0..quad_split, 0..1);
+                draw_clipped(&mut pass, 0..quad_split, &quad_clips, screen_px, |pass, r| pass.draw(r, 0..1));
             }
             if top_start > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
@@ -1065,7 +1165,7 @@ impl GpuState {
                 crosshair_center_offset(crosshair_extras.shape, size)
             };
             let mitte_px = ((mitte.0 * screen_px.0).round() + versatz, (mitte.1 * screen_px.1).round() + versatz);
-            crosshair_data.extend(crosshair_ring_vertices(mitte_px, anteil, screen_px, crosshair_extras.ring_outline));
+            crosshair_data.extend(crosshair_ring_vertices(mitte_px, crosshair_extras.ring_radius, anteil, screen_px, crosshair_extras.ring_outline));
         }
         // Die Texte nach Schrift gruppiert: je Schrift ein Zeichenaufruf mit ihrer
         // Glyphen-Bindung (Gruppe 1). Kreuz und Kreis davor brauchen keine.

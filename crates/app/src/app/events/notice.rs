@@ -25,18 +25,45 @@ impl App {
     // Einmal je Bild, vor dem Zeichnen: Stapel, Animationen und Ziehen weiterschalten.
     pub(crate) fn tick_notifications(&mut self) {
         let Some(gpu) = self.gpu.as_ref() else { return };
-        let pointer = self.notification_pointer();
+        // Die Karten rechnen immer in Menue-Pixeln, auch im Spiel (s. notification_scale).
+        let s = self.notification_scale(gpu);
+        let zeiger = gpu.cursor_scale.get() / s;
+        let pointer = self.notification_pointer().map(|(x, y)| (x * zeiger, y * zeiger));
         let inset = if self.chrome_visible() { TOPBAR_H } else { 0.0 };
         self.notifications.set_top_inset(inset);
+        let vorher = gpu.ui_scale.replace(s);
         self.notifications.update(Instant::now(), gpu.size(), pointer, |n| notification_layout(gpu, n).height);
+        gpu.ui_scale.set(vorher);
     }
 
-    // Die Karten als oberste UI-Ebene (s. UiOverlay).
+    // Massstab der Karten: im Menue der des Menues (im HUD-Editor also 1), im Spiel derselbe
+    // wie im Menue -- eine Karte ist ueberall gleich gross.
+    pub(crate) fn notification_scale(&self, gpu: &crate::GpuState) -> f32 {
+        match self.mode {
+            AppMode::Menu => gpu.cursor_scale.get(),
+            AppMode::World => Self::world_menu_scale(gpu),
+        }
+    }
+
+    // Die Karten als oberste UI-Ebene (s. UiOverlay). Im Menue rechnet render_menu sie in echte
+    // Pixel um, im Spiel geschieht das hier.
     pub(crate) fn build_notifications(&self) -> UiOverlay {
         let mut overlay = UiOverlay::default();
         let Some(gpu) = self.gpu.as_ref() else { return overlay };
         // Zuerst, also unter den Karten.
         self.debug_graph_overlay(&mut overlay);
+        let karten_ab = overlay.groups.len();
+        let s = self.notification_scale(gpu);
+        let vorher = gpu.ui_scale.replace(s);
+        self.build_notification_cards(gpu, &mut overlay);
+        gpu.ui_scale.set(vorher);
+        for g in &mut overlay.groups[karten_ab..] {
+            crate::scale_overlay_group(g, s / vorher);
+        }
+        overlay
+    }
+
+    fn build_notification_cards(&self, gpu: &crate::GpuState, overlay: &mut UiOverlay) {
         let now = Instant::now();
         // Fallende Karten zuletzt, also obenauf: sie stuerzen an den stehenden vorbei.
         let mut karten: Vec<_> = self.notifications.cards(now).collect();
@@ -82,7 +109,6 @@ impl App {
             }
             overlay.groups.push(g);
         }
-        self.build_volume_display(&mut overlay);
-        overlay
+        self.build_volume_display(overlay);
     }
 }

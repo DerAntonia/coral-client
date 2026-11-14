@@ -27,7 +27,30 @@ pub(crate) struct Replay {
     loading: Option<std::sync::mpsc::Receiver<Result<record::Tracks, String>>>,
     // Index des zuletzt angewandten L-Eintrags (+1), damit nur Aenderungen greifen.
     state_applied: usize,
+    // Bis hierher sind die Pakete abgearbeitet (ms Aufnahmezeit, s. ClientEvent::ReplayAt).
+    processed_ms: f64,
+    // Gespult: dorthin wird gerade nachgeholt (in der Leiste blau), bis processed_ms dort ist.
+    seek_to: Option<f64>,
+    // Mit F5 selbst gewaehlte Ansicht -- gilt statt der aufgenommenen, solange die Wiedergabe laeuft.
+    perspective: Option<Perspective>,
+    // Inventar-Taste in der Wiedergabe gedrueckt: Inventar bleibt offen (Umschalter). Sonst
+    // offen, wenn es in der Aufnahme offen war.
+    inventory_forced: bool,
+    recorded_inventory: bool,
+    // Leiste gerade gedrueckt (Ziehen): beim Loslassen dorthin.
+    bar_drag: bool,
 }
+
+// Die Leiste oben (Nutzer 2026-11-12, sonst wie osu): Rand links/rechts, Abstand oben, Hoehe
+// normal und beim Hovern (sie waechst nach unten), und wie weit unter ihr der Hover noch greift.
+const BAR_MARGIN_X: f32 = 0.05;
+const BAR_TOP: f32 = 14.0;
+const BAR_H: f32 = 6.0;
+const BAR_H_HOVER: f32 = 22.0;
+const BAR_HIT_H: f32 = 40.0;
+// So lange darf drain_events je Bild in der Wiedergabe arbeiten -- beim Nachholen nach dem
+// Spulen bleibt das Bild so fluessig, und die Leiste zeigt den Fortschritt.
+pub(crate) const REPLAY_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
 
 // Spulen je Pfeiltaste.
 const SEEK_MS: f64 = 5000.0;
@@ -149,6 +172,12 @@ impl App {
             tracks: None,
             loading: Some(rx),
             state_applied: 0,
+            processed_ms: 0.0,
+            seek_to: None,
+            perspective: None,
+            inventory_forced: false,
+            recorded_inventory: false,
+            bar_drag: false,
         });
         self.recordings_open = false;
         self.begin_replay();
@@ -159,6 +188,10 @@ impl App {
     fn begin_replay(&mut self) {
         let Some(r) = self.replay.as_mut() else { return };
         r.state_applied = 0;
+        r.processed_ms = 0.0;
+        // Neuer Durchlauf ab dem Anfang: alles bis zur Uhr wird nachgeholt (blau).
+        let ziel = r.clock.now_ms();
+        r.seek_to = (ziel > 0.0).then_some(ziel);
         let start = (r.path.clone(), Arc::clone(&r.clock), r.server.clone());
         self.column_history.clear();
         self.world_reset_debug = None;
@@ -179,18 +212,8 @@ impl App {
         let dauer = r.tracks.as_ref().map_or(f64::INFINITY, |t| t.duration_ms);
         match code {
             KeyCode::Space => clock.set_paused(!clock.paused()),
-            KeyCode::ArrowRight => clock.seek((clock.now_ms() + SEEK_MS).min(dauer)),
-            KeyCode::ArrowLeft => {
-                // Zurueck geht nur mit einem neuen Durchlauf (s. record::replay).
-                let ziel = (clock.now_ms() - SEEK_MS).max(0.0);
-                let neu = record::ReplayClock::new(ziel);
-                neu.set_speed(clock.speed());
-                neu.set_paused(clock.paused());
-                if let Some(r) = self.replay.as_mut() {
-                    r.clock = Arc::new(neu);
-                }
-                self.begin_replay();
-            }
+            KeyCode::ArrowRight => self.replay_seek((clock.now_ms() + SEEK_MS).min(dauer)),
+            KeyCode::ArrowLeft => self.replay_seek((clock.now_ms() - SEEK_MS).max(0.0)),
             KeyCode::ArrowUp | KeyCode::ArrowDown => {
                 let i = SPEEDS.iter().position(|&s| s >= clock.speed()).unwrap_or(2);
                 let j = if code == KeyCode::ArrowUp { (i + 1).min(SPEEDS.len() - 1) } else { i.saturating_sub(1) };
@@ -199,6 +222,99 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    // Zu einer Aufnahmezeit springen. Nach vorn stellt nur die Uhr, die Pakete bis dahin werden
+    // nachgeholt (wie in osu). Zurueck geht nur mit einem neuen Durchlauf ab dem Anfang (die
+    // Welt laesst sich nicht zurueckdrehen, s. record::replay), der bis zum Ziel nachholt.
+    pub(crate) fn replay_seek(&mut self, ziel: f64) {
+        let Some(r) = self.replay.as_mut() else { return };
+        let ziel = ziel.max(0.0);
+        if ziel >= r.processed_ms {
+            r.clock.seek(ziel);
+            r.seek_to = Some(ziel);
+            return;
+        }
+        let neu = record::ReplayClock::new(ziel);
+        neu.set_speed(r.clock.speed());
+        neu.set_paused(r.clock.paused());
+        r.clock = Arc::new(neu);
+        self.begin_replay();
+    }
+
+    // Abgearbeiteter Stand vom Netz-Task (s. ClientEvent::ReplayAt).
+    pub(crate) fn replay_processed(&mut self, t: f64) {
+        let Some(r) = self.replay.as_mut() else { return };
+        r.processed_ms = t;
+        let dauer = r.tracks.as_ref().map_or(f64::INFINITY, |t| t.duration_ms);
+        if r.seek_to.is_some_and(|z| t >= z - 100.0 || t >= dauer - 200.0) {
+            r.seek_to = None;
+        }
+    }
+
+    // Die Leiste: Trefferflaeche (zum Hovern und Klicken) und die Bahn selbst bei Anteil
+    // `hover` (0 normal, 1 ganz hoch). In Bildschirmpixeln.
+    fn replay_bar_rects(screen: (f32, f32), hover: f32) -> (Rect, Rect) {
+        let (sw, _) = screen;
+        let x = (sw * BAR_MARGIN_X).round();
+        let w = sw - 2.0 * x;
+        let h = BAR_H + (BAR_H_HOVER - BAR_H) * hover;
+        (Rect { x, y: 0.0, w, h: BAR_TOP + BAR_HIT_H }, Rect { x, y: BAR_TOP, w, h: h.round() })
+    }
+
+    fn replay_bar_time_at(&self, px: f32) -> Option<f64> {
+        let gpu = self.gpu.as_ref()?;
+        let dauer = self.replay.as_ref()?.tracks.as_ref()?.duration_ms;
+        let (_, bahn) = Self::replay_bar_rects(gpu.size(), 0.0);
+        Some((f64::from((px - bahn.x) / bahn.w)).clamp(0.0, 1.0) * dauer)
+    }
+
+    // Linke Maustaste in der Wiedergabe: auf der Leiste dorthin springen, Ziehen springt beim
+    // Loslassen nach. true = auf der Leiste.
+    pub(crate) fn replay_mouse_left(&mut self, pressed: bool) -> bool {
+        let Some(gpu) = self.gpu.as_ref() else { return false };
+        let (treffer, _) = Self::replay_bar_rects(gpu.size(), 0.0);
+        let (px, py) = self.cursor_pos;
+        let Some(r) = self.replay.as_mut() else { return false };
+        if pressed {
+            if !treffer.contains(px, py) {
+                return false;
+            }
+            r.bar_drag = true;
+        } else {
+            if !std::mem::take(&mut r.bar_drag) {
+                return false;
+            }
+        }
+        if let Some(ziel) = self.replay_bar_time_at(px) {
+            // Beim Loslassen nur, wenn wirklich gezogen wurde.
+            let jetzt = self.replay.as_ref().map_or(0.0, |r| r.clock.now_ms());
+            if pressed || (ziel - jetzt).abs() > 250.0 {
+                self.replay_seek(ziel);
+            }
+        }
+        true
+    }
+
+    // Tasten in der Wiedergabe, die das Zuschauen betreffen: Perspektive (F5), Freelook und
+    // Inventar. Alles andere bleibt aus -- der eigene Spieler bekommt keine Eingaben.
+    pub(crate) fn replay_view_action(&mut self, action: crate::KeyBindAction, pressed: bool) {
+        use crate::KeyBindAction as A;
+        match action {
+            A::TogglePerspective if pressed && !self.freelook_held => {
+                self.perspective = self.next_perspective();
+                if let Some(r) = self.replay.as_mut() {
+                    r.perspective = Some(self.perspective);
+                }
+            }
+            A::Freelook => self.apply_key_action(action, pressed),
+            A::OpenInventory if pressed => {
+                if let Some(r) = self.replay.as_mut() {
+                    r.inventory_forced = !r.inventory_forced;
+                }
+            }
+            _ => {}
+        }
     }
 
     // Einmal je Bild, bevor die Kamera gebraucht wird: Blick aus K (zwischen zwei Eintraegen
@@ -221,14 +337,23 @@ impl App {
         }
         let Some(tracks) = r.tracks.clone() else { return };
         let t = r.clock.now_ms().min(tracks.duration_ms);
+        let eigene_ansicht = r.perspective;
         if let Some((pos, yaw, pitch, fov, perspektive)) = camera_at(&tracks.camera, t) {
             self.camera.position = pos;
             self.camera.yaw = yaw;
             self.camera.pitch = pitch;
             self.camera.fov_degrees = fov;
-            self.perspective = perspektive;
+            // Selbst gewaehlte Ansicht (F5) vor der aufgenommenen; Freelook fuehrt seine eigene.
+            if !self.freelook_held {
+                self.perspective = eigene_ansicht.unwrap_or(perspektive);
+            }
             // Der eigene Koerper (3. Person, Schatten) steht dort, wo die Kamera ist.
             self.physics.pos = pos - DVec3::new(0.0, f64::from(self.physics.eye_height()), 0.0);
+            // Der Koerper wird zwischen zwei Tick-Positionen gemittelt (physics_render_prev ->
+            // pos). Die Kamera kommt hier aber je Bild aus der Aufnahme -- ohne das hinge der
+            // Koerper bis zu einen Tick hinterher und sprang je Tick nach: in F5 ruckelte alles
+            // (Nutzer 2026-11-13).
+            self.physics_render_prev = self.physics.pos;
         }
         let n = tracks.state.partition_point(|(ts, _)| *ts <= t);
         let r = self.replay.as_mut().expect("oben geprueft");
@@ -237,6 +362,13 @@ impl App {
             if let Some((_, s)) = n.checked_sub(1).and_then(|i| tracks.state.get(i)) {
                 self.apply_replay_state(s);
             }
+        }
+        // Inventar: offen, wenn selbst aufgemacht (Taste) oder in der Aufnahme offen. Ein Container
+        // des Servers (Truhe ...) kommt mit den Paketen und bleibt dessen Sache.
+        let r = self.replay.as_ref().expect("oben geprueft");
+        let offen = r.inventory_forced || r.recorded_inventory;
+        if self.inventory.open.is_none() {
+            self.inventory.screen_open = offen;
         }
     }
 
@@ -252,31 +384,58 @@ impl App {
         self.using_offhand = flag(3);
         self.own_swing_ticks = u32::from(s[2]);
         self.own_use_ticks = u32::from(u16::from_le_bytes([s[3], s[4]]));
+        if let Some(r) = self.replay.as_mut() {
+            r.recorded_inventory = flag(5);
+        }
     }
 
-    // Fortschritt oben in der Mitte: Zeit, Laenge, Tempo, Pause, Tastenhinweis.
+    // Die Leiste oben, sonst wie in osu: ueber die ganze Breite, beim Hovern hoeher. Weiss ist
+    // gespielt (abgearbeitet), blau wird nach dem Spulen gerade nachgeholt. Darunter links die
+    // Zeit (dazu Pause/Tempo, wenn nicht normal), rechts die Laenge; beim Hovern unter dem
+    // Zeiger die Zeit an dieser Stelle.
     pub(crate) fn build_replay_bar(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
         use theme::Slot;
         let Some(r) = self.replay.as_ref() else { return };
         let g = theme::get;
-        let (sw, _) = gpu.size();
         let dauer = r.tracks.as_ref().map_or(0.0, |t| t.duration_ms);
         let jetzt = r.clock.now_ms().min(dauer.max(0.0));
-        let w = 520.0_f32.min(sw - 32.0);
-        let flaeche = Rect { x: ((sw - w) / 2.0).round(), y: 12.0, w, h: 58.0 };
-        rects.push(UiRect::framed(flaeche, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)));
-        let zustand = if r.clock.paused() { "Pause" } else if jetzt >= dauer && dauer > 0.0 { "Ende" } else { "Wiedergabe" };
-        let tempo = r.clock.speed();
-        let zeile = format!("{zustand}  {} / {}  ·  {tempo}×", zeit(jetzt), zeit(dauer));
-        texts.push(UiText { text: zeile, x: flaeche.x + 12.0, y: flaeche.y + 8.0, color: theme::text(), scale: UI_SCALE_SMALL });
-        let hinweis = "Leertaste Pause · ←/→ 5 s · ↑/↓ Tempo · Esc Beenden";
-        let hw = gpu.measure_text(hinweis, UI_SCALE_SMALL);
-        texts.push(UiText { text: hinweis.into(), x: flaeche.x + flaeche.w - 12.0 - hw, y: flaeche.y + 8.0, color: theme::text_2(), scale: UI_SCALE_SMALL });
-        let leiste = Rect { x: flaeche.x + 12.0, y: flaeche.y + 40.0, w: flaeche.w - 24.0, h: 6.0 };
-        rects.push(UiRect::rounded(leiste, g(Slot::Surface3), 3.0));
+        let (treffer, _) = Self::replay_bar_rects(gpu.size(), 0.0);
+        let (px, py) = self.cursor_pos;
+        let zeiger_frei = !self.freelook_held;
+        let ueber = zeiger_frei && (r.bar_drag || treffer.contains(px, py));
+        let hoch = self.hover_level(treffer, ueber);
+        let (_, bahn) = Self::replay_bar_rects(gpu.size(), hoch);
+        rects.push(UiRect { rect: bahn, color: g(Slot::Surface3), ..UiRect::FLAT });
         if dauer > 0.0 {
-            let anteil = (jetzt / dauer).clamp(0.0, 1.0) as f32;
-            rects.push(UiRect::rounded(Rect { w: (leiste.w * anteil).max(6.0), ..leiste }, g(Slot::Accent), 3.0));
+            let x_bei = |ms: f64| bahn.x + bahn.w * (ms / dauer).clamp(0.0, 1.0) as f32;
+            let weiss_bis = if r.seek_to.is_some() { r.processed_ms.min(jetzt) } else { jetzt };
+            rects.push(UiRect { rect: Rect { w: (x_bei(weiss_bis) - bahn.x).max(0.0), ..bahn }, color: theme::text(), ..UiRect::FLAT });
+            if let Some(ziel) = r.seek_to {
+                let von = x_bei(r.processed_ms.min(ziel));
+                rects.push(UiRect { rect: Rect { x: von, w: (x_bei(ziel) - von).max(0.0), ..bahn }, color: g(Slot::Accent), ..UiRect::FLAT });
+            }
+        }
+        let zeile_y = bahn.y + bahn.h + 6.0;
+        let tempo = r.clock.speed();
+        let mut links = zeit(jetzt);
+        if r.clock.paused() {
+            links.push_str("  ·  Pause");
+        }
+        if (tempo - 1.0).abs() > 1e-6 {
+            links.push_str(&format!("  ·  {tempo}×"));
+        }
+        texts.push(UiText { text: links, x: bahn.x, y: zeile_y, color: theme::text(), scale: UI_SCALE_SMALL });
+        let rechts = zeit(dauer);
+        let rw = gpu.measure_text(&rechts, UI_SCALE_SMALL);
+        texts.push(UiText { text: rechts, x: bahn.x + bahn.w - rw, y: zeile_y, color: theme::text(), scale: UI_SCALE_SMALL });
+        if ueber && dauer > 0.0 {
+            let ms = (f64::from((px - bahn.x) / bahn.w)).clamp(0.0, 1.0) * dauer;
+            let tip = format!("{} ({:.0} %)", zeit(ms), ms / dauer * 100.0);
+            let tw = gpu.measure_text(&tip, UI_SCALE_SMALL);
+            let th = gpu.text_height(UI_SCALE_SMALL);
+            let kasten = Rect { x: (px - tw / 2.0 - 8.0).clamp(bahn.x, bahn.x + bahn.w - tw - 16.0).round(), y: (zeile_y + th + 10.0).round(), w: tw + 16.0, h: th + 10.0 };
+            rects.push(UiRect::framed(kasten, g(Slot::BgPanel), 6.0, 1.0, g(Slot::Border1)));
+            texts.push(UiText { text: tip, x: kasten.x + 8.0, y: kasten.y + 5.0, color: theme::text(), scale: UI_SCALE_SMALL });
         }
     }
 }

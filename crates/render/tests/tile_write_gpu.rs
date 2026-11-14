@@ -19,7 +19,7 @@ fn bytes(n: usize, saat: &mut u32) -> Vec<u8> {
 }
 
 fn atlas(device: &wgpu::Device, queue: &wgpu::Queue, hintergrund: &[Vec<u8>]) -> wgpu::Texture {
-    let texture = device.create_texture_with_data(
+    device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
             label: None,
@@ -33,8 +33,7 @@ fn atlas(device: &wgpu::Device, queue: &wgpu::Queue, hintergrund: &[Vec<u8>]) ->
         },
         wgpu::util::TextureDataOrder::LayerMajor,
         &hintergrund.concat(),
-    );
-    texture
+    )
 }
 
 // Alle Stufen zuruecklesen, ohne Zeilenauffuellung.

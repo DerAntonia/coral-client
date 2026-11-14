@@ -65,6 +65,49 @@ impl Frustum {
         }
         true
     }
+
+    // Wie intersects_aabb fuer einen Stapel aus 64 gleichen Boxen uebereinander: Box k ist
+    // (min, max) um k*step nach oben verschoben. Bit k gesetzt, wenn Box k den Test besteht.
+    // Je Ebene haengt der Test nur linear von k ab, also ergibt jede Ebene eine Unter- oder
+    // Obergrenze fuer k -- sechs Rechnungen statt sechs je Box. Die Grenzen werden um einen
+    // kleinen Rand erweitert: Rundung darf hoechstens eine Box zu viel durchlassen, nie eine
+    // sichtbare verwerfen.
+    #[must_use]
+    pub fn intersects_stacked_aabbs(&self, min: Vec3, max: Vec3, step: f32) -> u64 {
+        const RAND: f32 = 1e-3;
+        let (mut lo, mut hi) = (0.0f32, 63.0f32);
+        for (normal, d) in &self.planes {
+            let positive = Vec3::new(
+                if normal.x >= 0.0 { max.x } else { min.x },
+                if normal.y >= 0.0 { max.y } else { min.y },
+                if normal.z >= 0.0 { max.z } else { min.z },
+            );
+            // Box k besteht diese Ebene, wenn a + b*k >= 0.
+            let a = normal.dot(positive) + d;
+            let b = normal.y * step;
+            if b == 0.0 {
+                if a < 0.0 {
+                    return 0;
+                }
+            } else if b > 0.0 {
+                lo = lo.max(-a / b);
+            } else {
+                hi = hi.min(-a / b);
+            }
+        }
+        // NaN (entartete Ebene) faellt hier nicht durch: dann lieber alle Boxen.
+        if lo.is_nan() || hi.is_nan() {
+            return u64::MAX;
+        }
+        let lo = (lo - RAND).ceil().max(0.0);
+        let hi = (hi + RAND).floor().min(63.0);
+        if lo > hi {
+            return 0;
+        }
+        let (lo, hi) = (lo as u32, hi as u32);
+        let bis = if hi == 63 { u64::MAX } else { (1u64 << (hi + 1)) - 1 };
+        bis & !((1u64 << lo) - 1)
+    }
 }
 
 #[cfg(test)]
@@ -93,5 +136,43 @@ mod tests {
     fn box_weit_seitlich_ausserhalb_ist_unsichtbar() {
         let f = test_frustum();
         assert!(!f.intersects_aabb(Vec3::new(500.0, -1.0, 9.0), Vec3::new(502.0, 1.0, 11.0)));
+    }
+
+    // Der Stapeltest muss jede Box durchlassen, die der Einzeltest durchlaesst, und darf nur
+    // an der Grenze eine zusaetzliche Box mitnehmen.
+    #[test]
+    fn stapeltest_deckt_sich_mit_einzeltest() {
+        let mut zustand = 0x9E37_79B9_7F4A_7C15u64;
+        let mut zufall = move || {
+            zustand ^= zustand << 13;
+            zustand ^= zustand >> 7;
+            zustand ^= zustand << 17;
+            (zustand >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut zusatz = 0;
+        for _ in 0..4000 {
+            let yaw = zufall() * std::f32::consts::TAU;
+            let pitch = (zufall() - 0.5) * 3.1;
+            let blick = Vec3::new(yaw.cos() * pitch.cos(), pitch.sin(), yaw.sin() * pitch.cos());
+            let proj = Mat4::perspective_rh((30.0 + zufall() * 100.0).to_radians(), 16.0 / 9.0, 0.05, 400.0);
+            let f = Frustum::from_view_proj(proj * Mat4::look_at_rh(Vec3::ZERO, blick, Vec3::Y));
+            let f = if zufall() < 0.3 { f.without_far() } else { f };
+            let x0 = (zufall() - 0.5) * 600.0;
+            let z0 = (zufall() - 0.5) * 600.0;
+            let y0 = -(zufall() * 600.0);
+            let min = Vec3::new(x0, y0, z0);
+            let max = min + Vec3::splat(18.0);
+            let stapel = f.intersects_stacked_aabbs(min, max, 16.0);
+            let mut einzeln = 0u64;
+            for k in 0..64 {
+                let hub = Vec3::new(0.0, k as f32 * 16.0, 0.0);
+                if f.intersects_aabb(min + hub, max + hub) {
+                    einzeln |= 1 << k;
+                }
+            }
+            assert_eq!(einzeln & !stapel, 0, "sichtbare Box verworfen");
+            zusatz += (stapel & !einzeln).count_ones();
+        }
+        assert!(zusatz < 40, "zu viele zusaetzliche Boxen: {zusatz}");
     }
 }

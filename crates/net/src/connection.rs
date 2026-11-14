@@ -102,6 +102,9 @@ pub enum ClientEvent {
     PacketStall { outgoing: bool, millis: u32 },
     // Ping des Servers im Spiel (Transaktion, s. app/transactions.rs) -- schon beantwortet.
     TransactionPing(i32),
+    // KeepAlive beantwortet: so lange lag die Anfrage im Client, vom Lesen der Bytes am
+    // Socket bis die Antwort geschrieben war (F3, Ping-Zeile).
+    KeepAliveAnswered { micros: u32 },
     // Der Server schickt uns zu einem anderen Host (Transfer-Paket, s. packets::CB_PLAY_TRANSFER).
     // Die alte Verbindung ist zu, der Netz-Task verbindet sich gerade neu -- alles, was zur
     // alten Verbindung gehoert (Welt, Spielerliste, Skins, Chat-Signatur), muss weg. Die
@@ -305,6 +308,9 @@ pub enum ClientEvent {
     BlockChangedAck(i32),
     // Block Event (0x07): (Position, Typ, Daten), s. packets::read_block_event.
     BlockEvent((i32, i32, i32), u8, u8),
+    // Block Destruction (0x05): ein Entity baut einen Block ab; Stufe 0..=9, -1 oder >= 10
+    // = Riss entfernen (s. packets::read_block_destruction).
+    BlockDestruction { breaker: i32, pos: (i32, i32, i32), progress: i8 },
     // Eigene EntityId aus Login (play) (0x30, immer das allererste Play-Packet, s.
     // packets::CB_PLAY_LOGIN-Kommentar) -- serverbound Pakete wie Player Command (Sprint-
     // Start/Stop) brauchen sie als erstes Feld.
@@ -432,7 +438,20 @@ pub enum ClientEvent {
     ItemTags(std::collections::HashMap<String, Vec<u32>>),
     // Block-Tags des Servers (Name -> Block-Roh-IDs), s. world::mining::set_server_block_tags.
     BlockTags(std::collections::HashMap<String, Vec<u32>>),
+    // coral-clip (s. record::clip): ein Puffer hat begonnen bzw. hier liegt ein Haltepunkt --
+    // alles davor ist verarbeitet, die App sammelt jetzt ihren Zustand ein. Am Ende der Liste,
+    // damit alte Snapshots lesbar bleiben (postcard zaehlt die Varianten durch).
+    ClipStarted { session: u64, from_join: bool, t_ms: f64 },
+    ClipCheckpoint { session: u64, seq: u32, t_ms: f64 },
+    // Wiedergabe: bis zu dieser Aufnahmezeit (ms) sind die Pakete abgearbeitet -- fuer die
+    // Leiste (weiss gespielt, blau wird gerade nachgeholt). Hoechstens alle REPLAY_AT_STEP_MS.
+    ReplayAt(f64),
+    // Dialoge des Tags minecraft:pause_screen_additions (Registry-IDs), s. Pausemenue.
+    PauseScreenDialogs(Vec<u32>),
 }
+
+// So fein meldet die Wiedergabe ihren Stand (s. ClientEvent::ReplayAt).
+pub(crate) const REPLAY_AT_STEP_MS: f64 = 50.0;
 
 // Was der Netzwerk-Task nach aussen meldet: eine Warteschlange zur App PLUS ein optionaler
 // SOFORT-Haken.
@@ -459,17 +478,24 @@ pub struct Events {
     // Hier traegt die Verbindung ihre Sitzungsnummer bei coral-record ein (0 = keine
     // Aufnahme), damit die App Kamera und Maus derselben Datei zuordnet.
     record: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    // Der Puffer von coral-clip fuer diese Verbindung (s. record::ClipLink).
+    clip: Option<std::sync::Arc<record::ClipLink>>,
 }
 
 impl Events {
     #[must_use] 
     pub fn new(tx: std::sync::mpsc::Sender<ClientEvent>) -> Self {
-        Self { tx, immediate: None, raw: None, background: None, record: None }
+        Self { tx, immediate: None, raw: None, background: None, record: None, clip: None }
     }
 
     // Slot fuer die Sitzungsnummer der Aufnahme (s. record).
     pub fn with_record(mut self, slot: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Self {
         self.record = Some(slot);
+        self
+    }
+
+    pub fn with_clip(mut self, link: std::sync::Arc<record::ClipLink>) -> Self {
+        self.clip = Some(link);
         self
     }
 
@@ -701,6 +727,10 @@ struct Connection {
     // Wiedergabe einer Aufnahme (s. replay): die Pakete kommen aus der Datei statt vom
     // Socket, und was gesendet werden soll, faellt weg.
     replay: Option<record::PacketSource>,
+    // Wann der letzte Schwung Bytes vom Socket kam. Ein Frame wird erst gelesen, wenn keiner
+    // mehr vollstaendig im Puffer liegt -- der eben entnommene wurde also genau mit diesem
+    // Schwung vollstaendig. Daraus die Antwortzeit des Clients auf KeepAlive (F3).
+    last_read: std::time::Instant,
 }
 
 impl Connection {
@@ -733,6 +763,7 @@ impl Connection {
             held: Vec::new(),
             rec: None,
             replay: None,
+            last_read: std::time::Instant::now(),
         })
     }
 
@@ -750,6 +781,7 @@ impl Connection {
             held: Vec::new(),
             rec: None,
             replay: Some(source),
+            last_read: std::time::Instant::now(),
         }
     }
 
@@ -889,6 +921,7 @@ impl Connection {
     async fn fill_rbuf(&mut self) -> Result<(), NetError> {
         let mut tmp = [0u8; 8192];
         let n = self.stream.read(&mut tmp).await?;
+        self.last_read = std::time::Instant::now();
         if n == 0 {
             return Err(NetError::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "Verbindung vom Server geschlossen")));
         }

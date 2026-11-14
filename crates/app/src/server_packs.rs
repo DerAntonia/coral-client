@@ -43,7 +43,12 @@ pub struct ServerPacks {
 // (ueberlebt, wenn der Server sein Pack aendert -- Vanilla-Server leiten die UUID aus der URL
 // ab, sie bleibt also). Die Packs liegen nach ihrem SHA-1 benannt im Cache.
 pub fn keys(address: &str, id: [u8; 16], path: &std::path::Path) -> (Option<String>, String) {
-    let hash = path.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).filter(|h| h.len() == 40);
+    // Dateiname "<adresse>__<sha1>" oder altes "<sha1>": der SHA-1 ist immer der letzte Teil.
+    let hash = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .map(|s| s.rsplit("__").next().unwrap_or_default().to_string())
+        .filter(|h| h.len() == 40);
     let uuid: String = id.iter().map(|b| format!("{b:02x}")).collect();
     (hash.map(|h| format!("server-pack:{h}")), format!("server:{}:{uuid}", address.trim().to_ascii_lowercase()))
 }
@@ -57,14 +62,32 @@ pub fn cache_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join("coral-client").join("server-packs"))
 }
 
-// Schon geladene Datei zu einem angekuendigten SHA-1, falls vorhanden.
+// Dateiname im Cache: "<adresse>__<sha1>.zip". Die Adresse ist dateitauglich (nur a-z, 0-9,
+// Punkt und Bindestrich; alles andere wie der Doppelpunkt vor dem Port wird zu "_").
+pub fn cache_name(address: &str, hash: &str) -> String {
+    let adresse: String = address
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect();
+    let adresse = if adresse.is_empty() { "server".to_string() } else { adresse };
+    format!("{adresse}__{hash}.zip")
+}
+
+// Schon geladene Datei zu einem angekuendigten SHA-1, falls vorhanden -- unter welcher Adresse
+// sie auch gespeichert wurde (dieselbe Pack-Datei von einem anderen Server wird wiederverwendet).
 pub fn cached(hash: &str) -> Option<PathBuf> {
     let hash = hash.to_ascii_lowercase();
     if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    let pfad = cache_dir()?.join(format!("{hash}.zip"));
-    pfad.is_file().then_some(pfad)
+    let dir = cache_dir()?;
+    let exakt = format!("{hash}.zip");
+    let mit_adresse = format!("__{hash}.zip");
+    std::fs::read_dir(dir).ok()?.filter_map(Result::ok).map(|e| e.path()).find(|p| {
+        p.is_file() && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == exakt || n.ends_with(&mit_adresse))
+    })
 }
 
 // Nur http(s) -- wie Vanilla, das andere Schemata als ungueltige Adresse ablehnt.
@@ -260,5 +283,14 @@ mod tests {
         assert_eq!(adresse, format!("server:play.example.net:{}", "ab".repeat(16)));
         assert_eq!(keys("x", [0; 16], &PathBuf::from("/x/kurz.zip")).0, None);
         assert_eq!(position_key("Play.Example.net"), "server:play.example.net");
+    }
+
+    #[test]
+    fn cache_name_mit_adresse_und_hash() {
+        let h = "a".repeat(40);
+        assert_eq!(cache_name(" Play.Example.net:25565 ", &h), format!("play.example.net_25565__{h}.zip"));
+        assert_eq!(cache_name("", &h), format!("server__{h}.zip"));
+        let (hash, _) = keys("x", [0; 16], &PathBuf::from(format!("/x/play.example.net_25565__{h}.zip")));
+        assert_eq!(hash.as_deref(), Some(format!("server-pack:{h}").as_str()));
     }
 }

@@ -195,7 +195,7 @@ impl SheetLayout {
 // Wassertoenung des Regens).
 pub fn weather_sheet(rgba: &[u8], width: u32, height: u32, grau: bool) -> Option<(Vec<u8>, u32, u32, SheetLayout)> {
     let s = width / 2;
-    let rows = if s == 0 { 0 } else { height / s };
+    let rows = height.checked_div(s).unwrap_or(0);
     if rows == 0 || rgba.len() < (width * height * 4) as usize {
         return None;
     }
@@ -368,6 +368,12 @@ impl Precipitation {
         }
     }
 
+    // Explosion (s. particles::ExplosionPush): die Schneeflocken wegstossen. Regen nicht.
+    pub fn on_explosion(&mut self, center: DVec3, radius: f32, world: &world::World, shapes: &world::BlockShapes) {
+        let mut stoss = crate::particles::ExplosionPush::new(center, radius, world, shapes);
+        self.snow.explode(|p| stoss.at(p));
+    }
+
     #[cfg(test)]
     fn drop_count(&self) -> usize {
         self.drops.len()
@@ -451,7 +457,7 @@ impl Precipitation {
             self.origin = origin;
             self.size = size;
         }
-        for dz in (0..size).filter(|&dz| (dz as u64 + self.ticks) % 40 == 0) {
+        for dz in (0..size).filter(|&dz| (dz as u64 + self.ticks).is_multiple_of(40)) {
             for dx in 0..size {
                 let i = (dz * size + dx) as usize;
                 (self.tops[i], self.kinds[i]) = vermessen(origin.0 + dx, origin.1 + dz);
@@ -1080,7 +1086,6 @@ mod bench {
             println!("  still gesamt: fuellen {:?} bereich {:?} flocken {:?} {:?} spawnbloecke {} flocken {} bereich {}", p.snow_map.diag_zeit[0], p.snow_map.diag_zeit[1], p.snow_map.diag_zeit[2], p.snow.diag_zeit, p.snow.spawn.len(), p.snow.flakes.len(), p.snow_map.region_blocks().count());
             p.snow.diag_zeit = Default::default();
             // Sprinten: 5,6 Bloecke je Sekunde.
-            p.snow_map.diag_zahl = [0; 4];
             p.snow_map.diag_zeit = Default::default();
             let (t, mut laengster) = (std::time::Instant::now(), std::time::Duration::ZERO);
             for _ in 0..100 {
@@ -1091,7 +1096,7 @@ mod bench {
             }
             let laufen = t.elapsed() / 100;
             let z = std::mem::take(&mut p.snow_map.diag_zeit);
-            println!("  laufen flocken {:?}; zellen weiter als r {}, im schatten {}, markierungen {}, wegstuecke gelesen {}", p.snow.diag_zeit, p.snow_map.diag_zahl[0], p.snow_map.diag_zahl[1], p.snow_map.diag_zahl[2], p.snow_map.diag_zahl[3]);
+            println!("  laufen flocken {:?}", p.snow.diag_zeit);
             let mut out = Vec::new();
             let t = std::time::Instant::now();
             for _ in 0..100 {

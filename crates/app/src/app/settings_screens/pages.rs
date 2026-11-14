@@ -92,6 +92,7 @@ impl App {
             (DEATH_ANIM_ROW, "Todesanimation"),
             (ANIM_ROW, "Animationen"),
             (VIEW_MODEL_ROW, "Standardmäßig an"),
+            (VIEW_MODEL_BOB_ROW, "Hand-Bobbing"),
         ] {
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y: zeile_y(row), color: theme::text(), scale: UI_SCALE_SMALL });
         }
@@ -291,61 +292,38 @@ impl App {
     }
 
     pub(crate) fn build_settings_particles(&self, gpu: &GpuState, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>) {
-        let zeile = |row: usize| (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
-        // Spaltenkoepfe ueber den Knoepfen. Die vierte Spalte ist je nach Art Menge (Schwall)
-        // oder Intervall (verweilend), s. particles::SpawnKind.
-        let regler = |col: usize| (particle_column_x(col), PARTICLE_SLIDER_W);
-        let koepfe = [
-            ((PARTICLE_TOGGLE_X, PARTICLE_TOGGLE_W), "Zeigen"),
-            (regler(0), "Dauer"),
-            (regler(1), "Deckkraft"),
-            (regler(2), "Tempo"),
-            (regler(3), "Menge / Intervall"),
-            ((particle_column_x(PARTICLE_ALL_AT_ONCE_COL), PARTICLE_TOGGLE_W), "Auf einmal"),
-        ];
-        let sichtbar = self.particle_visible_rows();
-        // Welche der beiden Anpassungen (s. ButtonAction::OpenParticleSettings) hier offen ist.
         let own = self.particle_screen_own;
-        let kopf = if particles::KINDS.len() > sichtbar {
-            let erste = header_list_first(particles::KINDS.len(), self.particle_scroll.stand, sichtbar);
-            let bis = (erste + sichtbar).min(particles::KINDS.len());
-            if own {
-                format!("Eigene Partikel ({}–{} von {})", erste + 1, bis, particles::KINDS.len())
-            } else {
-                format!("Andere Partikel ({}–{} von {})", erste + 1, bis, particles::KINDS.len())
-            }
-        } else if own {
-            "Eigene Partikel".to_string()
-        } else {
-            "Andere Partikel".to_string()
-        };
-        // Die Koepfe stehen ueber dem Zeilenband: weder beschnitten noch ausgeblendet.
+        // Ueber den Zeilen, wo sonst die Reiter stehen: links welche Anpassung offen ist, dazu
+        // je Spalte zwei Koepfe -- oben fuer die erste, darunter fuer die zweite Zeile jeder Art
+        // (s. particle_slider_rows). Weder beschnitten noch ausgeblendet.
         push_fade_marker(rects, texts, None);
         crate::push_clip_marker(rects, texts, false);
-        texts.push(UiText { text: kopf, x: SETTINGS_LABEL_X, y: zeile(0), color: theme::text_2(), scale: UI_SCALE_SMALL });
-        for ((x, w), text) in koepfe {
-            texts.push(gpu.centered_text(Rect { x, y: settings_row_y(0), w, h: SETTINGS_CTRL_H }, text.to_string(), theme::text_2(), UI_SCALE_SMALL));
+        let h = gpu.text_height(UI_SCALE_SMALL);
+        let kopf_y = [SETTINGS_FIRST_Y - 44.0, SETTINGS_FIRST_Y - 44.0 + h + 4.0].map(f32::round);
+        let titel = if own { "Eigene Partikel" } else { "Andere Partikel" };
+        texts.push(UiText { text: titel.to_string(), x: SETTINGS_LABEL_X, y: kopf_y[0], color: theme::text_2(), scale: UI_SCALE_SMALL });
+        let mitte = |x: f32, w: f32, text: &str| (x + (w - gpu.measure_text(text, UI_SCALE_SMALL)) / 2.0).round();
+        for (zeile, text) in ["Zeigen", "Auf einmal"].into_iter().enumerate() {
+            texts.push(UiText { text: text.to_string(), x: mitte(PARTICLE_TOGGLE_X, PARTICLE_TOGGLE_W, text), y: kopf_y[zeile], color: theme::text_2(), scale: UI_SCALE_SMALL });
+        }
+        for (col, (oben, unten)) in PARTICLE_HEADS.into_iter().enumerate() {
+            for (zeile, text) in [oben, unten].into_iter().enumerate() {
+                texts.push(UiText { text: text.to_string(), x: mitte(particle_column_x(col), PARTICLE_SLIDER_W, text), y: kopf_y[zeile], color: theme::text_2(), scale: UI_SCALE_SMALL });
+            }
         }
         crate::push_clip_marker(rects, texts, true);
-        push_fade_marker(rects, texts, Some(self.particle_list_band().1));
-        let text_dy = (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0;
-        for (i, y) in header_list_rows_smooth(particles::KINDS.len(), self.particle_scroll.stand, sichtbar) {
-            let t = self.settings.particle_tuning_of(own)[i];
-            let art = particles::KINDS[i].spawn;
-            let farbe = if t == particles::ParticleTuning::default() { theme::text() } else { COLOR_HUD };
-            texts.push(UiText { text: particles::KINDS[i].label.to_string(), x: SETTINGS_LABEL_X, y: (y + text_dy).round(), color: farbe, scale: UI_SCALE_SMALL });
-            let mut werte = vec![t.lifetime_pct, t.opacity_pct, t.speed_pct];
-            if art.has_amount() {
-                werte.push(t.amount_pct);
-            } else if art.has_interval() {
-                werte.push(t.interval_pct);
-            }
-            // Wertfelder wie bei einem Stepper -- der Regler holt sich Flaeche und Zahl daraus.
-            for (col, wert) in werte.into_iter().enumerate() {
-                let rect = Rect { y, ..particle_value_rect(col, 0) };
-                rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-                let wert_farbe = if wert == 100 { theme::text() } else { COLOR_HUD };
-                texts.push(gpu.centered_text(rect, format!("{wert} %"), wert_farbe, UI_SCALE_SMALL));
+        push_fade_marker(rects, texts, Some(self.page_fade()));
+        // Wertfelder wie bei einem Stepper -- der Regler holt sich Flaeche und Zahl daraus.
+        for (i, (orig_i, kind)) in self.particle_kinds().into_iter().enumerate() {
+            let t = self.settings.particle_tuning_of(own)[orig_i];
+            for (zeile, regler) in particle_slider_rows(&t, kind.spawn).into_iter().enumerate() {
+                for (col, r) in regler.into_iter().enumerate() {
+                    let Some(r) = r else { continue };
+                    let rect = particle_value_rect(col, 2 * i + zeile);
+                    rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                    let wert_farbe = if r.value == 100 { theme::text() } else { COLOR_HUD };
+                    texts.push(gpu.centered_text(rect, format!("{} %", r.value), wert_farbe, UI_SCALE_SMALL));
+                }
             }
         }
     }

@@ -212,6 +212,7 @@ impl App {
         apply_language_settings(&mut self.installation, &self.settings);
         self.input_log.set_enabled(self.settings.module_input_log_enabled);
         record::set_enabled(self.settings.module_coral_record);
+        record::set_clip_enabled(self.settings.module_coral_clip);
         self.publish_totem_sound_enabled();
         // Block-Rotation, weiche Beleuchtung, Markierungen: alles steckt im Mesh.
         self.block_uvs.set_rng_rotation_enabled(self.settings.block_rng_rotation);
@@ -227,14 +228,10 @@ impl App {
         }
     }
 
-    pub(crate) fn particle_max_scroll(&self) -> f32 {
-        particles::KINDS.len().saturating_sub(self.particle_visible_rows()) as f32
+    pub(crate) fn particle_kinds(&self) -> Vec<(usize, &'static particles::ParticleKind)> {
+        particles::particle_kinds_for_own(self.particle_screen_own)
     }
 
-    pub(crate) fn particle_visible_rows(&self) -> usize {
-        let h = self.gpu.as_ref().map_or(1080.0, |g| g.size().1);
-        settings_visible_rows(h).saturating_sub(1).max(1)
-    }
 
     // Nach jeder Aenderung sofort schreiben. Das sind ein paar Dutzend Byte bei einem
     // Klick -- billiger als jede Loesung, die sich merken muesste, wann etwas "offen" ist.

@@ -1,6 +1,7 @@
 // Biome-Registry, Meshing anstehender Spalten und Render-Grenzen.
 
 use super::*;
+use crate::{MeshOutcome, RemeshLog, PATCH_SETTLE};
 
 impl App {
     // Biom-Registry des Servers (oder der Launcher-Szene, s. hero_scene.rs): Namen, Klima und
@@ -47,7 +48,40 @@ impl App {
     // Modulkommentar), damit ein Schwall neuer Chunks nicht die Frame-Zeit sprengt. Nur der
     // GPU-Upload der fertigen Ergebnisse muss auf diesem Thread bleiben (Device/Queue sind
     // dem Render-Loop zugeordnet, s. GpuState).
+    // Messung: alle 5 s ins Log, wie viele Spalten neu gemesht wurden und warum (s.
+    // world::DirtyLog). Schweigt, wenn in dem Fenster nichts gemesht wurde.
+    fn log_remesh(&mut self) {
+        const FENSTER: Duration = Duration::from_secs(5);
+        if self.remesh_log.seit.elapsed() < FENSTER {
+            return;
+        }
+        let log = std::mem::take(&mut self.world.dirty_log);
+        let RemeshLog { jobs, verschoben, geflickt, flick_rueckfall, .. } = std::mem::replace(&mut self.remesh_log, RemeshLog::neu());
+        if jobs == 0 && geflickt == 0 {
+            return;
+        }
+        let mut bloecke: Vec<(u32, u32)> = log.blocks.into_iter().collect();
+        bloecke.sort_unstable_by_key(|&(_, n)| std::cmp::Reverse(n));
+        let top: Vec<String> = bloecke
+            .iter()
+            .take(6)
+            .map(|&(state, n)| format!("{}#{state} x{n}", world::block_name(state).unwrap_or("?")))
+            .collect();
+        eprintln!(
+            "[remesh] 5 s: ganze Spalten {jobs}, geflickt {geflickt}, Flick-Rueckfall {flick_rueckfall}, verschoben {verschoben} | Spalte geladen {}, Nachbar geladen/entladen {}, Block geaendert {}, Block gleich {}, Block-Randnachbar {}, Licht {}, App-Markierung {} | {}",
+            log.column_loaded,
+            log.column_neighbor,
+            log.block_changed,
+            log.block_same,
+            log.block_neighbor,
+            log.light,
+            log.marked,
+            top.join(", ")
+        );
+    }
+
     pub(crate) fn mesh_pending_columns(&mut self) {
+        self.log_remesh();
         self.expire_stale_ghosts();
         let mut fertige_spalten: Vec<(i32, i32)> = Vec::new();
         // Gleiche Abstandsgrenze wie enforce_render_limits (ohne das Anzahl-Budget -- eine
@@ -63,11 +97,47 @@ impl App {
             // Frame verursachen -- verbleibende Ergebnisse bleiben einfach im Kanal und
             // kommen naechsten Frame dran, nichts geht dabei verloren.
             for _ in 0..self.settings.mesh_columns_per_frame {
-                let Ok(MeshResult { key, opaque, groups, runs, visibility, opacity, min_y, translucent: translucent_vertices, fade_quads, block_light }) =
-                    self.mesh_results_rx.try_recv()
-                else {
+                let Ok(outcome) = self.mesh_results_rx.try_recv() else {
                     break;
                 };
+                let MeshResult { key, opaque, groups, runs, visibility, opacity, min_y, translucent: translucent_vertices, fade_quads, fade_sources, block_light, quad_block } =
+                    match outcome {
+                        MeshOutcome::Full(r) => *r,
+                        // Flicken: nur die Flaechen rund um die geaenderten Bloecke austauschen.
+                        // Gilt dieselbe Pruefung wie unten (Spalte noch da und in Reichweite);
+                        // scheitert es (kein Platz mehr, Spalte inzwischen nicht mehr flickbar),
+                        // wird die Spalte ganz neu gebaut.
+                        MeshOutcome::Patch { key, removed, added, visibility, opacity, min_y } => {
+                            self.mesh_jobs_pending.remove(&key);
+                            let (dx, dz) = (i64::from(key.0) - player_cx, i64::from(key.1) - player_cz);
+                            let in_reichweite = !self.camera_placed || dx * dx + dz * dz <= max_distance_sq;
+                            if self.world.column(key.0, key.1).is_none() || !in_reichweite {
+                                self.mesh_jobs_stale_on_completion.remove(&key);
+                                continue;
+                            }
+                            if gpu.block_renderer.patch_column(&gpu.queue, key, &removed, &added, visibility) {
+                                gpu.block_renderer.sight.set_column(key, min_y, opacity);
+                                self.remesh_log.geflickt += 1;
+                                self.patch_columns.entry(key).or_default().last_patch = Some(Instant::now());
+                                fertige_spalten.push(key);
+                                if self.mesh_jobs_stale_on_completion.remove(&key) {
+                                    self.world.requeue_dirty(key.0, key.1);
+                                }
+                            } else {
+                                self.remesh_log.flick_rueckfall += 1;
+                                self.mesh_jobs_stale_on_completion.remove(&key);
+                                self.world.mark_dirty(key.0, key.1);
+                            }
+                            continue;
+                        }
+                        MeshOutcome::PatchFailed { key } => {
+                            self.remesh_log.flick_rueckfall += 1;
+                            self.mesh_jobs_pending.remove(&key);
+                            self.mesh_jobs_stale_on_completion.remove(&key);
+                            self.world.mark_dirty(key.0, key.1);
+                            continue;
+                        }
+                    };
                 // Der Job lief los, als die Spalte noch gebraucht wurde. Inzwischen entladen
                 // (ForgetChunk) oder aus der Sichtweite gefallen: verwerfen. Sonst landete das
                 // Mesh trotzdem im VRAM -- eine entladene Spalte hing dann fuer immer in der
@@ -89,17 +159,41 @@ impl App {
                         self.column_light.remove(&key);
                     }
                 }
-                gpu.block_renderer.set_column_mesh(&gpu.device, &gpu.queue, key, &opaque, groups, runs, visibility, min_y, &translucent_vertices);
+                gpu.block_renderer.set_column_mesh(&gpu.device, &gpu.queue, key, &opaque, groups, runs, visibility, min_y, &translucent_vertices, quad_block);
+                // Ganz neu gebaut: der Stand ist wieder vollstaendig, nichts steht mehr aus.
+                if let Some(p) = self.patch_columns.get_mut(&key) {
+                    p.last_patch = None;
+                }
                 gpu.block_renderer.sight.set_column(key, min_y, opacity);
                 // Ein laufendes Einblenden dieser Spalte gehoert zum ALTEN Puffer. Das neue
                 // beginnt mit den Vertices "wie vorher" (s. AoFade) -- im selben Frame, bevor
                 // gezeichnet wird.
+                // MESSUNG (voruebergehend).
+                if !fade_quads.is_empty() || self.ao_fades.iter().any(|f| f.column == key) {
+                    eprintln!(
+                        "[flick] {} ms Ergebnis {key:?}: ganz gebaut, Einblend-Flaechen {}, laufende Einblendung abgebrochen {}",
+                        crate::mess_ms(),
+                        fade_quads.len(),
+                        self.ao_fades.iter().any(|f| f.column == key),
+                    );
+                }
                 self.ao_fades.retain(|f| f.column != key);
                 if !fade_quads.is_empty() {
                     for q in &fade_quads {
                         gpu.block_renderer.write_column_vertices(&gpu.queue, key, q.start, &q.before);
                     }
-                    self.ao_fades.push(AoFade { column: key, quads: fade_quads, start: Instant::now() });
+                    // Das Einblenden zaehlt ab dem ERSTEN Mesh, das die Platzierung zeigt: wird
+                    // die Spalte mittendrin neu gebaut (Redstone nebenan), geht es dort weiter,
+                    // wo es stand, statt von vorn zu beginnen oder abzubrechen.
+                    let jetzt = Instant::now();
+                    let mut start = None;
+                    for (p, _, _, beginn) in &mut self.ao_fade_sources {
+                        if fade_sources.contains(p) {
+                            let b = *beginn.get_or_insert(jetzt);
+                            start = Some(start.map_or(b, |s: Instant| s.max(b)));
+                        }
+                    }
+                    self.ao_fades.push(AoFade { column: key, quads: fade_quads, start: start.unwrap_or(jetzt) });
                 }
                 // Fuer enforce_render_limits: ab jetzt zaehlt diese Spalte als "hat einen
                 // Mesh", auch wenn beide Vertex-Listen leer waren (reine Luft-Spalte --
@@ -107,6 +201,16 @@ impl App {
                 // Meshing-Job gedacht).
                 self.render_limit_meshed.insert(key);
                 self.lod.mask_changed = true;
+                // Das ERSTE Mesh einer Spalte blendet ein (Chunk-Einblendung) -- wie in Vanilla
+                // nicht in der Naehe des Auges (Vanilla: Abstand der Section unter sqrt(768),
+                // hier waagerecht bis zur Spaltenmitte).
+                if !self.column_meshed_at.contains_key(&key) && self.settings.chunk_fade_ms > 0 {
+                    let auge = self.camera.position;
+                    let (dx, dz) = (f64::from(key.0 * 16 + 8) - auge.x, f64::from(key.1 * 16 + 8) - auge.z);
+                    if dx * dx + dz * dz >= CHUNK_FADE_NEAR_SQ {
+                        gpu.block_renderer.start_column_fade(key, self.settings.chunk_fade_ms as f32 / 1000.0);
+                    }
+                }
                 self.column_meshed_at.entry(key).or_insert_with(Instant::now);
                 self.mesh_jobs_pending.remove(&key);
                 // Jetzt zeichnet der gewoehnliche Chunk-Pass diese Spalte -- die bestaetigten
@@ -118,12 +222,21 @@ impl App {
                 // Ergebnis mit veralteten Nachbardaten gebaut -- sofort neu einreihen, statt
                 // auf die naechste zufaellige Dirty-Markierung von aussen zu warten.
                 if self.mesh_jobs_stale_on_completion.remove(&key) {
-                    self.world.mark_dirty(key.0, key.1);
+                    self.world.requeue_dirty(key.0, key.1);
                 }
             }
         }
         for key in fertige_spalten {
             self.drop_ghosts_of_column(key);
+        }
+        // Sicherheitsnetz: eine nur geflickte Spalte, an der sich PATCH_SETTLE lang nichts mehr
+        // getan hat, wird einmal ganz neu gebaut -- das raeumt die leeren Plaetze auf und gleicht
+        // alles aus, was ueber die geflickte Umgebung hinausreicht.
+        for (key, p) in &mut self.patch_columns {
+            if p.last_patch.is_some_and(|t| t.elapsed() >= PATCH_SETTLE) {
+                p.last_patch = None;
+                self.world.mark_dirty(key.0, key.1);
+            }
         }
 
         if self.world.dirty_count() == 0 {
@@ -144,6 +257,7 @@ impl App {
             // sie wird nur verzoegert, bis der laufende Job fertig ist.
             if !self.mesh_jobs_pending.insert(key) {
                 self.mesh_jobs_stale_on_completion.insert(key);
+                self.remesh_log.verschoben += 1;
                 continue;
             }
             // Nachbarn koennen inzwischen fehlen (z.B. reset_world() zwischen take_dirty()
@@ -153,6 +267,9 @@ impl App {
                 self.mesh_jobs_pending.remove(&key);
                 continue;
             };
+            // Reichen die einzelnen Blockaenderungen (s. World::take_mesh_request)? Dann wird
+            // geflickt statt neu gebaut -- sofern die Spalte flickbar im Speicher liegt.
+            let aenderungen = self.world.take_mesh_request(key.0, key.1);
             let tx = self.mesh_results_tx.clone();
             // Arc-Klone der UV-/Formen-/Biom-Tabellen in den Worker: read-only, kein
             // Kopieren der Daten.
@@ -176,10 +293,97 @@ impl App {
                 .ao_fade_sources
                 .iter()
                 .filter(|_| !mit_licht)
-                .filter(|(p, _, _)| p.0 >= x0 - 1 && p.0 <= x0 + world::SECTION_SIZE && p.2 >= z0 - 1 && p.2 <= z0 + world::SECTION_SIZE)
-                .map(|(p, s, _)| (*p, *s))
+                .filter(|(p, ..)| p.0 >= x0 - 1 && p.0 <= x0 + world::SECTION_SIZE && p.2 >= z0 - 1 && p.2 <= z0 + world::SECTION_SIZE)
+                // Schon fertig eingeblendet: nicht noch einmal.
+                .filter(|(_, _, _, beginn)| beginn.is_none_or(|b| b.elapsed() < crate::AO_FADE))
+                .map(|(p, s, ..)| (*p, *s))
                 .collect();
+            let fade_sources: Vec<(i32, i32, i32)> = fades.iter().map(|f| f.0).collect();
+            // Flickbar gebaut wird ohne Schatten-Einblendung und nur im PvP-Pfad: die
+            // Einblendung ueberschreibt Vertices an festen Stellen, das Licht des Shader-Pfads
+            // haengt an mehr als der naechsten Umgebung.
+            let flick_erlaubt = !mit_licht && fades.is_empty() && !self.ao_fades.iter().any(|f| f.column == key);
+            let min_y = neighbors.target.min_y;
+            let sections_n = neighbors.target.sections.len();
+            if let Some(liste) = &aenderungen {
+                let p = self.patch_columns.entry(key).or_default();
+                for &((_, y, _), _) in liste {
+                    let index = (y - min_y).div_euclid(world::SECTION_SIZE);
+                    for n in index - 1..=index + 1 {
+                        if (0..sections_n.min(64) as i32).contains(&n) {
+                            p.sections |= 1u64 << n;
+                        }
+                    }
+                }
+            }
+            // MESSUNG (voruebergehend): welchen Weg nimmt eine Spalte mit Blockaenderungen?
+            if !fades.is_empty() || self.ao_fades.iter().any(|f| f.column == key) {
+                eprintln!(
+                    "[flick] {} ms Auftrag {key:?}: Aenderungen {:?}, Quellen {}, Einblendung laeuft {}, flickbar im Speicher {}",
+                    crate::mess_ms(),
+                    aenderungen.as_ref().map(Vec::len),
+                    fades.len(),
+                    self.ao_fades.iter().any(|f| f.column == key),
+                    self.gpu.as_ref().is_some_and(|g| g.block_renderer.column_patchable(key)),
+                );
+            }
+            let flicken = aenderungen.filter(|_| flick_erlaubt && self.gpu.as_ref().is_some_and(|g| g.block_renderer.column_patchable(key)));
+            if let Some(liste) = flicken {
+                self.mesh_pool.spawn(move || {
+                    let positionen: Vec<(i32, i32, i32)> = liste.iter().map(|c| c.0).collect();
+                    let region = world::MeshRegion::around(key.0, key.1, min_y, sections_n, &positionen);
+                    let mesh = |n: &world::ColumnNeighbors| {
+                        world::mesh_column_blocks(key.0, key.1, n, &uvs, &shapes, &biomes, &cross, &cross_extra_shapes, ao_strength, show_markers, Some(&region))
+                    };
+                    let (opak, durchsichtig, anfaenge) = mesh(&neighbors);
+                    // Wasser und Glas liegen in einem eigenen, sortierten Puffer, der sich nicht
+                    // flicken laesst: war dort vorher oder ist dort jetzt etwas Durchsichtiges,
+                    // die Spalte ganz neu bauen.
+                    let vorher = neighbors.with_blocks(key.0, key.1, &liste);
+                    if !durchsichtig.is_empty() || !mesh(&vorher).1.is_empty() {
+                        let _ = tx.send(MeshOutcome::PatchFailed { key });
+                        return;
+                    }
+                    let mut starts: Vec<u32> = anfaenge.iter().map(|a| a.0).collect();
+                    let packed = world::pack_terrain_lit(&opak, &mut starts, min_y, None);
+                    let bloecke: Vec<(u32, u32)> = starts.iter().zip(&anfaenge).map(|(s, a)| (*s, a.1)).collect();
+                    let added = world::place_quads(&packed, &bloecke);
+                    let visibility = world::visibility::column_visibility(&neighbors.target.sections, &shapes);
+                    let opacity = world::visibility::column_opacity(&neighbors.target.sections, &shapes).into();
+                    let _ = tx.send(MeshOutcome::Patch { key, removed: region.blocks().to_vec(), added, visibility, opacity, min_y });
+                });
+                continue;
+            }
+            // Spalten mit Einzelblock-Aenderungen flickbar bauen (s. PatchColumn).
+            let flickbar = self.patch_columns.get(&key).filter(|_| flick_erlaubt).map(|p| p.sections);
+            self.remesh_log.jobs += 1;
             self.mesh_pool.spawn(move || {
+                if let Some(slack_sections) = flickbar {
+                    let (vertices, translucent_vertices, anfaenge) =
+                        world::mesh_column_blocks(key.0, key.1, &neighbors, &uvs, &shapes, &biomes, &cross, &cross_extra_shapes, ao_strength, show_markers, None);
+                    let mut starts: Vec<u32> = anfaenge.iter().map(|a| a.0).collect();
+                    let packed = world::pack_terrain_lit(&vertices, &mut starts, min_y, None);
+                    let bloecke: Vec<(u32, u32)> = starts.iter().zip(&anfaenge).map(|(s, a)| (*s, a.1)).collect();
+                    let (opaque, groups, runs, quad_block) = world::layout_patchable(&world::place_quads(&packed, &bloecke), slack_sections);
+                    let visibility = world::visibility::column_visibility(&neighbors.target.sections, &shapes);
+                    let opacity = world::visibility::column_opacity(&neighbors.target.sections, &shapes).into();
+                    let translucent = world::pack_terrain_lit(&translucent_vertices, &mut [], min_y, None);
+                    let _ = tx.send(MeshOutcome::Full(Box::new(MeshResult {
+                        key,
+                        opaque,
+                        groups,
+                        runs,
+                        visibility,
+                        opacity,
+                        min_y,
+                        translucent,
+                        fade_quads: Vec::new(),
+                        fade_sources: Vec::new(),
+                        block_light: None,
+                        quad_block: Some(quad_block),
+                    })));
+                    return;
+                }
                 let (vertices, translucent_vertices, fade_quads) = world::mesh_column_ao_fading(
                     key.0,
                     key.1,
@@ -225,7 +429,7 @@ impl App {
                 // Wasser/Glas ebenso kompakt (ohne Richtungsgruppen, s. render::TranslucentMesh).
                 let translucent_vertices = world::pack_terrain_lit(&translucent_vertices, &mut [], min_y, licht);
                 let block_light = feld.as_ref().and_then(world::light::LightField::column_block_light);
-                let _ = tx.send(MeshResult { key, opaque, groups, runs, visibility, opacity, min_y, translucent: translucent_vertices, fade_quads, block_light });
+                let _ = tx.send(MeshOutcome::Full(Box::new(MeshResult { key, opaque, groups, runs, visibility, opacity, min_y, translucent: translucent_vertices, fade_quads, fade_sources, block_light, quad_block: None })));
             });
         }
     }

@@ -139,7 +139,14 @@ impl GpuState {
         );
     }
 
-    pub(crate) const fn size(&self) -> (f32, f32) {
+    // Die Flaeche, in der die Oberflaeche rechnet: im Spiel die echten Pixel, in Menues die
+    // der Bezugshoehe (s. ui_scale). Fuer alles, was echte Pixel braucht, real_size.
+    pub(crate) fn size(&self) -> (f32, f32) {
+        let s = self.ui_scale.get();
+        (self.config.width as f32 / s, self.config.height as f32 / s)
+    }
+
+    pub(crate) const fn real_size(&self) -> (f32, f32) {
         (self.config.width as f32, self.config.height as f32)
     }
 }

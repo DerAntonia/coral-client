@@ -140,6 +140,8 @@ impl BlockRenderer {
             attributes: &[
                 wgpu::VertexAttribute { offset: 0, shader_location: 3, format: wgpu::VertexFormat::Float32x3 },
                 wgpu::VertexAttribute { offset: 12, shader_location: 5, format: wgpu::VertexFormat::Float32x3 },
+                // Einblenden der Spalte (s. block.wgsl::chunk_fade_discard), 0 = ganz da.
+                wgpu::VertexAttribute { offset: 24, shader_location: 6, format: wgpu::VertexFormat::Float32 },
             ],
         };
 
@@ -335,8 +337,8 @@ impl BlockRenderer {
 
         // Wasser/Glas der Spalten im kompakten Format (s. world::terrain_vertex) -- sonst wie
         // translucent_pipeline, das die Geisterbloecke weiter im alten Format benutzen.
-        let terrain_translucent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("terrain translucent pipeline"),
+        let terrain_translucent = |label: &str, fs: &str, unter: u8| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -346,7 +348,7 @@ impl BlockRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main_translucent",
+                entry_point: fs,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
@@ -377,13 +379,19 @@ impl BlockRenderer {
                 // Tiefenschreiben; nie umgekehrt.
                 depth_write_enabled: false,
                 depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
+                // Render-Order: nicht auf Pixeln, die etwas "immer darueber" belegt.
+                stencil: crate::render_order::stencil_under(unter),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
+        // In einem Zug (s. RenderOrder::single_translucent_pass) oder
+        // getrennt nach Wasser und Rest, wenn die Render-Order beide verschieden behandelt.
+        let terrain_translucent_pipeline = terrain_translucent("terrain translucent pipeline", "fs_main_translucent", cover::WATER | cover::REST);
+        let terrain_translucent_water_pipeline = terrain_translucent("terrain translucent water pipeline", "fs_translucent_water", cover::WATER);
+        let terrain_translucent_rest_pipeline = terrain_translucent("terrain translucent rest pipeline", "fs_translucent_rest", cover::REST);
         // Shader-Pfad: dasselbe mit Licht je Vertex (s. block.wgsl::vs_terrain_lit).
         let lit_terrain_translucent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("lit terrain translucent pipeline"),
@@ -518,7 +526,8 @@ impl BlockRenderer {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: false,
                 depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
+                // Nicht auf Hitbox-Kanten "ueber Spielern" (Render-Order).
+                stencil: crate::render_order::stencil_under(cover::PLAYERS),
                 bias: wgpu::DepthBiasState { constant: -2, slope_scale: -1.0, clamp: 0.0 },
             }),
             multisample: wgpu::MultisampleState::default(),
@@ -593,8 +602,8 @@ impl BlockRenderer {
         // eigene Shader-Paar identisch zur Block-Pipeline -- gleiche Bind-Groups, gleiches
         // Culling, gleiches Tiefenverhalten, kein Blending. Entities liefen vorher ueber die
         // Block-Pipeline; alles ausser der Faerbung soll sich deshalb nicht aendern.
-        let entity_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("entity pipeline"),
+        let entity = |label: &str, stencil: wgpu::StencilState| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -617,13 +626,17 @@ impl BlockRenderer {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
+                stencil,
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
+        // Render-Order: Entities schreiben, was sie verdecken; die Flammen an ihnen werden
+        // verdeckt (s. crate::render_order).
+        let entity_pipeline = entity("entity pipeline", crate::render_order::stencil_writer());
+        let entity_flame_pipeline = entity("entity flame pipeline", crate::render_order::stencil_under(cover::FLAMES));
 
         let skinning = crate::skinning::Skinning::new(
             device,
@@ -634,7 +647,7 @@ impl BlockRenderer {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
+                stencil: crate::render_order::stencil_writer(),
                 bias: wgpu::DepthBiasState::default(),
             },
         );
@@ -656,7 +669,7 @@ impl BlockRenderer {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: false,
                     depth_compare: wgpu::CompareFunction::LessEqual,
-                    stencil: wgpu::StencilState::default(),
+                    stencil: crate::render_order::stencil_under(cover::PLAYERS),
                     bias: wgpu::DepthBiasState { constant: -2, slope_scale: -1.0, clamp: 0.0 },
                 },
             );
@@ -817,7 +830,7 @@ impl BlockRenderer {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
+                stencil: crate::render_order::stencil_writer(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
@@ -972,14 +985,14 @@ impl BlockRenderer {
         });
 
         let outline_complement = OutlineComplement::new(device, &shader, &camera_bind_group_layout, hitbox_vertex_layout.clone(), surface_format);
-        let hitbox_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("hitbox pipeline"),
+        let hitbox = |label: &str, farbe: wgpu::ColorWrites, tiefe: wgpu::CompareFunction, stencil: wgpu::StencilState| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_hitbox",
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[hitbox_vertex_layout],
+                buffers: std::slice::from_ref(&hitbox_vertex_layout),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -988,21 +1001,27 @@ impl BlockRenderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: farbe,
                 })],
             }),
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
+                depth_compare: tiefe,
+                stencil,
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
+        // Render-Order: die Kanten schreiben, was sie verdecken, samt Merker. Fuer "ueber
+        // Spielern" mit Bewegungsunschaerfe erst nur der Stencil (mark), dann scharf auf dem
+        // Merker ohne Tiefentest (sharp) -- s. draw_after_terrain, render_hitboxes.
+        let hitbox_pipeline = hitbox("hitbox pipeline", wgpu::ColorWrites::ALL, wgpu::CompareFunction::Less, crate::render_order::stencil_hitbox());
+        let hitbox_mark_pipeline = hitbox("hitbox mark pipeline", wgpu::ColorWrites::empty(), wgpu::CompareFunction::Less, crate::render_order::stencil_hitbox());
+        let hitbox_sharp_pipeline = hitbox("hitbox sharp pipeline", wgpu::ColorWrites::ALL, wgpu::CompareFunction::Always, crate::render_order::stencil_marked());
 
         // Partikel: kein Backface-Culling (ein Billboard hat keine Rueckseite, aber die
         // Wicklung haengt an der Kameradrehung), Tiefe wird getestet. Die opake Variante
@@ -1036,7 +1055,7 @@ impl BlockRenderer {
                 wgpu::VertexAttribute { offset: 36, shader_location: 3, format: wgpu::VertexFormat::Float32x2 },
             ],
         };
-        let quad_pipeline = |label: &str, vertex: (&str, &wgpu::VertexBufferLayout), entry: &str, blend: wgpu::BlendState, write_depth: bool| {
+        let quad_pipeline = |label: &str, vertex: (&str, &wgpu::VertexBufferLayout), entry: &str, blend: wgpu::BlendState, write_depth: bool, stencil: wgpu::StencilState| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -1057,7 +1076,7 @@ impl BlockRenderer {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: write_depth,
                     depth_compare: wgpu::CompareFunction::LessEqual,
-                    stencil: wgpu::StencilState::default(),
+                    stencil,
                     bias: wgpu::DepthBiasState::default(),
                 }),
                 multisample: wgpu::MultisampleState::default(),
@@ -1066,7 +1085,8 @@ impl BlockRenderer {
             })
         };
         let particle_pipeline = |label: &str, entry: &str, blend: wgpu::BlendState, write_depth: bool| {
-            quad_pipeline(label, ("vs_particle", &particle_vertex_layout), entry, blend, write_depth)
+            // Render-Order: nicht auf Pixeln von etwas, das "immer ueber Partikeln" liegt.
+            quad_pipeline(label, ("vs_particle", &particle_vertex_layout), entry, blend, write_depth, crate::render_order::stencil_under(cover::PARTICLES))
         };
         let particle_opaque_pipeline = particle_pipeline("particle opaque pipeline", "fs_particle_opaque", wgpu::BlendState::REPLACE, true);
         let particle_translucent_pipeline =
@@ -1114,7 +1134,7 @@ impl BlockRenderer {
             cache: None,
         });
         let weather_pipeline =
-            quad_pipeline("weather pipeline", ("vs_weather", &weather_vertex_layout), "fs_weather", wgpu::BlendState::ALPHA_BLENDING, false);
+            quad_pipeline("weather pipeline", ("vs_weather", &weather_vertex_layout), "fs_weather", wgpu::BlendState::ALPHA_BLENDING, false, wgpu::StencilState::default());
         let weather_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("weather vertex buffer"),
             size: (std::mem::size_of::<WeatherVertex>() * WEATHER_VERTEX_CAPACITY) as wgpu::BufferAddress,
@@ -1128,7 +1148,7 @@ impl BlockRenderer {
             mapped_at_creation: false,
         });
 
-        let depth_view = create_depth_view(device, width, height);
+        let (depth_view, depth_sample_view) = create_depth_view(device, width, height);
 
         // Ein paar wenige Bloecke gleichzeitig -- mehr als eine Handvoll unbestaetigter
         // Platzierungen gibt es nicht, dafuer reicht ein kleiner, fest vergebener Puffer.
@@ -1223,11 +1243,16 @@ impl BlockRenderer {
             crumbling_buffer,
             crumbling_vertex_count: 0,
             hitbox_pipeline,
+            hitbox_mark_pipeline,
+            hitbox_sharp_pipeline,
+            render_order: crate::render_order::RenderOrder::default(),
+            entity_classes: Vec::new(),
             hitbox_buffer,
             hitbox_vertex_count: 0,
             hitbox_params: [0.0, HITBOX_MIN_RASTER_HALF_PX, width as f32, height as f32],
             outline_complement,
             depth_view,
+            depth_sample_view,
             camera_buffer,
             camera_bind_group,
             atlas_bind_group,
@@ -1245,8 +1270,12 @@ impl BlockRenderer {
             translucent_arena: TerrainArena::new(device),
             translucent_draws: IndirectDraws::new(device),
             terrain_translucent_pipeline,
+            terrain_translucent_water_pipeline,
+            terrain_translucent_rest_pipeline,
             lit_terrain_translucent_pipeline,
             daylight: 1.0,
+            entity_near_dither: 0.0,
+            mip_bias: 0.0,
             vanilla_game_time: 0.0,
             // Beides noetig: mehrere Aufrufe aus einem Puffer, und first_instance != 0 (daran
             // haengt der Spalten-Versatz). Auf Vulkan-Desktop-Treibern praktisch immer da.
@@ -1271,6 +1300,7 @@ impl BlockRenderer {
             }),
             column_offset_capacity: 1,
             column_offset_scratch: Vec::new(),
+            column_fade: HashMap::default(),
             zero_offset_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("zero column offset"),
                 size: COLUMN_OFFSET_STRIDE,
@@ -1307,6 +1337,7 @@ impl BlockRenderer {
             outline_color_buffer,
             outline_vertex_count: 0,
             entity_pipeline,
+            entity_flame_pipeline,
             skinning,
             entity_translucent_pipeline,
             entity_light_buffer,

@@ -4,8 +4,7 @@
 // zwei Bloecke, deren Trefferflaeche man im Kampf kennen will: Spinnennetz (der ganze Block,
 // obwohl das Modell nur ein flaches Kreuz ist) und Wasserquellen in der Form, die ein Eimer
 // trifft. Dazu die Mobs in zwei Gruppen, gefaehrlich und passiv (s. ENEMY_NAMES). Alles, was
-// hier nicht steht (Ruestungsstaender, Boote, Loren), bekommt weiter die Farbe der
-// geglaetteten Box und die Deckkraft des Moduls.
+// hier nicht steht (Ruestungsstaender, Boote, Loren), ist die Art Other ("Alles andere").
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HitboxKind {
@@ -25,10 +24,12 @@ pub enum HitboxKind {
     PassiveMob,
     Cobweb,
     Water,
+    // Alles andere Angreifbare (Boote, Loren, Ruestungsstaender): of_entity liefert es nie.
+    Other,
 }
 
 impl HitboxKind {
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 17;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Player,
         Self::EnderPearl,
@@ -46,15 +47,13 @@ impl HitboxKind {
         Self::PassiveMob,
         Self::Cobweb,
         Self::Water,
+        Self::Other,
     ];
 
-    // Die Entity-Arten, in der Reihenfolge der Liste "Individuelle Farben".
-    pub fn entities() -> impl Iterator<Item = Self> {
-        Self::ALL.into_iter().filter(|k| !k.is_block())
-    }
-
-    pub const fn is_block(self) -> bool {
-        matches!(self, Self::Cobweb | Self::Water)
+    // Zaehlt in der Render-Order zu "Spieler": alle PvP-Arten, also alles ausser Mobs und
+    // den beiden Bloecken (Nutzer 2026-11-12).
+    pub const fn is_pvp(self) -> bool {
+        !matches!(self, Self::DangerousMob | Self::PassiveMob | Self::Cobweb | Self::Water | Self::Other)
     }
 
     pub const fn index(self) -> usize {
@@ -104,6 +103,7 @@ impl HitboxKind {
             Self::PassiveMob => "Passive Mobs",
             Self::Cobweb => "Spinnennetz",
             Self::Water => "Wasserquelle",
+            Self::Other => "Alles andere",
         }
     }
 
@@ -126,6 +126,7 @@ impl HitboxKind {
             Self::PassiveMob => "passive_mob",
             Self::Cobweb => "cobweb",
             Self::Water => "water",
+            Self::Other => "other",
         }
     }
 
@@ -133,18 +134,8 @@ impl HitboxKind {
         Self::ALL.into_iter().find(|k| k.key() == key)
     }
 
-    // Bekommt diese Art ohne Ueberschreiben eine Box? Items nach dem Schalter oben im Modul,
-    // alles andere wie vor den eigenen Arten (s. default_style).
-    pub const fn shown_by_default(self, items: bool) -> bool {
-        match self {
-            Self::Item => items,
-            _ => self.default_style().on,
-        }
-    }
-
     // Vorgabe: an ist, was die Anzeige schon vor den eigenen Arten gezeigt hat (alles
     // Angreifbare). Pfeile, Dreizacke und Items waren aus und bleiben es, ebenso die Bloecke.
-    // Spieler in der Farbe der geglaetteten Box, damit sich beim Umstieg nichts aendert.
     pub const fn default_style(self) -> HitboxStyle {
         let (on, hue, saturation, value) = match self {
             Self::Player => (true, 100, 70, 90),
@@ -163,16 +154,18 @@ impl HitboxKind {
             Self::PassiveMob => (true, 130, 50, 85),
             Self::Cobweb => (false, 0, 0, 100),
             Self::Water => (false, 210, 80, 100),
+            Self::Other => (true, 100, 70, 90),
         };
-        HitboxStyle { on, custom: false, hue, saturation, value, alpha: 100 }
+        // Netz und Wasser behalten ihre eigene Farbe, alles andere folgt der Hauptfarbe.
+        let custom = matches!(self, Self::Cobweb | Self::Water);
+        HitboxStyle { on, custom, hue, saturation, value, alpha: 100 }
     }
 }
 
 // Ueberschreiben, Sichtbar, Farbe (Ton in Grad, Saettigung/Helligkeit in Prozent) und
-// Deckkraft in Prozent. Bei den Entities gelten Sichtbar, Farbe und Deckkraft nur mit
-// Ueberschreiben, sonst die Vorgaben (s. HitboxKind::shown_by_default, Farbe von "Geglättet").
-// Die Bloecke haben keine geglaettete Box: fuer sie ist Sichtbar der Schalter oben im Modul
-// und die Farbe immer ihre eigene. Die Deckkraft wirkt zusaetzlich zur Deckkraft des Moduls.
+// Deckkraft in Prozent. Sichtbar gilt immer; Farbe und Deckkraft nur mit Ueberschreiben, sonst
+// die Hauptfarbe des Moduls (Settings::module_hitbox_smoothed_*). Die Deckkraft wirkt
+// zusaetzlich zur Deckkraft des Moduls.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HitboxStyle {
     pub on: bool,
@@ -189,7 +182,7 @@ impl HitboxStyle {
     }
 
     // Unlesbares laesst die Vorgabe stehen. Ohne sechstes Feld (aeltere Dateien) ist
-    // Ueberschreiben aus.
+    // Ueberschreiben aus (Netz und Wasser erzwingt der Parser an).
     pub fn decode(text: &str, default: Self) -> Self {
         let teile: Vec<&str> = text.split(',').collect();
         let (on, h, s, v, a, custom) = match teile[..] {

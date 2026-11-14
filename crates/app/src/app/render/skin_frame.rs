@@ -9,6 +9,11 @@
 use super::*;
 use render::skinning::{MeshId, SkinInstance, SkinMatrix};
 
+// Entity-Tint fuer Block-Entities (Truhen, Betten, Schilder ...): ungefaerbt und vom Nah-Raster
+// ausgenommen -- Rot unter -0.5 (s. block.wgsl::entity_near_cut), die Farbe zaehlt bei Anteil 0
+// nicht. Fuer beide Wege: Ecken (build_entity_vertices) und Skinning-Instanzen.
+pub(crate) const OHNE_NAH_RASTER: [f32; 4] = [-1.0, 0.0, 0.0, 0.0];
+
 // Schluessel eines Netzes: Adresse des Modells und Seitigkeit, dazu ein Fingerabdruck seiner
 // Geometrie -- wird ein Modell neu gebaut und landet ein anderes an derselben Adresse, passt der
 // Fingerabdruck nicht mehr und das Netz entsteht neu.
@@ -18,6 +23,23 @@ type MeshKey = (usize, bool);
 enum MeshRef {
     Known(MeshId),
     New(usize),
+}
+
+// Die Matrizen einer Instanz, die erst in upload_skinning entstehen -- dort auf dem Frame-Pool,
+// parallel zu den anderen (s. run_skin_jobs). `start` = ihr reservierter Platz in `matrices`,
+// die Pose liegt mit gleichem Index in SkinFrame::posen.
+struct SkinJob {
+    skelett: std::sync::Arc<world::entity_model::Skeleton>,
+    base: world::Affine,
+    start: u32,
+}
+
+// Woraus die Matrizen einer Instanz kommen.
+enum Matrizen<'p> {
+    // Ein starres Netz: eine Matrix, sofort eingetragen.
+    Starr(world::Affine),
+    // Ein Modell in einer Pose: aufgeschoben (s. SkinJob).
+    Pose(std::sync::Arc<world::entity_model::Skeleton>, &'p world::Pose, world::Affine),
 }
 
 #[derive(Default)]
@@ -30,7 +52,10 @@ pub(crate) struct SkinFrame {
     new_meshes: Vec<(MeshKey, u64, Vec<world::entity_model::SkinVertex>)>,
     // Nur Puffer, die ueber die Frames ihre Kapazitaet behalten (keine Allokation je Instanz):
     // die Teil-Matrizen einer Instanz (push_skinned) und die drei Zeichenlisten (upload_skinning).
-    teile: Vec<Option<world::Affine>>,
+    jobs: Vec<SkinJob>,
+    // Die Posen der Jobs, gleicher Index. Wird nie geleert, nur ueberschrieben (clone_from
+    // behaelt die Listen der Posen).
+    posen: Vec<world::Pose>,
     instanzen: Vec<(MeshId, SkinInstance)>,
     umrisse: Vec<(MeshId, SkinInstance)>,
     glanz: Vec<(MeshId, SkinInstance)>,
@@ -43,7 +68,7 @@ impl SkinFrame {
         self.shown.clear();
         self.matrices.clear();
         self.new_meshes.clear();
-        self.teile.clear();
+        self.jobs.clear();
         self.instanzen.clear();
         self.umrisse.clear();
         self.glanz.clear();
@@ -60,11 +85,15 @@ struct Shown {
     skin: bool,
     // Glint: (Massstab, Texturwahl) wie render::glint, None = nicht verzaubert.
     glint: Option<[f32; 2]>,
+    // Klasse der Render-Order (render::render_order::CLASS_*).
+    class: u8,
 }
 
 #[derive(Default)]
 pub(crate) struct SkinCache {
     meshes: rustc_hash::FxHashMap<MeshKey, (u64, MeshId)>,
+    // Je Modelladresse sein Skelett, mit dem Fingerabdruck wie bei `meshes`.
+    skelette: rustc_hash::FxHashMap<usize, (u64, std::sync::Arc<world::entity_model::Skeleton>)>,
     // Motion Blur: die Matrizen jeder Instanz im vorigen Bild (relativ zum damaligen Auge), je
     // (Schluessel, wievielte Instanz dieses Schluessels) -- wie EntityMotion bei den Ecken. Der
     // Wert ist (Anfang, Anzahl) in prev_data, der Kopie der Matrizen des vorigen Bildes.
@@ -167,11 +196,23 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_skinned(&self, model: &world::Model, pose: &world::Pose, base: world::Affine, tex: [f32; 4], color: [f32; 3], two_sided: bool, motion: u64) -> usize {
         let key = (std::ptr::from_ref(model) as usize, two_sided);
+        let abdruck = fingerprint(model);
+        let skelett = {
+            let mut cache = self.skin_cache.borrow_mut();
+            match cache.skelette.get(&key.0) {
+                Some((f, s)) if *f == abdruck => s.clone(),
+                _ => {
+                    let s = std::sync::Arc::new(world::entity_model::Skeleton::of(model));
+                    cache.skelette.insert(key.0, (abdruck, s.clone()));
+                    s
+                }
+            }
+        };
         self.push_skin_instance(
             key,
-            fingerprint(model),
+            abdruck,
             || world::entity_model::skin_mesh(model, two_sided).vertices,
-            |teile| world::entity_model::part_matrices_into(model, pose, base, teile),
+            Matrizen::Pose(skelett, pose, base),
             tex,
             color,
             motion,
@@ -198,10 +239,7 @@ impl App {
             key,
             abdruck,
             build,
-            |teile| {
-                teile.clear();
-                teile.push(Some(base));
-            },
+            Matrizen::Starr(base),
             tex,
             color,
             motion,
@@ -215,7 +253,7 @@ impl App {
         key: MeshKey,
         abdruck: u64,
         build: impl FnOnce() -> Vec<world::entity_model::SkinVertex>,
-        matrizen: impl FnOnce(&mut Vec<Option<world::Affine>>),
+        matrizen: Matrizen<'_>,
         tex: [f32; 4],
         color: [f32; 3],
         motion: u64,
@@ -233,11 +271,34 @@ impl App {
             },
         };
         let matrix = frame.matrices.len() as u32;
-        matrizen(&mut frame.teile);
-        SkinMatrix::extend_from_parts(&mut frame.matrices, &frame.teile);
-        frame.instances.push((mesh, SkinInstance { rect: tex, color, matrix, tint: [0.0; 4] }, motion, frame.teile.len() as u32));
-        frame.shown.push(Shown { main: true, outline: None, skin: false, glint: None });
+        let teile = match matrizen {
+            Matrizen::Starr(base) => {
+                frame.matrices.push(SkinMatrix::from_affine(base));
+                1
+            }
+            Matrizen::Pose(skelett, pose, base) => {
+                let n = skelett.len();
+                frame.matrices.resize(frame.matrices.len() + n, SkinMatrix::HIDDEN);
+                let k = frame.jobs.len();
+                match frame.posen.get_mut(k) {
+                    Some(p) => p.clone_from(pose),
+                    None => frame.posen.push(pose.clone()),
+                }
+                frame.jobs.push(SkinJob { skelett, base, start: matrix });
+                n as u32
+            }
+        };
+        frame.instances.push((mesh, SkinInstance { rect: tex, color, matrix, tint: [0.0; 4] }, motion, teile));
+        frame.shown.push(Shown { main: true, outline: None, skin: false, glint: None, class: render::render_order::CLASS_OTHER });
         frame.instances.len() - 1
+    }
+
+    // Block-Entity mit Skinning (Truhe, Bett ...): nie nah rastern, wie auf dem Ecken-Weg (s.
+    // OHNE_NAH_RASTER). Fuer Block-Entities laeuft kein finish_skin_entity, der Tint bleibt.
+    pub(crate) fn skin_without_near_dither(&self, index: usize) {
+        if let Some((_, i, _, _)) = self.skin_frame.borrow_mut().instances.get_mut(index) {
+            i.tint = OHNE_NAH_RASTER;
+        }
     }
 
     // Wie push_skinned, fuer den Koerper selbst (Haut, s. finish_skin_entity).
@@ -254,7 +315,7 @@ impl App {
     pub(crate) fn push_skinned_outline_only(&self, model: &world::Model, pose: &world::Pose, base: world::Affine, tex: [f32; 4], two_sided: bool, motion: u64, color: [f32; 4]) {
         let i = self.push_skinned(model, pose, base, tex, [1.0; 3], two_sided, motion);
         if let Some(s) = self.skin_frame.borrow_mut().shown.get_mut(i) {
-            *s = Shown { main: false, outline: Some(color), skin: true, glint: None };
+            *s = Shown { main: false, outline: Some(color), skin: true, glint: None, class: s.class };
         }
     }
 
@@ -263,6 +324,13 @@ impl App {
     pub(crate) fn skin_glint(&self, index: usize, scale: f32, texture: f32) {
         if let Some(s) = self.skin_frame.borrow_mut().shown.get_mut(index) {
             s.glint = Some([scale, texture]);
+        }
+    }
+
+    // Render-Order: die Instanzen eines Entities ab `from` gehoeren zur Klasse `class`.
+    pub(crate) fn skin_entity_class(&self, from: usize, class: u8) {
+        for s in self.skin_frame.borrow_mut().shown.iter_mut().skip(from) {
+            s.class = class;
         }
     }
 
@@ -295,10 +363,56 @@ impl App {
         }
     }
 
+    // Die aufgeschobenen Matrizen (s. SkinJob) in ihre reservierten Plaetze, in Gruppen auf dem
+    // Frame-Pool. Die Jobs liegen in `matrices` hintereinander, jede Gruppe bekommt ihr eigenes
+    // Stueck davon.
+    fn run_skin_jobs(&self, frame: &mut SkinFrame) {
+        const JE_GRUPPE: usize = 16;
+        let SkinFrame { jobs, posen, matrices, .. } = frame;
+        if jobs.is_empty() {
+            return;
+        }
+        let gruppen: Vec<&[SkinJob]> = jobs.chunks(JE_GRUPPE).collect();
+        let mut stuecke: Vec<std::sync::Mutex<&mut [SkinMatrix]>> = Vec::with_capacity(gruppen.len());
+        let mut rest: &mut [SkinMatrix] = matrices;
+        let mut bis = 0;
+        for g in &gruppen {
+            let (Some(erster), Some(letzter)) = (g.first(), g.last()) else { continue };
+            let von = erster.start as usize;
+            let ende = letzter.start as usize + letzter.skelett.len();
+            let (_, r) = std::mem::take(&mut rest).split_at_mut(von - bis);
+            let (eigen, r) = r.split_at_mut(ende - von);
+            rest = r;
+            bis = ende;
+            stuecke.push(std::sync::Mutex::new(eigen));
+        }
+        let rechne = |i: usize| {
+            let mut ziel = stuecke[i].lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut teile: Vec<Option<world::Affine>> = Vec::new();
+            let anfang = gruppen[i].first().map_or(0, |j| j.start as usize);
+            for (k, job) in gruppen[i].iter().enumerate() {
+                let n = job.skelett.len();
+                teile.clear();
+                teile.resize(n, None);
+                job.skelett.matrices_into(&posen[i * JE_GRUPPE + k], job.base, &mut teile);
+                let a = job.start as usize - anfang;
+                for (z, t) in ziel[a..a + n].iter_mut().zip(&teile) {
+                    *z = t.map_or(SkinMatrix::HIDDEN, SkinMatrix::from_affine);
+                }
+            }
+        };
+        if gruppen.len() < 2 {
+            (0..gruppen.len()).for_each(rechne);
+        } else {
+            self.frame_pool.run(gruppen.len(), &rechne);
+        }
+    }
+
     // Nach build_entity_vertices: neue Netze hochladen und die Instanzen an den Renderer.
     // Das Frame wird danach geleert zurueckgelegt, damit seine Listen ihre Kapazitaet behalten.
     pub(crate) fn upload_skinning(&mut self) {
         let mut frame = std::mem::take(&mut *self.skin_frame.borrow_mut());
+        self.run_skin_jobs(&mut frame);
         if let Some(gpu) = self.gpu.as_mut() {
             let mut neu = Vec::with_capacity(frame.new_meshes.len());
             {
@@ -322,7 +436,8 @@ impl App {
                     .filter(|(_, s)| s.main)
                     .filter_map(|((m, i, _, _), s)| s.glint.map(|[scale, tex]| (id(*m), SkinInstance { tint: [scale, tex, 0.0, 0.0], ..*i }))),
             );
-            gpu.block_renderer.skinning.set_instances(&gpu.device, &gpu.queue, instanzen, matrices);
+            let klassen: Vec<u8> = shown.iter().filter(|s| s.main).map(|s| s.class).collect();
+            gpu.block_renderer.skinning.set_instances(&gpu.device, &gpu.queue, instanzen, &klassen, matrices);
             gpu.block_renderer.skinning.set_outline_instances(&gpu.device, &gpu.queue, umrisse);
             gpu.block_renderer.skinning.set_glint_instances(&gpu.device, &gpu.queue, glanz);
             // Motion Blur bewegter Entities: wie die Ecken (s. frame.rs, entity_motion).

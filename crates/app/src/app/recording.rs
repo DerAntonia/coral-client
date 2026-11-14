@@ -1,6 +1,7 @@
 // coral-record, App-Seite (s. crates/record): Kamera (K), Maus (M), lokaler Zustand (L) und
 // Markierungen (E) fuer die Aufnahme des Tabs vorn. Die Pakete (S, C) schreibt die Verbindung
-// selbst; ihre Sitzungsnummer steht im record_slot des Tabs.
+// selbst; ihre Sitzungsnummer steht im record_slot des Tabs. Dasselbe geht an den Puffer von
+// coral-clip (s. app/clip.rs).
 //
 // Maus und lokaler Zustand nur bei Fokus und im Spiel (dieselbe Regel wie input_log): die
 // Raw-Maus laeuft fokusunabhaengig.
@@ -10,12 +11,19 @@ use crate::{App, Instant, AppMode, Perspective};
 // Lokaler Zustand: Slot, Flags, Schwung, Benutzen, Abbaufortschritt, Abbau-Block.
 const STATE_LEN: usize = 1 + 1 + 1 + 2 + 4 + 12;
 
+// Was je Ziel getrennt laeuft: die Sitzung, an die zuletzt geschrieben wurde (0 = keine), und
+// der zuletzt geschriebene Zustand.
+#[derive(Default)]
+struct Track {
+    session: u64,
+    last_state: Option<[u8; STATE_LEN]>,
+}
+
+// Zwei Ziele: die Datei von coral-record und der Puffer von coral-clip (s. app/clip.rs).
 #[derive(Default)]
 pub(crate) struct AppRecorder {
     producer: record::Producer,
-    // Die Sitzung, an die zuletzt geschrieben wurde (0 = keine).
-    session: u64,
-    last_state: Option<[u8; STATE_LEN]>,
+    tracks: [Track; 2],
 }
 
 impl AppRecorder {
@@ -25,53 +33,63 @@ impl AppRecorder {
 }
 
 impl App {
-    fn record_session(&self) -> u64 {
-        self.tabs.get(self.active_tab).map_or(0, |t| t.record_slot.load(std::sync::atomic::Ordering::Relaxed))
+    // Die Sitzungen des Tabs vorn: Datei und Puffer (0 = keine).
+    fn record_sessions(&self) -> [u64; 2] {
+        self.tabs.get(self.active_tab).map_or([0, 0], |t| [t.record_slot.load(std::sync::atomic::Ordering::Relaxed), t.clip_link.session()])
     }
 
     pub(crate) fn record_mouse(&mut self, dx: f64, dy: f64, at: Instant) {
         if !self.focused || self.mode != AppMode::World {
             return;
         }
-        let id = self.record_session();
         let mut b = [0u8; 8];
         b[..4].copy_from_slice(&(dx as f32).to_le_bytes());
         b[4..].copy_from_slice(&(dy as f32).to_le_bytes());
-        self.recorder.producer.push(id, record::Tag::M, at, &b);
+        for id in self.record_sessions() {
+            self.recorder.producer.push(id, record::Tag::M, at, &b);
+        }
     }
 
     // Einmal je Bild, nach dem Setzen der Kamera.
     pub(crate) fn record_frame(&mut self) {
-        let id = self.record_session();
-        let jetzt = Instant::now();
-        if id != self.recorder.session {
-            let alt = self.recorder.session;
-            self.recorder.producer.push(alt, record::Tag::E, jetzt, &[record::Mark::Back as u8]);
-            let packs = self.settings.active_skins.join("\n");
-            self.recorder.producer.push_parts(id, record::Tag::E, jetzt, &[&[record::Mark::Front as u8]]);
-            self.recorder.producer.push_parts(id, record::Tag::E, jetzt, &[&[record::Mark::Packs as u8], packs.as_bytes()]);
-            self.recorder.session = id;
-            self.recorder.last_state = None;
+        let ids = self.record_sessions();
+        if ids == [0, 0] && self.recorder.tracks.iter().all(|t| t.session == 0) {
+            return;
         }
-        if id != 0 {
-            // Im Menue-Hintergrund steht die Kamera in der Startszene, nicht beim Spieler.
-            if self.hero_fov.is_none() {
-                let c = &self.camera;
-                let mut k = [0u8; 37];
-                k[..8].copy_from_slice(&c.position.x.to_le_bytes());
-                k[8..16].copy_from_slice(&c.position.y.to_le_bytes());
-                k[16..24].copy_from_slice(&c.position.z.to_le_bytes());
-                k[24..28].copy_from_slice(&c.yaw.to_le_bytes());
-                k[28..32].copy_from_slice(&c.pitch.to_le_bytes());
-                k[32..36].copy_from_slice(&c.fov_degrees.to_le_bytes());
-                k[36] = Perspective::ALL.iter().position(|p| *p == self.perspective).unwrap_or(0) as u8;
-                self.recorder.producer.push(id, record::Tag::K, jetzt, &k);
+        let jetzt = Instant::now();
+        // Im Menue-Hintergrund steht die Kamera in der Startszene, nicht beim Spieler.
+        let kamera = self.hero_fov.is_none().then(|| {
+            let c = &self.camera;
+            let mut k = [0u8; 37];
+            k[..8].copy_from_slice(&c.position.x.to_le_bytes());
+            k[8..16].copy_from_slice(&c.position.y.to_le_bytes());
+            k[16..24].copy_from_slice(&c.position.z.to_le_bytes());
+            k[24..28].copy_from_slice(&c.yaw.to_le_bytes());
+            k[28..32].copy_from_slice(&c.pitch.to_le_bytes());
+            k[32..36].copy_from_slice(&c.fov_degrees.to_le_bytes());
+            k[36] = Perspective::ALL.iter().position(|p| *p == self.perspective).unwrap_or(0) as u8;
+            k
+        });
+        let zustand = (self.focused && self.mode == AppMode::World).then(|| self.record_state());
+        for (i, id) in ids.into_iter().enumerate() {
+            if id != self.recorder.tracks[i].session {
+                let alt = self.recorder.tracks[i].session;
+                self.recorder.producer.push(alt, record::Tag::E, jetzt, &[record::Mark::Back as u8]);
+                let packs = self.settings.active_skins.join("\n");
+                self.recorder.producer.push_parts(id, record::Tag::E, jetzt, &[&[record::Mark::Front as u8]]);
+                self.recorder.producer.push_parts(id, record::Tag::E, jetzt, &[&[record::Mark::Packs as u8], packs.as_bytes()]);
+                self.recorder.tracks[i] = Track { session: id, last_state: None };
             }
-            if self.focused && self.mode == AppMode::World {
-                let zustand = self.record_state();
-                if self.recorder.last_state != Some(zustand) {
-                    self.recorder.last_state = Some(zustand);
-                    self.recorder.producer.push(id, record::Tag::L, jetzt, &zustand);
+            if id == 0 {
+                continue;
+            }
+            if let Some(k) = &kamera {
+                self.recorder.producer.push(id, record::Tag::K, jetzt, k);
+            }
+            if zustand.is_some() && self.recorder.tracks[i].last_state != zustand {
+                self.recorder.tracks[i].last_state = zustand;
+                if let Some(z) = &zustand {
+                    self.recorder.producer.push(id, record::Tag::L, jetzt, z);
                 }
             }
         }

@@ -221,6 +221,15 @@ pub(crate) const SECTION_TAB_GAP: f32 = 8.0;
 // Wie schnell die Hinterlegung des aktiven Reiters zum neuen Abschnitt gleitet (je Sekunde,
 // exponentiell): nach gut 0,15 s ist sie fast da.
 pub(crate) const SECTION_SLIDE_RATE: f32 = 18.0;
+// So lange gleitet die Leiste oben beim Pausieren von oben herein (Sekunden).
+pub(crate) const PAUSE_BAR_SLIDE_SECS: f32 = 0.15;
+
+// Versatz der Leiste oben `secs` nach dem Pausieren: erst ganz ueber dem Bildrand, dann
+// abbremsend (kubisch) an ihren Platz.
+pub(crate) fn pause_bar_slide_dy(secs: f32) -> f32 {
+    let t = (secs / PAUSE_BAR_SLIDE_SECS).clamp(0.0, 1.0);
+    -TOPBAR_H * (1.0 - t).powi(3)
+}
 
 impl Button {
     // Liegt (x, y) auf dem Knopf? Reiter fangen auch die Haelfte der Luecke zum Nachbarn mit

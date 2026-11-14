@@ -8,9 +8,11 @@ impl App {
         accounts::display_order(&self.accounts.list, |a| self.account_check(a), self.credentials.as_ref().map(|c| c.profile_id.as_str()))
     }
 
-    // Kontenliste unter dem Konto-Knopf: zuerst das angemeldete Konto, dann die uebrigen,
-    // ungueltige zuletzt. Some = Index in accounts.list; None = ein angemeldetes Konto, das nicht
-    // in der Liste steht. Ohne Anmeldung gibt es keine eigene Zeile, es ist nur keins markiert.
+    // Kontenliste unter dem Konto-Knopf: nur Konten, die sofort gehen -- bestaetigtes, noch
+    // laufendes Access-Token (Nutzer 2026-11-11, s. Account::usable; gespeichert, steht also
+    // schon beim Start fest). Das angemeldete zuerst. Some = Index in accounts.list; None = ein
+    // angemeldetes Konto, das nicht in der Liste steht. Ohne Anmeldung gibt es keine eigene
+    // Zeile, es ist nur keins markiert.
     pub(crate) fn account_menu_rows(&self, gpu: &GpuState) -> Vec<(Rect, Option<usize>)> {
         let l = self.topbar_layout(gpu);
         let w = l.konto.w.max(340.0);
@@ -19,12 +21,14 @@ impl App {
         if self.credentials.as_ref().is_some_and(|c| self.accounts.find(&c.profile_id).is_none()) {
             zeilen.push(None);
         }
-        zeilen.extend(self.account_order().into_iter().map(Some));
+        let jetzt = accounts::now_unix();
+        zeilen.extend(self.account_order().into_iter().filter(|&i| self.accounts.list[i].usable(jetzt)).map(Some));
         zeilen.into_iter().enumerate().map(|(n, z)| (Rect { x, y: TOPBAR_H + 4.0 + n as f32 * 48.0, w, h: 44.0 }, z)).collect()
     }
 
     // Kopf eines Kontos in `bild`: Gesicht + Hutlage aus dem Skin; waehrend der Pruefung der
-    // Ladekreis an seiner Stelle, ein ungueltiges Konto blass.
+    // Ladekreis an seiner Stelle. Ungueltige nicht mehr blass (Nutzer 2026-11-11) -- das sagt
+    // im Acc-Manager das X rechts.
     pub(crate) fn push_account_head(&self, a: Option<&accounts::Account>, uuid: Option<[u8; 16]>, bild: Rect, rects: &mut Vec<UiRect>, sprites: &mut Vec<UiSprite>) {
         use theme::Slot;
         let g = theme::get;
@@ -39,11 +43,9 @@ impl App {
             rects.extend(loading_dots(bild, seit.elapsed().as_secs_f32(), g(Slot::Accent)));
             return;
         }
-        let blass = a.is_some_and(|a| matches!(self.account_check(a), accounts::Check::Invalid(_)));
-        let tint = if blass { [1.0, 1.0, 1.0, 0.35] } else { [1.0; 4] };
         let uuid = uuid.unwrap_or([0; 16]);
         for (px, py) in [(8.0, 8.0), (40.0, 8.0)] {
-            sprites.push(UiSprite::quad(bild.x, bild.y, bild.w, bild.h, self.skin_face_uv(&uuid, px, py), tint, SpriteAtlas::Entity));
+            sprites.push(UiSprite::quad(bild.x, bild.y, bild.w, bild.h, self.skin_face_uv(&uuid, px, py), [1.0; 4], SpriteAtlas::Entity));
         }
     }
 
@@ -91,7 +93,7 @@ impl App {
             };
             texts.push(UiText { text: name, x: bild.x + bild.w + 12.0, y: ty, color: farbe, scale: UI_SCALE_SMALL });
             if let Some(a) = konto {
-                self.push_account_info(gpu, a, r, &mut texts);
+                self.push_account_info(gpu, a, r, 0.0, &mut texts);
             }
         }
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites, pivot: (0.0, 0.0), angle: 0.0, clip: None });
@@ -227,7 +229,10 @@ impl App {
                     };
                     texts.push(UiText { text: e.label.clone(), x: bild.x + bild.w + 12.0, y: mitte_y(e.rect, UI_SCALE_SMALL), color: farbe, scale: UI_SCALE_SMALL });
                     if let Some(a) = konto {
-                        self.push_account_info(gpu, a, e.rect, &mut texts);
+                        // Ganz rechts der Stand der Pruefung, die Restlaufzeit links daneben.
+                        let feld = Rect { x: e.rect.x + e.rect.w - 12.0 - ACCOUNT_STATE_ICON, y: e.rect.y + (e.rect.h - ACCOUNT_STATE_ICON) / 2.0, w: ACCOUNT_STATE_ICON, h: ACCOUNT_STATE_ICON };
+                        push_account_state_icon(&mut rects, feld, &self.account_check(a), self.app_started.elapsed().as_secs_f32());
+                        self.push_account_info(gpu, a, e.rect, ACCOUNT_STATE_ICON + 10.0, &mut texts);
                     }
                 }
                 AccKind::Hint => texts.push(UiText { text: e.label.clone(), x: e.rect.x, y: mitte_y(e.rect, UI_SCALE_SMALL), color: theme::text_3(), scale: UI_SCALE_SMALL }),
@@ -264,8 +269,9 @@ impl App {
 
     // Rechts in einer Kontozeile: bei Tokens, die sich nicht selbst erneuern, wie lange sie
     // noch gelten; ein ungueltiges Konto sagt das statt dessen. Woher ein Konto stammt, steht
-    // im Acc-Manager schon in der Ueberschrift seiner Gruppe.
-    pub(crate) fn push_account_info(&self, gpu: &GpuState, a: &accounts::Account, zeile: Rect, texts: &mut Vec<UiText>) {
+    // im Acc-Manager schon in der Ueberschrift seiner Gruppe. `rechts_frei`: so viel bleibt
+    // rechts frei (im Acc-Manager fuer das Symbol der Pruefung).
+    pub(crate) fn push_account_info(&self, gpu: &GpuState, a: &accounts::Account, zeile: Rect, rechts_frei: f32, texts: &mut Vec<UiText>) {
         let (text, farbe) = match self.account_check(a) {
             accounts::Check::Invalid(_) => ("ungültig".to_string(), theme::get(theme::Slot::Danger)),
             _ if a.source != accounts::Source::Microsoft => match accounts::expiry(&a.access_token) {
@@ -275,7 +281,7 @@ impl App {
             _ => return,
         };
         let ty = (zeile.y + (zeile.h - gpu.text_height(TOPBAR_SUB_SCALE)) / 2.0).round();
-        let x = zeile.x + zeile.w - 12.0 - gpu.measure_text(&text, TOPBAR_SUB_SCALE);
+        let x = zeile.x + zeile.w - 12.0 - rechts_frei - gpu.measure_text(&text, TOPBAR_SUB_SCALE);
         texts.push(UiText { text, x: x.round(), y: ty, color: farbe, scale: TOPBAR_SUB_SCALE });
     }
 
@@ -548,6 +554,51 @@ impl App {
             (AccKind::Close, _) => self.account_manager_open = false,
             (_, Some(action)) => self.run_menu_action(action),
             _ => {}
+        }
+    }
+}
+
+// Kantenlaenge des Symbols fuer den Stand der Pruefung (s. push_account_state_icon).
+const ACCOUNT_STATE_ICON: f32 = 20.0;
+// Breite der schwarzen Kontur um diese Symbole.
+const ACCOUNT_STATE_OUTLINE: f32 = 1.5;
+
+// Stand der Pruefung eines Kontos im Acc-Manager (Nutzer 2026-11-11): gueltig ein Haken,
+// ungueltig ein X, sonst (wird geprueft, noch ungeprueft) der Ladekreis. Alles mit schwarzer
+// Kontur -- auf Wunsch des Nutzers fest schwarz, keine Theme-Farbe.
+fn push_account_state_icon(rects: &mut Vec<UiRect>, feld: Rect, check: &accounts::Check, t: f32) {
+    use theme::Slot;
+    let schwarz = [0.0, 0.0, 0.0, 1.0];
+    let o = ACCOUNT_STATE_OUTLINE;
+    let (x, y, s) = (feld.x, feld.y, feld.w / 20.0);
+    // Erst alle Balken schwarz und dicker, dann farbig darueber: so liegt die Kontur auch an
+    // der Kreuzung nicht ueber dem anderen Balken.
+    let balken = |rects: &mut Vec<UiRect>, linien: &[((f32, f32), (f32, f32))], farbe: [f32; 4]| {
+        let d = 3.0 * s;
+        for (a, b) in linien {
+            push_bar(rects, *a, *b, d + 2.0 * o, schwarz);
+        }
+        for (a, b) in linien {
+            push_bar(rects, *a, *b, d, farbe);
+        }
+    };
+    match check {
+        accounts::Check::Valid => {
+            let linien = [((x + 4.0 * s, y + 10.5 * s), (x + 8.0 * s, y + 14.5 * s)), ((x + 8.0 * s, y + 14.5 * s), (x + 16.0 * s, y + 5.5 * s))];
+            balken(rects, &linien, theme::get(Slot::Success));
+        }
+        accounts::Check::Invalid(_) => {
+            let linien = [((x + 5.0 * s, y + 5.0 * s), (x + 15.0 * s, y + 15.0 * s)), ((x + 5.0 * s, y + 15.0 * s), (x + 15.0 * s, y + 5.0 * s))];
+            balken(rects, &linien, theme::get(Slot::Danger));
+        }
+        accounts::Check::Checking | accounts::Check::Unknown => {
+            // Jeder Punkt mit einem schwarzen etwas groesseren dahinter, so deckend wie er.
+            for p in loading_dots(feld, t, theme::get(Slot::Accent)) {
+                let r = p.rect;
+                let rand = Rect { x: r.x - o, y: r.y - o, w: r.w + 2.0 * o, h: r.h + 2.0 * o };
+                rects.push(UiRect::rounded(rand, [0.0, 0.0, 0.0, p.color[3]], rand.w / 2.0));
+                rects.push(p);
+            }
         }
     }
 }

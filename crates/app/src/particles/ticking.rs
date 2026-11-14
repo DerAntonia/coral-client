@@ -15,7 +15,9 @@ impl Particles {
         // Zwischen seinen Ticks gleitet das Bild ueber `phase` weiter (s. build_vertices).
         let tuning = self.tuning;
         let sprites = &self.sprites;
+        let painted = &self.painted;
         for p in &mut self.particles {
+            fit_painted_box(p, painted, tuning[usize::from(p.own)][p.kind as usize]);
             let speed = tuning[usize::from(p.own)][p.kind as usize].speed();
             if speed == 1.0 {
                 Self::tick_one(p, sprites, ctx, &mut spawns, &mut boeen);
@@ -33,6 +35,9 @@ impl Particles {
         let mut emitters = std::mem::take(&mut self.emitters);
         emitters.retain_mut(|em| self.tick_emitter(em, body, ctx));
         emitters.append(&mut self.emitters);
+        for em in &mut emitters {
+            em.fresh = false;
+        }
         self.emitters = emitters;
 
         for p in self.pending.drain(..) {
@@ -241,20 +246,31 @@ impl Particles {
             (Sheet::Block, &mut draws.block),
         ] {
             let before = out.len();
-            for p in self.particles.iter().filter(|p| self.sheet_of(p) == sheet && p.behavior.renders()) {
+            for p in self.particles.iter().filter(|p| self.sheet_at(p, tick_progress) == sheet && p.behavior.renders() && !(p.hide_until_moved && p.age == 0)) {
                 let t = self.tuning_of(p.own, p.kind as usize);
                 // Bei eigenem Tempo laeuft die Zeit des Partikels anders: `phase` ist schon
                 // vergangen, der Rest des Spielticks zaehlt mal Tempo. Ueber 1 hinaus (mehr als
                 // ein eigener Tick je Spieltick) geht es den letzten Schritt entlang weiter.
                 let progress = if t.speed_pct == 100 { tick_progress } else { p.phase + tick_progress * t.speed() };
-                let center = (p.last.lerp(p.pos, f64::from(progress)) - eye).as_vec3();
-                let s = p.size(progress);
+                let mut center = (p.last.lerp(p.pos, f64::from(progress)) - eye).as_vec3();
+                let s = p.size(progress) * t.size();
+                // Bemalte Pixel genau in der Kollisionsbox (s. fit_painted_box): ihre Mitte auf die
+                // Mitte der Box, nicht die Bildmitte auf die Unterkante wie Vanilla.
+                if let Some(b) = painted_of(p, &self.painted) {
+                    let (a, c) = ((b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5);
+                    center += Vec3::new(0.0, p.spacing_y as f32 * 0.5, 0.0) - right * (s * (2.0 * a - 1.0)) - up * (s * (1.0 - 2.0 * c));
+                }
                 let mut color = p.color;
+                // Mit Coral-Ausblenden kein Vanilla-Ausblenden (Nutzer 2026-11-11): Totem und
+                // End-Rod bleiben voll und blenden nur ueber fade_out aus. Ihr Farbwechsel bleibt.
+                if p.fades_out && self.fade_out_ms > 0 {
+                    color[3] = 1.0;
+                }
                 if p.flash {
                     // Die Deckkraft aus den Optionen ueberschreibt Vanilla jedes Bild hiermit.
                     color[3] = 0.6 - (p.age as f32 + progress - 1.0) * 0.25 * 0.5;
                 }
-                color[3] *= t.opacity();
+                color[3] *= t.opacity() * self.fade_out(p, tick_progress);
                 let (r, u) = (right * s, up * s);
                 let [u0, v0, u1, v1] = p.uv;
                 // BillboardParticleSubmittable: (1,-1) (1,1) (-1,1) (-1,-1) mit
@@ -282,6 +298,48 @@ impl Particles {
         draws
     }
 
+    // Partikel ausblenden (kein Vanilla, Nutzer 2026-11-11): in den letzten fade_out_ms seines
+    // Lebens geht die Deckkraft linear auf 0. Die Zeit zaehlt echt, also mit dem Tempo der Art
+    // umgerechnet. Gilt auch fuer die, die in Vanilla selbst ausblenden (Totem, End-Rod): deren
+    // Vanilla-Ausblenden (bis halbe Deckkraft) faellt dann weg, s. build_vertices. 1 = voll.
+    pub(super) fn fade_out(&self, p: &Particle, tick_progress: f32) -> f32 {
+        if self.fade_out_ms == 0 {
+            return 1.0;
+        }
+        let t = self.tuning_of(p.own, p.kind as usize);
+        let progress = if t.speed_pct == 100 { tick_progress } else { p.phase + tick_progress * t.speed() };
+        let rest_ticks = (self.visible_end(p) - p.age) as f32 - progress;
+        let rest_ms = rest_ticks.max(0.0) / t.speed() * 50.0;
+        (rest_ms / self.fade_out_ms as f32).min(1.0)
+    }
+
+    // Ab welchem Alter ein Partikel nicht mehr zu sehen ist: gezeichnet wird er bis einschliesslich
+    // age == max_age (s. tick_physics), es sei denn, seine Bilderreihe endet mit durchsichtigen
+    // Bildern (s. visible_frames) -- dann ab dem ersten davon. So endet das Ausblenden, wo der
+    // Pack die Animation enden laesst, und sie wird nicht laenger.
+    pub(super) fn visible_end(&self, p: &Particle) -> i32 {
+        let voll = p.max_age + 1;
+        let Some(t) = p.animated_sprites else { return voll };
+        let (Some(list), Some(&k)) = (self.sprites.get(t as usize), self.visible_frames.get(t as usize)) else { return voll };
+        if list.len() < 2 || k >= list.len() {
+            return voll;
+        }
+        // sprite_by_age: Bild = age * (n - 1) / max_age, abgerundet. Bild k kommt also ab
+        // age * (n - 1) >= k * max_age.
+        let n1 = list.len() as i32 - 1;
+        ((k as i32 * p.max_age.max(1) + n1 - 1) / n1).min(voll)
+    }
+
+    // Wohin ein Partikel in diesem Bild gehoert (s. sheet_of): beim Ausblenden ins
+    // durchscheinende Blatt, damit es mischen kann.
+    pub(super) fn sheet_at(&self, p: &Particle, tick_progress: f32) -> Sheet {
+        if p.sheet == Sheet::Opaque && self.fade_out(p, tick_progress) < 1.0 {
+            Sheet::Translucent
+        } else {
+            self.sheet_of(p)
+        }
+    }
+
     // Opake Partikel mischen nicht -- mit weniger Deckkraft gehen sie ins durchscheinende
     // Blatt (derselbe Atlas, nur mit Mischung).
     pub(super) fn sheet_of(&self, p: &Particle) -> Sheet {
@@ -291,4 +349,22 @@ impl Particles {
             p.sheet
         }
     }
+}
+
+// Bemaltes Rechteck des aktuellen Bildes, wenn der Partikel gegen die Welt kollidiert und sein
+// Bild im Partikel-Atlas liegt (Block- und Item-Splitter nicht: deren Box bleibt wie Vanilla).
+fn painted_of(p: &Particle, painted: &HashMap<[u32; 4], [f32; 4]>) -> Option<[f32; 4]> {
+    if !p.collides || p.behavior != Behavior::Physics {
+        return None;
+    }
+    painted.get(&p.uv.map(f32::to_bits)).copied()
+}
+
+// Kollisionsbox = die bemalten Pixel (Nutzer 2026-11-11, wie beim Schnee): so breit und hoch,
+// wie das Bild in der Welt bemalt ist (Bildgroesse 2 x size), statt Vanillas fester 0,2. Ein
+// Partikel landet so mit seinen sichtbaren Pixeln auf dem Boden, statt halb darin zu stecken.
+fn fit_painted_box(p: &mut Particle, painted: &HashMap<[u32; 4], [f32; 4]>, t: ParticleTuning) {
+    let Some(b) = painted_of(p, painted) else { return };
+    let s = f64::from(p.size(0.0) * t.size()) * 2.0;
+    p.set_spacing(((b[2] - b[0]) as f64 * s).max(0.005), ((b[3] - b[1]) as f64 * s).max(0.005));
 }

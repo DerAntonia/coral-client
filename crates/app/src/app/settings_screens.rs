@@ -1,6 +1,6 @@
 // Die Einstellungsseiten: Allgemein, Video, Steuerung, Design, Schrift, Audio, Skins.
 
-use crate::{theme, skin_tab, App, GpuState, UiText, UI_MARGIN, UI_SCALE_TITLE, UI_SCALE_SMALL, active_config, Instant, i18n, Duration, system_info, CPU_ROW, GPU_ROW, RAM_ROW, SWAP_ROW, COMPOSITING_ROW, UiRect, SETTINGS_LABELS, Rect, SETTINGS_LABEL_X, settings_row_y, SETTINGS_CTRL_X, SETTINGS_CTRL_H, stepper_value_rect, FRAME_LATENCY_ROW, FPS_LIMIT_ROW, fps_limit_label, EditableValue, MESH_BUDGET_ROW, CHUNK_THREADS_ROW, TEAR_TIMING_ROW, TEAR_RESERVE_ROW, SLOT_HOVER_FADE_ROW, SLOT_HOVER_COLOR_ROW, SWAP_ANIM_ROW, SWAP_ANIM_TOTEM_ROW, SWAP_ANIM_HEALING_ROW, DOLL_BACKDROP_ROW, Perspective, PROJECTION_ROW, SMOOTH_LIGHTING_ROW, BLOCK_ROTATION_ROW, PARTICLES_ROW, PARTICLES_OTHER_ROW, ARMOR_TRIMS_ROW, VIEW_MODEL_ROW, DAMAGE_TINT_FIRST_ROW, DAMAGE_TINT_SKIN_ONLY_ROW, DAMAGE_TINT_TICKS_ROW, damage_tint_duration_text, RENDER_DISTANCE_ROW, ENTITY_DISTANCE_ROW, BLOCK_ENTITY_DISTANCE_ROW, LOD_DETAIL_ROW, MAX_RENDER_DISTANCE_MAX, ENTITY_DISTANCE_MAX, BLOCK_ENTITY_DISTANCE_MAX, controls_rows, ControlsRow, format_sensitivity, format_cursor_sensitivity, AppMode, SETTINGS_CONTENT_DX, SETTINGS_FIRST_Y, MenuScreen, SETTINGS_ROW_H, SETTINGS_SECTION_GAP, settings_rows_bottom, MENU_BACKDROP_ROW, SCROLL_INERTIA_ROW, SCROLL_DISTANCE_ROW, WALLPAPER_ROW, WALLPAPER_PICK_X, wallpaper, shared_config_dir, hero_scene, theme_tile_rect, mix_color, push_bar, ThemeChoice, push_typed_marker, DESIGN_THEME_ROW, design_row_count, THEME_DIVIDER_X, THEME_COLORS_X, theme_slot_cell, THEME_COLOR_SWATCH_DX, SWATCH_W, UiOverlay, NameDialogPurpose, dialog_dim, UI_SCALE_NORMAL, TOPBAR_SUB_SCALE, Button, ButtonAction, styled_button, UiOverlayGroup, text_field, field_press, ui_sound, CustomTheme, ui_screen, wrap_measured, LANGUAGE_ROWS, LOANWORDS_ROW, wrap_text, LANGUAGE_HINT, STABLE_NUMBERS_ROW, CAPITALS_ROW, ShadowArea, FONT_EXCEPTIONS_ROW, FontSlot, FontTile, ellipsize, push_font_marker, font_palette_name_h, SHADOW_CHECKER_PX, SHADOW_CHECKER_YELLOW, SHADOW_CHECKER_GREY, push_shadow_marker, SHADOW_PREVIEW_TEXT, FontPalette, SETTINGS_CONTENT_DY, tooltip_strip_w, FONT_SLOT_H, FontDrag, area_font_code, area_shadow_code, minecraft_sens_to_client, SENSITIVITY_MIN, SENSITIVITY_MAX, SENS_CALC_MC_ROW, trimme_nullen, SENS_CALC_RESULT_ROW, SENS_CALC_DPI_ROW, cm_per_360, SENS_CALC_CM_MC_ROW, SENS_CALC_CM_OWN_ROW, GLINT_SPEED_ROW, GLINT_STRENGTH_ROW, PLAYER_LIST_SCALE_ROW, CRIT_COLOR_ROW, FIRE_MODE_CROSSHAIR, FIRE_MODE_OFF, HURT_CAM_ROW, HURT_CAM_STRENGTH_ROW, SHOULDER_ROW, SHOULDER_OFFSET_ROW, SHOULDER_CROSSHAIR_ROW, SHOULDER_FADE_ROW, SHOULDER_DECOUPLED_ROW, FIRE_MODE_ROW, FIRE_DETAIL_ROW, DEATH_ANIM_ROW, ANIM_ROW, FIRE_MODE_VANILLA, InputKind, ConfigEdit, config_name_field_rect, CONFIG_LIST_FIRST_ROW, MAX_VISIBLE_CONFIGS, CARET_WIDTH_PX, SLIDER_SPAN_W, SEARCH_HIT_COUNT, SearchHit, SETTINGS_CATEGORIES, SETTINGS_SCROLL_FIRST, SETTINGS_SCROLL_BOTTOM, store_section_starts, settings_row_pos, SearchPlace, ModuleCategory, ModuleRow, header_list_rows_smooth, COLOR_HUD, header_list_first, particle_column_x, PARTICLE_SLIDER_W, PARTICLE_TOGGLE_X, PARTICLE_TOGGLE_W, PARTICLE_ALL_AT_ONCE_COL, particles, particle_value_rect, AUDIO_DEVICE_ROW, AUDIO_TEST_TONE_ROW, AUDIO_PITCH_ROW, format_ui_pitch, AUDIO_BUFFER_ROW, AUDIO_BUFFER_INFO_ROW, settings_wide_rect, format_audio_buffer, AUDIO_PIPEWIRE_ROW, AUDIO_PIPEWIRE_PRIO_ROW, AUDIO_PIPEWIRE_SET_ROW, PipewireKnopf, AUDIO_AUTO_ROW, AUDIO_SPATIAL_ROW, AUDIO_MASTER_ROW, volume_text, VOLUME_CATEGORIES, AUDIO_CATEGORY_FIRST_ROW, AUDIO_UI_SOUND_FIRST_ROW, UiSprite, skin_column_rect, SKIN_HEAD_H, skin_tiles_top, skin_tiles_bottom, ScrollFade, skin_tile_h, push_fade_marker, skin_clip, skin_icon_rect, pack_icon_uv, fade_sprite, SpriteAtlas, wrap_spans, ellipsize_spans, push_styled_row, skin_tile_rect, SKIN_TILE_GAP, skin_tiles_visible, SkinDrag, SERVER_DRAG_START_PX, HoverTarget, skin_files_layout, server_packs, skins_dir, list_available_skins, SkinFilesWindow, skin_files_rows_visible, SKIN_FILES_ROW_H, SKIN_FILES_INDENT, SKIN_FILES_ROWS_PER_NOTCH, TOGGLE_W};
+use crate::{theme, skin_tab, App, GpuState, UiText, UI_MARGIN, UI_SCALE_TITLE, UI_SCALE_SMALL, active_config, Instant, i18n, Duration, system_info, CPU_ROW, GPU_ROW, RAM_ROW, SWAP_ROW, COMPOSITING_ROW, UiRect, SETTINGS_LABELS, Rect, SETTINGS_LABEL_X, settings_row_y, SETTINGS_CTRL_X, SETTINGS_CTRL_H, stepper_value_rect, FRAME_LATENCY_ROW, FPS_LIMIT_ROW, fps_limit_label, EditableValue, MESH_BUDGET_ROW, CHUNK_THREADS_ROW, TEAR_TIMING_ROW, TEAR_RESERVE_ROW, SLOT_HOVER_FADE_ROW, SLOT_HOVER_COLOR_ROW, SWAP_ANIM_ROW, SWAP_ANIM_TOTEM_ROW, SWAP_ANIM_HEALING_ROW, DOLL_BACKDROP_ROW, Perspective, PROJECTION_ROW, SMOOTH_LIGHTING_ROW, BLOCK_ROTATION_ROW, PARTICLES_ROW, PARTICLES_OTHER_ROW, PARTICLE_DISTANCE_ROW, PARTICLE_FADE_ROW, ENTITY_NEAR_ROW, ARMOR_TRIMS_ROW, VIEW_MODEL_ROW, VIEW_MODEL_BOB_ROW, DAMAGE_TINT_FIRST_ROW, DAMAGE_TINT_SKIN_ONLY_ROW, DAMAGE_TINT_TICKS_ROW, damage_tint_duration_text, RENDER_DISTANCE_ROW, ENTITY_DISTANCE_ROW, BLOCK_ENTITY_DISTANCE_ROW, CHUNK_FADE_ROW, MAX_RENDER_DISTANCE_MAX, ENTITY_DISTANCE_MAX, BLOCK_ENTITY_DISTANCE_MAX, controls_rows, ControlsRow, format_sensitivity, format_cursor_sensitivity, AppMode, SETTINGS_CONTENT_DX, SETTINGS_FIRST_Y, MenuScreen, SETTINGS_ROW_H, SETTINGS_SECTION_GAP, settings_rows_bottom, MENU_BACKDROP_ROW, SCROLL_INERTIA_ROW, SCROLL_DISTANCE_ROW, WALLPAPER_ROW, PANORAMA_SPEED_ROW, WALLPAPER_PICK_X, wallpaper, shared_config_dir, hero_scene, theme_tile_rect, mix_color, push_bar, ThemeChoice, push_typed_marker, DESIGN_THEME_ROW, design_row_count, THEME_DIVIDER_X, THEME_COLORS_X, theme_slot_cell, THEME_COLOR_SWATCH_DX, SWATCH_W, UiOverlay, NameDialogPurpose, dialog_dim, UI_SCALE_NORMAL, TOPBAR_SUB_SCALE, Button, ButtonAction, styled_button, UiOverlayGroup, text_field, field_press, ui_sound, CustomTheme, ui_screen, LANGUAGE_ROWS, LOANWORDS_ROW, wrap_text, LANGUAGE_HINT, STABLE_NUMBERS_ROW, CAPITALS_ROW, ShadowArea, FONT_EXCEPTIONS_ROW, FontSlot, FontTile, ellipsize, push_font_marker, font_palette_name_h, SHADOW_CHECKER_PX, SHADOW_CHECKER_YELLOW, SHADOW_CHECKER_GREY, push_shadow_marker, SHADOW_PREVIEW_TEXT, FontPalette, SETTINGS_CONTENT_DY, tooltip_strip_w, FONT_SLOT_H, FontDrag, area_font_code, area_shadow_code, minecraft_sens_to_client, SENSITIVITY_MIN, SENSITIVITY_MAX, SENS_CALC_MC_ROW, trimme_nullen, SENS_CALC_RESULT_ROW, SENS_CALC_DPI_ROW, cm_per_360, SENS_CALC_CM_MC_ROW, SENS_CALC_CM_OWN_ROW, GLINT_SPEED_ROW, GLINT_STRENGTH_ROW, PLAYER_LIST_SCALE_ROW, CRIT_COLOR_ROW, FIRE_MODE_CROSSHAIR, FIRE_MODE_OFF, HURT_CAM_ROW, HURT_CAM_STRENGTH_ROW, SHOULDER_ROW, SHOULDER_OFFSET_ROW, SHOULDER_CROSSHAIR_ROW, SHOULDER_FADE_ROW, SHOULDER_DECOUPLED_ROW, FIRE_MODE_ROW, FIRE_DETAIL_ROW, DEATH_ANIM_ROW, ANIM_ROW, FIRE_MODE_VANILLA, InputKind, ConfigEdit, config_name_field_rect, CONFIG_LIST_FIRST_ROW, MAX_VISIBLE_CONFIGS, CARET_WIDTH_PX, SLIDER_SPAN_W, SEARCH_HIT_COUNT, SearchHit, SETTINGS_CATEGORIES, SETTINGS_SCROLL_FIRST, SETTINGS_SCROLL_BOTTOM, store_section_starts, settings_row_pos, SearchPlace, ModuleCategory, ModuleRow, COLOR_HUD, particle_column_x, PARTICLE_SLIDER_W, PARTICLE_TOGGLE_X, PARTICLE_TOGGLE_W, particle_value_rect, AUDIO_DEVICE_ROW, AUDIO_TEST_TONE_ROW, AUDIO_PITCH_ROW, format_ui_pitch, AUDIO_BUFFER_ROW, AUDIO_BUFFER_INFO_ROW, settings_wide_rect, format_audio_buffer, AUDIO_PIPEWIRE_ROW, AUDIO_PIPEWIRE_PRIO_ROW, AUDIO_PIPEWIRE_SET_ROW, PipewireKnopf, AUDIO_AUTO_ROW, AUDIO_SPATIAL_ROW, AUDIO_MASTER_ROW, volume_text, VOLUME_CATEGORIES, AUDIO_CATEGORY_FIRST_ROW, AUDIO_UI_SOUND_FIRST_ROW, UiSprite, skin_column_rect, SKIN_HEAD_H, skin_tiles_top, skin_tiles_bottom, ScrollFade, skin_tile_h, push_fade_marker, skin_clip, skin_icon_rect, pack_icon_uv, fade_sprite, SpriteAtlas, wrap_spans, ellipsize_spans, push_styled_row, skin_tile_rect, SKIN_TILE_GAP, skin_tiles_visible, SkinDrag, SERVER_DRAG_START_PX, HoverTarget, skin_files_layout, server_packs, skins_dir, list_available_skins, SkinFilesWindow, skin_files_rows_visible, SKIN_FILES_ROW_H, SKIN_FILES_INDENT, SKIN_FILES_ROWS_PER_NOTCH, TOGGLE_W, PARTICLE_HEADS, particle_slider_rows, DISCONNECT_POPUP_SCALE, span_row_width};
 
 mod design;
 mod fonts;
@@ -110,7 +110,7 @@ impl App {
     pub(crate) fn tear_readout(&self, f: &system_info::WindowPath) -> Option<String> {
         let (letzter, periode) = self.vblank.as_ref()?.latest()?;
         let sichtbar = if let Some((sichtbar, gesamt)) = self.vblank.as_ref().and_then(|v| v.lines) { periode * f64::from(sichtbar) / f64::from(gesamt) } else {
-            let h = f64::from(self.gpu.as_ref()?.size().1);
+            let h = f64::from(self.gpu.as_ref()?.real_size().1);
             periode * h / (h + 45.0)
         };
         let (mitte, streuung) = system_info::tear_position(f, letzter.ts_ns, periode, sichtbar)?;
@@ -129,6 +129,12 @@ impl App {
             let row_rect = Rect { x: SETTINGS_LABEL_X, y: settings_row_y(row), w: SETTINGS_CTRL_X, h: SETTINGS_CTRL_H };
             let y = (row_rect.y + (row_rect.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+        }
+
+        // Render-Order: die Spaltennamen ueber den Schaltern der Tabelle (s. render_order).
+        for (spalte, name) in crate::render_order::COL_NAMES.iter().enumerate() {
+            let rect = crate::render_order_col_rect(crate::RENDER_ORDER_HEAD_ROW, spalte);
+            texts.push(gpu.centered_text(rect, i18n::tr(name).into_owned(), theme::text(), UI_SCALE_SMALL));
         }
 
         // Wertfelder der Stepper (Mesh-Budget/Chunk-Limiter/Threads folgen unten).
@@ -158,6 +164,10 @@ impl App {
         // Worker-Anzahl: bewusst NICHT frei tippbar -- der sinnvolle Bereich haengt an der
         // Kernzahl dieser Maschine, nicht am Geschmack (s. EditableValue::ALL).
         let threads = format!("{}", set.chunk_update_threads);
+        let rect = crate::mip_sharpness_value_rect();
+        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        let bias = format!("{:.2}", -f64::from(self.settings.mip_sharpness_pct) / 100.0);
+        texts.push(gpu.centered_text(rect, bias, theme::text(), UI_SCALE_SMALL));
         let rect = stepper_value_rect(CHUNK_THREADS_ROW);
         rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
         texts.push(gpu.centered_text(rect, threads, theme::text(), UI_SCALE_SMALL));
@@ -213,6 +223,9 @@ impl App {
         left.push((BLOCK_ROTATION_ROW, "Block-Rotation"));
         left.push((PARTICLES_ROW, "Eigene Partikel"));
         left.push((PARTICLES_OTHER_ROW, "Andere Partikel"));
+        left.push((PARTICLE_DISTANCE_ROW, "Partikel-Distanz"));
+        left.push((PARTICLE_FADE_ROW, "Partikel ausblenden"));
+        left.push((ENTITY_NEAR_ROW, "Nahe Entities rastern"));
         left.push((ARMOR_TRIMS_ROW, "Rüstungsbesatz"));
         for (row, label) in left {
             let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
@@ -234,6 +247,23 @@ impl App {
             p => format!("{p} %"),
         };
         texts.push(gpu.centered_text(rect, staerke, theme::text(), UI_SCALE_SMALL));
+        let rect = stepper_value_rect(PARTICLE_DISTANCE_ROW);
+        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        texts.push(gpu.centered_text(rect, format!("{} Blöcke", self.settings.particle_distance), theme::text(), UI_SCALE_SMALL));
+        let rect = stepper_value_rect(PARTICLE_FADE_ROW);
+        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        let dauer = match self.settings.particle_fade_out_ms {
+            0 => "Aus".to_string(),
+            ms => format!("{:.2} s", f64::from(ms) / 1000.0),
+        };
+        texts.push(gpu.centered_text(rect, dauer, theme::text(), UI_SCALE_SMALL));
+        let rect = stepper_value_rect(ENTITY_NEAR_ROW);
+        rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+        let abstand = match self.settings.entity_near_dither_cm {
+            0 => "Aus".to_string(),
+            cm => format!("{:.1} Blöcke", f64::from(cm) / 100.0),
+        };
+        texts.push(gpu.centered_text(rect, abstand, theme::text(), UI_SCALE_SMALL));
         // FOV-Wertfelder (Pfeile kommen aus buttons()), Zahl ohne Nachkommastelle -- jedes
         // anklickbar fuer einen eigenen Wert (s. EditableValue::Fov), weil die 5er-Schritte
         // des Steppers z.B. eine 103 nie treffen. Die aktive Perspektive wird hervorgehoben,
@@ -267,22 +297,19 @@ impl App {
         self.build_video_glint_and_crit(gpu, rects, texts);
 
         // Sichtweiten: Render-Distance (anklickbar fuer einen eigenen Wert, das Maximum heisst
-        // "unbegrenzt"), dann die Fernsicht.
+        // "unbegrenzt"), Entity- und Block-Entity-Weite.
         let set = &self.settings;
         for (row, label) in [
             (RENDER_DISTANCE_ROW, "Render-Distance"),
             (ENTITY_DISTANCE_ROW, "Entity-Renderdistanz"),
             (BLOCK_ENTITY_DISTANCE_ROW, "Block-Entity-Renderdistanz"),
-            (LOD_DETAIL_ROW, "LOD-Detail"),
+            (CHUNK_FADE_ROW, "Chunk-Einblendung"),
         ] {
             let y = (settings_row_y(row) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
             texts.push(UiText { text: label.to_string(), x: SETTINGS_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
         }
-        let weite = if set.max_render_distance >= MAX_RENDER_DISTANCE_MAX {
-            "unbegrenzt".to_string()
-        } else {
-            format!("{} Chunks", set.max_render_distance)
-        };
+        // Kein "unbegrenzt": das Maximum ist die angeforderte Sichtweite, also eine echte Zahl.
+        let weite = format!("{} Chunks", set.max_render_distance.min(MAX_RENDER_DISTANCE_MAX));
         self.draw_editable_value(gpu, stepper_value_rect(RENDER_DISTANCE_ROW), EditableValue::MaxRenderDistance, weite, rects, texts);
         let weite = set.entity_render_distance;
         let weite = if weite >= ENTITY_DISTANCE_MAX { "unbegrenzt".to_string() } else { format!("{weite} Blöcke") };
@@ -291,9 +318,13 @@ impl App {
         let weite = if weite >= BLOCK_ENTITY_DISTANCE_MAX { "unbegrenzt".to_string() } else { format!("{weite} Blöcke") };
         self.draw_editable_value(gpu, stepper_value_rect(BLOCK_ENTITY_DISTANCE_ROW), EditableValue::BlockEntityRenderDistance, weite, rects, texts);
 
-        let rect = stepper_value_rect(LOD_DETAIL_ROW);
+        let rect = stepper_value_rect(CHUNK_FADE_ROW);
         rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-        texts.push(gpu.centered_text(rect, format!("{} px²", set.chunk_saver_threshold), theme::text(), UI_SCALE_SMALL));
+        let dauer = match set.chunk_fade_ms {
+            0 => "Aus".to_string(),
+            ms => format!("{:.2} s", f64::from(ms) / 1000.0),
+        };
+        texts.push(gpu.centered_text(rect, dauer, theme::text(), UI_SCALE_SMALL));
     }
 
     // Steuerung: zwei Spalten (s. Layout-Konstanten am Dateianfang). Links die
@@ -312,6 +343,8 @@ impl App {
                 ControlsRow::CursorSens => "Zeiger-Empfindlichkeit",
                 ControlsRow::CursorSize => "Zeigergröße",
                 ControlsRow::CursorWidth => "Zeigerbreite",
+                ControlsRow::CursorOutline => "Outline-Dicke",
+                ControlsRow::CursorFill => "Transparenz innen",
                 ControlsRow::CursorCircle => "Zeiger-Kreis",
                 ControlsRow::SneakProtection => "Sneak-Kantenschutz",
                 ControlsRow::SnapTap => "SnapTap (SOCD)",
@@ -344,8 +377,13 @@ impl App {
                     rects,
                     texts,
                 ),
-                ControlsRow::CursorSize | ControlsRow::CursorWidth => {
-                    let wert = if zeile == ControlsRow::CursorSize { set.cursor_size } else { set.cursor_width };
+                ControlsRow::CursorSize | ControlsRow::CursorWidth | ControlsRow::CursorOutline | ControlsRow::CursorFill => {
+                    let wert = match zeile {
+                        ControlsRow::CursorSize => set.cursor_size,
+                        ControlsRow::CursorWidth => set.cursor_width,
+                        ControlsRow::CursorOutline => set.cursor_outline,
+                        _ => set.cursor_fill_transparency,
+                    };
                     let rect = stepper_value_rect(row);
                     rects.push(UiRect { rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
                     texts.push(gpu.centered_text(rect, format!("{wert} %"), theme::text(), UI_SCALE_SMALL));
@@ -399,12 +437,13 @@ impl App {
         // Im Schrift-Tab erklaeren sich "Standard" und "Ausnahmen" schon aus den Reitern und
         // der Tabelle; rechts stuende der Name nur im Weg.
         let ohne_namen: &[&str] = if self.screen == MenuScreen::SettingsFont { &["Standard", "Ausnahmen"] } else { &[] };
+        // Der Name steht rechts UNTER seiner Linie, im Abschnitt (Nutzer 2026-11-11).
         let name_ueber = |name: &str, linie_y: f32, texts: &mut Vec<UiText>| {
             if ohne_namen.contains(&name) {
                 return;
             }
             let x = linie_bis - gpu.measure_text(name, UI_SCALE_SMALL);
-            texts.push(UiText { text: name.to_string(), x: x.round(), y: (linie_y - 4.0 - gpu.text_height(UI_SCALE_SMALL)).round(), color: theme::text(), scale: UI_SCALE_SMALL });
+            texts.push(UiText { text: name.to_string(), x: x.round(), y: (linie_y + 4.0).round(), color: theme::text(), scale: UI_SCALE_SMALL });
         };
         // Gleitend gescrollt liegt die Linie eines Abschnitts irgendwo zwischen den Zeilen: ist
         // sie ueber die Linie oben gewandert, steht sein Name oben, sonst an seiner eigenen Linie

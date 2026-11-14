@@ -2,6 +2,13 @@
 
 use crate::*;
 
+// Ein fremder Abbau (Block Destruction): Block, Riss-Stufe 0..=9 und wann das Paket zuletzt kam.
+pub(crate) struct OtherBreak {
+    pub(crate) pos: (i32, i32, i32),
+    pub(crate) stage: u8,
+    pub(crate) seen: Instant,
+}
+
 pub(crate) struct App {
     pub(crate) gpu: Option<GpuState>,
     // Arbeitszeit (Vertex-Aufbau, Encoding, Submit) und Wartezeit (get_current_texture())
@@ -193,6 +200,8 @@ pub(crate) struct App {
     pub(crate) input_log: input_log::InputLog,
     // coral-record: Kamera, Maus und lokaler Zustand fuer die Aufnahme (s. app/recording.rs).
     pub(crate) recorder: app::AppRecorder,
+    // coral-clip: Haltepunkte der Puffer und laufende Speichervorgaenge (s. app/clip.rs).
+    pub(crate) clips: app::ClipBuffers,
     // Liste der Aufnahmen im Connect-Menue und die laufende Wiedergabe (s. app/replay.rs).
     pub(crate) recordings_open: bool,
     pub(crate) recordings: Vec<app::RecordingEntry>,
@@ -289,11 +298,15 @@ pub(crate) struct App {
     // Dialog-Registry, auf die Show Dialog im Spiel verweisen kann.
     pub(crate) dialog: Option<dialog_screen::OpenDialog>,
     pub(crate) dialog_waiting: Option<Instant>,
+    // Wann man zuletzt selbst eine Aktion in einem Dialog ausgeloest hat (s. App::dialog_answer_expected).
+    pub(crate) dialog_user_action: Option<Instant>,
     // Link, dessen Bestaetigungsfenster gerade offen ist: "Öffnen" darf genau ihn oeffnen.
     pub(crate) link_pending: Option<String>,
     pub(crate) code_of_conduct: Option<dialog_screen::CodeOfConduct>,
     pub(crate) server_links: Vec<protocol::packets::ServerLink>,
     pub(crate) dialog_registry: Vec<(String, Option<protocol::nbt::NbtValue>)>,
+    // Registry-IDs im Tag #minecraft:pause_screen_additions (s. App::pause_dialog).
+    pub(crate) pause_dialogs: Vec<u32>,
     // Teams-Modul: zuletzt ins Log geschriebene Zeile je Spieler (s. update_team_facts).
     pub(crate) team_color_log: std::collections::HashMap<[u8; 16], String>,
     // Merkmale je Spieler fuers Teams-Modul, einmal pro Tick (s. update_team_facts) -- das
@@ -323,6 +336,15 @@ pub(crate) struct App {
     // accounts::key) das Ergebnis der letzten Pruefung und wann sie begann bzw. endete.
     pub(crate) accounts: accounts::Store,
     pub(crate) account_checks: std::collections::HashMap<String, (accounts::Check, Instant)>,
+    // Eine Pruefung stiess ans Anmeldelimit: ab dann alle ungeprueften erneut (s. check_accounts).
+    pub(crate) account_retry_at: Option<Instant>,
+    // Seit wann das Pausemenue offen ist: so lange gleitet die Leiste oben von oben herein
+    // (s. pause_bar_slide_dy). None = keine Einblendung.
+    pub(crate) pause_bar_slide: Option<Instant>,
+    // Verbinden wartet auf die laufende Anmeldung des neu gewaehlten Kontos (s. start_session).
+    pub(crate) connect_after_login: bool,
+    // Knopf "Beenden" gedrueckt: die Schleife beendet sich beim naechsten Schritt (s. loop_step).
+    pub(crate) quit_requested: bool,
     // Rechtsklick-Menue im Acc-Manager: Konto (Index in accounts.list) und Klickpunkt.
     pub(crate) account_context: Option<(usize, (f32, f32))>,
     // Token-Export auskommentiert, vorerst abgeschaltet.
@@ -356,6 +378,9 @@ pub(crate) struct App {
     pub(crate) chat_pushed: u64,
     // Gesetzter Verlauf fuer den offenen Chat (s. chat_wrapped_all).
     pub(crate) chat_wrap_cache: std::cell::RefCell<Option<ChatWrapCache>>,
+    // Dasselbe fuer den geschlossenen Chat im Spiel, in dessen Breite (s.
+    // chat_wrapped_tail_faded).
+    pub(crate) chat_tail_wrap_cache: std::cell::RefCell<Option<ChatWrapCache>>,
     // Wie viele Zeilen der offene Chat vom Ende weg zurueckgeblaettert ist (0 = neueste unten).
     pub(crate) chat_scroll: usize,
     // chat_scroll gleitend nachgezogen (s. tick_ui_anim) -- gezeichnet wird damit.
@@ -401,6 +426,11 @@ pub(crate) struct App {
     // Programm, das ihn gesetzt hat, und verschwindet mit dem letzten Clipboard-Objekt.
     // Ein kurzlebiges je Kopiervorgang haette die Auswahl sofort wieder verloren.
     pub(crate) clipboard: Option<arboard::Clipboard>,
+    // Was zuletzt aus einem Eingabefeld in die primaere Auswahl kam (s. sync_primary_selection).
+    pub(crate) primary_sent: String,
+    // Nahe Entities rastern: das gerade gebaute Entity ist der Kamera so nah, dass es gerastert
+    // werden kann -- dann einseitig zeichnen (s. App::mark_near_entity).
+    pub(crate) near_single_sided: std::cell::Cell<bool>,
     // Actionbar-Text ueber der Hotbar (Set Action Bar Text / System-Chat-Overlay) + Zeitpunkt
     // des Empfangs. Verschwindet nach ACTION_BAR_DURATION (wie Vanilla ~3s).
     // Der Actionbar-Text MIT Farben (s. net::ClientEvent::ActionBar). Server faerben hier
@@ -522,6 +552,10 @@ pub(crate) struct App {
     // fuer den lokalen Abbruch bei Item-Wechsel unter Aggressive Prediction (s.
     // App::tick_aggressive_use_cancel).
     pub(crate) using_item_id: Option<u32>,
+    // Aggressive Prediction: der Server meldete "benutzt Item" (true = Nebenhand), waehrend
+    // wir lokal nichts benutzen -- im naechsten Tick nur RELEASE und Klicks verwerfen, ohne
+    // lokale Benutzung (s. tick_item_use).
+    pub(crate) server_use_report: Option<bool>,
     // Item-Abklingzeiten (Schild nach Axthieb, Enderperle, ...) -- s. item_cooldowns.
     pub(crate) item_cooldowns: item_cooldowns::ItemCooldowns,
     // Aufnahme-Animation der Hotbar (Vanillas popTime): wann Platz i zuletzt ein Item bekam
@@ -556,6 +590,13 @@ pub(crate) struct App {
     pub(crate) camera_entity: Option<i32>,
     // Laufender Klick-Teleport des Zuschauers: Ziel der Fuesse (s. spectator.rs).
     pub(crate) spectator_flight: Option<DVec3>,
+    // Zuschauer-Wechsel: welche Bewegungstasten beim Wechsel gehalten wurden und bis zum
+    // Loslassen verschluckt sind (s. spectator.rs, SWALLOW_KEYS). Reihenfolge wie SWALLOW_KEYS.
+    pub(crate) spectator_swallowed: [bool; 7],
+    // Noch offener Hub in Bloecken nach einem Wechsel in den Zuschauermodus (s. spectator.rs).
+    pub(crate) spectator_rise: f64,
+    // Wer gerade einen fremden Block abbaut (Block Destruction): Entity-ID -> Block und Stufe.
+    pub(crate) others_breaking: std::collections::HashMap<i32, OtherBreak>,
     // Wann je Entity zuletzt ein Speer-Treffer klang (s. kinetic_hit_sound).
     pub(crate) kinetic_hit_at: std::collections::HashMap<i32, Instant>,
     // Offenes Spielmodus-Rad und der Modus vor dem letzten Wechsel (s. gamemode_wheel.rs).
@@ -607,7 +648,7 @@ pub(crate) struct App {
     pub(crate) ghosts_awaiting_mesh: Vec<GhostAwaitingMesh>,
     // Bestaetigte eigene Platzierungen (Position, Zustand vorher, seit wann) -- Quellen fuers
     // Einblenden der Eckabdunklung im naechsten Mesh ihrer Spalte(n), s. AoFade.
-    pub(crate) ao_fade_sources: Vec<((i32, i32, i32), u32, Instant)>,
+    pub(crate) ao_fade_sources: Vec<((i32, i32, i32), u32, Instant, Option<Instant>)>,
     // Shader-Pfad: Blocklicht je Spalte aus dem letzten Mesh (nur Spalten, in denen etwas
     // leuchtet) -- daraus bekommen Entities, Hand und Blockentities ihr Licht (s. light_at).
     pub(crate) column_light: std::collections::HashMap<(i32, i32), world::light::ColumnBlockLight>,
@@ -733,6 +774,8 @@ pub(crate) struct App {
     // unter dem der eigene Skin in `skins` liegt. Ohne sie zeigt das eigene Modell in der
     // 3.-Person-Ansicht dauerhaft den Standard-Skin, obwohl der echte schon geladen ist.
     pub(crate) own_uuid: Option<[u8; 16]>,
+    // Letzte und groesste Antwortzeit des Clients auf KeepAlive in Mikrosekunden (F3).
+    pub(crate) keepalive_reply_us: Option<(u32, u32)>,
     // Wohin das Zahnrad (bzw. Esc auf einer Kategorie) die Einstellungen verlaesst.
     pub(crate) settings_return: MenuScreen,
     // Woher der HUD-Editor geoeffnet wurde (Pausemenue oder Einstellungen) -- dorthin geht
@@ -920,6 +963,15 @@ pub(crate) struct App {
     pub(crate) signs: std::collections::HashMap<(i32, i32, i32), protocol::sign::SignText>,
     // Die gesetzten Schildseiten (s. SignLayout).
     pub(crate) sign_layouts: std::cell::RefCell<SignLayouts>,
+    // Zerlegte und vermessene Namensschilder je Entity (s. LabelLines).
+    pub(crate) label_lines: std::cell::RefCell<LabelLinesCache>,
+    // Matrixkette je Schildseite ohne Kameraversatz, mit Art und Drehung, fuer die sie gilt
+    // (s. sign_side_frame).
+    // Schild-Geometrie je Position am Blockursprung, mit Blockzustand, Holz, Art, Drehung und Atlas-
+    // Rechteck, fuer die sie gilt (s. emit_signs).
+    #[allow(clippy::type_complexity)]
+    pub(crate) sign_meshes: std::cell::RefCell<rustc_hash::FxHashMap<(i32, i32, i32), (u32, Option<(usize, world::entity_model::SignKind, u32, [u32; 4])>, Vec<world::BlockVertex>)>>,
+    pub(crate) sign_frames: std::cell::RefCell<rustc_hash::FxHashMap<((i32, i32, i32), bool), (world::entity_model::SignKind, u32, glam::Mat4, f32)>>,
     // Platzierte Spielerkoepfe: Position -> Skin-Schluessel (s. head_skin_key). Koepfe ohne
     // Profil fehlen hier und bekommen den Standard-Skin.
     pub(crate) placed_heads: std::collections::HashMap<(i32, i32, i32), [u8; 16]>,
@@ -1078,6 +1130,13 @@ pub(crate) struct App {
     pub(crate) eat_held_through: bool,
     // Ticks, die neue Rechtsklicks nach dem lokalen Fertigessen noch warten (s. tick_item_use).
     pub(crate) eat_next_use_delay: u32,
+    // Aggressive Prediction: Ticks bis zum RELEASE nach dem lokalen Fertigessen, 0 = keins
+    // (s. tick_eat_release).
+    pub(crate) eat_release_wait: u32,
+    // Dieses RELEASE ist fuer das zuletzt lokal beendete Essen schon raus (s. grim_sees_eating).
+    pub(crate) eat_released: bool,
+    // Lokale Ess-Enden, deren "fertig" (Event 9) vom Server noch aussteht -- je Ende eins.
+    pub(crate) eat_local_finishes: std::collections::VecDeque<Instant>,
     pub(crate) own_body_yaw: world::BodyYaw,
     // Geglaettete Blickrichtung fuer das Nachschwingen der Ego-Hand. Vanilla
     // (ClientPlayerEntity.tickMovement) fuehrt renderYaw/renderPitch mit, die der echten
@@ -1344,6 +1403,9 @@ pub(crate) struct App {
     // &self-Methoden ausgegeben (Arm -> Hand -> Item), und jede davon muesste ihn sonst
     // durchreichen. Der Aufrufer leert sie vor und nimmt sie nach jedem Bau (s. render-Pfad).
     pub(crate) glint_out: std::cell::RefCell<Vec<world::BlockVertex>>,
+    // Render-Order: Klassen der Entity-Vertices des laufenden Frames (s.
+    // build_entity_vertices, render::BlockRenderer::set_entity_classes).
+    pub(crate) entity_classes_out: std::cell::RefCell<Vec<(std::ops::Range<u32>, u8)>>,
     // Inventar > Animation: weiche Hervorhebung und fliegende Items (s. inventory_anim). Eine
     // Zelle, weil build_inventory_screen sie beim Zeichnen weiterzaehlt.
     pub(crate) inventory_anim: std::cell::RefCell<crate::inventory_anim::InventoryAnim>,
@@ -1407,6 +1469,8 @@ pub(crate) struct App {
     // naechste Tastendruck bindet die Aktion um statt normal verarbeitet zu werden (s.
     // window_event). Escape bricht ab, statt als neue Taste zu gelten.
     pub(crate) awaiting_keybind: Option<(KeyBindAction, usize)>,
+    // Das Warten gilt dem Modifier dieses Slots statt seiner Taste (s. ButtonAction::RebindModifier).
+    pub(crate) awaiting_modifier: bool,
     // Welche Kamera-Empfindlichkeit zuletzt verstellt wurde (true = Y). Schaltet man "X/Y
     // getrennt" aus, gilt fuer beide der ANDERE Wert (gewuenscht).
     pub(crate) sens_last_changed_y: bool,
@@ -1517,8 +1581,10 @@ pub(crate) struct App {
     // Tupel: (opake Vertices, Wasser-Vertices -- echte Wasserbloecke + Waterlogged-
     // Fuellung, s. world::mesher-Kommentar). Getrennt, weil sie in verschiedenen
     // Render-Passes mit unterschiedlichem Blending landen (s. render::BlockRenderer).
-    pub(crate) mesh_results_tx: Sender<MeshResult>,
-    pub(crate) mesh_results_rx: Receiver<MeshResult>,
+    pub(crate) mesh_results_tx: Sender<MeshOutcome>,
+    pub(crate) mesh_results_rx: Receiver<MeshOutcome>,
+    // Spalten mit Einzelblock-Aenderungen (s. PatchColumn).
+    pub(crate) patch_columns: rustc_hash::FxHashMap<(i32, i32), PatchColumn>,
     // Dedizierter Worker-Pool fuer Chunk-Meshing (s. mesh_pool-Modulkommentar) -- getrennt
     // von tokio_rt, damit Settings::chunk_update_threads die Groesse live aendern kann, ohne
     // die Netzwerkverbindung zu killen.
@@ -1558,6 +1624,8 @@ pub(crate) struct App {
     // die Spalte hieraus entfernt und sofort NEU dirty markiert, statt den zweiten Wunsch zu
     // verlieren.
     pub(crate) mesh_jobs_stale_on_completion: std::collections::HashSet<(i32, i32)>,
+    // Messung Neu-Meshen (s. log_remesh): Fensterbeginn, gestartete Jobs, verschobene Jobs.
+    pub(crate) remesh_log: RemeshLog,
     // Wie viele Spalten noch zur Diagnose aufs Terminal geloggt werden (Fehlersuche).
     // Ob die Kamera schon auf die Spawn-Position gesetzt wurde. Nur das erste
     // Synchronize Player Position darf die Kamera versetzen -- spaetere Teleports

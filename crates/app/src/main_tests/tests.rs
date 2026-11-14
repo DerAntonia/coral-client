@@ -407,10 +407,10 @@ fn fps_stepper_findet_die_naechste_stufe() {
 // gar nicht eingetippt werden koennen (s. Tastatur-Zweig in window_event).
 #[test]
 fn unbegrenzt_gilt_nur_fuer_obergrenzen() {
-    for ev in [EditableValue::FpsLimit, EditableValue::MaxRenderDistance] {
+    for ev in [EditableValue::FpsLimit, EditableValue::EntityRenderDistance] {
         assert!(ev.allows_unlimited());
     }
-    for ev in [EditableValue::Fov(Perspective::FirstPerson), EditableValue::MouseSensitivity, EditableValue::MeshBudget] {
+    for ev in [EditableValue::MaxRenderDistance, EditableValue::Fov(Perspective::FirstPerson), EditableValue::MouseSensitivity, EditableValue::MeshBudget] {
         assert!(!ev.allows_unlimited());
     }
 }
@@ -506,6 +506,41 @@ fn mehrere_eingaben_pro_aktion() {
     kb.remove_at(KeyBindAction::Forward, 0);
     assert_eq!(kb.count(KeyBindAction::Forward), 0);
     assert!(!kb.is_bound(Bind::Key(KeyCode::ArrowUp)));
+}
+
+// Modifier: eine Belegung mit zweiter Taste greift nur, wenn beide unten sind; sie ueberlebt
+// das Speichern als "Modifier+Taste", eine neue Haupttaste behaelt ihn, Loeschen nimmt ihn mit.
+#[test]
+fn belegung_mit_modifier_greift_nur_mit_beiden_tasten() {
+    let mut kb = Keybinds::default();
+    let (e, strg) = (Bind::Key(KeyCode::KeyE), Bind::Key(KeyCode::ControlLeft));
+    let a = KeyBindAction::OpenInventory;
+    kb.set_modifier_at(a, 0, Some(strg));
+    assert_eq!(kb.modifier_at(a, 0), Some(strg));
+    assert!(!kb.matches(a, e, |b| b == e), "ohne Strg kein Treffer");
+    assert!(kb.matches(a, e, |b| b == e || b == strg));
+    assert!(!kb.held(a, |b| b == e));
+    assert!(kb.held(a, |b| b == e || b == strg));
+    assert!(kb.modifier_released(a, strg, |b| b == e), "Strg zuerst losgelassen: die Aktion endet");
+    // Die Taste selbst kann nicht ihr eigener Modifier sein.
+    kb.set_modifier_at(a, 0, Some(e));
+    assert_eq!(kb.modifier_at(a, 0), Some(strg));
+    // Speichern und Lesen; eine alte Zeile ohne "+" bleibt ohne Modifier.
+    let text = binds_to_str(&kb, a);
+    assert_eq!(text, "ControlLeft+KeyE");
+    let mut gelesen = Keybinds::default();
+    set_keybind_from_str(&mut gelesen, a, &text);
+    assert_eq!((gelesen.bind_at(a, 0), gelesen.modifier_at(a, 0)), (Some(e), Some(strg)));
+    set_keybind_from_str(&mut gelesen, a, "KeyR");
+    assert_eq!(gelesen.modifier_at(a, 0), None);
+    // Neue Haupttaste: der Modifier bleibt. Dieselbe Taste ohne Modifier ist eine eigene Belegung.
+    kb.set_at(a, 0, Bind::Key(KeyCode::KeyR));
+    assert_eq!(kb.modifier_at(a, 0), Some(strg));
+    kb.set_at(a, 1, Bind::Key(KeyCode::KeyR));
+    assert_eq!(kb.count(a), 2);
+    // Loeschen rueckt nach und nimmt den Modifier mit.
+    kb.remove_at(a, 0);
+    assert_eq!((kb.bind_at(a, 0), kb.modifier_at(a, 0), kb.count(a)), (Some(Bind::Key(KeyCode::KeyR)), None, 1));
 }
 
 // Eine Eingabe darf an mehreren Aktionen haengen (apply_bind loest alle aus). In derselben
@@ -862,21 +897,40 @@ fn jede_perspektive_hat_ein_eigenes_sichtfeld() {
     // Die letzte Platzhalter-Zeile muss auf einen 1080p-Bildschirm passen -- vier weitere
     // LINKE Zeilen haetten sie darueber hinausgeschoben, deshalb liegen die Kamerawerte
     // rechts (s. Perspective::distance_row).
-    let last = settings_row_y(LOD_DETAIL_ROW) + SETTINGS_CTRL_H;
+    let last = settings_row_y(CHUNK_FADE_ROW) + SETTINGS_CTRL_H;
     assert!(last < 1080.0, "Video-Tab läuft unten aus dem Bild (letzte Zeile endet bei {last})");
 }
 
 // LOD-Render-Distance: eigene Einstellung im Video-Tab, ueberlebt settings.conf, und eine
 // alte settings.conf (Fernsicht hing am Modul und an "Fernsicht zeichnen") wird uebernommen.
+// Die Anpassung der eigenen Partikel zeigt nur Arten, die an der eigenen Figur entstehen
+// koennen; je Art zwei Zeilen und ein Abschnitt (Trennlinie mit Namen), ohne Reiter.
+#[test]
+fn eigene_partikel_nur_was_an_einem_selbst_entsteht() {
+    let eigene: Vec<&str> = particles::particle_kinds_for_own(true).iter().map(|(_, k)| k.key).collect();
+    for k in ["crit", "totem", "potion", "potion_splash", "damage_indicator", "gust", "block"] {
+        assert!(eigene.contains(&k), "{k} fehlt");
+    }
+    for k in ["bubbles", "end_rod", "explosion", "flame", "smoke", "dust", "sculk_soul", "cloud"] {
+        assert!(!eigene.contains(&k), "{k} gehoert nicht zu den eigenen");
+    }
+    assert_eq!(particles::particle_kinds_for_own(false).len(), particles::KINDS.len());
+    for own in [false, true] {
+        let abschnitte = particle_sections(own);
+        assert_eq!(abschnitte.len(), particles::particle_kinds_for_own(own).len());
+        assert!(abschnitte.iter().enumerate().all(|(i, &(_, row))| row == 2 * i));
+    }
+}
+
 #[test]
 fn partikel_anpassung_wird_gespeichert_und_alter_explosionsschalter_uebernommen() {
     let mut set = Settings::parse_onto(Settings::base(), "");
     assert!(set.particle_tuning.iter().all(|t| *t == particles::ParticleTuning::default()));
     let herzen = particles::KINDS.iter().position(|k| k.key == "damage_indicator").unwrap();
     set.particle_tuning[herzen] =
-        particles::ParticleTuning { enabled: false, lifetime_pct: 200, opacity_pct: 40, speed_pct: 50, amount_pct: 25, interval_pct: 100, all_at_once: true };
+        particles::ParticleTuning { enabled: false, lifetime_pct: 200, opacity_pct: 40, speed_pct: 50, amount_pct: 25, interval_pct: 100, size_pct: 150, spread_pct: 50, all_at_once: true };
     let text = set.serialize();
-    assert!(text.contains("particle_tuning=damage_indicator:0,200,40,50,25,100,1\n"), "nur Abweichungen: {text}");
+    assert!(text.contains("particle_tuning=damage_indicator:0,200,40,50,25,100,1,150,50\n"), "nur Abweichungen: {text}");
     assert_eq!(Settings::parse_onto(Settings::base(), &text).particle_tuning, set.particle_tuning);
     // Alte Zeile mit vier Werten: "potion" galt damals auch fuer die Spritzer.
     let alt = Settings::parse_onto(Settings::base(), "particle_tuning=potion:1,50,100,100\n");
@@ -1414,16 +1468,105 @@ fn riss_position_und_feuer_werden_gespeichert() {
 
 // Die Vorhersage-Toleranz ueberlebt Speichern/Laden, auch ausserhalb des Reglers.
 // Bei 720p passen nicht mehr alle Zeilen der Haupt-Einstellungen untereinander -- die
-// Seite scrollt; ab Full HD passt alles (seit die Render-Distance im Video-Tab steht). Die
-// Fussleiste darf nie unter den Rand rutschen.
+// Seite scrollt. Bei Full HD passt alles bis zum Abschnitt System, die Render-Order darunter
+// (seit 2026-11-12) erreicht man dort durch Scrollen; ab 1440p passt alles. Die Fussleiste
+// darf nie unter den Rand rutschen.
 #[test]
 fn einstellungen_scrollen_erst_wenn_es_eng_wird() {
     assert!(settings_visible_rows(720.0) < SETTINGS_ROW_COUNT);
-    assert!(settings_visible_rows(1080.0) >= SETTINGS_ROW_COUNT, "{}", settings_visible_rows(1080.0));
-    for h in [600.0, 720.0, 1080.0] {
+    assert!(settings_visible_rows(1080.0) >= RENDER_ORDER_HEAD_ROW, "{}", settings_visible_rows(1080.0));
+    assert!(settings_visible_rows(1440.0) >= SETTINGS_ROW_COUNT, "{}", settings_visible_rows(1440.0));
+    for h in [600.0, 720.0, 1080.0, 1440.0] {
         let zeilen = settings_visible_rows(h).min(SETTINGS_ROW_COUNT);
         assert!(SETTINGS_CONTENT_DY + SETTINGS_FIRST_Y + zeilen as f32 * SETTINGS_ROW_H <= h, "letzte Zeile unter dem Rand bei {h}");
     }
+}
+
+// Menues sehen bei jeder Aufloesung gleich aus (Nutzer 2026-11-12): sie rechnen in der
+// Bezugshoehe, also passen ueberall gleich viele Zeilen, und die Breite folgt dem Fenster.
+#[test]
+fn menues_rechnen_bei_jeder_aufloesung_in_der_bezugshoehe() {
+    let zeilen_fhd = settings_visible_rows(1080.0);
+    for (w, h) in [(1280.0_f32, 720.0_f32), (1920.0, 1080.0), (2560.0, 1440.0), (3440.0, 1440.0), (3840.0, 2160.0)] {
+        let s = menu_scale_for(h);
+        assert!((h / s - MENU_REF_H).abs() < 1e-3, "{h}");
+        assert_eq!(settings_visible_rows(h / s), zeilen_fhd, "{h}");
+        // 16:9 ist ueberall 1920 breit, 21:9 breiter: Knoepfe am Rand bleiben am Rand.
+        assert!((w / s - w / h * MENU_REF_H).abs() < 1e-2);
+    }
+    assert_eq!(menu_scale_for(1080.0), 1.0);
+}
+
+// Beim Umrechnen in echte Pixel wachsen Flaechen samt Rundung und Schatten mit; Marker
+// behalten ihre Daten, nur der Listenrand-Verlauf traegt Pixel.
+#[test]
+fn flaechen_wachsen_mit_dem_massstab_marker_bleiben() {
+    let r = UiRect { soft: 3.0, ..UiRect::framed(Rect { x: 10.0, y: 20.0, w: 30.0, h: 40.0 }, [1.0; 4], 6.0, 1.0, [1.0; 4]) };
+    let g = scale_ui_rect(&r, 2.0);
+    assert_eq!((g.rect.x, g.rect.y, g.rect.w, g.rect.h), (20.0, 40.0, 60.0, 80.0));
+    assert_eq!((g.radius, g.border, g.soft), (12.0, 2.0, 6.0));
+    // Ein Rahmen verschwindet beim Verkleinern nicht.
+    assert_eq!(scale_ui_rect(&r, 0.5).border, 1.0);
+    let (mut rects, mut texts) = (Vec::new(), Vec::new());
+    push_clip_marker(&mut rects, &mut texts, true);
+    let fade = ScrollFade { top: 100.0, bottom: 300.0, zone: 25.0, edge_top: 0.4, edge_bottom: 1.0 };
+    push_fade_marker(&mut rects, &mut texts, Some(fade));
+    assert_eq!(clip_marker_rect(&scale_ui_rect(&rects[0], 1.5)), Some(true));
+    let gross = fade_marker_rect(&scale_ui_rect(&rects[1], 1.5)).flatten().expect("Verlauf");
+    assert_eq!(gross, ScrollFade { top: 150.0, bottom: 450.0, zone: 37.5, edge_top: 0.4, edge_bottom: 1.0 });
+}
+
+// Ein vergroessert gezeichnetes Server-Icon tastet einen halben Texel weiter innen ab, sonst
+// zieht der Rand das Nachbarbild herein; in eigener Groesse oder kleiner bleibt es genau.
+#[test]
+fn vergroessertes_icon_ohne_nachbarbild() {
+    let icon = UiSprite::quad(10.0, 10.0, 64.0, 64.0, server_icon_uv(9), [1.0; 4], SpriteAtlas::ServerIcons);
+    let gross = scale_ui_sprite(&icon, 1.25);
+    let halb = 0.5 / 512.0;
+    assert_eq!(gross.uv, [icon.uv[0] + halb, icon.uv[1] + halb, icon.uv[2] - halb, icon.uv[3] - halb]);
+    // Ganze Menue-Pixel landen auf ganzen echten -- wie die Flaeche unter dem Icon, sonst
+    // schaut sie an einer Kante hervor.
+    assert_eq!(gross.corners[2], [93.0, 93.0]);
+    let feld = scale_ui_rect(&UiRect::rounded(Rect { x: 10.0, y: 10.0, w: 64.0, h: 64.0 }, [1.0; 4], 6.0), 1.25);
+    assert_eq!([feld.rect.x, feld.rect.y, feld.rect.x + feld.rect.w, feld.rect.y + feld.rect.h], [gross.corners[0][0], gross.corners[0][1], 93.0, 93.0]);
+    // Was gleitet, bleibt stufenlos.
+    assert_eq!(scale_edge(10.5, 1.5), 15.75);
+    assert_eq!(scale_ui_sprite(&icon, 0.75).uv, icon.uv);
+}
+
+// Durchsichtiges Weiss neben der Form eines Icons nimmt deren Farbe an (bleibt durchsichtig),
+// damit vergroessert kein heller Saum entsteht; sichtbare Pixel und ferne bleiben.
+#[test]
+fn durchsichtiger_icon_rand_nimmt_die_farbe_der_form_an() {
+    let mut bild = [255u8, 255, 255, 0].repeat(16);
+    bild[(4 + 1) * 4..(4 + 1) * 4 + 4].copy_from_slice(&[180, 0, 170, 255]);
+    bleed_icon_edges(&mut bild, 4);
+    assert_eq!(&bild[0..4], &[180, 0, 170, 0], "Nachbar der Form");
+    assert_eq!(&bild[(4 + 1) * 4..(4 + 1) * 4 + 4], &[180, 0, 170, 255], "die Form selbst");
+    assert_eq!(&bild[(3 * 4 + 3) * 4..(3 * 4 + 3) * 4 + 4], &[255, 255, 255, 0], "weit weg");
+}
+
+// Ein Menue-Teil zwischen dem HUD (Modul-Menue im Spiel): nur sein Stueck der Listen wird
+// umgerechnet, das HUD davor bleibt; der Text steht zwischen zwei Markern.
+#[test]
+fn menue_teil_im_hud_wird_allein_umgerechnet() {
+    let flaeche = |x: f32| UiRect::rounded(Rect { x, y: 10.0, w: 20.0, h: 20.0 }, [1.0; 4], 0.0);
+    let text = |t: &str| UiText { text: t.into(), x: 10.0, y: 10.0, color: [1.0; 4], scale: 2.0 };
+    let (mut rects, mut texts) = (vec![flaeche(10.0)], vec![text("hud")]);
+    let ab = (rects.len(), texts.len());
+    rects.push(flaeche(30.0));
+    texts.push(text("menue"));
+    scale_ui_tail(&mut rects, &mut texts, ab, 1.5);
+    assert_eq!((rects[0].rect.x, rects[1].rect.x, rects[1].rect.w), (10.0, 45.0, 30.0));
+    assert_eq!(texts.len(), 4);
+    assert_eq!(text_scale_marker_of(&texts[0]), None);
+    assert_eq!(text_scale_marker_of(&texts[1]), Some(Some(1.5)));
+    assert_eq!(texts[2].text, "menue");
+    assert_eq!(text_scale_marker_of(&texts[3]), Some(None));
+    // Massstab 1: nichts zu tun, keine Marker.
+    let mut nur = vec![text("a")];
+    scale_ui_tail(&mut rects, &mut nur, (0, 0), 1.0);
+    assert_eq!(nur.len(), 1);
 }
 
 // Was man in ein Kaestchen des Schrift-Tabs zieht, steht danach genau so darin.
@@ -1461,7 +1604,7 @@ fn reglerwert_in_zahl_und_einheit() {
 // steht er oben, keinen. Gescrollt wird so weit, dass die letzte Zeile passt.
 #[test]
 fn abschnitte_im_zeilenraster() {
-    let seite = SettingsPage { rows: 7, sections: &[("Allgemein", 0), ("Tränke", 4)] };
+    let seite = SettingsPage { rows: 7, sections: &[("Allgemein", 0), ("Tränke", 4)], tabs: true };
     let starts = seite.section_starts();
     assert_eq!(starts, 1 << 4);
     let y = |row, erste: usize| settings_row_y_in(row, erste as f32, starts, f32::INFINITY);
@@ -1843,10 +1986,10 @@ fn aufhellungs_zeile_nur_im_komplementaer_modus() {
     // Farbe + Kontur + Kontur des Rings + Aufhellung bzw. ohne Aufhellung, je dazu "Form"
     // und "Groesse"/"Pixel bearbeiten" direkt darunter.
     let mit_modus = |crosshair_color_mode| Settings { crosshair_color_mode, ..Default::default() };
-    assert_eq!(hud_config_rows(HudElement::Crosshair, &mit_modus(CROSSHAIR_MODE_COMPLEMENTARY)), 6);
+    assert_eq!(hud_config_rows(HudElement::Crosshair, &mit_modus(CROSSHAIR_MODE_COMPLEMENTARY)), 7);
     assert_eq!(crosshair_shape_row(CROSSHAIR_MODE_COMPLEMENTARY), 4);
     for feste_farbe in 1..CROSSHAIR_COLOR_MODES.len() {
-        assert_eq!(hud_config_rows(HudElement::Crosshair, &mit_modus(feste_farbe)), 5, "Modus {feste_farbe} hat keine Aufhellung");
+        assert_eq!(hud_config_rows(HudElement::Crosshair, &mit_modus(feste_farbe)), 6, "Modus {feste_farbe} hat keine Aufhellung");
         assert_eq!(crosshair_shape_row(feste_farbe), 3);
     }
     // Hotbar: Skalierung, Haltbarkeit ab, Grenze prozentual/pauschal, Sauerstoff, Zahl-Farbe,
@@ -1882,16 +2025,15 @@ fn die_effekte_verschieben_die_spitze_nicht() {
     let screen = (1920.0, 1080.0);
     let tip_pos = (400.0, 300.0);
     for fx in [
-        CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 1.0, right: 0.0, circle: true, width: 1.0 },
-        CursorFxFrame { scale: 1.0, rotation_deg: 137.0, additive: 0.0, right: 0.0, circle: true, width: 1.0 },
-        CursorFxFrame { scale: 0.9, rotation_deg: -204.0, additive: 0.4, right: 0.0, circle: true, width: 1.0 },
+        CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 1.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 },
+        CursorFxFrame { scale: 1.0, rotation_deg: 137.0, additive: 0.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 },
+        CursorFxFrame { scale: 0.9, rotation_deg: -204.0, additive: 0.4, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 },
     ] {
         let u = cursor_polygons(tip_pos, screen, fx);
-        assert!(
-            (u.points[0][0] - tip_pos.0).abs() < 1e-3 && (u.points[0][1] - tip_pos.1).abs() < 1e-3,
-            "{fx:?}: Spitze bei {:?}",
-            (u.points[0][0], u.points[0][1])
-        );
+        // Der Klickpunkt ist die Aussenkante der runden Spitze: Punkt 0 liegt genau die
+        // Rundung davon weg, egal wie gedreht oder gestaucht.
+        let d = ((u.points[0][0] - tip_pos.0).powi(2) + (u.points[0][1] - tip_pos.1).powi(2)).sqrt();
+        assert!((d - u.form[0]).abs() < 1e-3, "{fx:?}: Spitze {d} weg, Rundung {}", u.form[0]);
     }
 }
 
@@ -1905,8 +2047,8 @@ fn beim_druecken_wird_der_zeiger_kleiner() {
         let u = cursor_polygons(tip, screen, fx);
         u.bounds[3] - u.bounds[1]
     };
-    let ruhe = spanne(CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0 });
-    let gedrueckt = spanne(CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0 });
+    let ruhe = spanne(CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 });
+    let gedrueckt = spanne(CursorFxFrame { scale: 0.90, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 });
     assert!(gedrueckt < ruhe, "gedrückt {gedrueckt} muss kleiner sein als in Ruhe {ruhe}");
 }
 
@@ -1915,39 +2057,41 @@ fn beim_druecken_wird_der_zeiger_kleiner() {
 fn das_aufleuchten_aendert_nur_die_farbe() {
     let screen = (1920.0, 1080.0);
     let tip = (400.0, 300.0);
-    let ohne = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0 });
-    let mit = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, right: 0.0, circle: true, width: 1.0 });
+    let ohne = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 });
+    let mit = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 });
     assert_eq!(ohne.points, mit.points);
     assert_eq!(ohne.colors, mit.colors, "die Grundfarben bleiben, das Leuchten kommt DAZU");
     assert_eq!(ohne.additive[3], 0.0);
     assert_eq!(mit.additive[3], CURSOR_PRESS_TINT);
     let [r, g, b, _] = theme::get(theme::Slot::Accent);
     assert_eq!([mit.additive[0], mit.additive[1], mit.additive[2]], [r, g, b], "Leuchten in der Akzentfarbe des Themes");
-    let rechts = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, right: 1.0, circle: true, width: 1.0 });
+    let rechts = cursor_polygons(tip, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 1.0, right: 1.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 });
     let [r, g, b, _] = theme::get(theme::Slot::Accent2);
     assert_eq!([rechts.additive[0], rechts.additive[1], rechts.additive[2]], [r, g, b], "Rechtsklick leuchtet in Akzent 2");
 }
 
-// Die Pfeilspitze ist der Hotspot: ohne diese Garantie klickt man mit der falschen
-// Stelle der Form, nicht mit der sichtbaren Spitze -- ein Fehler, der sich nur beim
-// Spielen bemerkbar macht, nicht beim Hinsehen.
+// Die Breite streckt nur die Fluegel: Spitze und Kerbe bleiben, der Pfeil wird schmaler.
 #[test]
-fn zeiger_fluegel_sind_abgerundet() {
-    let umriss = cursor_kite_outline(1.0);
-    let schmal = cursor_kite_outline(0.5);
-    assert_eq!(schmal[0], CURSOR_KITE[0], "Breite lässt die Spitze stehen");
-    let spanne = |u: &[(f32, f32)]| u.iter().map(|p| p.0).fold(f32::MIN, f32::max) - u.iter().map(|p| p.0).fold(f32::MAX, f32::min);
-    assert!(spanne(&schmal) < spanne(&umriss) * 0.6, "halbe Breite macht den Pfeil schmaler");
-    assert_eq!(umriss.len(), CURSOR_KITE_POINTS);
-    assert_eq!(umriss[0], CURSOR_KITE[0], "Spitze bleibt spitz");
+fn zeigerbreite_streckt_nur_die_fluegel() {
+    let voll = cursor_shape(1.0);
+    let schmal = cursor_shape(0.5);
     let abstand = |a: (f32, f32), b: (f32, f32)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-    // Der Bogen liegt innerhalb der alten Ecke und beginnt/endet auf ihren Kanten.
-    let bogen = &umriss[1..=CURSOR_WING_ARC_POINTS];
-    let rechts = CURSOR_KITE[1];
-    assert!(bogen.iter().all(|&p| abstand(p, rechts) > 1.0), "Ecke nicht abgeschnitten");
-    let auf_strecke = |p: (f32, f32), a: (f32, f32), b: (f32, f32)| (abstand(a, p) + abstand(p, b) - abstand(a, b)).abs() < 1e-3;
-    assert!(auf_strecke(bogen[0], CURSOR_KITE[0], rechts));
-    assert!(auf_strecke(bogen[CURSOR_WING_ARC_POINTS - 1], rechts, CURSOR_KITE[2]));
+    assert!(voll.iter().zip(CURSOR_SHAPE).all(|(&a, b)| abstand(a, b) < 1e-3), "100 % ist die Vorlage: {voll:?}");
+    assert_eq!((schmal[0], schmal[2]), (voll[0], voll[2]), "Spitze und Kerbe bleiben stehen");
+    assert!(abstand(schmal[1], schmal[3]) < abstand(voll[1], voll[3]) * 0.6, "halbe Breite macht den Pfeil schmaler");
+}
+
+// Die Kontur waechst mit dem Regler und mit der Zeigergroesse.
+#[test]
+fn die_kontur_waechst_mit_regler_und_groesse() {
+    let screen = (1920.0, 1080.0);
+    let tip = (400.0, 300.0);
+    let dicke = |scale: f32, outline: f32| {
+        cursor_polygons(tip, screen, CursorFxFrame { scale, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0, outline, fill_alpha: 0.5 }).screen[2]
+    };
+    assert!((dicke(1.0, 2.0) - 2.0 * dicke(1.0, 1.0)).abs() < 1e-4);
+    assert!((dicke(2.0, 1.0) - 2.0 * dicke(1.0, 1.0)).abs() < 1e-4);
+    assert_eq!(dicke(1.0, 0.0), 0.0);
 }
 
 #[test]
@@ -1955,15 +2099,13 @@ fn cursor_tip_landet_exakt_auf_tip_pos() {
     let screen = (1920.0, 1080.0);
     let tip_pos = (400.0, 300.0);
     // Ruhezustand: volle Groesse, ungedreht, kein Leuchten.
-    let u = cursor_polygons(tip_pos, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0 });
+    let u = cursor_polygons(tip_pos, screen, CursorFxFrame { scale: 1.0, rotation_deg: 0.0, additive: 0.0, right: 0.0, circle: true, width: 1.0, outline: 1.0, fill_alpha: 0.5 });
 
-    // Erster Punkt der aeussersten (Kontur-)Schicht ist die Pfeilspitze (Reihenfolge
-    // s. cursor_polygons: Schicht 0, Kite, Punkt 0 = CURSOR_KITE[0]).
-    assert!(
-        (u.points[0][0] - tip_pos.0).abs() < 1e-4 && (u.points[0][1] - tip_pos.1).abs() < 1e-4,
-        "Spitze bei {:?}, erwartet {tip_pos:?}",
-        (u.points[0][0], u.points[0][1])
-    );
+    // Die runde Spitze: der erste Punkt liegt genau die Rundung von tip_pos weg, die sichtbare
+    // Aussenkante (Punkt minus Rundung) also genau auf tip_pos.
+    let spitze = (u.points[0][0], u.points[0][1]);
+    let d = ((spitze.0 - tip_pos.0).powi(2) + (spitze.1 - tip_pos.1).powi(2)).sqrt();
+    assert!((d - u.form[0]).abs() < 1e-3, "Spitze {spitze:?} liegt {d} von {tip_pos:?}, Rundung {}", u.form[0]);
 
     // Kein NaN, keine Explosion durch einen Vorzeichenfehler in Rotation/Skalierung:
     // alle Punkte liegen in der Naehe der Spitze (die Form ist nur 40 px hoch).
@@ -1983,8 +2125,10 @@ fn cursor_tip_landet_exakt_auf_tip_pos() {
             assert!(y > u.bounds[1] && y < u.bounds[3], "y {y} außerhalb der Zeichenfläche");
         }
     }
-    assert_eq!(u.screen[..3], [screen.0, screen.1, CURSOR_OUTLINE_PX]);
-    assert!(u.screen[3] > 0.0, "Kapselradius fehlt");
+    assert_eq!(u.screen[..2], [screen.0, screen.1]);
+    assert!(u.screen[2] > 0.0, "Kontur fehlt");
+    assert!(u.screen[3] > 0.0, "Ringradius fehlt");
+    assert!(tip_pos.0 > u.bounds[0] && tip_pos.1 > u.bounds[1], "die Spitze liegt in der Zeichenfläche");
 }
 
 // Die Atlas-Platzvergabe (s. claim_atlas_slot). Ihr eigentlicher Zweck ist, dass zwei
@@ -2054,6 +2198,16 @@ fn bogen_durchdruecken() {
     assert!(bow_hold_through(17, 150), "3 Ticks = 150 ms Rest");
     assert!(!bow_hold_through(16, 150), "4 Ticks Rest sind zu viel");
     assert!(!bow_hold_through(BOW_FULL_SHOT_TICKS, 500), "voll: los");
+}
+
+#[test]
+// Armbrust: nur kurz vor geladen weiterhalten, Grenze aus = nie, geladen = los.
+fn armbrust_durchdruecken() {
+    assert!(crossbow_hold_through(22, 25, 150), "3 Ticks = 150 ms Rest");
+    assert!(!crossbow_hold_through(21, 25, 150), "4 Ticks Rest sind zu viel");
+    assert!(!crossbow_hold_through(24, 25, 0), "Grenze aus");
+    assert!(!crossbow_hold_through(25, 25, 500), "geladen: los");
+    assert!(crossbow_hold_through(12, 15, 150), "Schnellladen II: 15 Ticks");
 }
 
 #[test]

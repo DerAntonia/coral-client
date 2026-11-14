@@ -20,6 +20,10 @@ pub(crate) struct Settings {
     // Groesse des Mauszeigers in Prozent (s. cursor_fx_frame).
     pub(crate) cursor_size: u32,
     pub(crate) cursor_width: u32,
+    // Dicke der Zeiger-Kontur in Prozent, 100 = wie in osu (s. CURSOR_OUTLINE).
+    pub(crate) cursor_outline: u32,
+    // Durchsichtigkeit des schwarzen Inneren in Prozent, 50 = wie in osu.
+    pub(crate) cursor_fill_transparency: u32,
     // Bestaetigungsdauer (wie osus Hold-to-confirm) in ms, und die der Reconnect-Taste;
     // RECONNECT_HOLD_GENERAL dort = die allgemeine.
     pub(crate) hold_confirm_ms: u32,
@@ -64,6 +68,9 @@ pub(crate) struct Settings {
     pub(crate) hud_actionbar_y: f32,
     pub(crate) hud_scoreboard_x: f32,
     pub(crate) hud_scoreboard_y: f32,
+    // Feste Ecke der Seitenleiste (SCOREBOARD_ALIGNS): hud_scoreboard_x/y ist diese Ecke, die
+    // Leiste waechst von ihr weg. 0 = oben links (wie frueher).
+    pub(crate) scoreboard_align: u8,
     // Schriftgroesse der Seitenleiste in Prozent (HUD-Editor).
     pub(crate) hud_scoreboard_scale: u32,
     // Groesse der Pfeil-Anzeige in Prozent eines Hotbar-Slots (HUD-Editor).
@@ -186,6 +193,8 @@ pub(crate) struct Settings {
     pub(crate) crosshair_outline: bool,
     // Dieselbe Kontur um den Ring am Kreuz (Schild-Cooldown, Timer), eigens schaltbar.
     pub(crate) crosshair_ring_outline: bool,
+    // Radius dieses Rings (Mitte der Linie) in Bildschirmpixeln.
+    pub(crate) crosshair_ring_radius: u32,
     // Form des eingebauten Fadenkreuzes (Index in CROSSHAIR_SHAPES) und je Form die Groesse
     // in Pixeln -- jede Form behaelt ihre eigene, wenn man zwischen ihnen wechselt.
     pub(crate) crosshair_shape: usize,
@@ -221,6 +230,20 @@ pub(crate) struct Settings {
     // Block-Entities weiter weg als so viele Bloecke werden nicht gezeichnet
     // (BLOCK_ENTITY_DISTANCE_MAX = unbegrenzt), s. App::block_entity_shown.
     pub(crate) block_entity_render_distance: u32,
+    // So lange blendet eine Spalte bei ihrem ersten Mesh ein, in ms (0 = aus), s.
+    // render::BlockRenderer::start_column_fade.
+    pub(crate) chunk_fade_ms: u32,
+    // So lange vor ihrem Ende blenden Partikel aus, in ms (0 = aus), s. particles::Particles::fade_out_ms.
+    pub(crate) particle_fade_out_ms: u32,
+    // Bis so viele Bloecke um die Kamera entstehen Partikel (Vanilla 32), s.
+    // particles::Particles::spawn_distance.
+    pub(crate) particle_distance: u32,
+    // Entities nah an der Kamera je Pixel rastern ab diesem Abstand, in Hundertstel Bloecken
+    // (0 = aus), s. render::BlockRenderer::entity_near_dither.
+    pub(crate) entity_near_dither_cm: u32,
+    // Mip-Schaerfe der Welt-Texturen in Prozent (0 = Bias 0, 100 = Bias -1), s.
+    // render::BlockRenderer::mip_bias.
+    pub(crate) mip_sharpness_pct: u32,
     // Vertikales Sichtfeld in Grad (Vanilla-Default 70, Bereich FOV_MIN..FOV_MAX). Wird pro
     // Frame auf die Kamera uebertragen (s. render-Zweig), fliesst in die Perspektive UND als
     // tan(fov/2) in die nichtlinearen Projektionen.
@@ -293,6 +316,10 @@ pub(crate) struct Settings {
     pub(crate) shadow_opacity: [u8; TEXT_AREA_COUNT + 1],
     // Hintergrund des Startbildschirms, Index in wallpaper::WallpaperMode::ALL (0 = keins).
     pub(crate) wallpaper: u8,
+    // Hintergrund Panorama: aus welchem Skin (Ordnername; leer oder ohne Panorama = der erste
+    // mit Panorama) und wie schnell es sich dreht, in Prozent von Vanilla (negativ = andersherum).
+    pub(crate) panorama_skin: String,
+    pub(crate) panorama_speed: i32,
     // CMAA2 (Conservative Morphological Anti-Aliasing 2, s. cmaa2.wgsl) -- gather-basierte,
     // kontrastadaptive Kantenglaettung, inspiriert von Intels Referenzimplementierung (deren
     // Scatter/Deferred-Blend-Architektur noch nicht portiert ist, s. cmaa2.wgsl-Kommentar).
@@ -312,10 +339,8 @@ pub(crate) struct Settings {
     // UI-Sounddesign gedacht, nicht zum Verstimmen von Gameplay-Signalen. Ganzzahlig wie im
     // Stepper von scripts/klaenge-anhoeren.sh, absichtlich ohne Ober-/Untergrenze.
     pub(crate) ui_pitch_semitones: i32,
-    // Hauptlautstaerke der WELTGERAEUSCHE in Prozent (s. App::play_server_sound). Gilt
-    // bewusst NICHT fuer die Klaenge der Oberflaeche: die haben ihren eigenen, aufeinander
-    // abgestimmten Pegel (s. ui_sound::UiSound::sample_gain), und wer die Welt leiser dreht,
-    // will meist nicht auch den Menue-Klick verlieren.
+    // Hauptlautstaerke in Prozent (s. App::play_server_sound), auch fuer die Klaenge der
+    // Oberflaeche (Nutzer 2026-11-11; frueher bewusst ausgenommen).
     pub(crate) master_volume: f32,
     // Lautstaerke je Kategorie in Prozent, in der Reihenfolge von VOLUME_CATEGORIES.
     pub(crate) category_volume: [f32; VOLUME_CATEGORIES.len()],
@@ -349,10 +374,10 @@ pub(crate) struct Settings {
     // Consumable-Optimizer: Slotwechsel, Tausch und Wegwerfen warten, solange der Server noch
     // isst (s. App::server_still_eating).
     pub(crate) eat_slot_lock: bool,
-    // Consumable-Optimizer "Aggressive Prediction": die Verlangsamung beim Benutzen (Essen,
-    // Bogen, alles) richtet sich allein nach dem Client, das "benutzt Item"-Flag des Servers
-    // fuer den eigenen Spieler wird nicht beachtet (s. events.rs, living_flags).
-    pub(crate) eat_aggressive_prediction: bool,
+    // Usage-Optimizer "No Shield Lock": haelt das Schild der Nebenhand den Rechtsklick fest,
+    // obwohl die Haupthand inzwischen etwas Benutzbares haelt, endet das Blocken von selbst
+    // (s. App::shield_locks_main_hand).
+    pub(crate) no_shield_lock: bool,
     // Timer am Fadenkreuz: Kreis fuellt sich beim Spannen/Essen (s. App::use_timer_ring).
     pub(crate) module_use_timer: bool,
     // No Tool Break (s. App::tool_break_guard): Abbauen sperren, bevor ein Diamant- oder
@@ -379,21 +404,19 @@ pub(crate) struct Settings {
     // Wie lange eine unbestaetigte Platzierung als echt gilt. Standard 200 ms -- etwa eine
     // normale Rundreise; wer auf einem weiter entfernten Server spielt, dreht hoch.
     pub(crate) ghost_tolerance_ms: u32,
-    // Hitbox-Anzeige: zeichnet die Trefferbox anderer Entities als Drahtgitter, einmal an
-    // ihrer GEGLAETTETEN Bildposition (render_pos, s. world::Entity) und/oder an ihrer
-    // ROHEN, zuletzt vom Server geschickten Position (target_pos) -- letztere zeigt, wie weit
-    // die Glaettung dem echten Server-Stand gerade hinterherhaengt. Standardmaessig AUS: ein
-    // neues Debug-/Analyse-Modul, keine bestehende Funktion, die man vermissen wuerde.
+    // Hitbox-Anzeige: zeichnet die Trefferbox anderer Entities als Drahtgitter an ihrer
+    // GEGLAETTETEN Bildposition (render_pos, s. world::Entity). Nur beim Spieler waehlbar:
+    // stattdessen an der ROHEN, zuletzt vom Server geschickten Position (target_pos) -- die
+    // zeigt, wie weit die Glaettung dem echten Server-Stand gerade hinterherhaengt.
+    // Standardmaessig AUS: ein neues Debug-/Analyse-Modul, keine bestehende Funktion, die man
+    // vermissen wuerde.
     pub(crate) module_hitbox_enabled: bool,
-    pub(crate) module_hitbox_show_smoothed: bool,
-    pub(crate) module_hitbox_show_raw: bool,
+    pub(crate) module_hitbox_player_raw: bool,
     // Gestrichelt statt durchgezogen (s. world::wireframe_box_vertices).
     pub(crate) module_hitbox_dotted: bool,
-    // Nur die Kanten, die die Box selbst nicht verdeckt (s. build_hitbox_vertices).
-    pub(crate) module_hitbox_visible_edges: bool,
-    // Items am Boden bekommen eine Box (Vorgabe, solange "Item am Boden" unter den eigenen
-    // Farben nicht ueberschreibt).
-    pub(crate) module_hitbox_items: bool,
+    // Welche Kanten (HITBOX_LINE_NAMES): alle, nur die, die die Box selbst nicht verdeckt, oder
+    // nur der Umriss (s. build_hitbox_vertices).
+    pub(crate) module_hitbox_lines: u8,
     // Die eigene Hitbox (nur in der 3. Person, s. build_hitbox_vertices).
     pub(crate) module_hitbox_self: bool,
     // Kantenbreite in Bildschirmpixeln -- IMMER wirksam (auch durchgezogen), im gepunkteten
@@ -438,9 +461,8 @@ pub(crate) struct Settings {
     pub(crate) module_crit_color_saturation: u32,
     pub(crate) module_crit_color_value: u32,
     pub(crate) module_crit_color_alpha: u32,
-    // Blockumriss-Modul (s. ModuleId::BlockOutline): AUS zeichnet den Rahmen um den
-    // anvisierten Block wie Vanilla (schwarz, 40 % deckend, s. vanilla_block_outline), AN mit
-    // eigener Farbe, Deckkraft und Linienbreite.
+    // Blockumriss-Modul (s. ModuleId::BlockOutline): AUS gar kein Rahmen um den anvisierten
+    // Block (Nutzer 2026-11-11), AN mit eigener Farbe, Deckkraft und Linienbreite.
     pub(crate) module_block_outline: bool,
     // Modul "Saettigung": ein Balken in eigener Farbe ueber der Hungerleiste (s.
     // build_status_bars).
@@ -573,8 +595,13 @@ pub(crate) struct Settings {
     pub(crate) freelook_view: u8,
     // Trims auf getragener Ruestung zeichnen (Video, Darstellung).
     pub(crate) armor_trims: bool,
+    // Render-Order: was immer ueber was liegt (s. render_order).
+    pub(crate) render_order: crate::render_order::RenderOrderTable,
     // Modified View Model (Video, Darstellung): Arm haelt das Item, Hand-Debug-Werte je Item.
     pub(crate) modified_view_model: bool,
+    // Hand-Bobbing (Video, Modified View Model): Vanillas Wackeln beim Laufen nur an der Hand,
+    // die Kamera bleibt ruhig.
+    pub(crate) view_model_bobbing: bool,
     // Feuer vor den Augen (Video-Tab, FIRE_MODE_*): Vanillas Bild mit eigener Hoehe in Prozent,
     // oder statt des Bilds ein Fadenkreuz in eigener Farbe (HSV, wie crosshair_*).
     pub(crate) fire_mode: u8,
@@ -597,6 +624,11 @@ pub(crate) struct Settings {
     pub(crate) hud_session_scale: u32,
     pub(crate) session_opacity: u32,
     pub(crate) session_lines: u8,
+    // Uhr (s. ModuleId::Clock): echte Uhrzeit, obere linke Ecke normiert und Groesse in Prozent.
+    pub(crate) module_clock: bool,
+    pub(crate) hud_clock_x: f32,
+    pub(crate) hud_clock_y: f32,
+    pub(crate) hud_clock_scale: u32,
     // Rueckmeldung, wenn man ohne Munition den Bogen/die Armbrust zu spannen versucht (Vanilla:
     // es passiert schlicht nichts). Index in ARROW_EMPTY_FEEDBACK_NAMES.
     pub(crate) arrow_empty_feedback: u8,
@@ -633,6 +665,13 @@ pub(crate) struct Settings {
     // Modul "coral-record" (s. crates/record, app/record.rs): Aufnahme fuer spaetere Videos.
     // Vorgabe aus.
     pub(crate) module_coral_record: bool,
+    // Modul "coral-clip" (s. app/clip.rs): haelt die letzten clip_seconds Sekunden im Speicher,
+    // die Taste "Clip speichern" schreibt sie als Aufnahme. Vorgabe aus.
+    pub(crate) module_coral_clip: bool,
+    pub(crate) clip_seconds: u32,
+    // Regelmaessige Haltepunkte je Clip-Dauer (4 = alle Viertel der Dauer). An einem Haltepunkt
+    // kann ein Clip beginnen; er wird hoechstens um einen Abstand laenger als eingestellt.
+    pub(crate) clip_checkpoints: u32,
     // Debug-Modul "Autoklicker" (s. App::tick_autoclicker): solange Angreifen oder Benutzen gehalten ist,
     // klickt es autoclicker_cps-mal je Sekunde. Wirkt nur auf anticheat-test.com und lokalen
     // Servern (s. App::autoclicker_allowed) -- zum Testen der Anticheats, nicht zum Spielen.
@@ -714,6 +753,8 @@ pub(crate) struct Settings {
     pub(crate) arrow_trail: bool,
     // Pfeile in der Welt ganz weiss zeichnen (Pfeile-Modul), damit man sie sofort sieht.
     pub(crate) arrow_white: bool,
+    // Krit-Spur fliegender Pfeile (Pfeile-Modul); aus = keine Krit-Partikel hinter Pfeilen.
+    pub(crate) arrow_crit_trail: bool,
     // Standzeit eines Spurpunkts bis zum Ausblenden und Dauer des Ausblendens (Zehntelsekunden).
     pub(crate) trail_hold_tenths: u32,
     pub(crate) trail_fade_tenths: u32,

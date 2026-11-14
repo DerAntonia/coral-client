@@ -431,8 +431,56 @@ pub(crate) struct MeshResult {
     pub(crate) min_y: i32,
     pub(crate) translucent: Vec<world::TerrainVertex>,
     pub(crate) fade_quads: Vec<world::TerrainFadeQuad>,
+    // Die Platzierungen, deren Schatten fade_quads einblendet (s. App::ao_fade_sources).
+    pub(crate) fade_sources: Vec<(i32, i32, i32)>,
     // Shader-Pfad: Blocklicht der Spalte zum Nachschlagen (s. App::column_light).
     pub(crate) block_light: Option<world::light::ColumnBlockLight>,
+    // Flickbar gebaut (s. world::layout_patchable): je Platz im opaken Puffer der Block.
+    pub(crate) quad_block: Option<Vec<u32>>,
+}
+
+// Was ein Mesh-Auftrag liefert: die ganze Spalte, oder nur die ausgetauschten Flaechen rund um
+// geaenderte Bloecke (Flicken, s. render::BlockRenderer::patch_column).
+pub(crate) enum MeshOutcome {
+    Full(Box<MeshResult>),
+    Patch {
+        key: (i32, i32),
+        // Bloecke, deren alte Flaechen verschwinden (sortierte Kennungen, s. world::block_id).
+        removed: Vec<u32>,
+        added: Vec<world::PlacedQuad>,
+        visibility: Vec<world::visibility::SectionVis>,
+        opacity: std::sync::Arc<[world::visibility::SectionOpacity]>,
+        min_y: i32,
+    },
+    // Flicken geht hier nicht (Wasser oder Glas im Spiel): die Spalte ganz neu bauen.
+    PatchFailed { key: (i32, i32) },
+}
+
+// Eine Spalte, in der sich schon einmal einzelne Bloecke geaendert haben: ihre Meshes werden
+// flickbar gebaut. `sections`: wo freie Plaetze fuer JEDE Richtung vorgehalten werden (Bit n =
+// Section n). `last_patch`: seit wann sie nur geflickt ist -- nach PATCH_SETTLE Ruhe wird sie
+// einmal ganz neu gebaut.
+#[derive(Default)]
+pub(crate) struct PatchColumn {
+    pub(crate) sections: u64,
+    pub(crate) last_patch: Option<std::time::Instant>,
+}
+
+pub(crate) const PATCH_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+// Messung Neu-Meshen (s. App::log_remesh).
+pub(crate) struct RemeshLog {
+    pub(crate) seit: std::time::Instant,
+    pub(crate) jobs: u32,
+    pub(crate) verschoben: u32,
+    pub(crate) geflickt: u32,
+    pub(crate) flick_rueckfall: u32,
+}
+
+impl RemeshLog {
+    pub(crate) fn neu() -> Self {
+        Self { seit: std::time::Instant::now(), jobs: 0, verschoben: 0, geflickt: 0, flick_rueckfall: 0 }
+    }
 }
 
 // Ein laufendes Einblenden der Eckabdunklung in einer Spalte: die betroffenen Quads mit ihren
@@ -440,6 +488,9 @@ pub(crate) struct MeshResult {
 pub(crate) struct AoFade {
     pub(crate) column: (i32, i32),
     pub(crate) quads: Vec<world::TerrainFadeQuad>,
+    // Beginn des Einblendens: der Moment, in dem das erste Mesh mit dieser Platzierung kam
+    // (s. App::ao_fade_sources). Ein spaeterer Neubau der Spalte setzt an derselben Stelle
+    // fort statt von vorn zu beginnen.
     pub(crate) start: Instant,
 }
 
@@ -490,28 +541,38 @@ pub(crate) const COLOR_DEATH_OVERLAY: [f32; 4] = [0.45, 0.0, 0.0, 0.55];
 pub(crate) const COLOR_DEATH_TITLE: [f32; 4] = [1.0, 0.85, 0.85, 1.0];
 // Angedockt (folgt dem Log) vs. abgedockt (haengt an einer festen Stelle) -- die
 // Thumb-Farbe ist die einzige Anzeige dafuer, in welchem der beiden Zustaende man ist.
-// Zeiger-Form aus Mauszeiger.dc.html: Kite/Dart-Pfeil + kleiner "Griff" als Kapsel,
-// um -25 Grad gedreht -- als Vektor-Punkte im 100x130-Koordinatenraum des Originals.
+// Zeiger-Form wie osu!lazers Menue-Zeiger (an menu-cursor.png aus ppy/osu-resources
+// abgemessen, in dessen Einheiten): ein Dreieck mit Kerbe, Spitze oben links. Die vier Punkte
+// sind die INNERE Kante der Kontur (Spitze, rechter Fluegel, Kerbe, unterer Fluegel); die
+// sichtbare Form reicht ringsum CURSOR_ROUNDING weiter, dadurch sind die Ecken aussen rund.
 // Als Formen statt als Bild erzeugt: bleibt bei jeder Aufloesung scharf, keine Textur-Datei.
-// Die Spitze sass frueher bei y=4 -- das wirkte zu lang, jetzt bei 20: gleich
-// breit, gut ein Sechstel kuerzer.
-pub(crate) const CURSOR_KITE: [(f32, f32); 4] = [(50.0, 20.0), (90.0, 90.0), (50.0, 70.0), (10.0, 90.0)];
-// Kreis unter dem Pfeil (statt des frueheren Rechtecks/der Kapsel -- beides gefiel nicht),
-// abschaltbar (Settings::cursor_circle). Im Shader eine Kapsel mit gleichen Enden.
-pub(crate) const CURSOR_CIRCLE_CENTER: (f32, f32) = (50.0, 86.0);
-pub(crate) const CURSOR_CIRCLE_RADIUS: f32 = 8.0;
-pub(crate) const CURSOR_ROTATION_DEG: f32 = -25.0;
-// Bildschirmhoehe des gezeichneten Zeigers; Original-viewBox ist 130 hoch.
-pub(crate) const CURSOR_HEIGHT_PX: f32 = 40.0;
+pub(crate) const CURSOR_SHAPE: [(f32, f32); 4] = [(31.0, 21.0), (275.0, 226.0), (129.0, 238.0), (31.0, 340.0)];
+pub(crate) const CURSOR_ROUNDING: f32 = 20.0;
+// Ring unter der Kerbe wie in osu, abschaltbar (Settings::cursor_circle): Mitte und Aussenradius.
+pub(crate) const CURSOR_CIRCLE_CENTER: (f32, f32) = (180.5, 341.5);
+pub(crate) const CURSOR_CIRCLE_RADIUS: f32 = 45.0;
+// Konturdicke bei 100 % (Settings::cursor_outline) -- osus Dicke. Sie waechst nach innen, die
+// Aussenform bleibt; in Einheiten der Form, waechst also mit der Zeigergroesse.
+pub(crate) const CURSOR_OUTLINE: f32 = 20.0;
+// Schatten: dieselbe Form, schwarz zu 65 % deckend wie in osu (Nutzer 2026-11-11), nach links
+// unten versetzt.
+pub(crate) const CURSOR_SHADOW_OFFSET: (f32, f32) = (-10.0, 11.0);
+pub(crate) const CURSOR_SHADOW_ALPHA: f32 = 0.65;
+// Bildschirmhoehe des Pfeils bei 100 % (etwa die des bisherigen Zeigers); er ist in der
+// Vorlage CURSOR_HEIGHT_UNITS hoch.
+pub(crate) const CURSOR_HEIGHT_PX: f32 = 24.0;
+pub(crate) const CURSOR_HEIGHT_UNITS: f32 = 360.0;
 
-// Schwarzer Kern mit duenner weisser Kontur (so gewuenscht). Die Kontur entsteht im Shader
-// ueber den Abstand zur Kante (s. cursor.wgsl) und ist dadurch ueberall gleich dick -- die
-// frueheren skalierten Kopien waren an spitzen Stellen duenner als an breiten.
+// Weisse Kontur, das Innere schwarz -- seine Deckkraft kommt aus dem Regler
+// (Settings::cursor_fill_transparency, 50 % wie osu).
 pub(crate) const COLOR_CURSOR_OUTLINE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-pub(crate) const COLOR_CURSOR_FILL: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-// Dicke der Kontur in Bildschirm-Pixeln -- fest, auch bei groesserem Zeiger (1.5 und
-// mitwachsend war zu fett).
-pub(crate) const CURSOR_OUTLINE_PX: f32 = 1.0;
+pub(crate) const COLOR_CURSOR_FILL: [f32; 3] = [0.0, 0.0, 0.0];
 // Wie weit das Innere beim Druecken Richtung Akzentfarbe geht (0 = gar nicht, 1 = ganz) --
 // "etwas", nicht voll.
 pub(crate) const CURSOR_PRESS_TINT: f32 = 0.55;
+
+// MESSUNG (voruebergehend): Millisekunden seit dem ersten Aufruf, fuer die [flick]-Zeilen.
+pub(crate) fn mess_ms() -> u128 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis()
+}

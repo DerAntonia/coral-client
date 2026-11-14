@@ -1,6 +1,6 @@
 // Laufende Logik einzelner Module: Totem-Klaenge, Voicechat, Kristall- und Ess-Optimierer.
 
-use crate::{App, toteming, Arc, DVec3, sound_log, voicechat, ConnStatus, VoiceKnob, VoiceFlag, Instant, Duration, crystal_optimizer, consumable_optimizer, bow_hold_through, eat_rest_within, zufallswert, EAT_NEXT_USE_DELAY};
+use crate::{App, toteming, Arc, DVec3, sound_log, voicechat, ConnStatus, VoiceKnob, VoiceFlag, Instant, Duration, crystal_optimizer, consumable_optimizer, bow_hold_through, crossbow_hold_through, eat_rest_within, zufallswert, EAT_NEXT_USE_DELAY, EAT_RELEASE_AFTER};
 
 impl App {
     pub(crate) fn publish_totem_sound_enabled(&mut self) {
@@ -424,7 +424,8 @@ impl App {
 
     // Fehlen beim laufenden Essen/Trinken hoechstens eat_hold_through_ms? (s. tick_item_use)
     // Beim Bogen dazu: zu frueh losgelassen haelt es bis zum ersten Pfeil, kurz vor voll bis
-    // zur vollen Kraft (s. bow_hold_through).
+    // zur vollen Kraft (s. bow_hold_through); an der Armbrust kurz vor geladen bis geladen
+    // (s. crossbow_hold_through).
     pub(crate) fn eat_hold_through(&self) -> bool {
         let grenze = self.settings.eat_hold_through_ms;
         if !self.settings.module_consumable_optimizer {
@@ -433,6 +434,10 @@ impl App {
         let Some((name, stack)) = self.own_used_item() else { return false };
         if name == "bow" {
             return bow_hold_through(self.own_use_ticks, grenze);
+        }
+        if name == "crossbow" {
+            let Some(st) = stack.as_ref().filter(|s| !s.is_charged()) else { return false };
+            return crossbow_hold_through(self.own_use_ticks, self.enchantments.crossbow_pull_ticks(st), grenze);
         }
         if grenze == 0 {
             return false;
@@ -487,12 +492,15 @@ impl App {
     // Der Server meldet, dass das eigene Essen fertig ist (Flag "benutzt Item" aus oder Entity-
     // Event 9 -- je nach Server kommt nur eins davon): nicht mehr warten.
     pub(crate) fn consumable_server_done(&mut self, woher: &str) {
+        crate::interaktions_log(&format!("server: essen fertig ({woher}), wartete {}", self.consumable.waiting(Instant::now())));
         if let Some(d) = self.consumable.confirm_delay(Instant::now()) {
             eprintln!("[essen] lokal fertig, Server bestaetigt ({woher}) nach {} ms -- so lange blieb die Ess-Verlangsamung nach dem Klang", d.as_millis());
         }
         self.consumable.stop_waiting();
-        // Er ist fertig: der naechste Bissen muss nicht mehr warten.
+        // Er ist fertig: der naechste Bissen muss nicht mehr warten, und ein RELEASE braucht
+        // es nicht mehr -- seine Meldung raeumt Grims "isst" selbst.
         self.eat_next_use_delay = 0;
+        self.eat_release_wait = 0;
     }
 
     // Wie Vanillas LivingEntity.updatingUsingItem, jeden Tick: haelt die benutzte Hand nicht mehr
@@ -515,6 +523,7 @@ impl App {
     // consumable_optimizer.rs). Laeuft nach dem Hochzaehlen von own_use_ticks.
     pub(crate) fn tick_consumable_optimizer(&mut self) {
         if self.consumable.timed_out(Instant::now()) {
+            crate::interaktions_log("essen: 500 ms ohne Server-Meldung abgelaufen");
             eprintln!("[essen] lokal fertig, keine Bestaetigung vom Server -- Ess-Verlangsamung lief die vollen 500 ms nach dem Klang");
         }
         if !self.consumable_optimizer_active() {
@@ -542,10 +551,21 @@ impl App {
             self.play_event_at_scaled(consumable_optimizer::BURP_SOUND, auge, 0.5, ruelps_hoehe, protocol::packets::SoundCategory::Players);
             klaenge.push(consumable_optimizer::BURP_SOUND);
         }
+        crate::interaktions_log("essen lokal fertig");
         self.consumable.finished_locally(&klaenge, Instant::now());
+        self.eat_local_finishes.push_back(Instant::now());
+        if self.eat_local_finishes.len() > 4 {
+            self.eat_local_finishes.pop_front();
+        }
         self.eat_next_use_delay = EAT_NEXT_USE_DELAY;
         // Wie stopUsingItem im Client: kein RELEASE an den Server -- der beendet das Essen im
-        // selben Tick selbst.
+        // selben Tick selbst. Das RELEASE kommt etwas spaeter doch (s. tick_eat_release): es
+        // raeumt Grims "isst", ohne dass wir eine volle Rundreise auf die Meldung des Servers
+        // warten. Frueher nur mit dem Schalter "Aggressive Prediction"; ohne ihn flaggte
+        // Abbauen direkt nach dem Essen MultiActionsB/E, sobald der Ping ueber der Wartezeit
+        // lag -- der Schalter ist deshalb weg, das Verhalten immer an (Nutzer 2026-11-12).
+        self.eat_released = false;
+        self.eat_release_wait = EAT_RELEASE_AFTER;
         self.using_item = false;
         self.own_use_ticks = 0;
     }

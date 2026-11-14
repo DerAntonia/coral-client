@@ -229,18 +229,22 @@ impl App {
                 // Der Glint liest die Vertices sofort (s. push_glint), also dann nicht aufschieben.
                 let farbe = [tint[0] * ENTITY_BRIGHTNESS, tint[1] * ENTITY_BRIGHTNESS, tint[2] * ENTITY_BRIGHTNESS];
                 if let Some(key) = skin {
-                    let i = self.push_skinned(model, pose, base, tex, farbe, true, key);
+                    let i = self.push_skinned(model, pose, base, tex, farbe, self.two_sided_here(), key);
                     if item.enchanted {
                         self.skin_glint(i, render::glint::GLINT_SCALE_ARMOR, render::glint::GLINT_TEXTURE_ARMOR);
                     }
                     continue;
                 }
                 if let Some(jobs) = jobs.as_deref_mut().filter(|_| !item.enchanted) {
-                    defer_model(jobs, out, model, pose, base, tex, farbe, true);
+                    defer_model(jobs, out, model, pose, base, tex, farbe, self.two_sided_here());
                     continue;
                 }
                 let start = out.len();
-                world::entity_model::emit_tinted_two_sided(model, pose, base, tex, tint, ENTITY_BRIGHTNESS, out);
+                if self.two_sided_here() {
+                    world::entity_model::emit_tinted_two_sided(model, pose, base, tex, tint, ENTITY_BRIGHTNESS, out);
+                } else {
+                    world::entity_model::emit_tinted(model, pose, base, tex, tint, ENTITY_BRIGHTNESS, out);
+                }
                 self.push_armor_glint(item, model, pose, base, out, start);
             }
             let asset_pfad = asset.split_once(':').map_or(asset.as_str(), |(_, p)| p);
@@ -252,18 +256,22 @@ impl App {
                 .and_then(|platz| self.entity_atlas.trim_slot_rect(platz))
             {
                 if let Some(key) = skin {
-                    let i = self.push_skinned(model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], true, key);
+                    let i = self.push_skinned(model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], self.two_sided_here(), key);
                     if item.enchanted {
                         self.skin_glint(i, render::glint::GLINT_SCALE_ARMOR, render::glint::GLINT_TEXTURE_ARMOR);
                     }
                     continue;
                 }
                 if let Some(jobs) = jobs.as_deref_mut().filter(|_| !item.enchanted) {
-                    defer_model(jobs, out, model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], true);
+                    defer_model(jobs, out, model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], self.two_sided_here());
                     continue;
                 }
                 let start = out.len();
-                world::entity_model::emit_two_sided(model, pose, base, tex, ENTITY_BRIGHTNESS, out);
+                if self.two_sided_here() {
+                    world::entity_model::emit_two_sided(model, pose, base, tex, ENTITY_BRIGHTNESS, out);
+                } else {
+                    world::entity_model::emit(model, pose, base, tex, ENTITY_BRIGHTNESS, out);
+                }
                 self.push_armor_glint(item, model, pose, base, out, start);
             }
         }
@@ -500,7 +508,12 @@ impl App {
     ) {
         if item.enchanted {
             self.push_glint(out, start, render::glint::GLINT_SCALE_ARMOR, render::glint::GLINT_TEXTURE_ARMOR, |l| {
-                world::entity_model::emit_two_sided(model, pose, base, [0.0, 0.0, 1.0, 1.0], 1.0, l);
+                // Dieselbe Seitenzahl wie die Ruestung darunter (s. two_sided_here).
+                if self.two_sided_here() {
+                    world::entity_model::emit_two_sided(model, pose, base, [0.0, 0.0, 1.0, 1.0], 1.0, l);
+                } else {
+                    world::entity_model::emit(model, pose, base, [0.0, 0.0, 1.0, 1.0], 1.0, l);
+                }
             });
         }
     }
@@ -748,16 +761,12 @@ impl App {
             // Ein liegendes Item ohne empfangenen Stapel zeigt Vanilla gar nicht (leerer Stack).
             (None, world::ItemRenderKind::Dropped) => return,
         };
-        let mut lokal = Vec::new();
         self.held_items.set_skull(self.held_skull_texture(&item));
         // Laeuft das Item ueber den Core-Shader eines Packs, braucht es die Geometrie hier nur
         // fuer seine Masse (Hoehe ueber dem Boden, Abstand der Kopien) -- gezeichnet wird es
         // unten je Platzierung (s. HeldItems::emit_vanilla).
         let umgeleitet = self.held_items.routes_to_vanilla(item.model_id);
-        self.held_items.without_vanilla(|| self.held_items.emit_ground(item.model_id, item.potion_color, Affine::IDENTITY, ENTITY_BRIGHTNESS, false, &mut lokal));
-        if lokal.is_empty() {
-            return;
-        }
+        let Some(netz) = self.held_items.ground_mesh(item.model_id, item.potion_color, ENTITY_BRIGHTNESS) else { return };
         let alter = e.age_ticks(progress);
         let platzierungen: Vec<Affine> = match art {
             world::ItemRenderKind::Flying { scale, .. } => {
@@ -772,12 +781,7 @@ impl App {
                 vec![Affine::translation(feet).then(Affine::scale([scale; 3])).then(drehung)]
             }
             world::ItemRenderKind::Dropped => {
-                let (mut min_y, mut min_z, mut max_z) = (f32::MAX, f32::MAX, f32::MIN);
-                for v in &lokal {
-                    min_y = min_y.min(v.position[1]);
-                    min_z = min_z.min(v.position[2]);
-                    max_z = max_z.max(v.position[2]);
-                }
+                let (min_y, min_z, max_z) = (netz.min_y, netz.min_z, netz.max_z);
                 let versatz = item_unique_offset(id);
                 let hoehe = -min_y + 0.0625 + (alter / 10.0 + versatz).sin() * 0.1 + 0.1;
                 let basis = Affine::translation(feet)
@@ -792,9 +796,27 @@ impl App {
             }
             return;
         }
+        // Per GPU-Skinning wie ein Item in der Hand (s. HeldItems::rigid_ground): das Netz liegt
+        // einmal auf der GPU, je Kopie nur eine Matrix -- statt jede Ecke jedes Bild zu
+        // verschieben und hochzuladen. Faerbung, Umriss und Motion Blur setzt
+        // finish_skin_entity wie bei jedem Entity. Ein verzauberter Block (UV schon im Atlas)
+        // und Pack-Modelle, Koepfe, Sondermodelle bleiben auf dem Ecken-Weg.
+        if self.skinning_active() {
+            if let Some(r) = self.held_items.rigid_ground(item.model_id, item.potion_color).filter(|r| r.glint || !item.enchanted) {
+                let bewegung = crate::entity_motion::key(crate::entity_motion::KIND_ENTITY, id);
+                for p in &platzierungen {
+                    let i = self.push_skinned_rigid(r.key, r.abdruck, || r.source.mesh(), p.then(r.base), r.rect, [ENTITY_BRIGHTNESS; 3], bewegung);
+                    if item.enchanted {
+                        self.skin_glint(i, render::glint::GLINT_SCALE_ITEM, render::glint::GLINT_TEXTURE_ITEM);
+                    }
+                }
+                return;
+            }
+        }
         let start = out.len();
+        out.reserve(netz.verts.len() * platzierungen.len());
         for p in &platzierungen {
-            out.extend(lokal.iter().map(|v| world::BlockVertex { position: p.apply(v.position), ..*v }));
+            out.extend(netz.verts.iter().map(|v| world::BlockVertex { position: p.apply(v.position), ..*v }));
         }
         if item.enchanted {
             self.push_glint(out, start, render::glint::GLINT_SCALE_ITEM, render::glint::GLINT_TEXTURE_ITEM, |l| {

@@ -29,6 +29,8 @@ impl BlockRenderer {
             // Die Hand zeichnet nie Hitbox-Kanten. Im Shader-Pfad steht hier ihr Licht:
             // x = gepackter Lichtwert (Bits als f32), s. block.wgsl::fs_hand_lit.
             hitbox: [f32::from_bits(self.hand_light.unwrap_or(0)), 0.0, 0.0, 0.0],
+            // Die Hand ist immer nah -- sie wird nie gerastert.
+            near: [0.0; 4],
         };
         queue.write_buffer(&self.hand_camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
@@ -167,6 +169,7 @@ impl BlockRenderer {
             // Warp-Projektion der Welt; im Orthomodus liest der Shader sie nicht.
             params: [0.0, 1.0, 1.0, 0.0],
             hitbox: [0.0; 4],
+            near: [0.0; 4],
         };
         queue.write_buffer(&self.doll_camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
@@ -247,6 +250,28 @@ impl BlockRenderer {
         self.entity_translucent_count = translucent.min(n) as u32;
         self.entity_head_translucent = head.min(n - translucent.min(n)) as u32;
         self.own_vertex_count = own.min(n) as u32;
+    }
+
+    // Render-Order: Klassen (render_order::CLASS_*) fuer Bereiche der Entity-Vertices aus
+    // set_entity_vertices. Was in keinem Bereich liegt, ist CLASS_OTHER. Die Bereiche duerfen
+    // ungeordnet sein, aber nicht ueberlappen.
+    pub fn set_entity_classes(&mut self, mut classes: Vec<(std::ops::Range<u32>, u8)>) {
+        classes.retain(|(r, k)| r.start < r.end && *k != render_order::CLASS_OTHER);
+        classes.sort_by_key(|(r, _)| r.start);
+        // Gleiche Klassen direkt hintereinander zu einem Aufruf.
+        let mut out: Vec<(std::ops::Range<u32>, u8)> = Vec::with_capacity(classes.len());
+        for (r, k) in classes {
+            match out.last_mut() {
+                Some((letzter, klasse)) if *klasse == k && letzter.end == r.start => letzter.end = r.end,
+                _ => out.push((r, k)),
+            }
+        }
+        self.entity_classes = out;
+    }
+
+    // Die deckenden Entity-Vertices `deckend` der Klasse `class` als Zeichenbereiche.
+    pub(super) fn entity_class_ranges(&self, deckend: std::ops::Range<u32>, class: u8) -> Vec<std::ops::Range<u32>> {
+        entity_class_ranges(&self.entity_classes, deckend, class)
     }
 
     // Motion Blur: je Entity-Ecke die Lage im vorigen Bild, gleich lang wie die Ecken aus
@@ -373,12 +398,21 @@ impl BlockRenderer {
         if self.hitbox_vertex_count == 0 {
             return;
         }
-        pass.set_pipeline(&self.hitbox_pipeline);
+        // "Ueber Spielern": die Tiefe enthaelt die Spieler, also genau auf den Pixeln, die der
+        // Welt-Durchgang gemerkt hat (s. draw_after_terrain), ohne Tiefentest.
+        if self.render_order.hitbox_over_players() {
+            pass.set_pipeline(&self.hitbox_sharp_pipeline);
+            pass.set_stencil_reference(u32::from(cover::MARK));
+        } else {
+            pass.set_pipeline(&self.hitbox_pipeline);
+            pass.set_stencil_reference(u32::from(self.render_order.of_hitbox() | cover::MARK));
+        }
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, self.atlas_group(), &[]);
         let bytes = u64::from(self.hitbox_vertex_count) * std::mem::size_of::<HitboxVertex>() as u64;
         pass.set_vertex_buffer(0, self.hitbox_buffer.slice(..bytes));
         pass.draw(0..self.hitbox_vertex_count, 0..1);
+        pass.set_stencil_reference(0);
     }
 
     pub const fn has_own_player(&self) -> bool {
@@ -416,6 +450,9 @@ impl BlockRenderer {
         }
         let n = u64::from(self.entity_vertex_count);
         pass.set_pipeline(&self.entity_pipeline);
+        // Der Stencil zaehlt hier nicht mehr; Referenz 0 laesst nur Hitbox-Kanten "ueber
+        // Spielern" aus (s. render_order::stencil_writer).
+        pass.set_stencil_reference(0);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, &self.entity_bind_group, &[]);
         pass.set_vertex_buffer(0, self.entity_buffer.slice(..n * std::mem::size_of::<BlockVertex>() as u64));
@@ -491,5 +528,49 @@ impl BlockRenderer {
     // dort. Breite und Deckkraft tragen die Vertices selbst (s. HitboxVertex).
     pub const fn set_hitbox_params(&mut self, screen: (f32, f32)) {
         self.hitbox_params = [0.0, HITBOX_MIN_RASTER_HALF_PX, screen.0, screen.1];
+    }
+}
+
+// Die Teile von `deckend`, die zur Klasse `class` gehoeren. `classes`: aufsteigend, ohne
+// Ueberlappung, ohne CLASS_OTHER -- der ist alles dazwischen.
+pub(super) fn entity_class_ranges(classes: &[(std::ops::Range<u32>, u8)], deckend: std::ops::Range<u32>, class: u8) -> Vec<std::ops::Range<u32>> {
+    let mut out: Vec<std::ops::Range<u32>> = Vec::new();
+    let mut push = |a: u32, b: u32| {
+        let (a, b) = (a.max(deckend.start), b.min(deckend.end));
+        if a < b {
+            match out.last_mut() {
+                Some(letzter) if letzter.end == a => letzter.end = b,
+                _ => out.push(a..b),
+            }
+        }
+    };
+    let mut frei = deckend.start;
+    for (r, k) in classes {
+        if class == render_order::CLASS_OTHER {
+            push(frei, r.start);
+        } else if *k == class {
+            push(r.start, r.end);
+        }
+        frei = frei.max(r.end);
+    }
+    if class == render_order::CLASS_OTHER {
+        push(frei, deckend.end);
+    }
+    out
+}
+
+#[cfg(test)]
+mod entity_class_tests {
+    use super::*;
+    use render_order::{CLASS_BLOCK_ENTITY, CLASS_OTHER, CLASS_PVP};
+
+    #[test]
+    fn klassen_teilen_den_deckenden_bereich_lueckenlos() {
+        let klassen = vec![(0..10, CLASS_PVP), (20..30, CLASS_PVP), (30..40, CLASS_BLOCK_ENTITY)];
+        assert_eq!(entity_class_ranges(&klassen, 5..50, CLASS_PVP), vec![5..10, 20..30]);
+        assert_eq!(entity_class_ranges(&klassen, 5..50, CLASS_BLOCK_ENTITY), vec![30..40]);
+        assert_eq!(entity_class_ranges(&klassen, 5..50, CLASS_OTHER), vec![10..20, 40..50]);
+        assert_eq!(entity_class_ranges(&[], 3..7, CLASS_OTHER), vec![3..7]);
+        assert!(entity_class_ranges(&[], 3..7, CLASS_PVP).is_empty());
     }
 }

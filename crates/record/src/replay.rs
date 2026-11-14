@@ -98,11 +98,13 @@ pub struct PacketSource {
     queue: VecDeque<Entry>,
     clock: std::sync::Arc<ReplayClock>,
     snapshot: Vec<Vec<u8>>,
+    // Aufnahmezeit des zuletzt herausgegebenen Pakets (ms).
+    last_t: f64,
 }
 
 impl PacketSource {
     pub fn open(path: &Path, clock: std::sync::Arc<ReplayClock>) -> Result<Self, ReadError> {
-        let mut s = Self { reader: Reader::open(path)?, next_block: 0, queue: VecDeque::new(), clock, snapshot: Vec::new() };
+        let mut s = Self { reader: Reader::open(path)?, next_block: 0, queue: VecDeque::new(), clock, snapshot: Vec::new(), last_t: 0.0 };
         if !s.reader.header.from_join {
             while s.next_block < s.reader.blocks.len() {
                 let block = s.reader.block(s.next_block)?;
@@ -133,6 +135,12 @@ impl PacketSource {
         &self.reader.header
     }
 
+    // Aufnahmezeit des zuletzt herausgegebenen Pakets (ms), 0 vor dem ersten.
+    #[must_use]
+    pub const fn last_t(&self) -> f64 {
+        self.last_t
+    }
+
     pub fn next_due(&mut self) -> Result<Next, ReadError> {
         while self.queue.is_empty() {
             if self.next_block >= self.reader.blocks.len() {
@@ -145,6 +153,7 @@ impl PacketSource {
         let t = self.queue[0].t;
         let jetzt = self.clock.now_ms();
         if t <= jetzt {
+            self.last_t = t;
             return Ok(Next::Packet(self.queue.pop_front().map(|e| e.data).unwrap_or_default()));
         }
         // Waehrend der Pause wird regelmaessig nachgesehen, ob es weitergeht.

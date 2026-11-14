@@ -107,14 +107,15 @@ impl App {
         (scale, gpu.text_height(scale) + (3.0 * f).round(), gpu.text_height(scale) + (6.0 * f).round(), (8.0 * f).round())
     }
 
-    // Griff-/Zeichen-Rechteck der Seitenleiste: obere linke Ecke normiert (hud_scoreboard_x/y),
-    // auf den Bildschirm geklemmt wie das Perf-Element (Default x nahe 1.0 -> rechtsbuendig).
+    // Griff-/Zeichen-Rechteck der Seitenleiste: die feste Ecke (Settings::scoreboard_align)
+    // normiert in hud_scoreboard_x/y, die Leiste waechst von ihr weg; auf den Bildschirm
+    // geklemmt wie das Perf-Element (Default oben links, x nahe 1.0 -> rechtsbuendig).
     pub(crate) fn hud_scoreboard_rect(&self, gpu: &GpuState) -> Rect {
         let (w, h) = self.hud_scoreboard_size(gpu);
         let (sw, sh) = gpu.size();
-        let x = (self.settings.hud_scoreboard_x * sw).min(sw - w).max(0.0).round();
-        let y = (self.settings.hud_scoreboard_y * sh).min(sh - h).max(0.0).round();
-        Rect { x, y, w, h }
+        let set = &self.settings;
+        let (x, y) = scoreboard_origin((set.hud_scoreboard_x * sw, set.hud_scoreboard_y * sh), w, h, set.scoreboard_align);
+        Rect { x: x.min(sw - w).max(0.0).round(), y: y.min(sh - h).max(0.0).round(), w, h }
     }
 
     // Actionbar-Rechteck: Breite aus dem aktuellen Text (oder Platzhalter), obere linke Ecke
@@ -237,6 +238,7 @@ impl App {
             HudElement::Armor => self.hud_armor_rect(gpu),
             HudElement::Keystrokes => self.hud_keys_rect(gpu),
             HudElement::Session => self.hud_session_rect(gpu),
+            HudElement::Clock => self.hud_clock_rect(gpu),
         }
     }
 
@@ -252,6 +254,7 @@ impl App {
             HudElement::Armor => set.module_armor_hud,
             HudElement::Keystrokes => set.module_keystrokes,
             HudElement::Session => set.module_session_info,
+            HudElement::Clock => set.module_clock,
             _ => true,
         }
     }
@@ -278,6 +281,8 @@ impl App {
             Some(HudElement::Keystrokes)
         } else if self.hud_element_shown(HudElement::Session) && hits(self.hud_session_rect(gpu)) {
             Some(HudElement::Session)
+        } else if self.hud_element_shown(HudElement::Clock) && hits(self.hud_clock_rect(gpu)) {
+            Some(HudElement::Clock)
         } else if self.hud_element_shown(HudElement::Perf) && hits(self.hud_perf_rect(gpu)) {
             Some(HudElement::Perf)
         } else if hits(self.hud_scoreboard_rect(gpu)) {
@@ -331,6 +336,7 @@ impl App {
                     (defaults.crosshair_hue, defaults.crosshair_saturation, defaults.crosshair_value);
                 self.settings.crosshair_brightness_boost = defaults.crosshair_brightness_boost;
                 self.settings.crosshair_outline = defaults.crosshair_outline;
+                self.settings.crosshair_ring_radius = defaults.crosshair_ring_radius;
                 self.settings.crosshair_shape = defaults.crosshair_shape;
                 self.settings.crosshair_sizes = defaults.crosshair_sizes;
                 self.settings.crosshair_custom = defaults.crosshair_custom;
@@ -383,6 +389,7 @@ impl App {
             HudElement::Scoreboard => {
                 self.settings.hud_scoreboard_x = defaults.hud_scoreboard_x;
                 self.settings.hud_scoreboard_y = defaults.hud_scoreboard_y;
+                self.settings.scoreboard_align = defaults.scoreboard_align;
                 self.settings.hud_scoreboard_scale = defaults.hud_scoreboard_scale;
             }
             HudElement::Hotbar => {
@@ -424,6 +431,11 @@ impl App {
                 self.settings.hud_session_y = defaults.hud_session_y;
                 self.settings.hud_session_scale = defaults.hud_session_scale;
                 self.settings.session_opacity = defaults.session_opacity;
+            }
+            HudElement::Clock => {
+                self.settings.hud_clock_x = defaults.hud_clock_x;
+                self.settings.hud_clock_y = defaults.hud_clock_y;
+                self.settings.hud_clock_scale = defaults.hud_clock_scale;
             }
             HudElement::Armor => {
                 self.settings.hud_armor_x = defaults.hud_armor_x;
@@ -503,8 +515,10 @@ impl App {
                 self.settings.hud_held_name_y = ((cy - oy) / sh).clamp(0.0, 1.0);
             }
             HudElement::Scoreboard => {
-                self.settings.hud_scoreboard_x = ((cx - ox) / sw).clamp(0.0, 1.0);
-                self.settings.hud_scoreboard_y = ((cy - oy) / sh).clamp(0.0, 1.0);
+                let h = self.hud_scoreboard_rect(gpu).h;
+                let (x, y) = scoreboard_anchor(Rect { x: cx - ox, y: cy - oy, w, h }, self.settings.scoreboard_align);
+                self.settings.hud_scoreboard_x = (x / sw).clamp(0.0, 1.0);
+                self.settings.hud_scoreboard_y = (y / sh).clamp(0.0, 1.0);
             }
             HudElement::BossBar => {
                 // Gespeichert werden MITTE und Oberkante (s. hud_bossbar_rect).
@@ -537,6 +551,10 @@ impl App {
             HudElement::Session => {
                 self.settings.hud_session_x = ((cx - ox) / sw).clamp(0.0, 1.0);
                 self.settings.hud_session_y = ((cy - oy) / sh).clamp(0.0, 1.0);
+            }
+            HudElement::Clock => {
+                self.settings.hud_clock_x = ((cx - ox) / sw).clamp(0.0, 1.0);
+                self.settings.hud_clock_y = ((cy - oy) / sh).clamp(0.0, 1.0);
             }
             HudElement::Armor => {
                 self.settings.hud_armor_x = ((cx - ox) / sw).clamp(0.0, 1.0);
@@ -626,14 +644,18 @@ impl App {
         Self::end_text_area(gpu, texts);
     }
 
-    // Die FPS-Zahl: weiss, solange sie das FPS-Limit (bzw. die Bildrate des Monitors) haelt,
-    // darunter zunehmend orange -- ganz orange beim halben Limit. Ohne Limit nie.
+    // Die FPS-Zahl: gruen, solange sie mindestens das FPS-Limit (bzw. die Bildrate des
+    // Monitors) minus 1 erreicht (Nutzer 2026-11-11), darunter weiss und zunehmend orange --
+    // ganz orange beim halben Limit. Ohne Limit immer weiss.
     pub(crate) fn perf_fps_color(&self) -> [f32; 4] {
         let selbst = self.gpu.as_ref().is_some_and(super::super::super::GpuState::present_mode_self_paces);
         if self.settings.fps_limit == FPS_LIMIT_UNLIMITED && !selbst {
             return COLOR_PERF;
         }
         let ziel = 1.0 / self.profiler_target_interval().unwrap_or(self.monitor_frame_interval).as_secs_f32().max(1e-6);
+        if self.frame_stats.fps() as f32 >= ziel.round() - 1.0 {
+            return theme::get(theme::Slot::Success);
+        }
         let t = ((ziel - self.frame_stats.fps() as f32) / (ziel / 2.0)).clamp(0.0, 1.0);
         let orange = [1.0, 0.55, 0.1, 1.0];
         [0, 1, 2, 3].map(|k| COLOR_PERF[k] + (orange[k] - COLOR_PERF[k]) * t)

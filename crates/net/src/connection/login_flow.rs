@@ -91,6 +91,9 @@ pub(super) async fn do_configuration(conn: &mut Connection, events: &Events, out
                 if let Ok(tags) = protocol::recipe::read_block_tags(&payload) {
                     let _ = events.send(ClientEvent::BlockTags(tags));
                 }
+                if let Ok(Some(ids)) = protocol::recipe::read_pause_screen_dialogs(&payload) {
+                    let _ = events.send(ClientEvent::PauseScreenDialogs(ids));
+                }
             }
             packets::CB_CONFIG_RESET_CHAT => {
                 let _ = events.send(ClientEvent::ResetChat);
@@ -245,6 +248,7 @@ pub(super) async fn run_play_loop(
     };
 
     let mut war_hinten = false;
+    let mut replay_gemeldet = f64::NEG_INFINITY;
     loop {
         // Im Hintergrund-Tab schickt die App keine Ticks: die Luecke bis zum ersten Tick danach
         // ist keine Stockung. Mitmessen erst wieder ab dem Moment, in dem der Tab vorn ist.
@@ -281,6 +285,10 @@ pub(super) async fn run_play_loop(
                         let start = std::time::Instant::now();
                         conn.send(&payload).await?;
                         let jetzt = std::time::Instant::now();
+                        // MESSUNG (voruebergehend): wann geht das Platzier-Paket auf die Leitung?
+                        if payload.first().is_some_and(|b| i32::from(*b) == protocol::packets::SB_PLAY_USE_ITEM_ON) {
+                            eprintln!("[flick] Uhr {}: use_item_on geschrieben (Schreiben dauerte {:?})", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() % 1_000_000), jetzt.duration_since(start));
+                        }
                         let haengt = jetzt.duration_since(start);
                         if haengt >= crate::stall::OUT_WRITE_STALL {
                             melde(true, haengt);
@@ -299,6 +307,13 @@ pub(super) async fn run_play_loop(
                     melde(false, pause);
                 }
                 let flow = handle_play_packet(conn, events, &payload, &mut stats, &mut chunk_batch, rotation).await?;
+                // Wiedergabe: den abgearbeiteten Stand an die App (Leiste, s. ClientEvent::ReplayAt).
+                if let Some(t) = conn.replay.as_ref().map(record::PacketSource::last_t) {
+                    if t - replay_gemeldet >= super::REPLAY_AT_STEP_MS || t < replay_gemeldet {
+                        replay_gemeldet = t;
+                        let _ = events.send(ClientEvent::ReplayAt(t));
+                    }
+                }
                 if !events.in_background() {
                     conn.flush_held().await?;
                 }

@@ -15,6 +15,10 @@
 //     (Startwert, Nutzer 2026-11-07).
 //   - Wuerde die Seitwaertsbewegung sie aus dem Bereich tragen (Block, rote Zone, Rand, Spalte
 //     ohne Schnee), faellt sie in diesem Tick senkrecht weiter, wie die Wand beim Plinko.
+//   - Eine Explosion stoesst die Flocken weg wie Partikel (s. particles::ExplosionPush, Nutzer
+//     2026-11-11): der Stoss kommt zu Fall und Wandern dazu (auch nach oben) und wird je Tick
+//     schwaecher (mal PUSH_KEEP, wie Vanillas Partikelreibung). Wuerde er sie aus dem Bereich
+//     tragen, gilt dasselbe wie beim Wandern: senkrecht weiter, Stoss und Wandern sind weg.
 //   - Kommt sie beim Fallen aus dem Bereich (auf einen Block, unten hinaus), verschwindet sie;
 //     ausserhalb entstehen auch keine. Ueber einem niedrigen Block (Stufe, Teppich) erst an
 //     dessen Oberkante (s. SnowMap::holds).
@@ -38,6 +42,10 @@ use super::Rng;
 // wie vielen Bloecken Fall sie ihre Richtung weitgehend vergessen hat.
 const DRIFT: f64 = 0.25;
 const DRIFT_LENGTH: f64 = 1.0;
+// So viel eines Explosionsstosses bleibt je Tick (Vanillas Partikelreibung 0,98), und darunter
+// (Bloecke je Tick) ist er ganz weg.
+const PUSH_KEEP: f64 = 0.98;
+const PUSH_MIN: f64 = 1e-3;
 
 pub(super) struct SnowFlake {
     pub(super) pos: DVec3,
@@ -47,6 +55,8 @@ pub(super) struct SnowFlake {
     pub(super) id: u64,
     // Seitwaertsbewegung (x, z) in Bloecken je Block Fall.
     drift: [f64; 2],
+    // Stoss einer Explosion in Bloecken je Tick (s. explode), meist null.
+    push: DVec3,
 }
 
 pub(super) struct SnowFlakes {
@@ -105,7 +115,7 @@ impl SnowFlakes {
         let t = std::time::Instant::now();
         // DIAG Schnee: einmal je Sekunde.
         self.diag_tick += 1;
-        if cfg!(test) && self.diag_tick % 20 == 0 {
+        if cfg!(test) && self.diag_tick.is_multiple_of(20) {
             let unter_block = self.spawn.iter().filter(|&&(x, y, z)| map.blocked(x, y + 1, z) == Some(true)).count();
             let ohne_bereich_darunter = self.spawn.iter().filter(|&&(x, y, z)| !map.in_region(x, y - 1, z)).count();
             eprintln!(
@@ -124,7 +134,7 @@ impl SnowFlakes {
 
     fn new_flake(&mut self, pos: DVec3) {
         let drift = [DRIFT * self.gauss(), DRIFT * self.gauss()];
-        self.flakes.push(SnowFlake { pos, prev: pos, id: self.next_id, drift });
+        self.flakes.push(SnowFlake { pos, prev: pos, id: self.next_id, drift, push: DVec3::ZERO });
         self.next_id += 1;
     }
 
@@ -137,15 +147,30 @@ impl SnowFlakes {
             for a in 0..2 {
                 f.drift[a] = f.drift[a] * halten + neu * self.gauss();
             }
-            let ziel = f.pos + DVec3::new(f.drift[0] * fall, -fall, f.drift[1] * fall);
+            let ziel = f.pos + DVec3::new(f.drift[0] * fall, -fall, f.drift[1] * fall) + f.push;
             if holds(map, ziel, snow_column) {
                 f.pos = ziel;
+                f.push *= PUSH_KEEP;
+                if f.push.length_squared() < PUSH_MIN * PUSH_MIN {
+                    f.push = DVec3::ZERO;
+                }
             } else {
                 f.pos.y -= fall;
                 f.drift = [0.0; 2];
+                f.push = DVec3::ZERO;
             }
         }
         self.flakes = flakes;
+    }
+
+    // Explosion: jede Flocke bekommt den Stoss, den `push` fuer ihre Stelle liefert (None =
+    // ausser Reichweite oder abgeschirmt), zu ihrem bisherigen dazu.
+    pub(super) fn explode(&mut self, mut push: impl FnMut(DVec3) -> Option<DVec3>) {
+        for f in &mut self.flakes {
+            if let Some(p) = push(f.pos) {
+                f.push += p;
+            }
+        }
     }
 
     // Flocken entfernen, die nicht mehr sein duerfen; gibt zurueck, wie viele.
@@ -464,6 +489,47 @@ mod tests {
         assert!((nach_16 - 1.94).abs() < 0.15, "nach 16 Bloecken {nach_16:.2}");
     }
 
+    // Explosion: eine Flocke in Reichweite fliegt weg vom Zentrum, der Stoss wird je Tick um
+    // PUSH_KEEP schwaecher; hinter einem Block (grobe Deckung, s. particles::ExplosionPush)
+    // passiert nichts.
+    #[test]
+    fn explosion_stoesst_flocken_weg() {
+        let mut w = world::World::new();
+        for cx in -2..=2 {
+            for cz in -2..=2 {
+                let sections = (0..24).map(|_| world::ChunkSection::from_states(vec![0u32; 4096])).collect();
+                w.insert_column(cx, cz, sections);
+            }
+        }
+        let stein = (0..world::state_count() as u32).find(|&s| world::block_name(s) == Some("stone")).expect("stone");
+        w.set_block(-4, 10, 2, stein);
+        let shapes = world::BlockShapes::new(vec![None; world::state_count()]);
+        let mut karte = SnowMap::new();
+        Welt::new().karte(DVec3::new(0.5, 10.5, 0.5), 24, &mut karte);
+        let mut flocken = SnowFlakes::new();
+        let frei = DVec3::new(0.5, 10.5, 0.5);
+        let gedeckt = DVec3::new(-3.5, 10.5, 4.5);
+        flocken.new_flake(frei);
+        flocken.new_flake(gedeckt);
+        for f in &mut flocken.flakes {
+            f.drift = [0.0; 2];
+        }
+        let mitte = DVec3::new(-3.5, 10.5, 0.5);
+        let mut stoss = crate::particles::ExplosionPush::new(mitte, 4.0, &w, &shapes);
+        flocken.explode(|p| stoss.at(p));
+        assert!((flocken.flakes[0].push.x - 1.0).abs() < 1e-9, "Stoss {:?}", flocken.flakes[0].push);
+        assert_eq!(flocken.flakes[1].push, DVec3::ZERO, "hinter dem Stein kein Stoss");
+        let mut schritte = Vec::new();
+        for _ in 0..3 {
+            let vorher = flocken.flakes[0].pos.x;
+            flocken.move_flakes(&karte, 0.05, &ueberall);
+            schritte.push(flocken.flakes[0].pos.x - vorher);
+        }
+        assert!(schritte[0] > 0.95 && schritte[1] < schritte[0] && schritte[2] < schritte[1], "Schritte {schritte:?}");
+        assert!((schritte[1] / schritte[0] - PUSH_KEEP).abs() < 0.02, "Schritte {schritte:?}");
+        assert!((flocken.flakes[1].pos.x - gedeckt.x).abs() < 0.2, "gedeckte Flocke nur gewandert: {:?}", flocken.flakes[1].pos);
+    }
+
     // Im Stehen unter freiem Himmel: nach dem Einschwingen bleibt die Zahl der Flocken ruhig.
     // Gemessen wird, wie weit sie unter JE_BLOCK mal Bereich liegt (am Kugelrand wandern
     // Flocken hinaus, aber keine herein).
@@ -679,10 +745,10 @@ mod tests {
             let mut karte = SnowMap::new();
             karte.update(auge, 12, 32, &top2, &solid2, &Gesetzt(&block, &stand));
             karte.diag_zeit = Default::default();
-            // Alles neu: eine frische Karte (die Wege sind schon da gewesen -- hier extra gezaehlt).
+            // Alles neu: eine frische Karte (mit Aufbau der Tabelle fuer den Bereich).
             let mut frisch = SnowMap::new();
             frisch.update(auge, 12, 32, &top2, &solid2, &Gesetzt(&block, &stand));
-            eprintln!("DIAG blockwechsel: alles neu (max 32): fuellen {:?}, bereich mit Wege-Aufbau {:?}", frisch.diag_zeit[0], frisch.diag_zeit[1]);
+            eprintln!("DIAG blockwechsel: alles neu (max 32): fuellen {:?}, bereich mit Aufbau der Tabelle {:?}", frisch.diag_zeit[0], frisch.diag_zeit[1]);
             for (name, b) in [("am Boden vor dir", (42, 101, -12)), ("3 hoch", (42, 104, -12)), ("12 hoch", (43, 113, -10)), ("25 hoch", (44, 126, -8))] {
                 block.set(Some(b));
                 stand.set(stand.get() + 1);
@@ -705,19 +771,15 @@ mod tests {
             karte.update(auge, 12, 32, &top, &solid, &rev);
             eprintln!("DIAG chunk ganz: gesamt {:?} (fuellen {:?}, bereich {:?}); {:?}", t.elapsed(), karte.diag_zeit[0], karte.diag_zeit[1], karte.diag);
         }
-        // DIAG Schatten: 30 Bloecke laufen (Weg aus der Aufnahme), Zeit des Bereichs mit und ohne.
+        // DIAG Laufen: 30 Bloecke (Weg aus der Aufnahme), Zeit von Bereich und Fuellen je Schritt.
         for max in [20, 32] {
-            for ohne in [true, false] {
-                let mut karte = SnowMap::new();
-                karte.diag_ohne_schatten = ohne;
-                karte.update(DVec3::new(58.5, 102.62, -15.8), 10, max, &top, &solid, &revision);
-                karte.diag_zeit = Default::default();
-                karte.diag_zahl = [0; 4];
-                for schritt in 1..=30 {
-                    karte.update(DVec3::new(58.5 - f64::from(schritt), 102.62, -15.8 + f64::from(schritt) * 0.3), 10, max, &top, &solid, &revision);
-                }
-                eprintln!("DIAG schatten max {max} ohne={ohne}: bereich je schritt {:?}, fuellen je schritt {:?}; je schritt zellen weiter als r {}, im schatten {}, markierungen {}, wegstuecke {}", karte.diag_zeit[1] / 30, karte.diag_zeit[0] / 30, karte.diag_zahl[0] / 30, karte.diag_zahl[1] / 30, karte.diag_zahl[2] / 30, karte.diag_zahl[3] / 30);
+            let mut karte = SnowMap::new();
+            karte.update(DVec3::new(58.5, 102.62, -15.8), 10, max, &top, &solid, &revision);
+            karte.diag_zeit = Default::default();
+            for schritt in 1..=30 {
+                karte.update(DVec3::new(58.5 - f64::from(schritt), 102.62, -15.8 + f64::from(schritt) * 0.3), 10, max, &top, &solid, &revision);
             }
+            eprintln!("DIAG laufen max {max}: bereich je schritt {:?}, fuellen je schritt {:?}", karte.diag_zeit[1] / 30, karte.diag_zeit[0] / 30);
         }
         for (name, auge) in [("pavillon", auge), ("spawn", DVec3::new(0.5, 103.62, 16.5))] {
             let a = (auge.x.floor() as i32, auge.y.floor() as i32, auge.z.floor() as i32);

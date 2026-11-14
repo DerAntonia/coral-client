@@ -1,7 +1,7 @@
 // Namensschilder, Schildtexte und Display-Text in der Welt.
 
 use super::*;
-use crate::{push_font_marker, push_plain_numbers_marker, push_shadow_marker, push_smooth_scale_marker, rect_verts, sign_border_mode, ShadowRun, SignInstance, SignLayout, SIGN_LAYOUT_KEEP};
+use crate::{ego_name, i18n, push_font_marker, push_plain_numbers_marker, push_shadow_marker, push_smooth_scale_marker, rect_verts, sign_border_mode, LabelLines, LabelLinesEnv, LabelLinesEntry, ShadowRun, SignInstance, SignLayout, LABEL_LINES_KEEP, SIGN_LAYOUT_KEEP};
 
 impl App {
     // Beschriftungen, die IN der Welt haengen: text_display-Entities und die Namensschilder
@@ -43,6 +43,7 @@ impl App {
         gpu.occluded_label_glyphs.borrow_mut().clear();
         gpu.label_font.set(self.settings.font_of(ShadowArea::Nametags));
         self.begin_text_area(gpu, texts, ShadowArea::Nametags);
+        self.begin_label_lines(gpu);
         push_smooth_scale_marker(texts, true);
         self.build_world_labels_in(gpu, rects, texts);
         push_smooth_scale_marker(texts, false);
@@ -96,7 +97,7 @@ impl App {
                 continue;
             }
             if let Some(basis) = label.display_matrix {
-                self.build_display_text(gpu, &label, basis, view_proj, (sw, sh));
+                self.build_display_text(gpu, _id, &label, basis, view_proj, (sw, sh));
                 continue;
             }
             // Augenrelativ, genau wie die Weltgeometrie (s. build_entity_vertices).
@@ -154,13 +155,12 @@ impl App {
 
             // Zeilen trennen, umbrechen und vermessen -- alles in Schriftpixeln, erst danach
             // mal `scale` in Bildschirmpixel.
-            let zeilen = wrap_label_lines(&split_label_lines(&self.ego_spans(&label.spans)), label.line_width, |t| gpu.measure_text(t, 1.0));
+            // Je Abschnitt einmal gemessen, fuer Zeilenbreite und Schreiben (s. zeilen_schreiben).
+            let gemerkt = self.label_lines(gpu, _id, &label);
+            let LabelLines { zeilen, abschnitt_breiten, breiten } = &*gemerkt;
             if zeilen.is_empty() {
                 continue;
             }
-            // Je Abschnitt einmal gemessen, fuer Zeilenbreite und Schreiben (s. zeilen_schreiben).
-            let abschnitt_breiten: Vec<Vec<f32>> = zeilen.iter().map(|z| z.iter().map(|s| gpu.measure_text(&s.text, 1.0)).collect()).collect();
-            let breiten: Vec<f32> = abschnitt_breiten.iter().map(|z| z.iter().sum()).collect();
             let block_breite = breiten.iter().copied().fold(0.0f32, f32::max);
             // Vanillas `n`: die letzte Zeile bekommt den Zeilenabstand nicht mehr dazu.
             let block_hoehe = zeilen.len() as f32 * line_pitch - WORLD_LABEL_LINE_GAP;
@@ -291,10 +291,22 @@ impl App {
         // Die Seite im Editor zeichnet unten der Editor selbst, mit dem Text, wie er gerade
         // getippt ist.
         let editiert = self.sign_edit_in_world(gpu).and(self.sign_edit.as_ref());
+        // Sichtkegel und Hoehlen-Culling je Section nur einmal pro Frame (s. block_section_culled):
+        // Schilder stehen oft dicht beieinander.
+        let mut section_weg: rustc_hash::FxHashMap<(i32, i32, i32), bool> = rustc_hash::FxHashMap::default();
+        let culling = self.cull_frustum.get().is_some();
         for (&pos, text) in &self.signs {
             let mitte = DVec3::new(f64::from(pos.0) + 0.5, f64::from(pos.1) + 0.5, f64::from(pos.2) + 0.5);
-            if !self.block_column_drawn(pos) || (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE || self.block_entity_culled(pos) {
+            if (mitte - auge).length_squared() > SIGN_TEXT_DISTANCE * SIGN_TEXT_DISTANCE || !self.block_column_drawn(pos) {
                 continue;
+            }
+            if culling {
+                let section = (pos.0.div_euclid(16), (pos.1 - self.world.min_y()).div_euclid(16), pos.2.div_euclid(16));
+                if *section_weg.entry(section).or_insert_with(|| self.block_section_culled(pos))
+                    || self.sight_hidden(render::sight::SightTarget::Block(pos.0, pos.1, pos.2))
+                {
+                    continue;
+                }
             }
             for (seite, vorn) in [(&text.front, true), (&text.back, false)] {
                 if seite.lines.iter().all(|z| z.iter().all(|s| s.text.is_empty())) || editiert.is_some_and(|e| e.pos == pos && e.front == vorn) {
@@ -321,23 +333,37 @@ impl App {
             }
             bleibt
         });
+        if gesetzt.runde.is_multiple_of(256) {
+            self.sign_frames.borrow_mut().retain(|(pos, _), _| self.signs.contains_key(pos));
+        }
         gesetzt.runde += 1;
         gpu.upload_signs(gesetzt);
     }
 
     // Vanillas Matrixkette bis in die Textebene einer Schildseite (s. build_sign_texts) und
     // die Zeilenhoehe dort; None, wenn an `pos` kein Schild steht.
+    //
+    // Die Kette ohne den Versatz zur Kamera wird je Seite gemerkt (s. sign_frames); je Frame
+    // kommt nur noch die Verschiebung davor.
     pub(crate) fn sign_side_frame(&self, pos: (i32, i32, i32), vorn: bool) -> Option<(glam::Mat4, f32)> {
         use world::entity_model::{Affine, SignKind};
         let (_, art, grad) = self.sign_at(pos)?;
-        let haengend = matches!(art, SignKind::Hanging(_));
         let rel = (DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)) - self.camera.position).as_vec3();
-        let mut b = world::entity_model::sign_base([rel.x, rel.y, rel.z], art, grad);
+        let mut gemerkt = self.sign_frames.borrow_mut();
+        if let Some(&(a, g, m, zeile_h)) = gemerkt.get(&(pos, vorn)) {
+            if a == art && g == grad.to_bits() {
+                return Some((glam::Mat4::from_translation(rel) * m, zeile_h));
+            }
+        }
+        let haengend = matches!(art, SignKind::Hanging(_));
+        let mut b = world::entity_model::sign_base([0.0; 3], art, grad);
         let (versatz, f, zeile_h) = if haengend { ([0.0, -0.32, 0.073], 1.0 / 64.0, 9.0) } else { ([0.0, 1.0 / 3.0, 0.046_666_667], (1.0 / 64.0) * (2.0 / 3.0), 10.0) };
         if !vorn {
             b = b.then(Affine::rotation_y_deg(180.0));
         }
-        Some((mat4_from_affine(&b.then(Affine::translation(versatz)).then(Affine::scale([f, -f, f]))), zeile_h))
+        let m = mat4_from_affine(&b.then(Affine::translation(versatz)).then(Affine::scale([f, -f, f])));
+        gemerkt.insert((pos, vorn), (art, grad.to_bits(), m, zeile_h));
+        Some((glam::Mat4::from_translation(rel) * m, zeile_h))
     }
 
     // Sieht man diese Schildseite gerade: von vorn, im Bild und (mit `verdeckung`) nicht hinter
@@ -473,17 +499,77 @@ impl App {
         (yaw, -pitch)
     }
 
+    // Je Frame einmal, nach begin_text_area (die Schrift des Bereichs steht dann fest): die
+    // Umgebung fuer label_lines feststellen und lange nicht gezeichnete Eintraege verwerfen.
+    pub(crate) fn begin_label_lines(&self, gpu: &GpuState) {
+        let set = &self.settings;
+        let env = LabelLinesEnv {
+            generation: font_atlas::glyph_generation(),
+            font: gpu.layout_atlas().kind(),
+            keep_capitals: gpu.keep_capitals.get(),
+            plain_numbers: gpu.plain_numbers.get(),
+            stable_numbers: gpu.stable_numbers.borrow().generation(),
+            ui_scale: gpu.ui_scale.get().to_bits(),
+            sprache: i18n::tr_state(),
+            ego: set
+                .module_ego_name
+                .then(|| self.own_name())
+                .flatten()
+                .map(|n| (n.to_string(), set.ego_alias.clone(), set.ego_deco != ego_name::Deco::Off, set.ego_shadow != ego_name::Deco::Off)),
+        };
+        let mut cache = self.label_lines.borrow_mut();
+        if cache.env.as_ref() != Some(&env) {
+            cache.env = Some(env);
+            cache.env_nr += 1;
+        }
+        cache.runde += 1;
+        if cache.runde.is_multiple_of(64) {
+            let runde = cache.runde;
+            cache.eintraege.retain(|_, e| runde - e.runde < LABEL_LINES_KEEP);
+        }
+    }
+
+    // Zeilen und Breiten einer Beschriftung (s. LabelLines): gemerkt, solange Wortlaut,
+    // Zeilenbreite und Umgebung gleich bleiben. Texte mit Ziffern haengen an stable_numbers;
+    // dessen Zaehler steht in der Umgebung.
+    pub(crate) fn label_lines(&self, gpu: &GpuState, id: i32, label: &WorldLabel) -> std::rc::Rc<LabelLines> {
+        let line_width = label.line_width.to_bits();
+        {
+            let mut cache = self.label_lines.borrow_mut();
+            let (env_nr, runde) = (cache.env_nr, cache.runde);
+            if let Some(e) = cache.eintraege.get_mut(&id) {
+                if e.env_nr == env_nr && e.line_width == line_width && *e.spans == *label.spans {
+                    e.runde = runde;
+                    return e.lines.clone();
+                }
+            }
+        }
+        let messen = |t: &str| gpu.measure_text(t, 1.0);
+        let zeilen = wrap_label_lines(&split_label_lines(&self.ego_spans(&label.spans)), label.line_width, messen);
+        let abschnitt_breiten: Vec<Vec<f32>> = zeilen.iter().map(|z| z.iter().map(|s| messen(&s.text)).collect()).collect();
+        let breiten: Vec<f32> = abschnitt_breiten.iter().map(|z| z.iter().sum()).collect();
+        let lines = std::rc::Rc::new(LabelLines { zeilen, abschnitt_breiten, breiten });
+        let mut cache = self.label_lines.borrow_mut();
+        if cache.env.is_none() {
+            cache.eintraege.remove(&id);
+        } else {
+            let (env_nr, runde) = (cache.env_nr, cache.runde);
+            cache.eintraege.insert(id, LabelLinesEntry { spans: label.spans.to_vec(), line_width, env_nr, lines: lines.clone(), runde });
+        }
+        lines
+    }
+
     // Ein Text-Display als Flaeche in der Welt: Vanillas Matrixkette (Entity-Position,
     // Billboard, AffineTransformation, Text-Skalierung -- s. WorldLabel::display_matrix und
     // display_text_frame), jede Glyphe und der Hintergrund einzeln auf den Bildschirm
     // projiziert. Wie Vanilla nur von VORN sichtbar: von hinten zeigt ein Display nichts.
-    pub(crate) fn build_display_text(&self, gpu: &GpuState, label: &WorldLabel, basis: glam::Mat4, view_proj: glam::Mat4, screen: (f32, f32)) {
+    pub(crate) fn build_display_text(&self, gpu: &GpuState, id: i32, label: &WorldLabel, basis: glam::Mat4, view_proj: glam::Mat4, screen: (f32, f32)) {
         let line_pitch = gpu.text_height(1.0) + WORLD_LABEL_LINE_GAP;
-        let zeilen = wrap_label_lines(&split_label_lines(&self.ego_spans(&label.spans)), label.line_width, |t| gpu.measure_text(t, 1.0));
+        let gemerkt = self.label_lines(gpu, id, label);
+        let LabelLines { zeilen, breiten, .. } = &*gemerkt;
         if zeilen.is_empty() {
             return;
         }
-        let breiten: Vec<f32> = zeilen.iter().map(|z| z.iter().map(|s| gpu.measure_text(&s.text, 1.0)).sum()).collect();
         let m = breiten.iter().copied().fold(0.0f32, f32::max);
         let n = zeilen.len() as f32 * line_pitch - WORLD_LABEL_LINE_GAP;
         let frame = basis * display_text_frame(m, n);

@@ -167,6 +167,15 @@ impl App {
                 can_next: set.lod_render_distance < DISTANCE_MAX,
                 slider: Some((f64::from(set.lod_render_distance), f64::from(DISTANCE_OFF), f64::from(DISTANCE_MAX))),
             },
+            ModuleRow::Stepper {
+                label: "LOD-Detail".to_string(),
+                prev: ButtonAction::ChunkSaverThresholdPrev,
+                next: ButtonAction::ChunkSaverThresholdNext,
+                text: format!("{} px²", set.chunk_saver_threshold),
+                can_prev: set.chunk_saver_threshold > THRESHOLD_MIN,
+                can_next: set.chunk_saver_threshold < THRESHOLD_MAX,
+                slider: Some((f64::from(set.chunk_saver_threshold), f64::from(THRESHOLD_MIN), f64::from(THRESHOLD_MAX))),
+            },
             ModuleRow::Toggle {
                 label: "Gespeicherte Chunks zeichnen".to_string(),
                 action: ButtonAction::ToggleChunkSaverRenderSaved,

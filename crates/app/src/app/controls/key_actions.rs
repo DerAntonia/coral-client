@@ -184,7 +184,7 @@ impl App {
             if matches!(action, KeyBindAction::Attack | KeyBindAction::Use) {
                 continue;
             }
-            if !kb.binds(action).any(|b| self.binds_down.contains(&b)) {
+            if !kb.held(action, |b| self.binds_down.contains(&b)) {
                 continue;
             }
             // Auch Umschalt-Aktionen als "unten" merken, damit ihr Loslassen keine falsche
@@ -246,6 +246,7 @@ impl App {
             | KeyBindAction::SpectatorFaster
             | KeyBindAction::InspectHeld
             | KeyBindAction::SwapShoulder
+            | KeyBindAction::SaveClip
             | KeyBindAction::ToggleHandDebug => false,
         }
     }
@@ -297,6 +298,7 @@ impl App {
             | KeyBindAction::SpectatorFaster
             | KeyBindAction::InspectHeld
             | KeyBindAction::SwapShoulder
+            | KeyBindAction::SaveClip
             | KeyBindAction::ToggleHandDebug => {}
         }
     }

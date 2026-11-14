@@ -64,17 +64,49 @@ pub(crate) const PARTICLE_OPACITY_STEP: u32 = 10;
 // des Vanilla-Abstands -- 200 % = halb so oft).
 pub(crate) const PARTICLE_AMOUNT_STEPS: [u32; 10] = [10, 25, 50, 75, 100, 125, 150, 200, 250, 300];
 pub(crate) const PARTICLE_INTERVAL_STEPS: [u32; 10] = [25, 50, 75, 100, 125, 150, 200, 300, 400, 500];
-// Spalten einer Partikelzeile: Schalter "Zeigen", vier Regler (Dauer, Deckkraft, Tempo, Menge
-// bzw. Intervall) mit halb so langer Bahn wie sonst, dann der Schalter "Auf einmal". Der
-// Schalter steht weiter links als SETTINGS_CTRL_X, damit alles neben die Namen passt.
+pub(crate) const PARTICLE_SIZE_STEPS: [u32; 10] = [10, 25, 50, 75, 100, 125, 150, 200, 250, 300];
+pub(crate) const PARTICLE_SPREAD_STEPS: [u32; 10] = [10, 25, 50, 75, 100, 125, 150, 200, 250, 300];
+// Spalten der zwei Zeilen je Partikelart: vorn ein Schalter ("Zeigen" bzw. "Auf einmal"),
+// dann drei Regler mit halb so langer Bahn wie sonst (s. particle_slider_rows). Der Schalter
+// steht weiter links als SETTINGS_CTRL_X.
 pub(crate) const PARTICLE_TOGGLE_X: f32 = 340.0;
 pub(crate) const PARTICLE_TOGGLE_W: f32 = 90.0;
 pub(crate) const PARTICLE_VALUE_W: f32 = 100.0;
 pub(crate) const PARTICLE_TRACK_W: f32 = 172.0;
 pub(crate) const PARTICLE_SLIDER_W: f32 = 6.0 + PARTICLE_TRACK_W + SLIDER_BOX_GAP + 52.0;
 pub(crate) const PARTICLE_COLUMN_W: f32 = 272.0;
-// Spalte des Schalters "Auf einmal" (nach den vier Reglern).
-pub(crate) const PARTICLE_ALL_AT_ONCE_COL: usize = 4;
+// Spaltenkoepfe: je Spalte oben die erste, darunter die zweite Zeile einer Art.
+pub(crate) const PARTICLE_HEADS: [(&str, &str); 3] = [("Dauer", "Größe"), ("Deckkraft", "Spread"), ("Tempo", "Menge / Intervall")];
+
+// Ein Regler einer Partikelart: Wert, Grenzen und welcher Wert es ist (ButtonAction::ParticleStep).
+#[derive(Clone, Copy)]
+pub(crate) struct ParticleSlider {
+    pub(crate) value: u32,
+    pub(crate) min: u32,
+    pub(crate) max: u32,
+    pub(crate) action_col: u8,
+}
+
+// Die Regler beider Zeilen einer Art: oben Dauer, Deckkraft, Tempo; unten Groesse, Spread und
+// Menge (Schwall) bzw. Intervall (verweilend) -- eine Art ohne beides laesst die Spalte leer.
+pub(crate) fn particle_slider_rows(t: &crate::particles::ParticleTuning, art: crate::particles::SpawnKind) -> [[Option<ParticleSlider>; 3]; 2] {
+    let r = |value: u32, stufen: &[u32], action_col: u8| Some(ParticleSlider { value, min: stufen[0], max: *stufen.last().unwrap(), action_col });
+    let dritte = if art.has_amount() {
+        r(t.amount_pct, &PARTICLE_AMOUNT_STEPS, 5)
+    } else if art.has_interval() {
+        r(t.interval_pct, &PARTICLE_INTERVAL_STEPS, 5)
+    } else {
+        None
+    };
+    [
+        [
+            r(t.lifetime_pct, &PARTICLE_LIFETIME_STEPS, 0),
+            Some(ParticleSlider { value: t.opacity_pct, min: PARTICLE_OPACITY_STEP, max: 100, action_col: 1 }),
+            r(t.speed_pct, &PARTICLE_SPEED_STEPS, 2),
+        ],
+        [r(t.size_pct, &PARTICLE_SIZE_STEPS, 3), r(t.spread_pct, &PARTICLE_SPREAD_STEPS, 4), dritte],
+    ]
+}
 // Naechste Stufe in einer aufsteigenden Liste; ein Wert zwischen zwei Stufen (von Hand in
 // der Datei) rastet auf die naechste in der gewuenschten Richtung ein.
 pub(crate) fn step_in(steps: &[u32], value: u32, up: bool) -> u32 {
@@ -84,27 +116,9 @@ pub(crate) fn step_in(steps: &[u32], value: u32, up: bool) -> u32 {
         steps.iter().rev().copied().find(|&s| s < value).unwrap_or(value)
     }
 }
-// Linker Rand der Spalte `col` (0..3 Regler, 4 Schalter "Auf einmal").
+// Linker Rand des Reglers in Spalte `col` (0..2).
 pub(crate) fn particle_column_x(col: usize) -> f32 {
     PARTICLE_TOGGLE_X + PARTICLE_TOGGLE_W + 24.0 + col as f32 * PARTICLE_COLUMN_W
-}
-
-// Gleitende Liste unter einer festen Kopfzeile (Partikel): die Eintraege von `n` beim
-// Scrollstand `stand`, auch die am Rand nur angeschnittenen Zeilen, die das Zeilenband der
-// Liste beschneidet (s. App::particle_list_band).
-pub(crate) fn header_list_rows_smooth(n: usize, stand: f32, sichtbar: usize) -> Vec<(usize, f32)> {
-    let von = stand.max(0.0).floor() as usize;
-    (von..(von + sichtbar + 2).min(n))
-        .filter_map(|i| {
-            let platz = 1.0 + i as f32 - stand;
-            (platz > 0.0 && platz < sichtbar as f32 + 1.0).then(|| (i, settings_row_y(0) + platz * SETTINGS_ROW_H))
-        })
-        .collect()
-}
-
-// Erste Zeile fuer "a–b von n": der gleitende Stand, in die Liste geklemmt.
-pub(crate) fn header_list_first(n: usize, stand: f32, sichtbar: usize) -> usize {
-    (stand.max(0.0).round() as usize).min(n.saturating_sub(sichtbar))
 }
 
 // Wertfeld des Reglers in Spalte `col`: dort steht der Wert, der Regler beginnt SLIDER_GROW davor.
@@ -290,7 +304,41 @@ pub(crate) const PARTICLES_ROW: usize = BLOCK_ROTATION_ROW + 1;
 pub(crate) const PARTICLES_OTHER_ROW: usize = PARTICLES_ROW + 1;
 // Glint-Regler (frueher im Tab Barrierefreiheit) stehen in der linken Spalte unter den
 // Partikeln, die Platzhalter danach.
-pub(crate) const GLINT_SPEED_ROW: usize = PARTICLES_OTHER_ROW + 1;
+// Partikel-Distanz (Settings::particle_distance, Nutzer 2026-11-11): bis so viele Bloecke um
+// die Kamera entstehen Partikel ohne `force`, Vanilla fest 32.
+pub(crate) const PARTICLE_DISTANCE_ROW: usize = PARTICLES_OTHER_ROW + 1;
+pub(crate) const PARTICLE_DISTANCE_MIN: u32 = 8;
+pub(crate) const PARTICLE_DISTANCE_MAX: u32 = 128;
+pub(crate) const PARTICLE_DISTANCE_STEP: u32 = 8;
+pub(crate) const PARTICLE_DISTANCE_DEFAULT: u32 = 32;
+pub(crate) const PARTICLE_DISTANCE_TOOLTIP: &str = "Bis zu welcher Entfernung von der Kamera Partikel entstehen, in Blöcken. Vanilla: 32. Weiter weg erzeugt der Client selbst keine mehr (Totem-Pops, Pfeil-Spuren, Treffer, Explosionen, ...). Partikel, die der Server schickt, kommen bei normalen Partikeln trotzdem nur bis 32 Blöcke an.";
+pub(crate) const PARTICLE_FADE_ROW: usize = PARTICLE_DISTANCE_ROW + 1;
+// Partikel ausblenden (Settings::particle_fade_out_ms): so lange vor dem Ende ihres Lebens
+// blenden Partikel aus, statt zu verschwinden (kein Vanilla); 0 = aus.
+pub(crate) const PARTICLE_FADE_MAX_MS: u32 = 1000;
+pub(crate) const PARTICLE_FADE_STEP_MS: u32 = 50;
+pub(crate) const PARTICLE_FADE_DEFAULT_MS: u32 = 250;
+pub(crate) const PARTICLE_FADE_TOOLTIP: &str = "So lange vor dem Ende ihres Lebens werden Partikel durchsichtig, statt einfach zu verschwinden (kein Vanilla). Gilt für alle Partikel. Totem und End-Rod blenden dann nicht mehr wie in Vanilla halb aus, sondern bleiben voll bis hierher. Wer früher verschwindet (landet im Wasser, ...), verschwindet weiter sofort. 0 = aus.";
+// Nahe Entities rastern (Settings::entity_near_dither_cm, Nutzer 2026-11-11, wie in Bedrock):
+// ab diesem Abstand zur Kamera fehlt von Entities ein wachsender Anteil ihrer Pixel. In
+// Hundertstel Bloecken, 0 = aus.
+pub(crate) const ENTITY_NEAR_ROW: usize = PARTICLE_FADE_ROW + 1;
+pub(crate) const ENTITY_NEAR_MAX_CM: u32 = 200;
+pub(crate) const ENTITY_NEAR_STEP_CM: u32 = 10;
+pub(crate) const ENTITY_NEAR_DEFAULT_CM: u32 = 100;
+// So viel groesser als die Trefferbox zaehlt ein Entity als nah (s. App::mark_near_entity), in
+// Bloecken: Ruestung und schwingende Arme ragen ueber die Box.
+pub(crate) const NEAR_SINGLE_SIDED_MARGIN: f64 = 0.5;
+pub(crate) const ENTITY_NEAR_TOOLTIP: &str = "Kommt eine Entity der Kamera näher als dieser Abstand, wird sie Pixel für Pixel in einem feinen Raster durchsichtig, je näher, desto mehr (wie in Bedrock). So steckt man nicht in einem Spieler, der einem zu nah kommt, und sieht, was dahinter ist. Gilt für alle Entities samt Block-Entities (Truhen, Betten, ...) und den eigenen Spieler in der Third-Person-Ansicht, nicht für die eigene Hand. 0 = aus.";
+// Mip-Schaerfe (Settings::mip_sharpness_pct): Bias der Welt-Texturen von 0 (weicher, kaum
+// Moire) bis -1 (schaerfer, in der Ferne flimmernde Muster). Zeile s. styled_text.rs.
+// Wertfeld des Reglers: der ganze Regler beginnt rechts neben dem Mipmapping-Schalter.
+pub(crate) fn mip_sharpness_value_rect() -> Rect {
+    Rect { x: SETTINGS_CTRL_X + TOGGLE_W + STEPPER_GAP + SLIDER_GROW, ..stepper_value_rect(MIP_SHARPNESS_ROW) }
+}
+pub(crate) const MIP_SHARPNESS_MAX: u32 = 100;
+pub(crate) const MIP_SHARPNESS_STEP: u32 = 5;
+pub(crate) const GLINT_SPEED_ROW: usize = ENTITY_NEAR_ROW + 1;
 pub(crate) const GLINT_STRENGTH_ROW: usize = GLINT_SPEED_ROW + 1;
 // Ruestungsbesatz (Trims) an getragener Ruestung zeigen (Settings::armor_trims).
 pub(crate) const ARMOR_TRIMS_ROW: usize = GLINT_STRENGTH_ROW + 1;
@@ -309,17 +357,24 @@ pub(crate) const BLOCK_ENTITY_DISTANCE_MAX: u32 = 512;
 pub(crate) const BLOCK_ENTITY_DISTANCE_STEP: u32 = 16;
 pub(crate) const BLOCK_ENTITY_DISTANCE_DEFAULT: u32 = 64;
 // Video-Tab, Abschnitt Sichtweite: Render-Distance (Settings::max_render_distance), Entity-
-// Weite, dann die Fernsicht aus dem Chunk-Saver (s. lod.rs) -- Weite und Detail. Das Modul
-// selbst speichert nur. Danach die Abschnitte Kamera (Sichtfeld je Perspektive, Projektion,
+// Weite und Block-Entity-Weite (Weite und Detail der Fernsicht stehen im Modul Chunk-Saver,
+// s. lod.rs), die Chunk-Einblendung. Danach die Abschnitte Kamera (Sichtfeld je Perspektive, Projektion,
 // Abstand und Hoehe der 3. Person, s. Perspective), Darstellung und Treffer.
 pub(crate) const RENDER_DISTANCE_ROW: usize = 0;
 pub(crate) const ENTITY_DISTANCE_ROW: usize = RENDER_DISTANCE_ROW + 1;
 pub(crate) const BLOCK_ENTITY_DISTANCE_ROW: usize = ENTITY_DISTANCE_ROW + 1;
-pub(crate) const LOD_DETAIL_ROW: usize = BLOCK_ENTITY_DISTANCE_ROW + 1;
-pub(crate) const VIDEO_CAMERA_ROW: usize = LOD_DETAIL_ROW + 1;
-pub(crate) const VIDEO_ROW_COUNT: usize = VIEW_MODEL_ROW + 1;
+pub(crate) const CHUNK_FADE_ROW: usize = BLOCK_ENTITY_DISTANCE_ROW + 1;
+pub(crate) const VIDEO_CAMERA_ROW: usize = CHUNK_FADE_ROW + 1;
+// Chunk-Einblendung (Settings::chunk_fade_ms): wie Vanillas "Chunk Fade" 0 bis 2 s in
+// 0,05-s-Schritten, Vorgabe 0,75 s; 0 = aus.
+pub(crate) const CHUNK_FADE_MAX_MS: u32 = 2000;
+pub(crate) const CHUNK_FADE_STEP_MS: u32 = 50;
+pub(crate) const CHUNK_FADE_DEFAULT_MS: u32 = 750;
+// Naeher (Quadrat des Abstands in Bloecken) blendet nichts ein, s. world_mesh.
+pub(crate) const CHUNK_FADE_NEAR_SQ: f64 = 768.0;
+pub(crate) const CHUNK_FADE_TOOLTIP: &str = "Wie lange ein neu geladener Chunk zum Einblenden braucht. Er erscheint Pixel für Pixel in einem feinen Raster, dahinter sieht man Himmel und Gelände (Vanilla blendet aus der Nebelfarbe ein, die es hier nicht gibt). Wie in Vanilla blenden Chunks in der Nähe (unter 28 Blöcken) nicht ein. 0 = aus, Standard 0.75 s wie Vanilla.";
+pub(crate) const VIDEO_ROW_COUNT: usize = VIEW_MODEL_BOB_ROW + 1;
 pub(crate) const RENDER_DISTANCE_TOOLTIP: &str = "Radius in Chunks um den Spieler, in dem geladene Chunks gezeichnet werden. Weiter draußen bleiben die Blockdaten geladen (kein Loch beim Zurückkommen), sie werden nur nicht gezeichnet. Unabhängig von der Sichtweite des Servers -- wirkt sofort, ohne neu zu verbinden. Zahl anklicken für einen eigenen Wert, -1 = unbegrenzt.";
-pub(crate) const LOD_DETAIL_TOOLTIP: &str = "Wie fein die Fernsicht unterteilt wird: so groß (in Pixeln²) darf ein Fernsicht-Block auf dem Bildschirm höchstens werden, bevor eine feinere Stufe geladen wird. Kleiner = schärfer, kostet mehr Speicher und GPU-Zeit. Standard 4.";
 pub(crate) const CRIT_COLOR_TOOLTIP: &str = "Eigene Farbe fuers Aufblitzen bei kritischen Treffern (kein Vanilla). AUS: Crits blitzen \
 wie jeder andere Treffer in der Schadens-Faerbung auf. Dauer und \"Nur Skin\" der Schadens-Färbung gelten auch hier.";
 pub(crate) const PARTICLES_TOOLTIP: &str = "Vanillas \"Partikel\": Alle, Verringert (jeder dritte fällt weg) oder Minimal (nur noch, was immer erscheint -- Explosionen, Schwung, Schadensherzen). Blockstaub beim Abbauen und Zerbrechen ist wie in Vanilla von der Stufe unabhängig; die Explosions-Trümmer gibt es nur bei \"Alle\". \"Anpassen\" (kein Vanilla): je Partikelart an/aus, wie lange sie bleibt, wie deckend sie ist und wie schnell sie sich bewegt -- z.B. Explosion aus gegen die weißen Punkte beim Crystallen. Eigene Partikel sind die, die an deinem Spieler entstehen (Treffer auf dich, deine Effekte, dein Totem), andere alle übrigen.";
@@ -386,6 +441,9 @@ pub(crate) const ANIM_ROW: usize = DEATH_ANIM_ROW + 1;
 // Letzter Abschnitt, Modified View Model (Settings::modified_view_model): eigenes Ego-Modell,
 // der Arm haelt das Item, je Item eingestellt. Aus gilt es trotzdem beim Item-Ansehen.
 pub(crate) const VIEW_MODEL_ROW: usize = ANIM_ROW + 1;
+// Hand-Bobbing (Settings::view_model_bobbing).
+pub(crate) const VIEW_MODEL_BOB_ROW: usize = VIEW_MODEL_ROW + 1;
+pub(crate) const VIEW_MODEL_BOB_TOOLTIP: &str = "Beim Laufen wackelt die Hand wie bei Vanillas View-Bobbing, die Kamera bleibt ruhig.";
 pub(crate) const VIEW_MODEL_TOOLTIP: &str = "In der Ich-Sicht hält deine Hand das Item, mit den im Hand-Debug je Item eingestellten Werten. Aus: wie in Vanilla, das Item ohne Arm -- nur beim Ansehen eines Items (Taste \"Item ansehen\") hält die Hand es trotzdem.";
 pub(crate) const ANIMS_TOOLTIP: &str = "Haltungen für Spieler in der dritten Person, die Vanilla nur in der Ich-Sicht oder gar nicht zeigt (wie die Mod Not Enough Animations) -- bei anderen Spielern und bei dir in F5. Schild, Speer und Schläge bleiben wie in Vanilla.";
 // Vanilla: umkippen (LivingEntityRenderer.setupRotations, deathTime) und rot. Aus: Spieler
@@ -545,7 +603,7 @@ pub(crate) const VOLUME_CATEGORIES: [VolumeCategory; 10] = {
             category: C::Ui,
             key: "ui",
             label: "UI-Sounds",
-            tooltip: "Klänge der Oberfläche wie Klicks in Menüs. Hängt als einzige nicht an der Hauptlautstärke.",
+            tooltip: "Klänge der Oberfläche wie Klicks in Menüs.",
         },
     ]
 };
@@ -621,6 +679,8 @@ pub(crate) enum ControlsRow {
     CursorSens,
     CursorSize,
     CursorWidth,
+    CursorOutline,
+    CursorFill,
     CursorCircle,
     SneakProtection,
     SnapTap,
@@ -637,11 +697,11 @@ pub(crate) enum ControlsRow {
 }
 
 pub(crate) const CONTROLS_SECTIONS: &[(&str, &[ControlsRow])] = {
-    use ControlsRow::{SensX, SensY, SensSplit, SensCalc, CursorSens, CursorSize, CursorWidth, CursorCircle, Bind, SnapTap, JumpCooldown, SneakProtection, SprintOnStart, HoldUseRepeat, RocketRepeat, ExtinguishDcGhost, UseWhileMining, CapsLock, HoldConfirm, ReconnectHold};
+    use ControlsRow::{SensX, SensY, SensSplit, SensCalc, CursorSens, CursorSize, CursorWidth, CursorOutline, CursorFill, CursorCircle, Bind, SnapTap, JumpCooldown, SneakProtection, SprintOnStart, HoldUseRepeat, RocketRepeat, ExtinguishDcGhost, UseWhileMining, CapsLock, HoldConfirm, ReconnectHold};
     use KeyBindAction as K;
     &[
         ("Maus", &[SensX, SensY, SensSplit, SensCalc]),
-        ("Zeiger", &[CursorSens, CursorSize, CursorWidth, CursorCircle]),
+        ("Zeiger", &[CursorSens, CursorSize, CursorWidth, CursorOutline, CursorFill, CursorCircle]),
         (
             "Bewegung",
             &[
@@ -685,7 +745,7 @@ pub(crate) const CONTROLS_SECTIONS: &[(&str, &[ControlsRow])] = {
         ("Chat", &[Bind(K::OpenChat), Bind(K::OpenCommand)]),
         (
             "Ansicht",
-            &[Bind(K::TogglePerspective), Bind(K::Zoom), Bind(K::Freelook), Bind(K::SwapShoulder), Bind(K::PlayerList), Bind(K::HideHud), Bind(K::ToggleDebugOverlay), Bind(K::ToggleProfiler), Bind(K::ToggleHandDebug)],
+            &[Bind(K::TogglePerspective), Bind(K::Zoom), Bind(K::Freelook), Bind(K::SwapShoulder), Bind(K::PlayerList), Bind(K::HideHud), Bind(K::ToggleDebugOverlay), Bind(K::ToggleProfiler), Bind(K::ToggleHandDebug), Bind(K::SaveClip)],
         ),
         ("Sprachchat", &[Bind(K::PushToTalk), Bind(K::VoiceWhisper), Bind(K::VoiceMute), Bind(K::VoiceDeafen), Bind(K::VoiceConfig)]),
         (
@@ -741,14 +801,19 @@ pub(crate) const RECONNECT_HOLD_TOOLTIP: &str = "Wie lange die Reconnect-Taste g
 
 pub(crate) const CURSOR_SIZE_MIN: u32 = 50;
 pub(crate) const CURSOR_SIZE_MAX: u32 = 300;
-pub(crate) const CURSOR_SIZE_STEP: u32 = 10;
+pub(crate) const CURSOR_SIZE_STEP: u32 = 5;
 pub(crate) const CURSOR_WIDTH_MIN: u32 = 50;
 pub(crate) const CURSOR_WIDTH_MAX: u32 = 200;
 pub(crate) const CURSOR_WIDTH_STEP: u32 = 5;
-pub(crate) const CURSOR_WIDTH_TOOLTIP: &str = "Breite des Mauszeiger-Pfeils in Prozent (100 % = bisherige Form). Die Spitze und die Länge bleiben gleich, nur die beiden Flügel rücken zusammen oder auseinander.";
-pub(crate) const CURSOR_CIRCLE_TOOLTIP: &str = "Kleiner Kreis unter der Pfeilspitze des Mauszeigers. AUS = nur der Pfeil.";
+pub(crate) const CURSOR_WIDTH_TOOLTIP: &str = "Breite des Mauszeiger-Pfeils in Prozent (100 % = Form wie in osu). Die Spitze und die Länge bleiben gleich, nur die beiden Flügel rücken zusammen oder auseinander.";
+pub(crate) const CURSOR_OUTLINE_MAX: u32 = 200;
+pub(crate) const CURSOR_OUTLINE_STEP: u32 = 5;
+pub(crate) const CURSOR_FILL_STEP: u32 = 5;
+pub(crate) const CURSOR_FILL_TOOLTIP: &str = "Wie durchsichtig das schwarze Innere des Mauszeigers ist, in Prozent (50 % = wie in osu, 100 % = nur die Kontur).";
+pub(crate) const CURSOR_OUTLINE_TOOLTIP: &str = "Dicke der weißen Kontur des Mauszeigers in Prozent (100 % = wie in osu). Die Kontur wächst nach innen und mit der Zeigergröße mit.";
+pub(crate) const CURSOR_CIRCLE_TOOLTIP: &str = "Kleiner Ring unter dem Pfeil des Mauszeigers. AUS = nur der Pfeil.";
 pub(crate) const CURSOR_SIZE_TOOLTIP: &str = "Größe des Mauszeigers in Menüs, im Inventar und im offenen Chat, in Prozent (100 % = bisherige Größe). Die Spitze bleibt dabei genau dort, wo geklickt wird.";
-pub(crate) const KEYBIND_TOOLTIP: &str = "Taste anklicken, dann die neue Taste oder Maustaste drücken; Escape bricht ab. Rechtsklick entfernt die Belegung. H/T daneben: Halten (gilt, solange die Taste unten ist) oder Toggle (ein Druck schaltet an, der nächste wieder aus). Mehrere Tasten für eine Aktion: beim Warten auf die Taste \"Erweitert\" anklicken.";
+pub(crate) const KEYBIND_TOOLTIP: &str = "Taste anklicken, dann die neue Taste oder Maustaste drücken; Escape bricht ab. Rechtsklick entfernt die Belegung. H/T daneben: Halten (gilt, solange die Taste unten ist) oder Toggle (ein Druck schaltet an, der nächste wieder aus). Mehrere Tasten für eine Aktion: beim Warten auf die Taste \"Erweitert\" anklicken. Dort steht rechts neben jeder Belegung ein Modifier: ist er gesetzt, greift sie nur, wenn beide Tasten gedrückt sind. Rechtsklick auf den Modifier entfernt ihn.";
 pub(crate) const CAPS_LOCK_RECHECK: Duration = Duration::from_millis(30);
 pub(crate) const CAPS_LOCK_TOOLTIP: &str = "AN: Im Spiel schaltet die Feststelltaste die Großschreibung nicht mehr ein, die Lampe auf der Tastatur bleibt aus. Als Taste funktioniert sie weiter ganz normal (z.B. für Push-to-Talk). Im Chat und in Textfeldern verhält sie sich wie immer.";
 pub(crate) const SPRINT_ON_START_TOOLTIP: &str = "AN: Sprinten ist nach dem Start des Clients schon eingeschaltet, als hätte man die Sprint-Taste einmal gedrückt. Wirkt nur, wenn Sprinten links in der Tabelle auf \"Umschalten\" steht -- mit \"Halten\" gibt es keinen Zustand, der anbleiben könnte.";
@@ -861,6 +926,26 @@ pub(crate) fn align_left(anchor: f32, w: f32, align: u8) -> f32 {
     }
 }
 
+// Feste Ecke der Scoreboard-Seitenleiste (Settings::scoreboard_align): oben links, oben
+// rechts, unten links, unten rechts. Als Pfeile, die Woerter passten nicht in eine Zeile.
+pub(crate) const SCOREBOARD_ALIGNS: [&str; 4] = ["\u{2196}", "\u{2197}", "\u{2199}", "\u{2198}"];
+// Konfig-Zeile der Ausrichtung im Einstellungsfenster des Scoreboards (unter "Groesse").
+pub(crate) const SCOREBOARD_ALIGN_ROW: usize = 1;
+
+// Ecke (Bildschirmpixel) einer Leiste in `r`, die `align` festhaelt.
+pub(crate) const fn scoreboard_anchor(r: Rect, align: u8) -> (f32, f32) {
+    let x = if align % 2 == 1 { r.x + r.w } else { r.x };
+    let y = if align >= 2 { r.y + r.h } else { r.y };
+    (x, y)
+}
+
+// Linke obere Ecke einer w x h grossen Leiste, deren Ecke `align` bei `anker` steht.
+pub(crate) const fn scoreboard_origin(anker: (f32, f32), w: f32, h: f32, align: u8) -> (f32, f32) {
+    let x = if align % 2 == 1 { anker.0 - w } else { anker.0 };
+    let y = if align >= 2 { anker.1 - h } else { anker.1 };
+    (x, y)
+}
+
 pub(crate) fn align_anchor(left: f32, w: f32, align: u8) -> f32 {
     match align {
         1 => left + w / 2.0,
@@ -888,7 +973,7 @@ pub(crate) fn hud_config_pick_rect(row: usize) -> Rect {
 // Groessenregler der HUD-Elemente in Prozent (Titel, Untertitel, Spielerliste).
 pub(crate) const HUD_SCALE_PCT_MIN: u32 = 50;
 pub(crate) const HUD_SCALE_PCT_MAX: u32 = 300;
-pub(crate) const HUD_SCALE_PCT_STEP: u32 = 10;
+pub(crate) const HUD_SCALE_PCT_STEP: u32 = 5;
 
 pub(crate) fn hud_align_button(i: usize) -> Rect {
     Rect { x: SETTINGS_CTRL_X + i as f32 * 96.0, y: settings_row_y(0), w: 90.0, h: SETTINGS_CTRL_H }
@@ -930,9 +1015,9 @@ pub(crate) const fn hud_config_rows(element: HudElement, set: &Settings) -> usiz
         // Farbe der Stueckzahl.
         HudElement::Hotbar => HOTBAR_GLIDE_ROW + 1,
         // Zeile 0 Farbe, Zeile 1 Kontur, Zeile 2 Kontur des Rings, Zeile 3 Aufhellung (nur beim
-        // Komplementaeren). Dazu "Form" und darunter "Groesse" bzw. "Pixel bearbeiten".
-        HudElement::Crosshair if crosshair_color_mode == CROSSHAIR_MODE_COMPLEMENTARY => 6,
-        HudElement::Crosshair => 5,
+        // Komplementaeren). Dazu "Form", darunter "Groesse" bzw. "Pixel bearbeiten" und der
+        // Radius des Rings.
+        HudElement::Crosshair => crosshair_shape_row(crosshair_color_mode) + 3,
         // Ausrichtung + Groesse.
         HudElement::Title | HudElement::Subtitle => 2,
         // Groesse, Im Inventar, Ambiente verstecken, Stil -- beim detaillierten dazu Ausrichtung, Icon,
@@ -941,7 +1026,8 @@ pub(crate) const fn hud_config_rows(element: HudElement, set: &Settings) -> usiz
         HudElement::Effects => EFFECTS_STYLE_ROW + 1,
         HudElement::Perf => 0,
         // Groesse.
-        HudElement::Scoreboard => 1,
+        // Groesse und Ausrichtung.
+        HudElement::Scoreboard => SCOREBOARD_ALIGN_ROW + 1,
         // Farbe des Countdowns (Countdown oder Kreis waehlt das Schilde-Modul).
         HudElement::ShieldCooldown => 1,
         // Groesse, Nur Zahl, Deckkraft, Zahl-Farbe.
@@ -957,6 +1043,8 @@ pub(crate) const fn hud_config_rows(element: HudElement, set: &Settings) -> usiz
         // Groesse, Deckkraft.
         HudElement::Keystrokes => 2,
         HudElement::Session => 2,
+        // Groesse.
+        HudElement::Clock => 1,
         // Die Chat-Einstellungen (s. CHAT_TOOLTIPS): Groesse, Breite, Hintergrund, Abdunkeln,
         // Zeilen im Spiel und beim Tippen, Ausblenden.
         HudElement::Chat => CHAT_TOOLTIPS.len(),
@@ -1051,6 +1139,28 @@ pub(crate) fn store_content_clip(r: Option<Rect>) {
 
 pub(crate) fn content_clip() -> Option<Rect> {
     let [x0, y0, x1, y1] = std::array::from_fn(|i| f32::from_bits(CONTENT_CLIP[i].load(std::sync::atomic::Ordering::Relaxed)));
+    (x1 > x0).then_some(Rect { x: x0, y: y0, w: x1 - x0, h: (y1 - y0).max(0.0) })
+}
+
+// Zeilenband der Modul-Detailansicht (Bildschirmpixel, s. App::module_detail_band). Getrennt von
+// CONTENT_CLIP: das gilt auch fuer die Treffer der Einstellungsseiten, die Modul-Knoepfe aber
+// liegen im Inhaltsraum bzw. (im Spiel) in Menue-Pixeln. Hier nur der Scissor.
+pub(crate) static MODULE_CLIP: [std::sync::atomic::AtomicU32; 4] = [
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+];
+
+pub(crate) fn store_module_clip(r: Option<Rect>) {
+    let w = r.map_or([0.0; 4], |r| [r.x, r.y, r.x + r.w, r.y + r.h]);
+    for (a, v) in MODULE_CLIP.iter().zip(w) {
+        a.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn module_clip() -> Option<Rect> {
+    let [x0, y0, x1, y1] = std::array::from_fn(|i| f32::from_bits(MODULE_CLIP[i].load(std::sync::atomic::Ordering::Relaxed)));
     (x1 > x0).then_some(Rect { x: x0, y: y0, w: x1 - x0, h: (y1 - y0).max(0.0) })
 }
 
@@ -1156,6 +1266,17 @@ pub(crate) fn fade_marker_rect(r: &UiRect) -> Option<Option<ScrollFade>> {
 // fertigen Glyphen-Vierecke, stufenlos: neu gerastert in kleinerer Schrift sprang er von Pixel
 // zu Pixel (gedrueckte Einstellungsknoepfe, s. menu/press.rs). Nur Text, Flaechen werden
 // ohnehin ungerundet gezeichnet.
+// Ende eines gedrueckten Knopfs (s. build_menu_ui, build_module_menu): seine Flaechen zur Mitte
+// hin verkleinern, fuer den Text endet der Zoom.
+pub(crate) fn zoom_pressed(zoom: Option<(f32, f32, f32)>, rects: &mut [UiRect], texts: &mut Vec<UiText>) {
+    let Some((mx, my, s)) = zoom else { return };
+    // Marker (leere Flaechen) tragen Daten in x/y, die bleiben.
+    for r in rects.iter_mut().filter(|r| r.rect.w != 0.0 || r.rect.h != 0.0) {
+        r.rect = Rect { x: mx + (r.rect.x - mx) * s, y: my + (r.rect.y - my) * s, w: r.rect.w * s, h: r.rect.h * s };
+    }
+    push_zoom_marker(texts, None);
+}
+
 pub(crate) fn push_zoom_marker(texts: &mut Vec<UiText>, zoom: Option<(f32, f32, f32)>) {
     let (x, y, s) = zoom.unwrap_or((0.0, 0.0, 1.0));
     let code = if zoom.is_some() { -54.0 } else { -55.0 };
@@ -1169,6 +1290,26 @@ pub(crate) fn zoom_marker_text(t: &UiText) -> Option<Option<(f32, f32, f32)>> {
     match t.color[3] {
         -54.0 => Some(Some((t.x, t.y, t.color[0]))),
         -55.0 => Some(None),
+        _ => None,
+    }
+}
+
+// Ab hier steht Text in Menue-Pixeln im Massstab `s` (Some) bzw. wieder in echten (None):
+// shape_text_in rechnet Lage und Schriftfaktor um (s. menu_text_scale). Fuer Menue-Teile, die
+// im Spiel zwischen das HUD gezeichnet werden (Modul-Menue, Benachrichtigungen) -- ein ganzes
+// Menue-Bild rechnet render_menu um.
+pub(crate) fn text_scale_marker(s: Option<f32>) -> UiText {
+    let code = if s.is_some() { -56.0 } else { -57.0 };
+    UiText { text: String::new(), x: 0.0, y: 0.0, color: [s.unwrap_or(1.0), 0.0, 0.0, code], scale: 1.0 }
+}
+
+pub(crate) fn text_scale_marker_of(t: &UiText) -> Option<Option<f32>> {
+    if !t.text.is_empty() {
+        return None;
+    }
+    match t.color[3] {
+        -56.0 => Some(Some(t.color[0])),
+        -57.0 => Some(None),
         _ => None,
     }
 }
@@ -1281,7 +1422,7 @@ pub(crate) fn fade_sprite(s: UiSprite, fade: ScrollFade, out: &mut Vec<UiSprite>
 // Den Scissor fuer den naechsten Zeichenaufruf: an = auf content_clip, sonst ganzer Schirm.
 // false, wenn das Band leer ist (dann nichts zeichnen).
 pub(crate) fn set_ui_clip(pass: &mut wgpu::RenderPass<'_>, an: bool, screen_px: (f32, f32)) -> bool {
-    set_scissor(pass, content_clip().filter(|_| an), screen_px)
+    set_scissor(pass, module_clip().or_else(content_clip).filter(|_| an), screen_px)
 }
 
 // Scissor auf `r` (Bildschirmpixel), None = ganzer Schirm. false, wenn `r` leer ist.
@@ -1373,7 +1514,9 @@ pub(crate) fn settings_max_first(rows: usize, starts: u128, unten: f32) -> usize
 }
 
 // Wie viele Einstellungs-Zeilen bei dieser Fensterhoehe ganz sichtbar sind -- darunter
-// brauchen Fussleiste (Zuruecksetzen, Speicherstatus) und etwas Rand ihren Platz.
+// brauchen Fussleiste (Zuruecksetzen, Speicherstatus) und etwas Rand ihren Platz. Nur noch
+// von den Tests gebraucht (die Seiten rechnen mit settings_max_first).
+#[cfg(test)]
 pub(crate) fn settings_visible_rows(screen_h: f32) -> usize {
     (((screen_h - SETTINGS_CONTENT_DY - SETTINGS_FIRST_Y - 24.0) / SETTINGS_ROW_H).floor() as usize).max(1)
 }

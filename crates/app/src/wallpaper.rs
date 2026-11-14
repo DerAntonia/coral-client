@@ -19,10 +19,12 @@ pub enum WallpaperMode {
     Desktop,
     // Das Bild der Launcher-Szene (s. hero_scene.rs), mit den Texturen der eigenen Installation.
     Coral,
+    // Das Panorama eines Skins, gedreht wie Vanillas Titelbildschirm (s. panorama.rs).
+    Panorama,
 }
 
 impl WallpaperMode {
-    pub const ALL: [Self; 4] = [Self::None, Self::File, Self::Desktop, Self::Coral];
+    pub const ALL: [Self; 5] = [Self::None, Self::File, Self::Desktop, Self::Coral, Self::Panorama];
 
     pub fn from_index(i: u8) -> Self {
         Self::ALL.get(i as usize).copied().unwrap_or(Self::None)
@@ -38,6 +40,7 @@ impl WallpaperMode {
             Self::File => "Eigenes Bild",
             Self::Desktop => "Linux-Desktop",
             Self::Coral => "Coral",
+            Self::Panorama => "Panorama",
         }
     }
 }
@@ -326,6 +329,8 @@ fn import(quelle: &Path, ziel: &Path) -> Result<(), String> {
 pub enum Event {
     /// Neues Bild fertig dekodiert.
     Loaded(Decoded),
+    /// Panorama fertig: die sechs Seiten nebeneinander (s. panorama::load).
+    LoadedPanorama(Decoded),
     /// Die Quelle hat kein Bild (Modus "Keins", Desktop ohne Hintergrund, noch nichts gewaehlt).
     Cleared,
     /// Laden ging schief -- Meldung fuer den Nutzer.
@@ -362,8 +367,10 @@ impl Default for Loader {
 impl Loader {
     /// Die Quelle (neu) laden. `force = false`: nur, wenn sich Pfad oder Datei geaendert
     /// haben -- fuer das regelmaessige Nachsehen beim Desktop-Hintergrund.
-    // `coral`: wo das Bild der Launcher-Szene liegt (s. hero_scene::path).
-    pub fn request(&mut self, mode: WallpaperMode, stored: Option<PathBuf>, coral: Option<PathBuf>, ziel: (u32, u32), force: bool) {
+    // `coral`: wo das Bild der Launcher-Szene liegt (s. hero_scene::path). `panorama`: der
+    // Ordner des Skins, dessen Panorama gezeigt wird.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request(&mut self, mode: WallpaperMode, stored: Option<PathBuf>, coral: Option<PathBuf>, panorama: Option<PathBuf>, ziel: (u32, u32), force: bool) {
         self.generation += 1;
         let generation = self.generation;
         let bisher = if force { None } else { self.stand.clone() };
@@ -374,6 +381,8 @@ impl Loader {
                 WallpaperMode::File => stored.filter(|p| p.is_file()),
                 WallpaperMode::Desktop => desktop_wallpaper(),
                 WallpaperMode::Coral => coral.filter(|p| p.is_file()),
+                // Geaendert gilt das Panorama, wenn sich Seite 0 aendert.
+                WallpaperMode::Panorama => panorama.clone().filter(|p| crate::panorama::has_panorama(p)).map(|p| crate::panorama::first_face(&p)),
             };
             let Some(pfad) = pfad else {
                 let _ = tx.send((generation, Event::Cleared, None));
@@ -384,9 +393,15 @@ impl Loader {
             if !force && stand == bisher {
                 return;
             }
-            let event = match decode(&pfad, ziel) {
-                Ok(d) => Event::Loaded(d),
-                Err(e) => Event::Failed(e),
+            let event = match (mode, panorama) {
+                (WallpaperMode::Panorama, Some(pack)) => match crate::panorama::load(&pack) {
+                    Ok(d) => Event::LoadedPanorama(d),
+                    Err(e) => Event::Failed(e),
+                },
+                _ => match decode(&pfad, ziel) {
+                    Ok(d) => Event::Loaded(d),
+                    Err(e) => Event::Failed(e),
+                },
             };
             let _ = tx.send((generation, event, stand));
         });

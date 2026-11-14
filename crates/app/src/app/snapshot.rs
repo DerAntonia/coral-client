@@ -19,6 +19,57 @@ struct ColumnJob {
     signs: Vec<((i32, i32, i32), protocol::sign::SignText)>,
 }
 
+// Ein eingesammelter Zustand (s. App::collect_snapshot), noch unkodiert.
+pub(crate) struct SnapshotJob {
+    config: Vec<Vec<u8>>,
+    vor: Vec<net::ClientEvent>,
+    columns: Vec<ColumnJob>,
+    nach: Vec<net::ClientEvent>,
+}
+
+// Kodiert `job` in einem eigenen Thread als Snapshot (Spur Z) der Sitzung `session`. Mit
+// `close` wird die Datei danach geschlossen (Clip, s. record::clip_save).
+pub(crate) fn encode_snapshot(job: Arc<SnapshotJob>, session: u64, close: bool, wer: &'static str) -> std::io::Result<()> {
+    let start = Instant::now();
+    std::thread::Builder::new().name("coral-snapshot".into()).spawn(move || {
+        let mut p = record::Producer::blocking();
+        let mut unkodierbar = 0;
+        let mut bytes = 0;
+        let mut push = |p: &mut record::Producer, e: &net::ClientEvent| match net::snapshot_encode(e) {
+            Some(b) => {
+                bytes += b.len();
+                p.push(session, record::Tag::Z, Instant::now(), &b);
+            }
+            None => unkodierbar += 1,
+        };
+        for b in &job.config {
+            p.push(session, record::Tag::Z, Instant::now(), b);
+        }
+        for e in &job.vor {
+            push(&mut p, e);
+        }
+        for spalte in &job.columns {
+            push(&mut p, &net::ClientEvent::Chunk(column_chunk(spalte)));
+        }
+        for e in &job.nach {
+            push(&mut p, e);
+        }
+        // Leer = abgeschlossen (s. record::Tag::Z).
+        p.push(session, record::Tag::Z, Instant::now(), &[]);
+        p.flush();
+        if close {
+            record::close(session);
+        }
+        eprintln!(
+            "{wer}: Snapshot geschrieben, {:.1} MB in {:.0} ms{}",
+            bytes as f64 / 1e6,
+            start.elapsed().as_secs_f64() * 1000.0,
+            if unkodierbar > 0 { format!(", {unkodierbar} nicht kodierbar") } else { String::new() }
+        );
+    })?;
+    Ok(())
+}
+
 impl App {
     // Merkt die Registries und Packs der Verbindung in kodierter Form (s. drain_events).
     pub(crate) fn snapshot_note_config(&mut self, event: &net::ClientEvent) {
@@ -35,9 +86,8 @@ impl App {
         }
     }
 
-    // Die Aufnahme `session` hat gerade mitten im Spiel begonnen: alles davor ist verarbeitet.
-    pub(crate) fn write_snapshot(&mut self, session: u64) {
-        let start = Instant::now();
+    // Der Zustand der App in diesem Augenblick, unkodiert (die Spalten als Arc).
+    pub(crate) fn collect_snapshot(&self) -> SnapshotJob {
         let config: Vec<Vec<u8>> = self.snapshot_config.iter().map(|(_, b)| b.clone()).collect();
         let vor = self.snapshot_before_world();
         let mut signs: std::collections::HashMap<(i32, i32), Vec<_>> = std::collections::HashMap::new();
@@ -50,43 +100,17 @@ impl App {
             .filter_map(|(x, z)| Some(ColumnJob { x, z, column: self.world.column_arc(x, z)?, signs: signs.remove(&(x, z)).unwrap_or_default() }))
             .collect();
         let nach = self.snapshot_after_world();
+        SnapshotJob { config, vor, columns, nach }
+    }
+
+    // Die Aufnahme `session` hat gerade mitten im Spiel begonnen: alles davor ist verarbeitet.
+    pub(crate) fn write_snapshot(&mut self, session: u64) {
+        let start = Instant::now();
+        let job = Arc::new(self.collect_snapshot());
         let gesammelt = start.elapsed();
-        let (n_spalten, n_ereignisse) = (columns.len(), config.len() + vor.len() + nach.len());
+        let (n_spalten, n_ereignisse) = (job.columns.len(), job.config.len() + job.vor.len() + job.nach.len());
         self.push_log(format!("coral-record: Snapshot mit {n_spalten} Spalten und {n_ereignisse} Ereignissen ({:.1} ms eingesammelt)", gesammelt.as_secs_f64() * 1000.0));
-        let gestartet = std::thread::Builder::new().name("coral-snapshot".into()).spawn(move || {
-            let mut p = record::Producer::blocking();
-            let mut unkodierbar = 0;
-            let mut bytes = 0;
-            let mut push = |p: &mut record::Producer, e: &net::ClientEvent| match net::snapshot_encode(e) {
-                Some(b) => {
-                    bytes += b.len();
-                    p.push(session, record::Tag::Z, Instant::now(), &b);
-                }
-                None => unkodierbar += 1,
-            };
-            for b in &config {
-                p.push(session, record::Tag::Z, Instant::now(), b);
-            }
-            for e in &vor {
-                push(&mut p, e);
-            }
-            for job in columns {
-                push(&mut p, &net::ClientEvent::Chunk(column_chunk(job)));
-            }
-            for e in &nach {
-                push(&mut p, e);
-            }
-            // Leer = abgeschlossen (s. record::Tag::Z).
-            p.push(session, record::Tag::Z, Instant::now(), &[]);
-            p.flush();
-            eprintln!(
-                "coral-record: Snapshot geschrieben, {:.1} MB in {:.0} ms{}",
-                bytes as f64 / 1e6,
-                start.elapsed().as_secs_f64() * 1000.0,
-                if unkodierbar > 0 { format!(", {unkodierbar} nicht kodierbar") } else { String::new() }
-            );
-        });
-        if let Err(e) = gestartet {
+        if let Err(e) = encode_snapshot(job, session, false, "coral-record") {
             self.push_log(format!("coral-record: Snapshot-Thread nicht startbar ({e})"));
         }
     }
@@ -258,7 +282,7 @@ impl App {
 }
 
 // Eine Spalte, wie sie als Chunk-Paket ankaeme: Sections, Himmelslicht, Schilder.
-fn column_chunk(job: ColumnJob) -> protocol::chunk::ChunkData {
+fn column_chunk(job: &ColumnJob) -> protocol::chunk::ChunkData {
     let sections = job
         .column
         .sections
@@ -277,5 +301,5 @@ fn column_chunk(job: ColumnJob) -> protocol::chunk::ChunkData {
             world::light::SkyLayer::Data(d) => light.sky.push((i, d.to_vec())),
         }
     }
-    protocol::chunk::ChunkData { x: job.x, z: job.z, sections, signs: job.signs, heads: Vec::new(), light: Some(light), tail_unreadable: false }
+    protocol::chunk::ChunkData { x: job.x, z: job.z, sections, signs: job.signs.clone(), heads: Vec::new(), light: Some(light), tail_unreadable: false }
 }

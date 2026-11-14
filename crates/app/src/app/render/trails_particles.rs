@@ -167,6 +167,8 @@ impl App {
         let tick_progress = self.tick_progress();
         let mut out = std::mem::take(&mut self.particle_vertices);
         self.particles.set_tuning(self.settings.particle_tuning, self.settings.particle_tuning_own);
+        self.particles.fade_out_ms = self.settings.particle_fade_out_ms;
+        self.particles.spawn_distance = f64::from(self.settings.particle_distance);
         // Motion Blur bewegter Entities gilt auch fuer Partikel: dafuer je Ecke die Lage im
         // vorigen Bild. Nach einer Pause (Menue, Ladebild) nicht ueber die Luecke.
         let jetzt = Instant::now();
@@ -252,9 +254,17 @@ impl App {
     //
     // Fehlte frueher ganz.
     // AbstractArrow.tick im Client: ein fliegender Krit-Pfeil streut je Tick vier Krit-
-    // Partikel entlang seiner Geschwindigkeit, jeder mit der Gegengeschwindigkeit und 0.2 nach
-    // oben -- die Spur, an der man einen voll gespannten Schuss erkennt.
+    // Partikel entlang seiner Geschwindigkeit -- die Spur, an der man einen voll gespannten
+    // Schuss erkennt. Vanilla gibt ihnen die Gegengeschwindigkeit (sie fliegen zum Schuetzen
+    // zurueck); hier fliegen sie in Pfeilrichtung (gewuenscht), 0.2 nach oben wie Vanilla.
+    // Vanilla setzt sie vom Stand aus nach VORN, bevor der Pfeil sich bewegt -- im Bild fliegt
+    // er dann durch sie hindurch, sie lagen vor ihm. Hier liegen sie hinter dem Stand vom
+    // Tickbeginn, also immer hinter dem gezeichneten Pfeil (Nutzer 2026-11-11).
+    // Im Pfeile-Modul abschaltbar (Nutzer 2026-11-12).
     pub(crate) fn tick_crit_trails(&mut self) {
+        if self.settings.module_arrows && !self.settings.arrow_crit_trail {
+            return;
+        }
         let spuren: Vec<_> = self.entities.iter().filter_map(|(_, e)| e.crit_trail()).collect();
         if spuren.is_empty() {
             return;
@@ -262,10 +272,8 @@ impl App {
         let krit = protocol::particle::ParticleEffect { type_id: protocol::particle::PARTICLE_CRIT, options: protocol::particle::ParticleOptions::None };
         self.with_particles(|p, ctx, _| {
             for ((x, y, z), (vx, vy, vz)) in spuren {
-                for i in 0..4 {
-                    let t = f64::from(i) / 4.0;
-                    p.add_world_particle(&krit, DVec3::new(x + vx * t, y + vy * t, z + vz * t), DVec3::new(-vx, -vy + 0.2, -vz), ctx);
-                }
+                let v = DVec3::new(vx, vy, vz);
+                p.add_trail(&krit, DVec3::new(x, y, z) - v, -v, DVec3::new(vx, vy + 0.2, vz), 4, ctx);
             }
         });
     }

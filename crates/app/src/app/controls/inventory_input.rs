@@ -314,10 +314,7 @@ impl App {
         //
         // Mit dem Stapel-Modifikator bleibt es beim Doppelklick: quick_move_all raeumt auch
         // dann etwas weg, wenn PICKUP_ALL nichts zu holen haette.
-        let doppelklick = doppelklick
-            && (move_stack
-                || hovered
-                    .is_some_and(|slot| self.inventory.predict_click(slot as i16, 0, protocol::packets::CLICK_MODE_PICKUP_ALL).is_some()));
+        let doppelklick = doppelklick && (move_stack || hovered.is_some_and(|slot| self.inventory.pickup_all_collects(slot)));
 
         let (slot, mode) = match hovered {
             // Doppelklick mit Stapel-Verschieben: alle gleichen Stapel im selben Bereich

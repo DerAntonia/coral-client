@@ -40,6 +40,7 @@ impl Settings {
         kv(&mut body, "hud_actionbar_y", self.hud_actionbar_y);
         kv(&mut body, "hud_scoreboard_x", self.hud_scoreboard_x);
         kv(&mut body, "hud_scoreboard_y", self.hud_scoreboard_y);
+        kv(&mut body, "scoreboard_align", self.scoreboard_align);
         kv(&mut body, "hud_hotbar_x", self.hud_hotbar_x);
         kv(&mut body, "hud_hotbar_y", self.hud_hotbar_y);
         kv(&mut body, "hud_hotbar_scale", self.hud_hotbar_scale);
@@ -66,6 +67,7 @@ impl Settings {
         kv(&mut body, "crosshair_brightness_boost", self.crosshair_brightness_boost);
         kv(&mut body, "crosshair_outline", self.crosshair_outline);
         kv(&mut body, "crosshair_ring_outline", self.crosshair_ring_outline);
+        kv(&mut body, "crosshair_ring_radius", self.crosshair_ring_radius);
         kv(&mut body, "fov", self.fov);
         kv(&mut body, "fov_third_back", self.fov_third_back);
         kv(&mut body, "fov_third_front", self.fov_third_front);
@@ -78,6 +80,8 @@ impl Settings {
         kv(&mut body, "font", self.font);
         kv(&mut body, "text_shadow", self.text_shadow);
         kv(&mut body, "wallpaper", self.wallpaper);
+        kv(&mut body, "panorama_skin", &self.panorama_skin);
+        kv(&mut body, "panorama_speed", self.panorama_speed);
         kv(&mut body, "cmaa2_enabled", self.cmaa2_enabled);
         kv(&mut body, "audio_output_device", &self.audio_output_device);
         kv(&mut body, "audio_buffer_frames", self.audio_buffer_frames);
@@ -87,11 +91,9 @@ impl Settings {
         kv(&mut body, "module_ghost_tolerance", self.module_ghost_tolerance);
         kv(&mut body, "ghost_tolerance_ms", self.ghost_tolerance_ms);
         kv(&mut body, "module_hitbox_enabled", self.module_hitbox_enabled);
-        kv(&mut body, "module_hitbox_show_smoothed", self.module_hitbox_show_smoothed);
-        kv(&mut body, "module_hitbox_show_raw", self.module_hitbox_show_raw);
+        kv(&mut body, "module_hitbox_player_raw", self.module_hitbox_player_raw);
         kv(&mut body, "module_hitbox_dotted", self.module_hitbox_dotted);
-        kv(&mut body, "module_hitbox_visible_edges", self.module_hitbox_visible_edges);
-        kv(&mut body, "module_hitbox_items", self.module_hitbox_items);
+        kv(&mut body, "module_hitbox_lines", self.module_hitbox_lines);
         kv(&mut body, "module_hitbox_self", self.module_hitbox_self);
         kv(&mut body, "module_hitbox_density_px", self.module_hitbox_density_px);
         kv(&mut body, "module_hitbox_opacity", self.module_hitbox_opacity);
@@ -128,6 +130,7 @@ impl Settings {
         kv(&mut body, "hud_arrows_y", self.hud_arrows_y);
         kv(&mut body, "arrow_trail", self.arrow_trail);
         kv(&mut body, "arrow_white", self.arrow_white);
+        kv(&mut body, "arrow_crit_trail", self.arrow_crit_trail);
         kv(&mut body, "arrow_empty_sound", self.arrow_empty_sound);
         kv(&mut body, "trail_hold_tenths", self.trail_hold_tenths);
         kv(&mut body, "trail_fade_tenths", self.trail_fade_tenths);
@@ -207,7 +210,7 @@ impl Settings {
         body.push_str(&format!("module_consumable_optimizer={}\nmodule_use_timer={}\n", self.module_consumable_optimizer, self.module_use_timer));
         body.push_str(&format!("eat_hold_through_ms={}\n", self.eat_hold_through_ms));
         body.push_str(&format!("eat_slot_lock={}\n", self.eat_slot_lock));
-        body.push_str(&format!("eat_aggressive_prediction={}\n", self.eat_aggressive_prediction));
+        body.push_str(&format!("no_shield_lock={}\n", self.no_shield_lock));
         body.push_str(&format!("crosshair_custom={}\ncrosshair_pixels={}\n", self.crosshair_custom, self.crosshair_pattern.encode()));
         let groessen: Vec<String> = self.crosshair_sizes.iter().map(std::string::ToString::to_string).collect();
         body.push_str(&format!("crosshair_shape={}\ncrosshair_sizes={}\n", self.crosshair_shape, groessen.join(",")));
@@ -262,7 +265,7 @@ impl Settings {
         ));
         body.push_str(&format!("spectator_speed={}\n", self.spectator_speed));
         body.push_str(&format!("mouse_sens_split={}\nmouse_sensitivity_y={}\n", self.mouse_sens_split, self.mouse_sensitivity_y));
-        body.push_str(&format!("cursor_width={}\n", self.cursor_width));
+        body.push_str(&format!("cursor_width={}\ncursor_outline={}\ncursor_fill_transparency={}\n", self.cursor_width, self.cursor_outline, self.cursor_fill_transparency));
         body.push_str(&format!("hold_confirm_ms={}\nreconnect_hold_ms={}\n", self.hold_confirm_ms, self.reconnect_hold_ms));
         body.push_str(&format!("text_shadow_style={}\n", self.text_shadow_style));
         body.push_str(&format!("stable_numbers={}\nfont_capitals={}\n", self.stable_numbers, self.font_capitals));
@@ -279,7 +282,7 @@ impl Settings {
                 .filter(|(_, t)| **t != particles::ParticleTuning::default())
                 .map(|(k, t)| {
                     format!(
-                        "{}:{},{},{},{},{},{},{}",
+                        "{}:{},{},{},{},{},{},{},{},{}",
                         k.key,
                         u8::from(t.enabled),
                         t.lifetime_pct,
@@ -287,7 +290,9 @@ impl Settings {
                         t.speed_pct,
                         t.amount_pct,
                         t.interval_pct,
-                        u8::from(t.all_at_once)
+                        u8::from(t.all_at_once),
+                        t.size_pct,
+                        t.spread_pct
                     )
                 })
                 .collect::<Vec<_>>()
@@ -369,9 +374,14 @@ impl Settings {
             self.module_session_info, self.hud_session_x, self.hud_session_y, self.hud_session_scale, self.session_opacity, self.session_lines
         ));
         body.push_str(&format!(
-            "armor_trims={}\nmodified_view_model={}\nhurt_cam={}\nhurt_cam_strength={}\nfire_mode={}\nfire_height={}\nfire_crosshair_hue={}\nfire_crosshair_saturation={}\nfire_crosshair_value={}\n",
+            "module_clock={}\nhud_clock_x={}\nhud_clock_y={}\nhud_clock_scale={}\n",
+            self.module_clock, self.hud_clock_x, self.hud_clock_y, self.hud_clock_scale
+        ));
+        body.push_str(&format!(
+            "armor_trims={}\nmodified_view_model={}\nview_model_bobbing={}\nhurt_cam={}\nhurt_cam_strength={}\nfire_mode={}\nfire_height={}\nfire_crosshair_hue={}\nfire_crosshair_saturation={}\nfire_crosshair_value={}\n",
             self.armor_trims,
             self.modified_view_model,
+            self.view_model_bobbing,
             self.hurt_cam,
             self.hurt_cam_strength,
             self.fire_mode,
@@ -401,6 +411,12 @@ impl Settings {
         body.push_str(&format!("chat_bedrock={}\n", u8::from(self.chat_bedrock)));
         body.push_str(&format!("entity_render_distance={}\n", self.entity_render_distance));
         body.push_str(&format!("block_entity_render_distance={}\n", self.block_entity_render_distance));
+        body.push_str(&format!("chunk_fade_ms={}\n", self.chunk_fade_ms));
+        body.push_str(&format!("particle_fade_out_ms={}\n", self.particle_fade_out_ms));
+        body.push_str(&format!("entity_near_dither_cm={}\n", self.entity_near_dither_cm));
+        body.push_str(&format!("mip_sharpness_pct={}\n", self.mip_sharpness_pct));
+        body.push_str(&format!("render_order={}\n", self.render_order.encode()));
+        body.push_str(&format!("particle_distance={}\n", self.particle_distance));
         body.push_str(&format!(
             "arrow_empty_feedback={}\nmodule_show_markers={}\nmodule_sound_debug={}\nmodule_hand_debug={}\nhand_fist_items={}\nmodule_connection_debug={}\n",
             self.arrow_empty_feedback,
@@ -414,6 +430,7 @@ impl Settings {
         body.push_str(&format!("module_discord_status={}\ndiscord_client_id={}\n", self.module_discord_status, self.discord_client_id));
         body.push_str(&format!("module_input_log_enabled={}\n", self.module_input_log_enabled));
         body.push_str(&format!("module_coral_record={}\n", self.module_coral_record));
+        body.push_str(&format!("module_coral_clip={}\nclip_seconds={}\nclip_checkpoints={}\n", self.module_coral_clip, self.clip_seconds, self.clip_checkpoints));
         body.push_str(&format!("module_autoclicker={}\nautoclicker_cps={}\n", self.module_autoclicker, self.autoclicker_cps));
         body.push_str(&format!(
             "module_saturation_hud={}\nsaturation_hud_hue={}\nsaturation_hud_saturation={}\nsaturation_hud_value={}\nsaturation_hud_height={}\nsaturation_hud_bg_alpha={}\nsaturation_hud_grid_alpha={}\n",

@@ -15,7 +15,8 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     fn emit_block_entity_model(&self, skinning: bool, pos: (i32, i32, i32), model: &world::Model, pose: &world::Pose, base: world::Affine, tex: [f32; 4], out: &mut Vec<world::BlockVertex>) {
         if skinning {
-            self.push_skinned(model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], false, block_entity_key(pos));
+            let i = self.push_skinned(model, pose, base, tex, [ENTITY_BRIGHTNESS; 3], false, block_entity_key(pos));
+            self.skin_without_near_dither(i);
         } else {
             world::emit_entity_model(model, pose, base, tex, ENTITY_BRIGHTNESS, out);
         }
@@ -167,15 +168,33 @@ impl App {
         let weihnachten = is_christmas();
         let skinning = self.skinning_active();
         let deckel = |pos: &(i32, i32, i32)| self.block_lids.get(pos).map_or(0.0, |d| d.last + (d.progress - d.last) * t);
+        // Je Bild einmal: die Haltung geschlossener Truhen und die Atlas-Rechtecke je Textur
+        // (die Suche ueber den Namen kostete je Truhe).
+        let zu = world::entity_model::chest_pose(0.0);
+        let mut rechtecke: Vec<(&'static str, [f32; 4])> = Vec::new();
         for (pos, state) in self.world.model_blocks() {
             let Some(truhe) = world::chest_instance(pos, state, weihnachten) else { continue };
             if !self.block_entity_shown(pos) {
                 continue;
             }
-            let tex = self.entity_atlas.rect_or_missing(truhe.texture);
+            let tex = match rechtecke.iter().find(|(t, _)| std::ptr::eq(*t, truhe.texture)) {
+                Some(&(_, r)) => r,
+                None => {
+                    let r = self.entity_atlas.rect_or_missing(truhe.texture);
+                    rechtecke.push((truhe.texture, r));
+                    r
+                }
+            };
             let offen = truhe.partner.map_or(0.0, |p| deckel(&p)).max(deckel(&pos));
+            let offene_pose;
+            let pose = if offen == 0.0 {
+                &zu
+            } else {
+                offene_pose = world::entity_model::chest_pose(offen);
+                &offene_pose
+            };
             let base = world::entity_model::chest_transform(block_rel(pos, eye), truhe.yaw_deg);
-            self.emit_block_entity_model(skinning, pos, world::entity_model::chest_model(truhe.half), &world::entity_model::chest_pose(offen), base, tex, out);
+            self.emit_block_entity_model(skinning, pos, world::entity_model::chest_model(truhe.half), pose, base, tex, out);
         }
     }
 
@@ -195,22 +214,53 @@ impl App {
     // ganz. Der Text kommt im UI-Pass (s. build_sign_texts).
     // Augenrelativ wie emit_beds. Frueher standen die Schilder irgendwo im Himmel:
     // hier stand die absolute Blockposition in einem augenrelativen Puffer.
+    //
+    // Die Geometrie je Schild wird am Blockursprung gemerkt (s. sign_meshes) und je Frame nur
+    // um den Versatz zur Kamera verschoben -- ein Schild bewegt sich nicht.
+    //
+    // Gemerkt wird auch der Blockzustand: solange er gleich bleibt, gelten Holz, Art und
+    // Drehung weiter (sign_at liest nur ihn). Die Atlas-Rechtecke je Holz und Art werden einmal
+    // je Bild gesucht statt je Schild.
     pub(crate) fn emit_signs(&self, eye: DVec3, out: &mut Vec<world::BlockVertex>) {
+        use world::entity_model::SignKind;
+        let mut gemerkt = self.sign_meshes.borrow_mut();
+        if gemerkt.len() > self.signs.len() + 64 {
+            gemerkt.retain(|pos, _| self.signs.contains_key(pos));
+        }
+        let mut rechtecke = [[None::<[f32; 4]>; world::entity_model::SIGN_TEXTURES.len()]; 2];
         for &pos in self.signs.keys() {
             if !self.block_entity_shown(pos) {
                 continue;
             }
-            let Some((holz, art, grad)) = self.sign_at(pos) else { continue };
-            let (textur, modell) = match art {
-                world::entity_model::SignKind::Hanging(a) => {
-                    (world::entity_model::HANGING_SIGN_TEXTURES[holz], world::entity_model::hanging_sign_model(a))
-                }
-                _ => (world::entity_model::SIGN_TEXTURES[holz], world::entity_model::sign_model(art == world::entity_model::SignKind::Standing)),
+            let state = self.world.block_at(pos.0, pos.1, pos.2);
+            let eintrag = gemerkt.entry(pos).or_insert_with(|| (state, None, Vec::new()));
+            let art_holz = match eintrag.1 {
+                Some((holz, art, grad, _)) if eintrag.0 == state => Some((holz, art, f32::from_bits(grad))),
+                _ => self.sign_at(pos),
             };
-            let tex = self.entity_atlas.rect_or_missing(textur);
-            let base = world::entity_model::sign_base(block_rel(pos, eye), art, grad);
-            let base = world::entity_model::sign_model_transform(base, art);
-            world::emit_entity_model(&modell, &world::Pose::new(), base, tex, ENTITY_BRIGHTNESS, out);
+            let Some((holz, art, grad)) = art_holz else { continue };
+            let haengend = matches!(art, SignKind::Hanging(_));
+            let tex = *rechtecke[usize::from(haengend)][holz].get_or_insert_with(|| {
+                self.entity_atlas.rect_or_missing(if haengend { world::entity_model::HANGING_SIGN_TEXTURES[holz] } else { world::entity_model::SIGN_TEXTURES[holz] })
+            });
+            let schluessel = (holz, art, grad.to_bits(), tex.map(f32::to_bits));
+            eintrag.0 = state;
+            if eintrag.1 != Some(schluessel) || eintrag.2.is_empty() {
+                let modell = match art {
+                    SignKind::Hanging(a) => world::entity_model::hanging_sign_model(a),
+                    _ => world::entity_model::sign_model(art == SignKind::Standing),
+                };
+                let base = world::entity_model::sign_model_transform(world::entity_model::sign_base([0.0; 3], art, grad), art);
+                eintrag.2.clear();
+                world::emit_entity_model(&modell, &world::Pose::new(), base, tex, ENTITY_BRIGHTNESS, &mut eintrag.2);
+                eintrag.1 = Some(schluessel);
+            }
+            let [rx, ry, rz] = block_rel(pos, eye);
+            out.extend(eintrag.2.iter().map(|v| {
+                let mut v = *v;
+                v.position = [v.position[0] + rx, v.position[1] + ry, v.position[2] + rz];
+                v
+            }));
         }
     }
 

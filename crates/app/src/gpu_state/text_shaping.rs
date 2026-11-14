@@ -28,9 +28,10 @@ struct LayoutEntry {
     stufe: u8,
     fett: bool,
     text: Box<str>,
-    // Zeichenlagen mit reserviertem Zahlenplatz (s. stable_numbers), nur bei Text mit Ziffern;
-    // ohne haengen sie allein am Text.
-    positionen: Box<[u32]>,
+    // Bei Text mit Ziffern der Zaehler der Ziffernbreiten (s. StableNumbers::generation): die
+    // Zeichenlagen mit reserviertem Zahlenplatz haengen nur an Text und diesem Stand. Ohne
+    // Ziffern None, dann haengen sie allein am Text.
+    zahlen: Option<u64>,
     quads: Vec<UnitQuad>,
     // Je Zeichen Anfang und Ende fuer die Textauswahl (s. TextRun), in Schriftpixeln.
     glyphs: Vec<(char, f32, f32)>,
@@ -134,7 +135,39 @@ const SHAPED_PRUNE_AT: usize = 2048;
 // (heaptrack 2026-11-05). 65536 Vertices sind gut 4 MB.
 const SHAPED_PRUNE_VERTS: usize = 65_536;
 
+// Der Schriftfaktor in echten Pixeln fuer Faktor `scale` eines Menues im Massstab `s` (s.
+// GpuState::ui_scale). Faktoren, fuer die es eine genau gerasterte Fassung gibt (Viertelstufen),
+// rasten wieder auf eine ein -- sonst wuerde jede Menueschrift ausserhalb von FHD aus einer
+// groesseren Fassung verkleinert und waere weich. Die Bitmap-Schrift (keine gerasterten
+// Fassungen) rastet auf ganze Faktoren. Stufenlose Faktoren bleiben stufenlos.
+pub(crate) fn menu_text_scale(atlas: &FontAtlas, scale: f32, s: f32) -> f32 {
+    if s == 1.0 {
+        return scale;
+    }
+    let ziel = scale * s;
+    let viertel = scale * 4.0;
+    if !ziel.is_finite() || (viertel - viertel.round()).abs() > 0.01 {
+        return ziel;
+    }
+    if atlas.linear_raster(1.0) == Some(0) {
+        return if scale.fract() == 0.0 { ziel.round().max(1.0) } else { (ziel * 2.0).round().max(2.0) / 2.0 };
+    }
+    let gerastet = (ziel * 4.0).round() / 4.0;
+    // Ausserhalb der gerasterten Faktoren gibt es nichts zum Einrasten.
+    if atlas.linear_raster(gerastet).is_none() { gerastet } else { ziel }
+}
+
 impl GpuState {
+    // Faktor fuers Messen: der echte Schriftfaktor (s. menu_text_scale), zurueck in die Pixel,
+    // in denen das Menue rechnet. Im Spiel `scale` selbst.
+    pub(crate) fn layout_scale(&self, scale: f32) -> f32 {
+        let s = self.ui_scale.get();
+        if s == 1.0 {
+            return scale;
+        }
+        menu_text_scale(self.layout_atlas(), scale, s) / s
+    }
+
     // Pixelbreite eines Textes bei gegebener Skalierung -- fuer Caret-/Layout-Berechnung.
     // Mit dem Platz, den eine wechselnde Zahl darin reserviert hat (s. stable_numbers) --
     // sonst lagen Ausrichtung (mittig, rechtsbuendig) und Zeichnen auseinander.
@@ -148,7 +181,8 @@ impl GpuState {
     // Ohne Uebersetzung: fuer Text, der schon uebersetzt ist (Umbruch, Kuerzen).
     pub(crate) fn measure_raw(&self, text: &str, scale: f32) -> f32 {
         let _klein = self.small_label_font(scale);
-        let text = &*self.layout_atlas().display_text(text);
+        let scale = self.layout_scale(scale);
+        let text = &*self.layout_atlas().display_text_cased(text, self.keep_capitals.get());
         if self.plain_numbers.get() {
             return text.chars().map(|c| self.advance(c)).sum::<f32>() * scale;
         }
@@ -167,7 +201,8 @@ impl GpuState {
     // ausgerichtet werden muessen.
     pub(crate) fn char_positions(&self, text: &str, scale: f32) -> (Vec<f32>, f32) {
         let _klein = self.small_label_font(scale);
-        let text = &*self.layout_atlas().display_text(text);
+        let scale = self.layout_scale(scale);
+        let text = &*self.layout_atlas().display_text_cased(text, self.keep_capitals.get());
         if self.plain_numbers.get() {
             let mut x = 0.0;
             let pos = text
@@ -201,13 +236,13 @@ impl GpuState {
     }
 
     pub(crate) fn text_height(&self, scale: f32) -> f32 {
-        self.layout_atlas().cell_height_px() * scale
+        self.layout_atlas().cell_height_px() * self.layout_scale(scale)
     }
 
     // Schreibcursor fuer Text, der bei `text_y` beginnt: so hoch wie eine Zeile, aber an der
     // Oberkante der Grossbuchstaben ausgerichtet (s. FontAtlas::cap_top_px).
     pub(crate) fn caret_rect(&self, x: f32, text_y: f32, scale: f32) -> Rect {
-        let y = (text_y + self.layout_atlas().cap_top_px() * scale).round();
+        let y = (text_y + self.layout_atlas().cap_top_px() * self.layout_scale(scale)).round();
         Rect { x, y, w: CARET_WIDTH_PX, h: self.text_height(scale) }
     }
 
@@ -317,12 +352,20 @@ impl GpuState {
         let mut fade = None;
         let mut zoom = None;
         let mut stufenlos = false;
+        // Menue im Massstab (s. GpuState::draw_scale): Lage und Faktor in echte Pixel.
+        // Teile davon sagen es selbst an (s. text_scale_marker).
+        let mut zeichen_s = self.draw_scale.get();
+        let mut umgerechnet;
         for (i, t) in texts.iter().enumerate() {
             while ende_bei.get(enden.len()).is_some_and(|&e| e <= i) {
                 enden.push(out.len() as u32);
             }
+            if let Some(s) = text_scale_marker_of(t) {
+                zeichen_s = s.unwrap_or_else(|| self.draw_scale.get());
+                continue;
+            }
             if let Some(z) = zoom_marker_text(t) {
-                zoom = z;
+                zoom = z.map(|(x, y, k)| (x * zeichen_s, y * zeichen_s, k));
                 continue;
             }
             if let Some(an) = clip_marker_text(t) {
@@ -330,7 +373,7 @@ impl GpuState {
                 continue;
             }
             if let Some(f) = fade_marker_text(t) {
-                fade = f;
+                fade = f.map(|f| ScrollFade { top: f.top * zeichen_s, bottom: f.bottom * zeichen_s, zone: f.zone * zeichen_s, ..f });
                 continue;
             }
             if let Some(neu) = shadow_marker(t) {
@@ -353,6 +396,10 @@ impl GpuState {
                 self.plain_numbers.set(an);
                 continue;
             }
+            if let Some(an) = keep_capitals_marker(t) {
+                self.keep_capitals.set(an);
+                continue;
+            }
             if let Some(an) = smooth_scale_marker(t) {
                 stufenlos = an;
                 continue;
@@ -371,6 +418,16 @@ impl GpuState {
                 group += 1;
                 continue;
             }
+            let t = if zeichen_s == 1.0 {
+                t
+            } else {
+                let scale = menu_text_scale(atlas, t.scale, zeichen_s);
+                // Was eingerastet ist, steht auch auf ganzen Pixeln (s. centered_text).
+                let fest = scale != t.scale * zeichen_s || (scale * 4.0).fract() == 0.0;
+                let lage = |v: f32| if fest && !stufenlos { (v * zeichen_s).round() } else { v * zeichen_s };
+                umgerechnet = UiText { text: t.text.clone(), x: lage(t.x), y: lage(t.y), color: t.color, scale };
+                &umgerechnet
+            };
             let text_start = out.len();
             // t.y ist die Oberkante der Zeile; ueber den ascent zur Grundlinie.
             let scale = t.scale;
@@ -426,7 +483,7 @@ impl GpuState {
             // Getippter Text auch: die Verschiebung haengt am ganzen Text, mit jedem Zeichen
             // ruckte sonst alles samt dem ersten Buchstaben, und der Cursor stand daneben.
             let getippt = std::mem::take(&mut getippt_naechster);
-            let anzeige = atlas.display_text(&t.text);
+            let anzeige = atlas.display_text_cased(&t.text, self.keep_capitals.get());
             // Schon einmal genau so gesetzt? (Zoom und Ausblenden verschieben die Vertices
             // danach noch, die laufen immer neu.)
             let schluessel = (zoom.is_none() && fade.is_none()).then(|| ShapedKey {
@@ -442,7 +499,7 @@ impl GpuState {
             if let Some(k) = &schluessel {
                 let mut cache = self.shaped_cache.borrow_mut();
                 let runde = cache.runde;
-                if let Some(e) = cache.eintraege.get_mut(k).filter(|e| out.len() + e.verts.len() <= MAX_UI_GLYPHS * VERTS_PER_QUAD) {
+                if let Some(e) = cache.eintraege.get_mut(k).filter(|e| out.len() + e.verts.len() <= MAX_UI_GLYPHS * TEXT_VERTS_PER_QUAD) {
                     e.runde = runde;
                     out.extend_from_slice(&e.verts);
                     runs.push(TextRun { top: t.y, bottom: t.y + self.text_height(scale), glyphs: e.glyphs.clone(), group });
@@ -453,7 +510,7 @@ impl GpuState {
             for &ist_rand in durchgaenge {
                 for (k, (ch, &rel)) in anzeige.chars().zip(&positionen).enumerate() {
                     let pen_x = x + rel + k as f32 * mehr;
-                    if out.len() + VERTS_PER_QUAD * 2 > MAX_UI_GLYPHS * VERTS_PER_QUAD {
+                    if out.len() + TEXT_VERTS_PER_QUAD * 2 > MAX_UI_GLYPHS * TEXT_VERTS_PER_QUAD {
                         runs.push(TextRun { top: t.y, bottom: t.y + self.text_height(scale), glyphs, group });
                         return; // Buffer-Limit erreicht -- Rest weglassen statt ueberlaufen
                     }
@@ -509,6 +566,7 @@ impl GpuState {
         drop(runs);
         self.set_layout_font(None);
         self.plain_numbers.set(false);
+        self.keep_capitals.set(false);
         let getippt = |i: usize| i > 0 && is_typed_marker(&texts[i - 1]);
         let mut ruhig = false;
         let ruhig_je_text: Vec<bool> = texts
@@ -543,32 +601,29 @@ impl GpuState {
     ) -> Option<Vec<(char, f32, f32)>> {
         use std::hash::{Hash, Hasher};
         let scale = t.scale;
-        let anzeige = atlas.display_text(&t.text);
+        let anzeige = atlas.display_text_cased(&t.text, self.keep_capitals.get());
         let vorschub = |c: char| atlas.glyph(c).map_or(0.0, |g| g.advance_px);
         let mit_ziffern = !self.plain_numbers.get() && anzeige.bytes().any(|b| b.is_ascii_digit());
-        let positionen: Vec<u32> = if mit_ziffern {
-            self.stable_numbers.borrow().layout(&anzeige, vorschub).0.into_iter().map(f32::to_bits).collect()
-        } else {
-            Vec::new()
-        };
+        // Nicht die Lagen selbst in den Schluessel: die rechnete jedes Bild jeden Text mit
+        // Ziffern neu durch, nur um ihn nachzuschlagen.
+        let zahlen = mit_ziffern.then(|| self.stable_numbers.borrow().generation());
         let generation = font_atlas::glyph_generation();
         let art = atlas.kind();
         let schluessel = {
             let mut h = rustc_hash::FxHasher::default();
-            (generation, art, stufe, fett).hash(&mut h);
+            (generation, art, stufe, fett, zahlen).hash(&mut h);
             anzeige.hash(&mut h);
-            positionen.hash(&mut h);
             h.finish()
         };
         let mut cache = self.shaped_cache.borrow_mut();
         let runde = cache.runde;
         match cache.lagen.get(&schluessel) {
-            Some(e) if e.generation == generation && e.atlas == art && e.stufe == stufe && e.fett == fett && *e.text == *anzeige && *e.positionen == *positionen => {}
+            Some(e) if e.generation == generation && e.atlas == art && e.stufe == stufe && e.fett == fett && *e.text == *anzeige && e.zahlen == zahlen => {}
             // Ein anderer Text unter demselben Hash: nicht ueberschreiben.
             Some(_) => return None,
             None => {
                 let lagen: Vec<f32> = if mit_ziffern {
-                    positionen.iter().copied().map(f32::from_bits).collect()
+                    self.stable_numbers.borrow().layout(&anzeige, vorschub).0
                 } else {
                     let mut x = 0.0;
                     anzeige
@@ -587,7 +642,7 @@ impl GpuState {
                     stufe,
                     fett,
                     text: anzeige.as_ref().into(),
-                    positionen: positionen.into(),
+                    zahlen,
                     quads,
                     glyphs,
                     runde,
@@ -601,13 +656,22 @@ impl GpuState {
         let durchgaenge = if rand == TextShadow::Off { 1 } else { 2 };
         // Mit demselben Rand wie shape_text_in je Zeichen: reicht der Platz nicht fuer alles,
         // kuerzt der gewoehnliche Weg wie bisher.
-        if out.len() + (e.quads.len() * durchgaenge + 2) * VERTS_PER_QUAD > MAX_UI_GLYPHS * VERTS_PER_QUAD {
+        if out.len() + (e.quads.len() * durchgaenge + 2) * TEXT_VERTS_PER_QUAD > MAX_UI_GLYPHS * TEXT_VERTS_PER_QUAD {
             return None;
         }
         e.runde = runde;
         let stand = layout_stand(t, screen_px, rand, staerke, halb, randfarbe);
+        // Nur verschoben (gleicher Faktor, gleiche Farben und Rand): die gemerkten Ecken
+        // versetzen statt neu bauen. Alles ausser der Lage haengt nicht an t.x/t.y, und die Lage
+        // geht linear in die NDC-Koordinate ein. Versetzt wird immer vom gemerkten Stand aus,
+        // so summiert sich kein Rundungsfehler.
+        let verschoben_von = e.zuletzt.filter(|z| z[2..] == stand[2..]);
         if e.zuletzt == Some(stand) {
             out.extend_from_slice(&e.verts);
+        } else if let Some(z) = verschoben_von {
+            let dx = (t.x - f32::from_bits(z[0])) / screen_px.0 * 2.0;
+            let dy = -(t.y - f32::from_bits(z[1])) / screen_px.1 * 2.0;
+            out.extend(e.verts.iter().map(|v| TextVertex { position: [v.position[0] + dx, v.position[1] + dy], ..*v }));
         } else {
             let anfang = out.len();
             let grundlinie = t.y + atlas.ascent_px() * scale;
@@ -675,11 +739,11 @@ impl GpuState {
             let mode = if pack { [mode[0] + crate::text_draw::TEXT_MODE_PACK, mode[1], mode[2], mode[3]] } else { mode };
             let v = |x: f32, y: f32, u: f32, vv: f32| project(x, y).map(|q| TextVertex { position: ndc(q), uv: [u, vv], color, bounds, mode, depth: tiefe(x, y) });
             let (va, vb, vc, vd) = (v(x0, y0, u0, v0)?, v(x1, y0, u1, v0)?, v(x1, y1, u1, v1)?, v(x0, y1, u0, v1)?);
-            Some([va, vb, vc, va, vc, vd])
+            Some([va, vb, vc, vd])
         };
         // Mit Rand erst alle Raender, dann alle Glyphen (wie shape_text): sonst laege der Rand
         // des naechsten Zeichens ueber dem vorigen.
-        let mut glyphen: Vec<[TextVertex; 6]> = Vec::new();
+        let mut glyphen: Vec<[TextVertex; 4]> = Vec::new();
         for ch in atlas.display_text(text).chars() {
             let Some(g) = atlas.glyph(ch) else { continue };
             if let Some(p) = atlas.place(ch, raster).filter(|p| p.size[0] > 0.0 && p.size[1] > 0.0) {

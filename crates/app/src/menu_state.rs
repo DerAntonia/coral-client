@@ -144,26 +144,34 @@ impl MenuScreen {
         match self {
             Self::SettingsGeneral => Some(SettingsPage {
                 rows: SETTINGS_ROW_COUNT,
-                sections: &[("Bildrate", FPS_LIMIT_ROW), ("Chunks", MESH_BUDGET_ROW), ("Effekte", MOTION_BLUR_ROW), ("Tearing", TEARING_TEST_ROW), ("System", CPU_ROW)],
+                sections: &[("Bildrate", FPS_LIMIT_ROW), ("Chunks", MESH_BUDGET_ROW), ("Effekte", MOTION_BLUR_ROW), ("Tearing", TEARING_TEST_ROW), ("System", CPU_ROW), ("Render-Order", RENDER_ORDER_HEAD_ROW)],
+                tabs: true,
             }),
             Self::SettingsVideo => Some(SettingsPage {
                 rows: VIDEO_ROW_COUNT,
                 sections: &[("Sichtweite", RENDER_DISTANCE_ROW), ("Kamera", VIDEO_CAMERA_ROW), ("Darstellung", SMOOTH_LIGHTING_ROW), ("Treffer", DAMAGE_TINT_FIRST_ROW), ("Spielerliste", PLAYER_LIST_SCALE_ROW), ("Hurt-Cam", HURT_CAM_ROW), ("Schulterkamera", SHOULDER_ROW), ("Feuer", FIRE_MODE_ROW), ("Tod", DEATH_ANIM_ROW), ("Animationen", ANIM_ROW), ("Modified View Model", VIEW_MODEL_ROW)],
+                tabs: true,
             }),
-            Self::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections() }),
+            Self::SettingsControls => Some(SettingsPage { rows: controls_rows().len(), sections: controls_sections(), tabs: true }),
             // Zeile 4 = Farbe der Anzahl, Zeilen 5..7 = Trank-Buchstaben.
-            Self::SettingsInventory => Some(SettingsPage { rows: INVENTORY_ROW_COUNT, sections: &[("Allgemein", 0), ("Tränke", 5), ("Animation", INVENTORY_ANIM_ROW)] }),
-            Self::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[] }),
-            Self::SettingsAnimations => Some(SettingsPage { rows: world::more_anims::FEATURES.len(), sections: &[] }),
-            Self::SettingsMotionBlur => Some(SettingsPage { rows: MB_ROW_COUNT, sections: &[] }),
-            Self::SettingsServerScreens => Some(SettingsPage { rows: SERVER_SCREENS_ROWS, sections: &[] }),
-            Self::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)] }),
-            Self::SettingsAudio => Some(SettingsPage { rows: AUDIO_AUTO_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)] }),
+            Self::SettingsInventory => Some(SettingsPage { rows: INVENTORY_ROW_COUNT, sections: &[("Allgemein", 0), ("Tränke", 5), ("Animation", INVENTORY_ANIM_ROW)], tabs: true }),
+            Self::SettingsMisc => Some(SettingsPage { rows: 5, sections: &[], tabs: true }),
+            Self::SettingsAnimations => Some(SettingsPage { rows: world::more_anims::FEATURES.len(), sections: &[], tabs: true }),
+            Self::SettingsMotionBlur => Some(SettingsPage { rows: MB_ROW_COUNT, sections: &[], tabs: true }),
+            // Abschnitte nur als Trennlinien mit Namen, ohne Reiter oben.
+            Self::SettingsServerScreens => Some(SettingsPage { rows: SERVER_SCREENS_ROWS, sections: &[("Server schließt", 0), ("Server öffnet", SERVER_OPEN_ROW)], tabs: false }),
+            // Je Art zwei Zeilen und ein Abschnitt mit ihrem Namen, ohne Reiter (s. particle_sections).
+            Self::SettingsParticles => {
+                let abschnitte = particle_sections(PARTICLE_SCREEN_OWN.load(std::sync::atomic::Ordering::Relaxed));
+                Some(SettingsPage { rows: abschnitte.len() * 2, sections: abschnitte, tabs: false })
+            }
+            Self::SettingsDesign => Some(SettingsPage { rows: design_row_count(), sections: &[("Allgemein", 0), ("Theme", DESIGN_THEME_ROW)], tabs: true }),
+            Self::SettingsAudio => Some(SettingsPage { rows: AUDIO_AUTO_ROW + 1, sections: &[("Lautstärke", AUDIO_MASTER_ROW), ("UI-Klänge", AUDIO_UI_SOUND_FIRST_ROW), ("Ausgabe", AUDIO_DEVICE_ROW)], tabs: true }),
             // Aussehen (Groesse, Breite, Hintergrund, Abdunkeln), dann Verlauf (Zeilen, Ausblenden).
-            Self::SettingsFont => Some(SettingsPage { rows: CAPITALS_ROW + 1, sections: &[("Standard", 0), ("Ausnahmen", FONT_EXCEPTIONS_ROW), ("Zahlen", STABLE_NUMBERS_ROW), ("Stil", CAPITALS_ROW)] }),
-            Self::SettingsLanguage => Some(SettingsPage { rows: LOANWORDS_ROW + 1, sections: &[("Sprachen", 0), ("Schreibweise", LATIN_MACRONS_ROW)] }),
+            Self::SettingsFont => Some(SettingsPage { rows: CAPITALS_ROW + 1, sections: &[("Standard", 0), ("Ausnahmen", FONT_EXCEPTIONS_ROW), ("Zahlen", STABLE_NUMBERS_ROW), ("Stil", CAPITALS_ROW)], tabs: true }),
+            Self::SettingsLanguage => Some(SettingsPage { rows: LOANWORDS_ROW + 1, sections: &[("Sprachen", 0), ("Schreibweise", LATIN_MACRONS_ROW)], tabs: true }),
             // Suchfeld, dann je Treffer eine Zeile (oder die Zeile "nichts gefunden").
-            Self::SettingsSearch => Some(SettingsPage { rows: 2 + SEARCH_HIT_COUNT.load(std::sync::atomic::Ordering::Relaxed), sections: &[] }),
+            Self::SettingsSearch => Some(SettingsPage { rows: 2 + SEARCH_HIT_COUNT.load(std::sync::atomic::Ordering::Relaxed), sections: &[], tabs: true }),
             _ => None,
         }
     }
@@ -175,6 +183,11 @@ pub(crate) const FREELOOK_VIEW_FIRST: u8 = 1;
 pub(crate) const FREELOOK_VIEW_BACK: u8 = 2;
 pub(crate) const FREELOOK_VIEW_FRONT: u8 = 3;
 pub(crate) const FREELOOK_VIEW_NAMES: [&str; 4] = ["Aktuelle", "Ich-Sicht", "Hinten", "Vorne"];
+// Kanten einer Hitbox (Settings::module_hitbox_lines): alle zwoelf, nur die, die die Box selbst
+// nicht verdeckt, oder nur ihr Umriss (Nutzer 2026-11-11).
+pub(crate) const HITBOX_LINE_NAMES: [&str; 3] = ["Alle", "Sichtbare", "Umriss"];
+pub(crate) const HITBOX_LINES_VISIBLE: u8 = 1;
+pub(crate) const HITBOX_LINES_OUTLINE: u8 = 2;
 
 // So viele Pixel steht ein angesprungener Abschnitt tiefer als die erste Zeile (s.
 // SettingsPage::section_stand). Hoechstens 8: tiefer kaeme seine eigene Trennlinie samt Name
@@ -206,14 +219,29 @@ pub(crate) enum SearchPlace {
 }
 
 // Eine Einstellungsseite mit Seiten-Scroll: wie viele Zeilen sie hat und wo ihre Abschnitte
-// beginnen (Name, erste Zeile). Ab zwei Abschnitten stehen oben Reiter, die sofort zum
-// Abschnitt scrollen, und vor jedem weiteren Abschnitt eine Trennlinie mit seinem Namen rechts
+// beginnen (Name, erste Zeile). Ab zwei Abschnitten stehen oben Reiter (ausser bei `tabs` aus),
+// die sofort zum Abschnitt scrollen, und vor jedem weiteren Abschnitt eine Trennlinie mit seinem Namen rechts
 // (s. App::build_settings_page_frame). Die Seite selbst setzt ihre Zeilen wie immer ueber
 // settings_row_y; den Platz fuer die Trennlinien rechnet das dort hinein.
 #[derive(Clone, Copy)]
 pub(crate) struct SettingsPage {
     pub(crate) rows: usize,
     pub(crate) sections: &'static [(&'static str, usize)],
+    // false: die Abschnitte nur als Trennlinien mit Namen, ohne Reiter oben.
+    pub(crate) tabs: bool,
+}
+
+// Welche Partikel-Anpassung offen ist (App::particle_screen_own), fuer settings_page, das
+// ohne App auskommen muss -- wie SEARCH_HIT_COUNT.
+pub(crate) static PARTICLE_SCREEN_OWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// Abschnitte der Partikel-Anpassung: je Art (s. particles::particle_kinds_for_own) ihr Name
+// ab ihrer ersten von zwei Zeilen.
+pub(crate) fn particle_sections(own: bool) -> &'static [(&'static str, usize)] {
+    static ABSCHNITTE: std::sync::LazyLock<[Vec<(&'static str, usize)>; 2]> = std::sync::LazyLock::new(|| {
+        [false, true].map(|own| crate::particles::particle_kinds_for_own(own).iter().enumerate().map(|(i, (_, k))| (k.label, i * 2)).collect())
+    });
+    &ABSCHNITTE[usize::from(own)]
 }
 
 impl SettingsPage {
@@ -273,11 +301,13 @@ pub(crate) enum HudElement {
     Keystrokes,
     // Die Session-Info (Modul, s. push_session_info).
     Session,
+    // Die Uhr (Modul, s. push_clock).
+    Clock,
 }
 
 impl HudElement {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 16] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::Perf,
         Self::Crosshair,
         Self::Title,
@@ -294,6 +324,7 @@ impl HudElement {
         Self::Armor,
         Self::Keystrokes,
         Self::Session,
+        Self::Clock,
     ];
 
     pub(crate) const fn label(self) -> &'static str {
@@ -314,6 +345,7 @@ impl HudElement {
             Self::Armor => "Rüstung",
             Self::Keystrokes => "Keystrokes",
             Self::Session => "Session-Info",
+            Self::Clock => "Uhr",
         }
     }
 }
@@ -420,6 +452,8 @@ pub(crate) enum Choice {
     AudioDevice,
     AudioBuffer,
     CrosshairShape,
+    // Skin, dessen Panorama der Hintergrund zeigt (nur Skins mit Panorama).
+    PanoramaSkin,
     // Auswahl-Einstellung eines Addon-Moduls (Modul, Einstellung).
     Addon(u16, u16),
 }
@@ -442,7 +476,6 @@ pub(crate) struct Dropdown {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum ScrollList {
     SettingsPage(MenuScreen),
-    Particles,
     ModuleMenu,
     Dropdown,
     Dialog,
@@ -532,11 +565,13 @@ pub(crate) const SWATCH_W: f32 = 54.0;
 // Hintergrundbild und darunter dessen Knopf "Bild waehlen" bzw. der Pfad.
 pub(crate) const MENU_BACKDROP_ROW: usize = 0;
 pub(crate) const WALLPAPER_ROW: usize = 1;
-pub(crate) const SCROLL_INERTIA_ROW: usize = 2;
-pub(crate) const SCROLL_DISTANCE_ROW: usize = 3;
+// Drehung des Panoramas (Settings::panorama_speed), nur beim Hintergrund Panorama einstellbar.
+pub(crate) const PANORAMA_SPEED_ROW: usize = 2;
+pub(crate) const SCROLL_INERTIA_ROW: usize = 3;
+pub(crate) const SCROLL_DISTANCE_ROW: usize = 4;
 // Rechts neben der Wahl: "Bild wählen..." bzw. der Pfad des Desktop-Bildes.
 pub(crate) const WALLPAPER_PICK_X: f32 = SETTINGS_CTRL_X + 230.0;
-pub(crate) const DESIGN_THEME_ROW: usize = 4;
+pub(crate) const DESIGN_THEME_ROW: usize = 5;
 // Trennlinie zwischen Kacheln und Farben.
 pub(crate) const THEME_DIVIDER_X: f32 = 856.0;
 pub(crate) const THEME_TILE_COLS: usize = 3;
@@ -1010,7 +1045,7 @@ impl EditableValue {
     }
 
     pub(crate) const fn allows_unlimited(self) -> bool {
-        matches!(self, Self::FpsLimit | Self::MaxRenderDistance | Self::EntityRenderDistance | Self::BlockEntityRenderDistance)
+        matches!(self, Self::FpsLimit | Self::EntityRenderDistance | Self::BlockEntityRenderDistance)
     }
 
     // Bildschirm-Rechteck des Wertfelds -- dieselbe Position, die auch die normale Anzeige

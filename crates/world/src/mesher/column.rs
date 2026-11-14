@@ -21,6 +21,106 @@ pub fn mesh_column_ao_fading(
     show_markers: bool,
     fades: &[AoFadeSource],
 ) -> (Vec<BlockVertex>, Vec<BlockVertex>, Vec<AoFadeQuad>) {
+    mesh_column_impl(chunk_x, chunk_z, neighbors, uvs, shapes, biomes, cross, cross_extra_shapes, ao_strength, show_markers, fades, None, None)
+}
+
+// Die Bloecke einer Spalte, auf die sich ein Teil-Meshen beschraenkt (s. mesh_column_blocks):
+// Block-Kennungen wie block_id, aufsteigend sortiert.
+#[derive(Clone, Debug, Default)]
+pub struct MeshRegion {
+    blocks: Vec<u32>,
+}
+
+// Kennung eines Blocks innerhalb seiner Spalte: x und z spaltenlokal (0..16), y ab min_y.
+#[must_use]
+pub const fn block_id(local_x: i32, y_ab_min: i32, local_z: i32) -> u32 {
+    (local_x as u32) | (local_z as u32) << 4 | (y_ab_min as u32) << 8
+}
+
+impl MeshRegion {
+    // Alle Bloecke der Spalte (chunk_x, chunk_z), die hoechstens einen Block (auch diagonal)
+    // von einer der `positions` (Weltkoordinaten) entfernt liegen -- so weit reicht eine
+    // Blockaenderung: die Flaechen der sechs Nachbarn und die Eckabdunklung ringsum.
+    #[must_use]
+    pub fn around(chunk_x: i32, chunk_z: i32, min_y: i32, sections: usize, positions: &[(i32, i32, i32)]) -> Self {
+        let (base_x, base_z) = (chunk_x * SECTION_SIZE, chunk_z * SECTION_SIZE);
+        let hoehe = sections as i32 * SECTION_SIZE;
+        let mut blocks = Vec::with_capacity(positions.len() * 27);
+        for &(px, py, pz) in positions {
+            for y in py - 1..=py + 1 {
+                for z in pz - 1..=pz + 1 {
+                    for x in px - 1..=px + 1 {
+                        let (lx, ly, lz) = (x - base_x, y - min_y, z - base_z);
+                        if (0..SECTION_SIZE).contains(&lx) && (0..SECTION_SIZE).contains(&lz) && (0..hoehe).contains(&ly) {
+                            blocks.push(block_id(lx, ly, lz));
+                        }
+                    }
+                }
+            }
+        }
+        blocks.sort_unstable();
+        blocks.dedup();
+        Self { blocks }
+    }
+
+    #[must_use]
+    pub fn contains(&self, id: u32) -> bool {
+        self.blocks.binary_search(&id).is_ok()
+    }
+
+    #[must_use]
+    pub fn blocks(&self) -> &[u32] {
+        &self.blocks
+    }
+
+    fn touches_section(&self, index: usize) -> bool {
+        let (von, bis) = ((index as u32 * SECTION_SIZE as u32) << 8, ((index as u32 + 1) * SECTION_SIZE as u32) << 8);
+        let i = self.blocks.partition_point(|&b| b < von);
+        self.blocks.get(i).is_some_and(|&b| b < bis)
+    }
+}
+
+// Nur die Bloecke aus `region` meshen, mit derselben Umgebung wie beim ganzen Meshen (Nachbarn
+// entscheiden ueber verdeckte Flaechen und die Eckabdunklung). Gibt opake und durchsichtige
+// Vertices zurueck und fuer jeden gemeshten Block (Anfang in den opaken Vertices, block_id),
+// in Reihenfolge der Vertices: die opaken Flaechen eines Blocks reichen von seinem Anfang bis
+// zum Anfang des naechsten.
+#[allow(clippy::too_many_arguments)]
+pub fn mesh_column_blocks(
+    chunk_x: i32,
+    chunk_z: i32,
+    neighbors: &ColumnNeighbors,
+    uvs: &BlockUvs,
+    shapes: &BlockShapes,
+    biomes: &BiomePalette,
+    cross: &CrossBlocks,
+    cross_extra_shapes: &BlockShapes,
+    ao_strength: f32,
+    show_markers: bool,
+    region: Option<&MeshRegion>,
+) -> (Vec<BlockVertex>, Vec<BlockVertex>, Vec<(u32, u32)>) {
+    let mut starts = Vec::new();
+    let (opaque, translucent, _) =
+        mesh_column_impl(chunk_x, chunk_z, neighbors, uvs, shapes, biomes, cross, cross_extra_shapes, ao_strength, show_markers, &[], region, Some(&mut starts));
+    (opaque, translucent, starts)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mesh_column_impl(
+    chunk_x: i32,
+    chunk_z: i32,
+    neighbors: &ColumnNeighbors,
+    uvs: &BlockUvs,
+    shapes: &BlockShapes,
+    biomes: &BiomePalette,
+    cross: &CrossBlocks,
+    cross_extra_shapes: &BlockShapes,
+    ao_strength: f32,
+    show_markers: bool,
+    fades: &[AoFadeSource],
+    region: Option<&MeshRegion>,
+    mut block_starts: Option<&mut Vec<(u32, u32)>>,
+) -> (Vec<BlockVertex>, Vec<BlockVertex>, Vec<AoFadeQuad>) {
     let mut fade_quads: Vec<AoFadeQuad> = Vec::new();
     let ao_strength = ao_strength.clamp(0.0, 1.0);
     let base_x = chunk_x * SECTION_SIZE;
@@ -86,7 +186,7 @@ pub fn mesh_column_ao_fading(
     let desync = uvs.has_anim_variants();
     let mut pending: Option<((i32, i32, i32), usize, usize, usize)> = None;
     for (index, section) in neighbors.target.sections.iter().enumerate() {
-        if section.is_empty() {
+        if section.is_empty() || region.is_some_and(|r| !r.touches_section(index)) {
             continue;
         }
         let base_y = welt_min_y + index as i32 * SECTION_SIZE;
@@ -100,6 +200,14 @@ pub fn mesh_column_ao_fading(
                     let state = section.get(local_x, local_y, local_z);
                     if !is_solid(state) {
                         continue;
+                    }
+
+                    let kennung = block_id(local_x, index as i32 * SECTION_SIZE + local_y, local_z);
+                    if region.is_some_and(|r| !r.contains(kennung)) {
+                        continue;
+                    }
+                    if let Some(starts) = block_starts.as_deref_mut() {
+                        starts.push((opaque.len() as u32, kennung));
                     }
 
                     let (x, y, z) = (base_x + local_x, base_y + local_y, base_z + local_z);
@@ -122,14 +230,16 @@ pub fn mesh_column_ao_fading(
                     if !show_markers && is_marker_block(name) {
                         // Eine wassergefuellte Barriere zeigt trotzdem ihr Wasser.
                         if property(state, "waterlogged") == Some("true") {
+                            let wasser_ab = translucent.len();
                             push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, [false; 6]);
+                            mark_water(&mut translucent, wasser_ab);
                         }
                         continue;
                     }
                     let (tint, tint_only_up) = if is_water(name) {
                         (wasser.at(local_x, y, local_z), false)
                     } else {
-                        match tint_kind(name) {
+                        match tint_kind_of_state(state, name) {
                             TintKind::None => ([1.0, 1.0, 1.0], false),
                             TintKind::GrassTop => (colors.grass, true),
                             TintKind::GrassAll => (colors.grass, false),
@@ -157,7 +267,9 @@ pub fn mesh_column_ao_fading(
                         // normale waterlogged-Check unten (Box-Schleife) fuer Kreuz-Bloecke
                         // nie erreicht wird (continue oben).
                         if always_wet(name) {
+                            let wasser_ab = translucent.len();
                             push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, [false; 6]);
+                            mark_water(&mut translucent, wasser_ab);
                         }
                         // Zusaetzliche, unrotierte Geometrie eines Kreuz-Modells (z.B. die
                         // Hitbox-Deko-Ebenen eines PvP-Cobweb-Packs, s. assets::shapes::
@@ -247,7 +359,9 @@ pub fn mesh_column_ao_fading(
                             }
                         }
                         if property(state, "waterlogged") == Some("true") {
+                            let wasser_ab = translucent.len();
                             push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, [false; 6]);
+                            mark_water(&mut translucent, wasser_ab);
                         }
                         continue;
                     }
@@ -277,7 +391,9 @@ pub fn mesh_column_ao_fading(
                     // Bloecken oben gibt es hier keine always_wet-Wasserfuellung zusaetzlich
                     // noetig -- "water" IST schon die Fuellung).
                     if is_water_block {
+                        let wasser_ab = translucent.len();
                         push_fluid_quads(&mut translucent, origin, x, y, z, state, FluidKind::Water, wasser.at(local_x, y, local_z), uvs, shapes, &block_at);
+                        mark_water(&mut translucent, wasser_ab);
                         continue;
                     }
 
@@ -556,7 +672,7 @@ pub fn mesh_column_ao_fading(
                                     push_face_quad_ao(verts, quad_min, quad_max, offset, shade, faktoren, uv);
                                     if let Some(vorher) = ao_vorher {
                                         let mut before = Vec::new();
-                                        push_face_quad_ao(&mut before, quad_min, quad_max, offset, shade, vorher, uv);
+                                        push_face_quad_ao_geteilt(&mut before, quad_min, quad_max, offset, shade, vorher, uv, ao_diagonal_gedreht(faktoren));
                                         fade_quads.push(AoFadeQuad { start: start as u32, translucent: is_water_block || is_glass_block, before, after: verts[start..].to_vec() });
                                     }
                                 }
@@ -598,7 +714,7 @@ pub fn mesh_column_ao_fading(
                                             push_face_quad_ao(&mut opaque, quad_min, quad_max, offset, overlay_shade, faktoren, overlay_uv);
                                             if let Some(vorher) = ao_vorher {
                                                 let mut before = Vec::new();
-                                                push_face_quad_ao(&mut before, quad_min, quad_max, offset, overlay_shade, vorher, overlay_uv);
+                                                push_face_quad_ao_geteilt(&mut before, quad_min, quad_max, offset, overlay_shade, vorher, overlay_uv, ao_diagonal_gedreht(faktoren));
                                                 fade_quads.push(AoFadeQuad { start: start as u32, translucent: false, before, after: opaque[start..].to_vec() });
                                             }
                                         }
@@ -619,7 +735,9 @@ pub fn mesh_column_ao_fading(
                     // Wasserbloecke ("water" selbst) sind hier ausgeschlossen (waeren sonst
                     // doppelt gezeichnet, s. is_water_block oben).
                     if !is_water_block && (property(state, "waterlogged") == Some("true") || always_wet(name)) {
+                        let wasser_ab = translucent.len();
                         push_waterlogged_fill(&mut translucent, origin, x, y, z, wasser.at(local_x, y, local_z), uvs, shapes, &block_at, own_faces);
+                        mark_water(&mut translucent, wasser_ab);
                     }
                 }
             }
@@ -682,5 +800,13 @@ pub(super) fn desync_animations(verts: &mut [BlockVertex], uvs: &BlockUvs, (x, y
             v.uv[0] += du;
             v.uv[1] += dv;
         }
+    }
+}
+
+// Alles ab `from` als Wasser kennzeichnen (s. BlockVertex::with_water_mark): die Render-Order
+// behandelt Wasser anders als das uebrige Durchscheinende.
+fn mark_water(out: &mut [BlockVertex], from: usize) {
+    for v in &mut out[from..] {
+        *v = v.with_water_mark();
     }
 }

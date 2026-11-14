@@ -503,6 +503,8 @@ pub(crate) enum ButtonAction {
     Back,
     Connect,
     Disconnect,
+    // Client beenden (Start- und Pausemenue), wie Alt+F4.
+    Quit,
     // Online-Mode-Login (Connect-Screen): Microsoft-Device-Code starten, ein Eingabefeld
     // (Token bzw. Refresh-Token) auf-/zuklappen, das Eingegebene uebernehmen, abmelden.
     MicrosoftLogin,
@@ -536,6 +538,8 @@ pub(crate) enum ButtonAction {
     OpenConfigFolder,
     // Pausemenue: die Links des Servers als Dialog.
     ServerLinks,
+    // Pausemenue: der Dialog des Servers aus #minecraft:pause_screen_additions (Vanilla-Knopf).
+    PauseDialog,
     Reconnect,
     DeleteConfig,
     // Partikel-Anpassung oeffnen: true = die eigenen Partikel, false = die anderen.
@@ -563,6 +567,10 @@ pub(crate) enum ButtonAction {
     CursorSizeDown,
     CursorWidthDown,
     CursorWidthUp,
+    CursorOutlineDown,
+    CursorOutlineUp,
+    CursorFillDown,
+    CursorFillUp,
     HoldConfirmDown,
     HoldConfirmUp,
     ReconnectHoldDown,
@@ -590,6 +598,8 @@ pub(crate) enum ButtonAction {
     // Vanilla-Schatten von Kaestchen i: 1 oder 1/2 Pixel versetzt.
     ToggleShadowHalf(usize),
     CycleWallpaper,
+    PanoramaSpeedPrev,
+    PanoramaSpeedNext,
     PickWallpaper,
     // Sprach-Tab: Index in LANGUAGE_ROWS (0 = alle Bereiche auf einmal).
     CycleLanguage(usize),
@@ -627,6 +637,9 @@ pub(crate) enum ButtonAction {
     CrosshairBoostNext,
     ToggleCrosshairOutline,
     ToggleCrosshairRingOutline,
+    // Radius des Rings am Kreuz (Schild-Cooldown, Timer).
+    CrosshairRingRadiusPrev,
+    CrosshairRingRadiusNext,
     // Form des Fadenkreuzes (s. CROSSHAIR_SHAPES, zuletzt "Eigene") und ihre Groesse.
     CrosshairSizePrev,
     CrosshairSizeNext,
@@ -646,6 +659,8 @@ pub(crate) enum ButtonAction {
     // Icon, Name in Effektfarbe, Timer-Art (EFFECTS_TIMER_STYLES), Timer in Effektfarbe.
     EffectsDetailed(bool),
     EffectsAlign(u8),
+    // Feste Ecke der Scoreboard-Seitenleiste (SCOREBOARD_ALIGNS).
+    ScoreboardAlign(u8),
     ToggleEffectsIcon,
     ToggleEffectsHideAmbient,
     ToggleEffectsName,
@@ -735,6 +750,8 @@ pub(crate) enum ButtonAction {
     // Aktion + Slot. Ein Slot jenseits der belegten zaehlt als "neue Belegung anlegen" (der
     // "+"-Knopf), sonst wird genau dieser Slot neu belegt.
     Rebind(KeyBindAction, usize),
+    // Modifier dieses Slots neu belegen (Fenster "Erweitert", Feld rechts neben der Belegung).
+    RebindModifier(KeyBindAction, usize),
     // Fenster mit allen Belegungen einer Aktion (bis zu MAX_BINDS_PER_ACTION) auf bzw. zu.
     OpenKeybindAdvanced(KeyBindAction),
     CloseKeybindAdvanced,
@@ -760,11 +777,11 @@ pub(crate) enum ButtonAction {
     // Aus den Einstellungen eines Moduls zurueck zu den Kacheln.
     ModuleBack,
     ToggleModuleHitbox,
-    ToggleModuleHitboxSmoothed,
-    ToggleModuleHitboxRaw,
+    // Spieler-Box: roh (true) oder geglaettet.
+    HitboxPlayerRaw(bool),
     ToggleModuleHitboxDotted,
-    ToggleModuleHitboxVisibleEdges,
-    ToggleModuleHitboxItems,
+    // Welche Kanten einer Hitbox (HITBOX_LINE_NAMES): alle, nur sichtbare, nur der Umriss.
+    HitboxLines(u8),
     ToggleModuleHitboxSelf,
     HitboxDensityPrev,
     HitboxDensityNext,
@@ -799,7 +816,10 @@ pub(crate) enum ButtonAction {
     // Video-Tab: Hurt-Cam und Feuer.
     ToggleHurtCam,
     ToggleArmorTrims,
+    // Render-Order: Zelle (Zeile, Spalte) der Tabelle umschalten (s. render_order).
+    ToggleRenderOrder(u8, u8),
     ToggleViewModel,
+    ToggleViewModelBobbing,
     HurtCamStrengthPrev,
     HurtCamStrengthNext,
     FireMode(u8),
@@ -813,6 +833,7 @@ pub(crate) enum ButtonAction {
     ToggleSessionLine(u8),
     ResetSession,
     ToggleModuleSessionInfo,
+    ToggleModuleClock,
     // Video > Tod: Todesanimation weiterschalten (DEATH_ANIM_NAMES).
     CycleDeathAnimation,
     // Ruestungs-HUD: Ausrichtung (armor_hud::LAYOUT_*) und Ruckrichtung (0 = oben/links,
@@ -842,6 +863,7 @@ pub(crate) enum ButtonAction {
     ToggleModuleFreelook,
     FreelookView(u8),
     ToggleArrowWhite,
+    ToggleArrowCritTrail,
     ToggleArrowEmptySound,
     ArrowOpacityPrev,
     ArrowOpacityNext,
@@ -869,6 +891,11 @@ pub(crate) enum ButtonAction {
     ToggleModuleDiscordStatus,
     ToggleModuleInputLog,
     ToggleModuleCoralRecord,
+    ToggleModuleCoralClip,
+    ClipSecondsPrev,
+    ClipSecondsNext,
+    ClipCheckpointsPrev,
+    ClipCheckpointsNext,
     ToggleModuleAutoclicker,
     ToggleModuleSaturationHud,
     SaturationHeightPrev,
@@ -920,7 +947,7 @@ pub(crate) enum ButtonAction {
     EatHoldThroughPrev,
     EatHoldThroughNext,
     ToggleEatSlotLock,
-    ToggleEatAggressivePrediction,
+    ToggleNoShieldLock,
     ToggleModuleUseTimer,
     ToggleModuleNoToolBreak,
     ToggleModuleBotcheckPass,
@@ -938,6 +965,16 @@ pub(crate) enum ButtonAction {
     NoToolBreakReserveNext,
     SmoothLightingDown,
     SmoothLightingUp,
+    ChunkFadeDown,
+    ChunkFadeUp,
+    ParticleFadeDown,
+    ParticleFadeUp,
+    EntityNearDown,
+    EntityNearUp,
+    MipSharpnessDown,
+    MipSharpnessUp,
+    ParticleDistanceDown,
+    ParticleDistanceUp,
     MotionBlurDown,
     MotionBlurUp,
     // Inventar > Animation (Settings::slot_hover_fade_ms, swap_anim_ms).

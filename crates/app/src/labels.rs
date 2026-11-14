@@ -22,7 +22,7 @@ pub(crate) fn chat_scroll_layout(gesamt: usize, basis: usize, max_wachstum: usiz
 // Chat-Einstellungen (Settings::chat_*), s. Chat-Tab.
 pub(crate) const CHAT_SCALE_MIN: u32 = 50;
 pub(crate) const CHAT_SCALE_MAX: u32 = 300;
-pub(crate) const CHAT_SCALE_STEP: u32 = 10;
+pub(crate) const CHAT_SCALE_STEP: u32 = 5;
 pub(crate) const CHAT_WIDTH_MIN: u32 = 80;
 pub(crate) const CHAT_WIDTH_MAX: u32 = 800;
 pub(crate) const CHAT_WIDTH_STEP: u32 = 20;
@@ -503,6 +503,53 @@ pub(crate) struct SignLayouts {
 
 pub(crate) const SIGN_LAYOUT_KEEP: u64 = 600;
 
+// Eine Beschriftung zerlegt, umgebrochen und vermessen (in Schriftpixeln). Haengt nur am
+// Wortlaut, an der Zeilenbreite und an der Umgebung (s. LabelLinesEnv) -- und wird darum je
+// Entity gemerkt, statt jeden Frame fuer jedes sichtbare Schild neu zu entstehen.
+pub(crate) struct LabelLines {
+    pub(crate) zeilen: Vec<Vec<protocol::nbt::TextSpan>>,
+    // Breite je Abschnitt und je Zeile.
+    pub(crate) abschnitt_breiten: Vec<Vec<f32>>,
+    pub(crate) breiten: Vec<f32>,
+}
+
+// Wovon Zerlegen und Vermessen ausser Wortlaut und Zeilenbreite abhaengen: Glyphen und
+// Schrift, Schreibweise, Ziffernmodus und gelernte Ziffernbreiten, Menue-Skalierung, Uebersetzung (s. i18n::tr) und der
+// Ego-Name (s. App::ego_rewrite).
+#[derive(Clone, PartialEq)]
+pub(crate) struct LabelLinesEnv {
+    pub(crate) generation: u64,
+    pub(crate) font: FontKind,
+    pub(crate) keep_capitals: bool,
+    pub(crate) plain_numbers: bool,
+    // s. StableNumbers::generation: Breiten von Texten mit Ziffern.
+    pub(crate) stable_numbers: u64,
+    pub(crate) ui_scale: u32,
+    pub(crate) sprache: (u8, bool, bool),
+    // (eigener Name, Alias, Deko an, Schatten an); None = Modul aus oder kein Name.
+    pub(crate) ego: Option<(String, String, bool, bool)>,
+}
+
+pub(crate) struct LabelLinesEntry {
+    pub(crate) spans: Vec<protocol::nbt::TextSpan>,
+    pub(crate) line_width: u32,
+    pub(crate) env_nr: u64,
+    pub(crate) lines: std::rc::Rc<LabelLines>,
+    pub(crate) runde: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct LabelLinesCache {
+    pub(crate) eintraege: rustc_hash::FxHashMap<i32, LabelLinesEntry>,
+    pub(crate) env: Option<LabelLinesEnv>,
+    // Zaehlt jede Aenderung der Umgebung; Eintraege mit anderer Nummer gelten nicht mehr.
+    pub(crate) env_nr: u64,
+    pub(crate) runde: u64,
+}
+
+// So viele Frames bleibt eine Beschriftung gemerkt, die nicht mehr gezeichnet wurde.
+pub(crate) const LABEL_LINES_KEEP: u64 = 600;
+
 // Punkt der Schild-Textebene (Schriftpixel) auf den Bildschirm; None hinter der Kamera.
 pub(crate) fn sign_projector(clip: glam::Mat4, screen: (f32, f32)) -> impl Fn(f32, f32) -> Option<(f32, f32)> {
     let (sw, sh) = screen;
@@ -605,10 +652,14 @@ pub(crate) fn wrap_label_lines(
         let mut aktuell: Vec<protocol::nbt::TextSpan> = Vec::new();
         let mut breite = 0.0f32;
         for span in line {
-            // Die Trennstellen mitfuehren, damit das Leerzeichen am Zeilenende verschwindet,
-            // mitten in der Zeile aber erhalten bleibt.
+            // Die Trennstellen mitfuehren: nur das Leerzeichen an der Umbruchstelle verschwindet
+            // (s. unten), alle anderen bleiben -- auch die am Zeilenanfang. Wie Vanillas
+            // StringSplitter.splitLines, der nur genau das Zeichen an der Trennstelle schluckt.
+            // Server polstern Zeilen der Tab-Liste mit Leerzeichen vorn UND hinten; fielen die
+            // vorderen weg, stand der Text um die halbe Polsterung zu weit links (mcpvp.club,
+            // Nutzer 2026-11-12).
             for (i, wort) in span.text.split(' ').enumerate() {
-                let mit_luecke = if i > 0 && !aktuell.is_empty() { format!(" {wort}") } else { wort.to_string() };
+                let mit_luecke = if i > 0 { format!(" {wort}") } else { wort.to_string() };
                 if mit_luecke.is_empty() {
                     continue;
                 }

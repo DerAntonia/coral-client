@@ -46,24 +46,20 @@ pub(crate) fn read_text_spans(r: &mut PacketReader) -> Result<Vec<crate::nbt::Te
 // Ohne das stand im Log nur "Server-Disconnect", und man musste raten, warum: fehlender
 // Resourcepack, Anticheat, Whitelist, Versionskonflikt -- der Server SAGT es, wir haben es
 // bloss weggeworfen.
+// Der Grund mit seinen Farben als Paragraphen-Codes (s. read_text_component_legacy) -- das
+// Disconnect-Fenster zeigt ihn farbig, Log und Addons bekommen den reinen Text.
 pub fn read_disconnect_reason(payload: &[u8]) -> Result<String, ReadError> {
     let mut r = PacketReader::new(payload);
     let _id = r.read_varint()?;
-    read_text_component(&mut r)
+    read_text_component_legacy(&mut r)
 }
 
-// Ein Text-Component (Netzwerk-NBT, TextCodecs.UNLIMITED_REGISTRY_PACKET_CODEC) als
-// Klartext -- dieselbe Kodierung fuer System-Chat, Actionbar, Titel/Untertitel und die
-// Scoreboard-Texte. Farben/Formatierung werden (noch) verworfen, nur der reine Text bleibt.
-// Wie read_text_component, aber mit den Farben als Paragraphen-Codes im Text (s.
-// nbt::spans_to_legacy) -- fuer Scoreboard und Teams, deren Texte erst im Client zu einer
-// Zeile zusammengesetzt werden. Ohne das kam das Scoreboard farblos an.
+// Ein Text-Component (Netzwerk-NBT, TextCodecs.UNLIMITED_REGISTRY_PACKET_CODEC) mit den
+// Farben als Paragraphen-Codes im Text (s. nbt::spans_to_legacy) -- fuer Scoreboard und Teams,
+// deren Texte erst im Client zu einer Zeile zusammengesetzt werden (ohne das kam das
+// Scoreboard farblos an), und fuer den Disconnect-Grund.
 pub(crate) fn read_text_component_legacy(r: &mut PacketReader) -> Result<String, ReadError> {
     Ok(nbt::read_root(r)?.as_ref().map(|v| nbt::spans_to_legacy(&nbt::text_to_spans(v))).unwrap_or_default())
-}
-
-pub(crate) fn read_text_component(r: &mut PacketReader) -> Result<String, ReadError> {
-    Ok(nbt::read_root(r)?.as_ref().map(nbt::text_to_plain_string).unwrap_or_default())
 }
 
 // --- Titel / Untertitel / Actionbar (IDs aus PlayStateFactories, gegen 6 bekannte Anker

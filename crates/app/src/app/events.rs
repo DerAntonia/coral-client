@@ -1,6 +1,6 @@
 // Server-Ereignisse (drain_events), Log, Welt zuruecksetzen, Lagback und Benachrichtigungen.
 
-use crate::{App, Duration, FPS_LIMIT_MONITOR, FPS_LIMIT_UNLIMITED, LOG_MAX_LINES, Instant, ConnStatus, chat_log, DVec3, SlotQueue, AppMode, MenuScreen, disconnect_popup_text, LAGBACK_MIN_BLOCKS, LAGBACK_MAX_BLOCKS, teleport_velocity, physics, ShownEffect, item_cooldowns, BLOCK_INTERACTION_REACH, ENTITY_INTERACTION_REACH, consumable_optimizer, inventory, GAME_MODE_SPECTATOR, GAME_MODE_SURVIVAL, GAME_MODE_ADVENTURE, GAME_MODE_CREATIVE, crystal_optimizer, notifications, ENTITY_STATUS_KINETIC_HIT, ENTITY_STATUS_DIED, ENTITY_STATUS_THROWN_HIT, ENTITY_STATUS_USE_ITEM_COMPLETE, ENTITY_STATUS_DEATH_PARTICLES, JavaRandom, CRIT_GRACE_TICKS, restart_swing, SERVER_SET_FOLLOW, SERVER_SET_RESET, SERVER_OPEN_ALLOW, SERVER_OPEN_CLOSE, SERVER_OPEN_SIGN, SERVER_OPEN_BOOK, SERVER_OPEN_DIALOG, SERVER_CLOSE_SIGN_ROW, SERVER_CLOSE_GROUP_ROW, SERVER_CLOSE_INVENTORY_ROW, TeamInfo, TEAM_VISIBILITY_ALWAYS, MAX_AIR_TICKS, saturate, MeshResult, AoFade, transactions, VANILLA_LOAD_TIMEOUT, VANILLA_CHUNK_FADE_READY, modules, MAX_PITCH, PACKET_GAP_WARN, PACKET_GAP_NOTE_LIFETIME, LAGBACK_GROUP, NOTIFICATION_HISTORY, TOPBAR_H, notification_layout, UiOverlay, notification_accent, theme, UiOverlayGroup, Rect, UiRect, NOTIFICATION_TIMER_H, NOTIFICATION_ACCENT_W, NOTIFICATION_PADDING, UiText, UI_SCALE_SMALL, notification_line_h, NOTIFICATION_BODY_GAP};
+use crate::{App, Duration, FPS_LIMIT_MONITOR, FPS_LIMIT_UNLIMITED, LOG_MAX_LINES, Instant, ConnStatus, chat_log, DVec3, SlotQueue, AppMode, MenuScreen, disconnect_popup_text, LAGBACK_MIN_BLOCKS, LAGBACK_MAX_BLOCKS, teleport_velocity, physics, ShownEffect, item_cooldowns, BLOCK_INTERACTION_REACH, ENTITY_INTERACTION_REACH, consumable_optimizer, inventory, GAME_MODE_SPECTATOR, GAME_MODE_SURVIVAL, GAME_MODE_ADVENTURE, GAME_MODE_CREATIVE, crystal_optimizer, notifications, ENTITY_STATUS_KINETIC_HIT, ENTITY_STATUS_DIED, ENTITY_STATUS_THROWN_HIT, ENTITY_STATUS_USE_ITEM_COMPLETE, ENTITY_STATUS_DEATH_PARTICLES, JavaRandom, CRIT_GRACE_TICKS, restart_swing, SERVER_SET_FOLLOW, SERVER_SET_RESET, SERVER_OPEN_ALLOW, SERVER_OPEN_CLOSE, SERVER_OPEN_SIGN, SERVER_OPEN_BOOK, SERVER_OPEN_DIALOG, SERVER_CLOSE_SIGN_ROW, SERVER_CLOSE_GROUP_ROW, SERVER_CLOSE_INVENTORY_ROW, TeamInfo, TEAM_VISIBILITY_ALWAYS, MAX_AIR_TICKS, saturate, MeshResult, AoFade, transactions, VANILLA_LOAD_TIMEOUT, VANILLA_CHUNK_FADE_READY, modules, MAX_PITCH, PACKET_GAP_WARN, PACKET_GAP_NOTE_LIFETIME, LAGBACK_GROUP, NOTIFICATION_HISTORY, TOPBAR_H, notification_layout, UiOverlay, notification_accent, theme, UiOverlayGroup, Rect, UiRect, NOTIFICATION_TIMER_H, NOTIFICATION_ACCENT_W, NOTIFICATION_PADDING, UiText, UI_SCALE_SMALL, notification_line_h, NOTIFICATION_BODY_GAP, CHUNK_FADE_NEAR_SQ, EAT_CONFIRM_MAX_AGE, interaktions_log};
 
 mod world_mesh;
 mod world_reset;
@@ -82,7 +82,14 @@ impl App {
     // Verbindungs-Events aus dem Netzwerk-Task einsammeln (nicht blockierend).
     pub(crate) fn drain_events(&mut self) {
         self.publish_ego_look();
+        let begonnen = Instant::now();
         loop {
+            // Wiedergabe: nach dem Spulen kommen die Pakete im Schwall. Je Bild nur so lange
+            // abarbeiten, der Rest bleibt fuers naechste -- das Bild bleibt fluessig und die
+            // Leiste zeigt, wie weit nachgeholt ist (s. replay::REPLAY_DRAIN_BUDGET).
+            if self.replay_active() && begonnen.elapsed() >= crate::app::replay::REPLAY_DRAIN_BUDGET {
+                break;
+            }
             // Was ein Tab hinten gesammelt hat, kommt zuerst (s. app/tabs.rs). Ein Versatz oder
             // eine Stockung darin ist zu der Zeit passiert, nicht jetzt: keine Meldung dafuer.
             let (event, nachgeholt) = match self.event_backlog.pop_front() {
@@ -94,7 +101,7 @@ impl App {
             };
             self.replaying_backlog = nachgeholt;
             // Log-Zeilen schreibt der Netz-Task selbst, alles andere kam vom Server.
-            if !matches!(event, net::ClientEvent::Log(_) | net::ClientEvent::PacketStall { .. }) {
+            if !matches!(event, net::ClientEvent::Log(_) | net::ClientEvent::PacketStall { .. } | net::ClientEvent::ReplayAt(_)) {
                 self.server_event_seen();
             }
             self.snapshot_note_config(&event);
@@ -109,6 +116,11 @@ impl App {
                     if let Some(zeile) = self.transactions.push(id, Instant::now()) {
                         self.push_log(zeile);
                     }
+                }
+                net::ClientEvent::ReplayAt(t) => self.replay_processed(t),
+                net::ClientEvent::KeepAliveAnswered { micros } => {
+                    let max = self.keepalive_reply_us.map_or(0, |(_, m)| m);
+                    self.keepalive_reply_us = Some((micros, max.max(micros)));
                 }
                 net::ClientEvent::Connected => self.on_connected(),
                 net::ClientEvent::Disconnected(reason) => self.on_disconnected(reason),
@@ -140,6 +152,8 @@ impl App {
                 }
                 net::ClientEvent::Route(ziel) => self.conn_route = Some(ziel),
                 net::ClientEvent::RecordingStarted(session) => self.write_snapshot(session),
+                net::ClientEvent::ClipStarted { session, from_join, t_ms } => self.clip_started(session, from_join, t_ms),
+                net::ClientEvent::ClipCheckpoint { session, seq, t_ms } => self.clip_checkpoint(session, seq, t_ms),
                 net::ClientEvent::Transferring { host, port } => {
                     self.conn_route = None;
                     // Der Server schickt uns weiter (Transfer), der Netz-Task verbindet schon
@@ -206,6 +220,7 @@ impl App {
                     }
                 }
                 net::ClientEvent::BlockEvent(..) => {}
+                net::ClientEvent::BlockDestruction { breaker, pos, progress } => self.on_block_destruction(breaker, pos, progress),
                 // Rueckstoss. Set Entity Motion SETZT die Geschwindigkeit (Vanillas
                 // Entity.setVelocityClient), die Explosion ADDIERT sie
                 // (addVelocityInternal) -- der Unterschied ist nicht kosmetisch: wer beim
@@ -272,6 +287,7 @@ impl App {
                 net::ClientEvent::EntityMeta(update) => self.on_entity_meta(update),
                 net::ClientEvent::Hardcore(h) => self.hardcore = h,
                 net::ClientEvent::GameMode(mode) => {
+                    let vorher = self.game_mode;
                     if mode != self.game_mode {
                         self.previous_game_mode = Some(self.game_mode);
                     }
@@ -281,6 +297,7 @@ impl App {
                     }
                     self.game_mode = mode;
                     self.spectator_flight = None;
+                    self.spectator_switch(vorher, mode);
                     // GameType.updatePlayerAbilities: der Client stellt die Faehigkeiten des neuen
                     // Modus sofort selbst ein, das Abilities-Paket des Servers folgt.
                     let a = &mut self.physics.abilities;
@@ -390,6 +407,7 @@ impl App {
                     self.dialog_registry = entries;
                 }
                 net::ClientEvent::ServerLinks(links) => self.server_links = links,
+                net::ClientEvent::PauseScreenDialogs(ids) => self.pause_dialogs = ids,
                 net::ClientEvent::ShowDialog(d) => {
                     if self.settings.server_open[SERVER_OPEN_DIALOG] == SERVER_OPEN_ALLOW {
                         self.show_dialog_ref(d);
@@ -718,6 +736,7 @@ impl App {
         self.lod_before_forget(x, z);
         if self.world.remove_column(x, z) {
             self.render_limit_meshed.remove(&(x, z));
+            self.patch_columns.remove(&(x, z));
             self.lod.mask_changed = true;
             self.column_meshed_at.remove(&(x, z));
             if let Some(gpu) = self.gpu.as_mut() {
@@ -797,6 +816,16 @@ impl App {
         // geoeffnete Inventar.
         let war_offen = self.inventory.screen_open;
         self.inventory.open_screen(screen.sync_id, screen.screen_type, screen.title);
+        // Antwortet das Menue auf einen eigenen Klick im Dialog (Shop-Knopf auf DonutSMP), weicht
+        // ihm der Dialog und auch das Pausemenue, aus dem der Dialog kam -- das wollte man ja.
+        // Ohne eigenen Klick bleiben Dialog, Pausemenue und Einstellungen offen: der Server darf
+        // sie nicht einfach schliessen (Nutzerwunsch, abweichend von Vanilla).
+        if self.take_dialog_answer() {
+            self.close_dialog_windows();
+            if self.mode == AppMode::Menu && self.screen == MenuScreen::Main && self.conn_status != ConnStatus::Disconnected {
+                self.mode = AppMode::World;
+            }
+        }
         // Nicht, waehrend man im Pausemenue/in den Einstellungen ist: dort gehoert
         // der Zeiger dem Menue, und ein Server, der nach einem Teleport ein Fenster
         // oeffnet (Kit-Auswahl o.ae.), riss ihn sonst in die Mitte.
@@ -1012,6 +1041,8 @@ impl App {
         let server = self.server_address.clone();
         self.addon_hook(coral_addon::Event::Join { server });
         self.conn_status = ConnStatus::Connected;
+        // Neue Verbindung: das Maximum der KeepAlive-Antwortzeit (F3) gilt je Verbindung.
+        self.keepalive_reply_us = None;
         // Mit dem Spiel beginnt ein neuer Bildschirm: Fenster aus der
         // Konfiguration sind vorbei.
         self.reset_dialogs();
@@ -1080,7 +1111,9 @@ impl App {
     }
 
     fn on_disconnected(&mut self, reason: String) {
-        self.addon_hook(coral_addon::Event::Leave { reason: reason.clone() });
+        // Der Grund traegt die Farben des Servers als Paragraphen-Codes; nur das Fenster zeigt sie.
+        let klartext = crate::strip_legacy_codes(&reason);
+        self.addon_hook(coral_addon::Event::Leave { reason: klartext.clone() });
         // Eine Wiedergabe ist kein Blick auf den gewaehlten Server.
         if self.replay.take().is_none() {
             self.keep_last_view();
@@ -1095,11 +1128,12 @@ impl App {
         // Dialoge und Links gehoeren ebenso zur Verbindung.
         self.reset_dialogs();
         self.server_links.clear();
+        self.pause_dialogs.clear();
         // Aus World/Death/Pause zurueck auf die Server-Liste.
         self.mode = AppMode::Menu;
         self.screen = MenuScreen::Connect;
         self.disconnect_popup = Some(disconnect_popup_text(&reason).to_string());
-        self.push_log(format!("getrennt: {reason}"));
+        self.push_log(format!("getrennt: {klartext}"));
     }
 
     fn on_chunk(&mut self, chunk: protocol::chunk::ChunkData) {
@@ -1327,6 +1361,7 @@ impl App {
         self.breaking_block = false;
         self.breaking_pos = None;
         self.breaking_progress = 0.0;
+        self.others_breaking.clear();
         self.block_breaking_cooldown = 0;
         self.attr_block_break_speed = 1.0;
         self.attr_mining_efficiency = 0.0;
@@ -1518,34 +1553,36 @@ impl App {
                 let nebenhand = flags & protocol::packets::LIVING_FLAG_OFFHAND_ACTIVE != 0;
                 // Consumable Optimizer: der Server meldet "fertig" -- nicht mehr warten.
                 // Waehrend wir selbst essen oder auf ihn warten, gilt sein Flag nicht
-                // (es ist dann veraltet, s. consumable_optimizer.rs). Mit Aggressive
-                // Prediction gilt es fuer die eigene Benutzung nie, bei keinem Item: die
-                // Verlangsamung beginnt und endet allein im Client.
+                // (es ist dann veraltet, s. consumable_optimizer.rs). Mit dem Consumable-
+                // Optimizer gilt es fuer die eigene Benutzung nie, bei keinem Item: die
+                // Verlangsamung beginnt und endet allein im Client (frueher der Schalter
+                // "Aggressive Prediction", seit 2026-11-12 immer an).
+                if benutzt {
+                    crate::interaktions_log("server: benutzt Item");
+                }
                 if !benutzt {
                     self.consumable_server_done("Flag");
                 }
-                let eigenes_essen = self.consumable_optimizer_active()
-                    && (self.settings.eat_aggressive_prediction
-                        || self.consumable.waiting(Instant::now())
-                        || self.own_used_item().is_some_and(|(name, st)| consumable_optimizer::consume_ticks(name, st.as_ref()).is_some()));
+                let eigenes_essen = self.consumable_optimizer_active();
+                // Eine Meldung "benutzt", die der naechste Tick noch nicht abgeholt hat, ist
+                // mit "benutzt nicht" ueberholt -- Vanilla hielte dann auch nichts mehr.
+                if !benutzt {
+                    self.server_use_report = None;
+                }
                 if eigenes_essen {
-                } else if benutzt && !self.using_item {
-                    // LocalPlayer.startUsingItem: nur mit einem Item in dieser Hand.
-                    let slot = if nebenhand {
-                        inventory::PLAYER_OFFHAND
-                    } else {
-                        inventory::PLAYER_HOTBAR_START + self.inventory.held_slot.min(8)
-                    };
-                    if self.hand_stack(slot).is_some() {
-                        self.using_item = true;
-                        self.eat_held_through = false;
-                        // Neue bzw. beendete Benutzung: der Zaehler der Ess-/Spannhaltung faengt neu an. Sonst
-                        // erbte ein Bissen, der im selben Tick auf den vorigen folgt, dessen Stand (der
-                        // Apfel sprang fuer ein Bild zurueck und stand danach sofort am Mund).
-                        self.own_use_ticks = 0;
-                        self.using_offhand = nebenhand;
-                        self.using_item_id = self.hand_stack(slot).map(|st| st.item_id);
+                    // Aggressive Prediction, lokal schon losgelassen (schneller Rechtsklick):
+                    // die Meldung nicht uebernehmen (keine Verlangsamung), aber im naechsten
+                    // Tick die Pakete wie Vanilla schicken (s. tick_item_use). GrimAC rechnet ab der
+                    // Ping-Antwort auf dieses Flag mit "benutzt Item" (PacketSelfMetadataListener),
+                    // auch wenn unser RELEASE schon vorher ankam. Vanilla uebernimmt das Flag,
+                    // schickt im naechsten Tick ein zweites RELEASE und verwirft die Klicks
+                    // dieses Ticks -- wir schickten Schlag und Schwung, Grim flaggte
+                    // MultiActionsA (Angriff) und MultiActionsE (Schwung) beim Gapple.
+                    if benutzt && !self.using_item && !self.consumable.waiting(Instant::now()) {
+                        self.server_use_report = Some(nebenhand);
                     }
+                } else if benutzt && !self.using_item {
+                    self.adopt_server_use(nebenhand);
                 } else if !benutzt && self.using_item {
                     self.using_item = false;
                     // Neue bzw. beendete Benutzung: der Zaehler der Ess-/Spannhaltung faengt neu an. Sonst
@@ -1624,7 +1661,15 @@ impl App {
         if status == ENTITY_STATUS_USE_ITEM_COMPLETE && self.own_entity_id == Some(entity_id) {
             // Hat der Optimizer schon lokal beendet, gehoert das Event zu DIESEM Essen --
             // eine inzwischen neu begonnene Benutzung darf es nicht abbrechen.
-            let lokal_beendet = self.consumable.waiting(Instant::now());
+            //
+            // ECHTER BUG gewesen: hier galt nur consumable.waiting, und das endet nach 500 ms.
+            // Bei hoeherem Ping kam das Event 9 des vorigen Bissens erst danach -- mitten in
+            // den naechsten, schnell nachgeklickten Bissen. Der endete dadurch lokal bei Tick
+            // 16 bis 21 (client.log), Server und Grim assen weiter: Lag-back und Flags. Jetzt
+            // zaehlt jedes lokale Ende ein ausstehendes "fertig", unabhaengig von den 500 ms.
+            let jetzt = Instant::now();
+            self.eat_local_finishes.retain(|t| jetzt.duration_since(*t) < EAT_CONFIRM_MAX_AGE);
+            let lokal_beendet = self.eat_local_finishes.pop_front().is_some();
             self.consumable_server_done("Event 9");
             // Wie Vanilla (Player.handleEntityEvent -> completeUsingItem): das Essen
             // endet hier, auch vor dem lokalen Ende. Gemessen auf pvphq: der Gap ohne
@@ -1686,6 +1731,8 @@ impl App {
             }, "explosion");
         }
         self.with_particles(|p, ctx, _| p.on_explosion(&explosion, ctx));
+        let mitte = DVec3::new(explosion.center.0, explosion.center.1, explosion.center.2);
+        self.precipitation.on_explosion(mitte, explosion.radius, &self.world, &self.block_shapes);
     }
 
     fn on_level_event(&mut self, event: protocol::particle::LevelEvent) {
@@ -1776,7 +1823,15 @@ impl App {
         // Immer, nicht nur mit Botcheck-Pass: das Echo kostet nichts und ist schlicht
         // Vanillas Verhalten.
         if Some(entity_id) == self.own_entity_id {
-            if let Some(tx) = &self.outgoing_tx {
+            // Kein Echo, solange wir ein Item benutzen bzw. Grim uns nach dem lokalen
+            // Fertigessen noch fuer essend haelt. Gemessen (pktlog, ~1,1 s Rundreise): die
+            // Schwuenge des Servers auf gehaltene Bettklicks kamen erst nach dem Ess-Beginn an,
+            // jedes Echo war ein MultiActionsE ("Swinging while using an item"). Vanilla echot
+            // auch dann; frueher Debug-Schalter grim-echo-fix, jetzt immer an.
+            let ohne_echo = self.using_item || self.grim_sees_eating();
+            if ohne_echo {
+                interaktions_log("swing-echo ausgelassen");
+            } else if let Some(tx) = &self.outgoing_tx {
                 let _ = tx.send(protocol::packets::swing_hand_payload(off_hand));
             }
             if !off_hand {

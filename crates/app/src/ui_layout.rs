@@ -264,7 +264,7 @@ pub(crate) const STEPPER_VALUE_W: f32 = 200.0;
 // Die fruehere lange Hinweiszeile darunter ist weg -- Erklaerungen stecken jetzt als
 // Hover-Tooltip an der jeweiligen Zeile (s. SETTINGS_TOOLTIPS/hovered_tooltip), nicht mehr
 // staendig sichtbar.
-pub(crate) const SETTINGS_ROW_COUNT: usize = 18;
+pub(crate) const SETTINGS_ROW_COUNT: usize = 22;
 
 // Steuerung-Screen (MenuScreen::SettingsControls): zwei Spalten. Links die Tastenbelegung
 // als scrollbare Tabelle (Aktion/Taste/Halten-Umschalten), rechts die uebrigen

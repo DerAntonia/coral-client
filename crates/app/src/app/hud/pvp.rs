@@ -119,11 +119,13 @@ impl App {
             return;
         }
         let Some(anzeige) = self.arrow_hud_stack() else {
-            // Ohne Munition ein rot getoenter Pfeil, die 0 dazu zeichnet arrow_number.
+            // Ohne Munition ein rot getoenter Pfeil, die 0 dazu zeichnet arrow_number. Mit einer
+            // geladenen Armbrust ist noch ein Schuss da: der Pfeil normal.
             if !self.settings.arrow_number_only && self.arrow_hud_empty() {
                 let rect = self.hud_arrows_rect(gpu);
                 let alpha = self.settings.arrow_opacity as f32 / 100.0;
-                self.item_icons.push_tinted(sprites, "arrow", rect.x, rect.y, rect.w, rect.h, ARROW_EMPTY_TINT, alpha);
+                let tint = if self.has_loaded_crossbow() { [1.0; 3] } else { ARROW_EMPTY_TINT };
+                self.item_icons.push_tinted(sprites, "arrow", rect.x, rect.y, rect.w, rect.h, tint, alpha);
             }
             return;
         };
@@ -139,9 +141,12 @@ impl App {
         }
         let rect = self.hud_arrows_rect(gpu);
         let scale = (rect.w / 16.0).round().max(1.0);
+        // Jede geladene Armbrust im Inventar zaehlt einen Schuss mit (dazu wird die Zahl gelb).
+        let geladen = self.loaded_crossbows();
         let anzahl = match self.arrow_hud_stack() {
             // Auch ein einzelner Pfeil zeigt seine 1 (Vanilla laesst sie am Slot weg).
-            Some(stack) => stack.count,
+            Some(stack) => stack.count + geladen,
+            None if geladen > 0 && self.arrow_hud_empty() => geladen,
             None => {
                 // Keine Munition: eine 0, solange Bogen/Armbrust in der Hand ist. Mit "0 blinkt"
                 // blinkt sie nach einem Spannversuch.
@@ -159,7 +164,7 @@ impl App {
                 0
             }
         };
-        let mut text = anzahl.to_string();
+        let text = anzahl.to_string();
         // Mit der Schrift vermessen, in der die Zahl auch gezeichnet wird.
         let atlas = gpu.hud_font(self.settings.effective_font(ShadowArea::ArrowNumber));
         // Mit stabilen Ziffern wie beim Zeichnen (s. CrosshairText::stable_digits).
@@ -172,14 +177,7 @@ impl App {
         } else {
             (rect.x + rect.w - w, rect.y + rect.h - h)
         };
-        // Mit geladener Armbrust im Inventar ein + rechts neben der Zahl (dazu gelb, s.
-        // has_loaded_crossbow). Die Zahl bleibt, wo sie ohne + stuende; das Rechteck waechst
-        // nur nach rechts.
-        let plus = if self.has_loaded_crossbow() { breite("+") } else { 0.0 };
-        if plus > 0.0 {
-            text.push('+');
-        }
-        Some((text, Rect { x, y, w: w + plus, h }, scale))
+        Some((text, Rect { x, y, w, h }, scale))
     }
 
     // Pfeil-Modul, "Wackeln": waagerechter Versatz des Fadenkreuzes in Bildschirmpixeln nach
@@ -226,7 +224,7 @@ impl App {
         // `away_from`): die Quelle des letzten Schadens laut Server, sonst der eigene Schlag.
         let quelle = self.damage_sources.remove(&entity_id).filter(|(_, t)| t.elapsed() < KILL_HIT_WINDOW).map(|(p, _)| p);
         let selbst = self.last_melee_hit.is_some_and(|(id, t)| id == entity_id && t.elapsed() < KILL_HIT_WINDOW);
-        let weg_von = quelle.or_else(|| selbst.then(|| self.physics.pos));
+        let weg_von = quelle.or_else(|| selbst.then_some(self.physics.pos));
         let burst = death_burst::Burst::new(entity_id, e.uuid, feet, e.render_yaw(progress), e.scale, &teile, weg_von.map(|p| (p.x, p.z)), seed);
         let (breite, hoehe) = e.hit_size();
         let mitte = DVec3::new(feet.0, feet.1 + hoehe * 0.5, feet.2);
@@ -411,6 +409,29 @@ impl App {
         }
     }
 
+    // Uhr (Modul): Zeichenfaktor aus HUD-Skala und eigener Groesse, auf Viertel gerundet.
+    pub(crate) fn clock_scale(&self, gpu: &GpuState) -> f32 {
+        let u = self.hud_scale(gpu.size()) * self.settings.hud_clock_scale as f32 / 100.0;
+        (u * 4.0).round().max(2.0) / 4.0
+    }
+
+    // Rechteck der Uhr: so breit wie "00:00:00", damit sie beim Weiterzaehlen nicht springt.
+    pub(crate) fn hud_clock_rect(&self, gpu: &GpuState) -> Rect {
+        let (sw, sh) = gpu.size();
+        let s = self.clock_scale(gpu);
+        let (w, h) = (gpu.measure_text("00:00:00", s).round(), gpu.text_height(s).round());
+        let x = (self.settings.hud_clock_x * sw).clamp(0.0, (sw - w).max(0.0)).round();
+        let y = (self.settings.hud_clock_y * sh).clamp(0.0, (sh - h).max(0.0)).round();
+        Rect { x, y, w, h }
+    }
+
+    // Die echte Uhrzeit, HH:MM:SS (Nutzer 2026-11-11).
+    pub(crate) fn push_clock(&self, gpu: &GpuState, texts: &mut Vec<UiText>) {
+        let rect = self.hud_clock_rect(gpu);
+        let text = chrono::Local::now().format("%H:%M:%S").to_string();
+        texts.push(UiText { text, x: rect.x, y: rect.y, color: theme::text(), scale: self.clock_scale(gpu) });
+    }
+
     // Groesse einer HUD-Einheit der Keystrokes in Bildschirmpixeln.
     pub(crate) fn keys_unit(&self, gpu: &GpuState) -> f32 {
         let u = self.hud_scale(gpu.size()) * self.settings.hud_keys_scale as f32 / 100.0;
@@ -448,7 +469,7 @@ impl App {
                 keystrokes::Key::Attack => KeyBindAction::Attack,
                 keystrokes::Key::Use => KeyBindAction::Use,
             };
-            let unten = eingabe_frei && kb.binds(aktion).any(|b| self.binds_down.contains(&b));
+            let unten = eingabe_frei && kb.held(aktion, |b| self.binds_down.contains(&b));
             // Maustasten: ein Doppelklick leuchtet in Akzent 2, solange die Taste unten ist.
             let maus = matches!(taste, keystrokes::Key::Attack | keystrokes::Key::Use);
             let doppelt = maus && kb.binds(aktion).any(|b| self.binds_down.contains(&b) && self.bind_presses.iter().any(|(p, _, d)| *p == b && *d));

@@ -26,7 +26,7 @@ default-members = ["crates/app"]
 
 [workspace.package]
 edition = "2021"
-version = "26.11.2"
+version = "26.11.3"
 
 # Clippy fuer alle Crates (je Crate "[lints] workspace = true"). Ausgeschaltet nur, was gegen den
 # Stil des Codes laeuft statt Fehler zu finden: GPU-/Mesh-Funktionen nehmen viele Parameter und
@@ -43,10 +43,14 @@ needless_range_loop = "allow"
 # aber nicht wo. Beides kostet zur Laufzeit nichts ausser einer groesseren Binary bzw.
 # (bei den Frame-Pointern) einem Register; dafuer sind die Aufruf-Stacks in perf ohne
 # DWARF-Unwinding korrekt, was bei tief verschachteltem wgpu-/tokio-Code der Unterschied
-# zwischen brauchbarem und unlesbarem Profil ist.
+# zwischen brauchbarem und unlesbarem Profil ist. Die Frame-Pointer kommen ueber
+# RUSTFLAGS="-C force-frame-pointers=yes" (Cargo kennt dafuer keinen Profil-Schluessel).
 [profile.release]
 debug = "line-tables-only"
-force-frame-pointers = true
+
+# Der Launcher wird verschickt (Discord-Upload-Limit 10 MB): ohne Debug-Info und Symbole.
+[profile.release.package.launcher]
+strip = true
 
 [workspace.dependencies]
 # Schneller, nicht-kryptografischer Hash (derselbe, den rustc selbst benutzt). Die Standard-

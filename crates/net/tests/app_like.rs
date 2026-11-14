@@ -138,6 +138,7 @@ fn app_like_polling_receives_chunks() {
                 | net::ClientEvent::EntityAnimation { .. }
                 | net::ClientEvent::MobEffectRemoved { .. }
                 | net::ClientEvent::BlockEvent(..)
+                | net::ClientEvent::BlockDestruction { .. }
                 | net::ClientEvent::HeadAt { .. }
                 | net::ClientEvent::WorldTime { .. }
                 | net::ClientEvent::EntitySleeping { .. } => {}

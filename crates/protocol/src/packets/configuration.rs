@@ -15,11 +15,12 @@ pub const CB_CONFIG_REGISTRY_DATA: i32 = 0x07;
 
 // Angeforderte Sichtweite in Chunks. Der Server liefert effektiv min(dieser Wert,
 // server.properties:view-distance) -- beide muessen also hoch stehen, damit weiter
-// gerendert wird. 32 = Vanillas Hoechstwert. Wie weit tatsaechlich gezeichnet wird, begrenzt
+// gerendert wird. Vanilla-Server kappen bei 32 (ChunkMap.setServerViewDistance), veraenderte
+// Server koennen mehr; 127 ist das Maximum des Byte-Felds. Wie weit tatsaechlich gezeichnet wird, begrenzt
 // der Client selbst (Settings::max_render_distance). Erfordert Chunk-Entladen
 // (CB_PLAY_FORGET_LEVEL_CHUNK), sonst wachsen Speicher und Draw-Aufwand beim Umherlaufen
 // unbegrenzt.
-pub const REQUESTED_VIEW_DISTANCE: u8 = 32;
+pub const REQUESTED_VIEW_DISTANCE: u8 = 127;
 
 // Locale, die der Client dem Server meldet (Einstellungen -> Sprache, Bereich Chat). Vanilla
 // schickt die gewaehlte Sprache; manche Server uebersetzen ihre eigenen Texte danach.

@@ -75,6 +75,7 @@ impl App {
         }
         record::set_client_version(concat!("v", env!("CARGO_PKG_VERSION")).to_string());
         record::set_enabled(settings.module_coral_record);
+        record::set_clip_enabled(settings.module_coral_clip);
         let mut item_icons = ItemIcons::new(item_icons);
         set_shield_icon(&mut item_icons, &shield, &entity_atlas);
         set_special_icons(&mut item_icons, &entity_atlas, &mut installation);
@@ -149,6 +150,7 @@ impl App {
             trim_slot_order: std::collections::VecDeque::new(),
             equipment_models: std::collections::HashMap::new(),
             glint_out: std::cell::RefCell::new(Vec::new()),
+            entity_classes_out: std::cell::RefCell::new(Vec::new()),
             inventory_anim: std::cell::RefCell::default(),
             hotbar_glide: std::cell::RefCell::default(),
             entity_motion: crate::entity_motion::EntityMotion::default(),
@@ -181,6 +183,7 @@ impl App {
             input_watcher,
             input_log,
             recorder: app::AppRecorder::default(),
+            clips: app::ClipBuffers::default(),
             recordings_open: false,
             recordings: Vec::new(),
             replay: None,
@@ -229,10 +232,12 @@ impl App {
             disconnect_popup: None,
             dialog: None,
             dialog_waiting: None,
+            dialog_user_action: None,
             link_pending: None,
             code_of_conduct: None,
             server_links: Vec::new(),
             dialog_registry: Vec::new(),
+            pause_dialogs: Vec::new(),
             team_color_log: std::collections::HashMap::new(),
             team_facts: std::collections::HashMap::new(),
             team_color_memory: std::collections::HashMap::new(),
@@ -249,6 +254,10 @@ impl App {
             server_edit: None,
             accounts: load_account_store(&settings),
             account_checks: std::collections::HashMap::new(),
+            account_retry_at: None,
+            pause_bar_slide: None,
+            connect_after_login: false,
+            quit_requested: false,
             account_context: None,
             // Token-Export auskommentiert, vorerst abgeschaltet.
             // token_export: None,
@@ -260,6 +269,7 @@ impl App {
             chat_generation: 0,
             chat_pushed: 0,
             chat_wrap_cache: Default::default(),
+            chat_tail_wrap_cache: Default::default(),
             chat_scroll: 0,
             chat_scroll_glide: Default::default(),
             chat_rise: 0.0,
@@ -278,6 +288,8 @@ impl App {
             text_selection: None,
             last_left_click: None,
             clipboard: None,
+            primary_sent: String::new(),
+            near_single_sided: std::cell::Cell::new(false),
             action_bar: None,
             title_text: None,
             subtitle_text: None,
@@ -334,6 +346,7 @@ impl App {
             using_item: false,
             using_offhand: false,
             using_item_id: None,
+            server_use_report: None,
             item_cooldowns: item_cooldowns::ItemCooldowns::default(),
             hotbar_pop: [None; 9],
             breaking_block: false,
@@ -351,6 +364,9 @@ impl App {
             camera_entity: None,
             op_level: 0,
             spectator_flight: None,
+            spectator_swallowed: [false; 7],
+            spectator_rise: 0.0,
+            others_breaking: std::collections::HashMap::new(),
             kinetic_hit_at: std::collections::HashMap::new(),
             gamemode_wheel: None,
             reconnect_hold: None,
@@ -416,6 +432,7 @@ impl App {
             ride_yaw_spin: (0.0, 0.0),
             boss_bars: Vec::new(),
             own_uuid: None,
+            keepalive_reply_us: None,
             settings_return: MenuScreen::Connect,
             hud_editor_return: MenuScreen::Main,
             notification_history: std::collections::VecDeque::new(),
@@ -497,6 +514,9 @@ impl App {
             tab_heads: std::collections::HashMap::new(),
             signs: std::collections::HashMap::new(),
             sign_layouts: Default::default(),
+            label_lines: Default::default(),
+            sign_frames: Default::default(),
+            sign_meshes: Default::default(),
             placed_heads: std::collections::HashMap::new(),
             sign_edit: None,
             book_view: None,
@@ -557,6 +577,9 @@ impl App {
             own_use_ticks: 0,
             eat_held_through: false,
             eat_next_use_delay: 0,
+            eat_release_wait: 0,
+            eat_released: false,
+            eat_local_finishes: std::collections::VecDeque::new(),
             own_render_yaw: 0.0,
             own_render_pitch: 0.0,
             own_last_render_yaw: 0.0,
@@ -667,6 +690,7 @@ impl App {
             discord_start: discord_rpc::unix_now(),
             last_orbit_update: Instant::now(),
             awaiting_keybind: None,
+            awaiting_modifier: false,
             sens_last_changed_y: false,
             keybind_advanced: None,
             tearfree_state: None,
@@ -723,6 +747,8 @@ impl App {
             render_limit_order_key: None,
             mesh_jobs_pending: std::collections::HashSet::new(),
             mesh_jobs_stale_on_completion: std::collections::HashSet::new(),
+            remesh_log: RemeshLog::neu(),
+            patch_columns: rustc_hash::FxHashMap::default(),
             camera_placed: false,
         }
     }
@@ -1073,6 +1099,7 @@ impl App {
         }
         self.release_atlas_pixels();
         self.render_limit_meshed.clear();
+        self.patch_columns.clear();
         self.lod.mask_changed = true;
         self.column_meshed_at.clear();
         // Items in Haenden zeigen auf Plaetze im ALTEN Entity-Atlas und auf Modelldaten des

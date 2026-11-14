@@ -3,7 +3,18 @@
 use super::*;
 
 impl App {
+    // Die Welt rechnet immer in echten Pixeln, auch als Bild hinter einem Menue (s.
+    // GpuState::ui_scale).
     pub(crate) fn draw_world_frame(&mut self, acquired: Option<(wgpu::SurfaceTexture, f32)>, with_hud: bool) -> Option<FrameTiming> {
+        let massstab = self.gpu.as_ref().map(|g| g.ui_scale.replace(1.0));
+        let timing = self.draw_world_frame_real(acquired, with_hud);
+        if let (Some(gpu), Some(s)) = (self.gpu.as_ref(), massstab) {
+            gpu.ui_scale.set(s);
+        }
+        timing
+    }
+
+    fn draw_world_frame_real(&mut self, acquired: Option<(wgpu::SurfaceTexture, f32)>, with_hud: bool) -> Option<FrameTiming> {
         use profiler::Phase;
         let t = Instant::now();
         if with_hud {
@@ -21,22 +32,48 @@ impl App {
         self.camera.projection = self.settings.projection_mode;
         self.apply_replay_view();
         self.record_frame();
+        self.tick_clip();
         let ui_started = Instant::now();
         // Ohne HUD (hinter einem Menue) zeichnet render_menu Benachrichtigungen und Zeiger.
         let (mut overlay, (hud_rects, hud_lines, hud_texts, hud_sprites, doll_split)) = if with_hud {
             self.tick_notifications();
             self.poll_resource_pack_job();
             let mut overlay = self.build_notifications();
-            // Im Modul-Menue im Spiel gibt es ebenfalls Farbfelder und das Namensfenster.
+            // Im Modul-Menue im Spiel gibt es ebenfalls Farbfelder und das Namensfenster -- in
+            // Menue-Pixeln gebaut wie das Menue selbst (s. build_hud).
+            let fenster_ab = overlay.groups.len();
+            let massstab = self.gpu.as_ref().map(|g| (Self::world_menu_scale(g), g.ui_scale.get()));
+            if let (Some(gpu), Some((s, _))) = (self.gpu.as_ref(), massstab) {
+                gpu.ui_scale.set(s);
+            }
             self.build_color_popup(&mut overlay);
             self.build_dropdown(&mut overlay);
             self.build_theme_name_dialog(&mut overlay);
+            if let (Some(gpu), Some((s, vorher))) = (self.gpu.as_ref(), massstab) {
+                gpu.ui_scale.set(vorher);
+                for g in &mut overlay.groups[fenster_ab..] {
+                    crate::scale_overlay_group(g, s / vorher);
+                }
+            }
             (overlay, self.build_hud())
         } else {
             (UiOverlay::default(), Default::default())
         };
         if with_hud {
+            // Getipptes im Modul-Menue steht in Menue-Pixeln (s. build_hud): was beim Loeschen
+            // herausfaellt, wird darin gemessen und dann wie das Menue umgerechnet.
+            let ab = overlay.groups.len();
+            let massstab = self.gpu.as_ref().filter(|_| self.module_menu_open).map(|g| (Self::world_menu_scale(g), g.ui_scale.get()));
+            if let (Some(gpu), Some((s, _))) = (self.gpu.as_ref(), massstab) {
+                gpu.ui_scale.set(s);
+            }
             self.update_falling_glyphs(&hud_texts, &mut overlay);
+            if let (Some(gpu), Some((s, vorher))) = (self.gpu.as_ref(), massstab) {
+                gpu.ui_scale.set(vorher);
+                for g in &mut overlay.groups[ab..] {
+                    crate::scale_overlay_group(g, s / vorher);
+                }
+            }
         }
         self.profiler.add(Phase::Hud, ui_started);
         let t = Instant::now();
@@ -128,8 +165,14 @@ impl App {
                 || self.connecting_view()
                 || self.dialog_shown()
                 || self.code_of_conduct.is_some()
-                || (self.inventory.screen_open && self.inventory.cursor.is_none())))
-            .then_some(self.cursor_pos)
+                || (self.inventory.screen_open && self.inventory.cursor.is_none())
+                // Wiedergabe: der Zeiger fuer die Leiste (wie osu), ausser im Freelook.
+                || (self.replay_active() && !self.freelook_held)))
+            // In echten Pixeln (s. GpuState::cursor_scale).
+            .then(|| {
+                let s = self.gpu.as_ref().map_or(1.0, |g| g.cursor_scale.get());
+                (self.cursor_pos.0 * s, self.cursor_pos.1 * s)
+            })
             // Spielmodus-Rad: derselbe Zeiger, an der Stelle, die das Rad fuehrt.
             .or_else(|| self.gamemode_wheel_cursor().filter(|_| with_hud));
         // Geisterbloecke JEDEN Frame neu bauen. Ihre Vertices sind
@@ -189,7 +232,8 @@ impl App {
         let sky_module = self.sky_color_module_active();
         #[cfg(feature = "shader_path")]
         let atmosphere = !matches!(self.dimension_type_name.as_str(), "minecraft:the_nether" | "minecraft:the_end");
-        let cursor_fx = self.cursor_fx_frame();
+        let mut cursor_fx = self.cursor_fx_frame();
+        cursor_fx.scale *= self.gpu.as_ref().map_or(1.0, |g| g.cursor_scale.get());
         // Ebenfalls vor dem &mut-Ausleihen der GPU: build_doll liest das
         // Inventar, den Skin und die Zeigerposition.
         let t = Instant::now();
@@ -224,6 +268,8 @@ impl App {
                     None => gpu.block_renderer.set_entity_prev_positions(&gpu.queue, &[], false),
                 }
                 gpu.block_renderer.set_sharp_entities(entity_sharp);
+                gpu.block_renderer.set_entity_classes(self.entity_classes_out.take());
+                gpu.block_renderer.render_order = self.settings.render_order.to_render();
                 gpu.block_renderer.set_outline_vertices(&gpu.queue, &outline_verts, &outline_colors);
                 gpu.block_renderer.vanilla.set_item_vertices(&gpu.device, &gpu.queue, &vanilla_items);
                 gpu.block_renderer.vanilla.set_border(&gpu.queue, self.camera.view_matrix(), glint_ms, border_draw.as_ref());
@@ -252,6 +298,8 @@ impl App {
                     gpu.block_renderer.set_doll_glint_vertices(&gpu.queue, &[]);
                 }
                 *upload_ms = t_upload.elapsed().as_secs_f32() * 1000.0;
+                gpu.block_renderer.entity_near_dither = self.settings.entity_near_dither_cm as f32 / 100.0;
+                gpu.block_renderer.mip_bias = -(self.settings.mip_sharpness_pct as f32) / 100.0;
                 // Tageslicht fuer den Shader-Pfad (Himmelslicht nachts gedimmt, s. block.wgsl).
                 // Mit festem Himmel (Modul Himmelsfarbe) gilt auch das Licht fest: die
                 // Helligkeit der gewaehlten Farbe -- sonst stuende nachts ein heller Himmel
@@ -317,7 +365,8 @@ impl App {
         let modus = wallpaper::WallpaperMode::from_index(self.settings.wallpaper);
         let gespeichert = shared_config_dir().map(|d| wallpaper::stored_path(&d));
         self.wallpaper_checked_at = Instant::now();
-        self.wallpaper_loader.request(modus, gespeichert, hero_scene::path(), ziel, force);
+        let panorama = crate::skins_dir().zip(crate::panorama::chosen_skin(&self.settings.panorama_skin)).map(|(d, n)| d.join(n));
+        self.wallpaper_loader.request(modus, gespeichert, hero_scene::path(), panorama, ziel, force);
     }
 
     // Einmal pro Durchlauf: fertige Bilder hochladen, Dialog-Ergebnisse umsetzen, und beim
@@ -327,12 +376,20 @@ impl App {
             match event {
                 wallpaper::Event::Loaded(bild) => {
                     if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.set_panorama(None);
                         gpu.set_wallpaper(Some(&bild));
+                    }
+                }
+                wallpaper::Event::LoadedPanorama(bild) => {
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.set_wallpaper(None);
+                        gpu.set_panorama(Some(&bild));
                     }
                 }
                 wallpaper::Event::Cleared => {
                     if let Some(gpu) = self.gpu.as_mut() {
                         gpu.set_wallpaper(None);
+                        gpu.set_panorama(None);
                     }
                 }
                 wallpaper::Event::Failed(e) => {

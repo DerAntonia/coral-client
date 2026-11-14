@@ -84,8 +84,3 @@ fn schleier_mischen_wie_vanilla_im_srgb_raum() {
     }
 }
 
-#[test]
-fn vanilla_blockumriss_waechst_erst_ueber_full_hd() {
-    assert_eq!(vanilla_block_outline(1280.0), ([0.0, 0.0, 0.0, 0.4], 1.25));
-    assert_eq!(vanilla_block_outline(3840.0).1, 2.5);
-}

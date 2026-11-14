@@ -180,7 +180,8 @@ impl Laden {
             }
             let modus = wallpaper::WallpaperMode::from_index(self.settings.wallpaper);
             let gespeichert = crate::shared_config_dir().map(|d| wallpaper::stored_path(&d));
-            self.wallpaper.request(modus, gespeichert, crate::hero_scene::path(), (groesse.width, groesse.height), true);
+            // Das Panorama dreht sich erst im Menue; der Ladebildschirm bleibt dann ohne Bild.
+            self.wallpaper.request(modus, gespeichert, crate::hero_scene::path(), None, (groesse.width, groesse.height), true);
             self.fenster = Some(fenster);
             self.neu_zeichnen = true;
         }

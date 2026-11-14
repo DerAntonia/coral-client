@@ -46,6 +46,11 @@ impl App {
                 AUDIO_BUFFER_CHOICES.iter().position(|&f| f == s.audio_buffer_frames),
             ),
             Choice::CrosshairShape => ((0..=CROSSHAIR_SHAPE_CUSTOM).map(|i| crosshair_shape_label(i).to_string()).collect(), Some(s.crosshair_shape_choice())),
+            Choice::PanoramaSkin => {
+                let liste = crate::panorama::skins_with_panorama();
+                let jetzt = crate::panorama::chosen_skin(&s.panorama_skin).and_then(|n| liste.iter().position(|m| *m == n));
+                (liste, jetzt)
+            }
             Choice::Addon(m, k) => match self.addon_setting(m, k).map(|d| d.kind) {
                 Some(addons::SettingKind::Choice { options }) => {
                     let wert = self.addon_value(m, k);
@@ -89,6 +94,12 @@ impl App {
             Choice::CrosshairShape => {
                 self.settings.set_crosshair_shape_choice(i);
                 self.persist_settings();
+                return;
+            }
+            Choice::PanoramaSkin => {
+                self.settings.panorama_skin = optionen[i].clone();
+                self.persist_settings();
+                self.request_wallpaper(true);
                 return;
             }
             Choice::Addon(m, k) => {
@@ -156,7 +167,7 @@ impl App {
                 s.ego_sound = ego_name::SOUNDS[vorher].0.to_string();
                 ButtonAction::CycleEgoSound
             }
-            Choice::AudioDevice | Choice::AudioBuffer | Choice::CrosshairShape | Choice::Addon(..) => return,
+            Choice::AudioDevice | Choice::AudioBuffer | Choice::CrosshairShape | Choice::PanoramaSkin | Choice::Addon(..) => return,
         };
         if matches!(c, Choice::ArrowEmptyFeedback | Choice::SkyMode | Choice::WeatherMode | Choice::EgoDeco | Choice::EgoShadow | Choice::EgoSound) {
             self.apply_module_action(weiter);

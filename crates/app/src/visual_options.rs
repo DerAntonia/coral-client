@@ -61,6 +61,9 @@ pub(crate) const HUD_TEXT_STYLE_NAMES: [&str; 2] = ["Fadenkreuz", "Weiß+Kontur"
 // Kreis-Anzeige: Radius (Mitte des Rings) und Staerke in Bildschirmpixeln, Anzahl Segmente
 // fuer den vollen Kreis.
 pub(crate) const SHIELD_RING_RADIUS_PX: f32 = 11.0;
+// Einstellbarer Radius (Settings::crosshair_ring_radius), ganze Pixel.
+pub(crate) const SHIELD_RING_RADIUS_MIN_PX: u32 = 4;
+pub(crate) const SHIELD_RING_RADIUS_MAX_PX: u32 = 40;
 pub(crate) const SHIELD_RING_THICKNESS_PX: f32 = 2.0;
 pub(crate) const SHIELD_RING_SEGMENTS: usize = 48;
 // Zeichenfaktor des eigenen Countdowns (Minecraft-Schrift: 16 px hoch).

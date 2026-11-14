@@ -133,7 +133,10 @@ impl Settings {
                 }
                 _ if key.strip_prefix("hitbox_").and_then(hitbox_kinds::HitboxKind::from_key).is_some() => {
                     let art = key.strip_prefix("hitbox_").and_then(hitbox_kinds::HitboxKind::from_key).expect("eben geprueft");
-                    settings.module_hitbox_styles[art.index()] = hitbox_kinds::HitboxStyle::decode(value, art.default_style());
+                    let mut stil = hitbox_kinds::HitboxStyle::decode(value, art.default_style());
+                    // Netz und Wasser hatten immer ihre eigene Farbe, auch ohne gespeichertes Ueberschreiben.
+                    stil.custom |= art.default_style().custom;
+                    settings.module_hitbox_styles[art.index()] = stil;
                 }
                 "trail_hold_tenths" => {
                     if let Ok(v) = value.parse::<u32>() {
@@ -280,6 +283,31 @@ impl Settings {
                 "block_rng_rotation" => settings.block_rng_rotation = value == "true",
                 // Alter Schluessel aus der Zeit des reinen An/Aus-Schalters.
                 "smooth_lighting" => settings.smooth_lighting_percent = if value == "true" { SMOOTH_LIGHTING_MAX } else { 0 },
+                "particle_fade_out_ms" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.particle_fade_out_ms = v.min(PARTICLE_FADE_MAX_MS);
+                    }
+                }
+                "entity_near_dither_cm" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.entity_near_dither_cm = v.min(ENTITY_NEAR_MAX_CM);
+                    }
+                }
+                "mip_sharpness_pct" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.mip_sharpness_pct = v.min(MIP_SHARPNESS_MAX);
+                    }
+                }
+                "particle_distance" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.particle_distance = v.clamp(PARTICLE_DISTANCE_MIN, PARTICLE_DISTANCE_MAX);
+                    }
+                }
+                "chunk_fade_ms" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        settings.chunk_fade_ms = v.min(CHUNK_FADE_MAX_MS);
+                    }
+                }
                 "smooth_lighting_percent" => {
                     if let Ok(v) = value.parse::<u32>() {
                         settings.smooth_lighting_percent = v;
@@ -397,6 +425,16 @@ impl Settings {
             "cursor_width" => {
                 if let Ok(v) = value.parse::<u32>() {
                     settings.cursor_width = v;
+                }
+            }
+            "cursor_outline" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.cursor_outline = v.min(CURSOR_OUTLINE_MAX);
+                }
+            }
+            "cursor_fill_transparency" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.cursor_fill_transparency = v.min(100);
                 }
             }
             "cursor_size" => {
@@ -525,7 +563,7 @@ impl Settings {
                     }
                 }
             }
-            "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" | "hud_scoreboard_scale" | "hud_arrows_scale" | "hud_held_name_scale" | "hud_armor_scale" | "hud_keys_scale" | "hud_session_scale" => {
+            "hud_title_scale" | "hud_subtitle_scale" | "hud_effects_scale" | "hud_bossbar_scale" | "hud_scoreboard_scale" | "hud_arrows_scale" | "hud_held_name_scale" | "hud_armor_scale" | "hud_keys_scale" | "hud_session_scale" | "hud_clock_scale" => {
                 if let Ok(v) = value.parse::<u32>() {
                     match key {
                         "hud_title_scale" => settings.hud_title_scale = v,
@@ -537,6 +575,7 @@ impl Settings {
                         "hud_armor_scale" => settings.hud_armor_scale = v,
                         "hud_keys_scale" => settings.hud_keys_scale = v,
                         "hud_session_scale" => settings.hud_session_scale = v,
+                        "hud_clock_scale" => settings.hud_clock_scale = v,
                         _ => settings.hud_effects_scale = v,
                     }
                 }
@@ -572,6 +611,11 @@ impl Settings {
             "hud_scoreboard_y" => {
                 if let Ok(v) = value.parse::<f32>() {
                     settings.hud_scoreboard_y = v.clamp(0.0, 1.0);
+                }
+            }
+            "scoreboard_align" => {
+                if let Ok(v) = value.parse::<u8>() {
+                    settings.scoreboard_align = v.min(SCOREBOARD_ALIGNS.len() as u8 - 1);
                 }
             }
             "hud_hotbar_x" => {
@@ -704,6 +748,11 @@ impl Settings {
                 settings.crosshair_ring_outline = settings.crosshair_outline;
             }
             "crosshair_ring_outline" => settings.crosshair_ring_outline = value == "true",
+            "crosshair_ring_radius" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.crosshair_ring_radius = v.clamp(SHIELD_RING_RADIUS_MIN_PX, SHIELD_RING_RADIUS_MAX_PX);
+                }
+            }
             "crosshair_custom" => settings.crosshair_custom = value == "true",
             "crosshair_shape" => {
                 if let Ok(v) = value.parse::<usize>() {
@@ -870,6 +919,12 @@ impl Settings {
             }
             "cmaa2_enabled" => settings.cmaa2_enabled = value == "true",
             "audio_output_device" => settings.audio_output_device = value.to_string(),
+            "panorama_skin" => settings.panorama_skin = value.to_string(),
+            "panorama_speed" => {
+                if let Ok(v) = value.parse::<i32>() {
+                    settings.panorama_speed = v.clamp(crate::panorama::SPEED_MIN, crate::panorama::SPEED_MAX);
+                }
+            }
             "audio_buffer_frames" => {
                 if let Ok(v) = value.parse::<u32>() {
                     if AUDIO_BUFFER_CHOICES.contains(&v) {
@@ -888,7 +943,7 @@ impl Settings {
             "module_crystal_optimizer" => settings.module_crystal_optimizer = value == "true",
             "module_consumable_optimizer" => settings.module_consumable_optimizer = value == "true",
             "eat_slot_lock" => settings.eat_slot_lock = value == "true",
-            "eat_aggressive_prediction" => settings.eat_aggressive_prediction = value == "true",
+            "no_shield_lock" => settings.no_shield_lock = value == "true",
             "eat_hold_through_ms" => {
                 if let Ok(v) = value.parse::<u32>() {
                     settings.eat_hold_through_ms = v;
@@ -972,11 +1027,19 @@ impl Settings {
                 }
             }
             "module_hitbox_enabled" => settings.module_hitbox_enabled = value == "true",
-            "module_hitbox_show_smoothed" => settings.module_hitbox_show_smoothed = value == "true",
-            "module_hitbox_show_raw" => settings.module_hitbox_show_raw = value == "true",
+            "module_hitbox_player_raw" => settings.module_hitbox_player_raw = value == "true",
             "module_hitbox_dotted" => settings.module_hitbox_dotted = value == "true",
-            "module_hitbox_visible_edges" => settings.module_hitbox_visible_edges = value == "true",
-            "module_hitbox_items" => settings.module_hitbox_items = value == "true",
+            // Aeltere Dateien: ein Schalter "nur sichtbare Kanten".
+            "module_hitbox_visible_edges" => {
+                if value == "true" {
+                    settings.module_hitbox_lines = HITBOX_LINES_VISIBLE;
+                }
+            }
+            "module_hitbox_lines" => {
+                if let Ok(v) = value.parse::<u8>() {
+                    settings.module_hitbox_lines = v.min(HITBOX_LINES_OUTLINE);
+                }
+            }
             "module_hitbox_self" => settings.module_hitbox_self = value == "true",
             "module_teams" => settings.module_teams = value == "true",
             "teams_match" => settings.team_match = teams::Matchers::decode(value),
@@ -1101,7 +1164,9 @@ impl Settings {
             "module_freelook" => settings.module_freelook = value == "true",
             "freelook_view" => settings.freelook_view = value.parse::<u8>().unwrap_or(FREELOOK_VIEW_BACK).min(FREELOOK_VIEW_FRONT),
             "armor_trims" => settings.armor_trims = value == "true",
+            "render_order" => settings.render_order = crate::render_order::RenderOrderTable::decode(value, settings.render_order),
             "modified_view_model" => settings.modified_view_model = value == "true",
+            "view_model_bobbing" => settings.view_model_bobbing = value == "true",
             "fire_mode" => settings.fire_mode = value.parse::<u8>().unwrap_or(0).min(FIRE_MODE_OFF),
             "hurt_cam_strength" | "fire_height" | "fire_crosshair_saturation" | "fire_crosshair_value" | "fire_crosshair_hue" => {
                 if let Ok(v) = value.parse::<u32>() {
@@ -1130,6 +1195,17 @@ impl Settings {
                 }
             }
             "module_session_info" => settings.module_session_info = value == "true",
+            "module_clock" => settings.module_clock = value == "true",
+            "hud_clock_x" | "hud_clock_y" => {
+                if let Ok(v) = value.parse::<f32>() {
+                    let v = v.clamp(0.0, 1.0);
+                    if key == "hud_clock_x" {
+                        settings.hud_clock_x = v;
+                    } else {
+                        settings.hud_clock_y = v;
+                    }
+                }
+            }
             "death_animation" => settings.death_animation = value.parse::<u8>().ok().filter(|&v| (v as usize) < DEATH_ANIM_NAMES.len()).unwrap_or(DEATH_ANIM_VANILLA),
             "hud_session_x" | "hud_session_y" => {
                 if let Ok(v) = value.parse::<f32>() {
@@ -1156,6 +1232,7 @@ impl Settings {
             "arrow_indicator" => settings.arrow_indicator = value == "true",
             "arrow_number_only" => settings.arrow_number_only = value == "true",
             "arrow_white" => settings.arrow_white = value == "true",
+            "arrow_crit_trail" => settings.arrow_crit_trail = value == "true",
             "arrow_empty_sound" => settings.arrow_empty_sound = value != "false",
             "arrow_opacity" => {
                 if let Ok(v) = value.parse::<u32>() {
@@ -1313,6 +1390,17 @@ impl Settings {
             "module_discord_status" => settings.module_discord_status = value == "true",
             "module_input_log_enabled" => settings.module_input_log_enabled = value == "true",
             "module_coral_record" => settings.module_coral_record = value == "true",
+            "module_coral_clip" => settings.module_coral_clip = value == "true",
+            "clip_checkpoints" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.clip_checkpoints = v.clamp(crate::CLIP_CHECKPOINTS_MIN, crate::CLIP_CHECKPOINTS_MAX);
+                }
+            }
+            "clip_seconds" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.clip_seconds = v.clamp(crate::CLIP_SECONDS_MIN, crate::CLIP_SECONDS_MAX);
+                }
+            }
             "module_autoclicker" => settings.module_autoclicker = value == "true",
             "autoclicker_cps" => {
                 if let Ok(v) = value.parse::<u32>() {
@@ -1465,10 +1553,11 @@ fn read_particle_tuning(ziel: &mut [particles::ParticleTuning; particles::KINDS.
         let Some((key, werte)) = eintrag.split_once(':') else { continue };
         let w: Vec<u32> = werte.split(',').filter_map(|v| v.trim().parse().ok()).collect();
         let klemmen = |v: u32, stufen: &[u32]| v.clamp(stufen[0], *stufen.last().unwrap());
-        // Vier Werte aus der Zeit vor Menge/Intervall, sonst sieben.
-        let (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal) = match w[..] {
-            [an, dauer, deckkraft, tempo] => (an, dauer, deckkraft, tempo, 100, 100, 0),
-            [an, dauer, deckkraft, tempo, menge, intervall, auf_einmal] => (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal),
+        // Vier Werte aus der Zeit vor Menge/Intervall, sieben aus der vor Groesse/Spread, sonst neun.
+        let (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal, groesse, spread) = match w[..] {
+            [an, dauer, deckkraft, tempo] => (an, dauer, deckkraft, tempo, 100, 100, 0, 100, 100),
+            [an, dauer, deckkraft, tempo, menge, intervall, auf_einmal] => (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal, 100, 100),
+            [an, dauer, deckkraft, tempo, menge, intervall, auf_einmal, groesse, spread] => (an, dauer, deckkraft, tempo, menge, intervall, auf_einmal, groesse, spread),
             _ => continue,
         };
         gelesen.insert(
@@ -1480,6 +1569,8 @@ fn read_particle_tuning(ziel: &mut [particles::ParticleTuning; particles::KINDS.
                 speed_pct: klemmen(tempo, &PARTICLE_SPEED_STEPS),
                 amount_pct: klemmen(menge, &PARTICLE_AMOUNT_STEPS),
                 interval_pct: klemmen(intervall, &PARTICLE_INTERVAL_STEPS),
+                size_pct: klemmen(groesse, &PARTICLE_SIZE_STEPS),
+                spread_pct: klemmen(spread, &PARTICLE_SPREAD_STEPS),
                 all_at_once: auf_einmal != 0,
             },
         );

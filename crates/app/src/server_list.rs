@@ -291,6 +291,43 @@ pub(crate) fn drag_icon_rim(feld: Rect) -> UiRect {
     UiRect::framed(r, [0.0; 4], 6.0 + DICKE, DICKE, [0.0, 0.0, 0.0, 1.0])
 }
 
+// Durchsichtige Pixel eines quadratischen RGBA-Bilds bekommen die Farbe ihrer sichtbaren
+// Nachbarn (durchsichtig bleiben sie). Viele Icons haben dort Weiss stehen; wird das Bild
+// groesser oder kleiner gezeichnet, mischt die weiche Abtastung diese Farbe in den Rand der
+// Form -- ein heller Saum um das Icon (Minemen, Nutzer 2026-11-12).
+pub(crate) fn bleed_icon_edges(rgba: &mut [u8], size: u32) {
+    let n = size as usize;
+    if rgba.len() != n * n * 4 {
+        return;
+    }
+    let alt = rgba.to_vec();
+    for y in 0..n {
+        for x in 0..n {
+            let i = (y * n + x) * 4;
+            if alt[i + 3] != 0 {
+                continue;
+            }
+            // Mittel der sichtbaren Nachbarn, nach Deckkraft gewichtet.
+            let (mut summe, mut gewicht) = ([0u32; 3], 0u32);
+            for ny in y.saturating_sub(1)..=(y + 1).min(n - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(n - 1) {
+                    let j = (ny * n + nx) * 4;
+                    let a = u32::from(alt[j + 3]);
+                    for k in 0..3 {
+                        summe[k] += u32::from(alt[j + k]) * a;
+                    }
+                    gewicht += a;
+                }
+            }
+            for k in 0..3 {
+                if let Some(mittel) = summe[k].checked_div(gewicht) {
+                    rgba[i + k] = mittel as u8;
+                }
+            }
+        }
+    }
+}
+
 // Ecken eines quadratischen RGBA-Bilds (`size` Pixel) mit Radius `r` (Bildpixel) abrunden:
 // ausserhalb des Viertelkreises durchsichtig, am Rand mit weicher Kante.
 pub(crate) fn round_icon_corners(rgba: &mut [u8], size: u32, r: f32) {
@@ -338,4 +375,4 @@ pub(crate) fn skin_files_rows_visible() -> usize {
     ((liste.h / SKIN_FILES_ROW_H).floor() as usize).max(1)
 }
 
-pub(crate) const SKIN_TAB_HINT: &str = "Links liegen die Packs aus dem Skin-Ordner, rechts die gewählten: das obere überschreibt die darunter. Packs unter Vanilla füllen nur noch auf, was Vanilla nicht hat. Ein Server-Pack steht anfangs ganz oben und lässt sich wie die anderen verschieben. Ziehen verschiebt, auch in die andere Spalte (Esc bricht ab); ein Klick wechselt die Spalte. Das Zahnrad auf dem Bild schaltet einzelne Dateien und Ordner des Packs aus. Geladen wird, sobald man den Tab verlässt.";
+pub(crate) const SKIN_TAB_HINT: &str = "Links liegen die Packs aus dem Skin-Ordner, rechts die gewählten: das obere überschreibt die darunter. Packs unter Vanilla füllen nur noch auf, was Vanilla nicht hat. Ein Server-Pack steht anfangs ganz oben und lässt sich wie die anderen verschieben. Rechts verschiebt Ziehen, auch nach links (Esc bricht ab); ein Klick wechselt die Spalte, links schon beim Drücken. Das Zahnrad auf dem Bild schaltet einzelne Dateien und Ordner des Packs aus. Geladen wird, sobald man den Tab verlässt.";

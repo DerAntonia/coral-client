@@ -3,9 +3,10 @@
 //!
 //! Neben dem Skin-Ordner statt in ~/.config, weil man die Logs von Hand oeffnen und
 //! durchsuchen will -- ein versteckter Konfigurationsordner ist dafuer der falsche Ort.
-//! Jede Zeile wird sofort angehaengt (Datei auf, schreiben, zu), damit bei einem Absturz
-//! nichts verloren geht -- aber in einem EIGENEN Thread: Dateizugriffe im Haupt-Thread lassen
-//! bei einem Schwall Nachrichten oder langsamer Platte Bilder haengen.
+//! Jede Zeile wird sofort angehaengt und auf die Platte gesichert (Datei auf, schreiben,
+//! sichern, zu), damit bei einem Absturz oder Stromausfall nichts verloren geht -- aber in
+//! einem EIGENEN Thread: Dateizugriffe im Haupt-Thread lassen bei einem Schwall Nachrichten
+//! oder langsamer Platte Bilder haengen.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -39,8 +40,11 @@ fn writer() -> &'static std::sync::Mutex<std::sync::mpsc::Sender<(String, String
     TX.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
         let _ = std::thread::Builder::new().name("chat-log".into()).spawn(move || {
-            for (datum, zeile) in rx {
-                write_now(&datum, &zeile);
+            while let Ok(erster) = rx.recv() {
+                // Alles mitnehmen, was schon wartet: ein Schwall kostet so nur EIN Sichern.
+                let mut auftraege = vec![erster];
+                auftraege.extend(rx.try_iter());
+                write_now(&auftraege);
             }
         });
         std::sync::Mutex::new(tx)
@@ -53,12 +57,25 @@ fn append_at(datum: &str, zeile: &str) {
     }
 }
 
-fn write_now(datum: &str, zeile: &str) {
+// Haengt die Auftraege an ihre Tagesdateien an und sichert jede Datei danach auf die Platte
+// (sync_data). Ohne das Sichern liegen die Zeilen nur im Seitencache: faellt der Strom aus,
+// waehrend das Spiel laeuft, kennt das Dateisystem schon die neue Laenge, aber nicht den
+// Inhalt -- die Datei bekommt dort einen Block aus Nullbytes und gilt als beschaedigt.
+fn write_now(auftraege: &[(String, String)]) {
     let Some(ordner) = dir() else { return };
     // Fehler still schlucken: ein voller oder schreibgeschuetzter Ordner darf den Chat nicht stoeren.
     let _ = std::fs::create_dir_all(&ordner);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(ordner.join(format!("{datum}.log"))) {
-        let _ = f.write_all(zeile.as_bytes());
+    let mut i = 0;
+    while i < auftraege.len() {
+        let datum = &auftraege[i].0;
+        let ende = i + auftraege[i..].iter().take_while(|(d, _)| d == datum).count();
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(ordner.join(format!("{datum}.log"))) {
+            for (_, zeile) in &auftraege[i..ende] {
+                let _ = f.write_all(zeile.as_bytes());
+            }
+            let _ = f.sync_data();
+        }
+        i = ende;
     }
 }
 

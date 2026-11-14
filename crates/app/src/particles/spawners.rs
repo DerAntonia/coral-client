@@ -2,12 +2,41 @@
 
 use super::*;
 
+// Wo ein Emitter-Partikel entsteht: auf dem Rand der Hitbox, dort wo der Strahl aus der
+// Koerpermitte in Flugrichtung `v` sie verlaesst -- es ist sofort draussen (Nutzer 2026-11-12;
+// Vanilla setzt es in die Mitte +- ein Viertel der Breite und Hoehe).
+pub(super) fn body_edge(b: EmitterBody, v: DVec3) -> DVec3 {
+    let mitte = DVec3::new(b.pos.x, b.pos.y + b.height * 0.5, b.pos.z);
+    let halb = DVec3::new(b.width * 0.5, b.height * 0.5, b.width * 0.5);
+    let t = (halb.x / v.x.abs()).min(halb.y / v.y.abs()).min(halb.z / v.z.abs());
+    if t.is_finite() { mitte + v * t } else { mitte }
+}
+
 impl Particles {
     // Ein Trank-Wirbel an einem Entity (LivingEntity.tickStatusEffects): Vanilla gibt als
     // "Geschwindigkeit" immer (1, 1, 1) mit.
     // Level.addParticle aus einem Entity-Tick (force = false, important = false).
     pub fn add_world_particle(&mut self, effect: &ParticleEffect, pos: DVec3, vel: DVec3, ctx: &SpawnContext) {
         self.add_client(effect, false, false, pos, vel, ctx);
+    }
+
+    // Eine Spur: `anzahl` Partikel (Vanillas Zahl) gleichmaessig auf der Strecke von `von` bis
+    // kurz vor `von + weg`. Mehr Menge als Vanilla verteilt die Spur selbst auf die Strecke --
+    // Kopien in push laegen als Haeufchen aufeinander (Nutzer 2026-11-12, wie tick_emitter).
+    pub fn add_trail(&mut self, effect: &ParticleEffect, von: DVec3, weg: DVec3, vel: DVec3, anzahl: u32, ctx: &SpawnContext) {
+        let n = self.trail_count(effect, von, anzahl, ctx);
+        self.emit_scaled = n > anzahl;
+        for i in 0..n {
+            self.add_client(effect, false, false, von + weg * (f64::from(i) / f64::from(n)), vel, ctx);
+        }
+        self.emit_scaled = false;
+    }
+
+    // Wie viele Partikel add_trail fuer `anzahl` setzt: bei mehr Menge entsprechend mehr, bei
+    // weniger bleibt es bei `anzahl`, und push laesst welche weg.
+    pub(super) fn trail_count(&self, effect: &ParticleEffect, von: DVec3, anzahl: u32, ctx: &SpawnContext) -> u32 {
+        let faktor = kind_of(effect.type_id).map_or(1.0, |k| self.tuning_of(own_at(ctx, k, von), k).spawn_factor(KINDS[k].spawn));
+        if faktor > 1.0 { (anzahl as f32 * faktor).round() as u32 } else { anzahl }
     }
 
     pub fn add_potion_swirl(&mut self, argb: u32, pos: DVec3, ctx: &SpawnContext) {
@@ -229,8 +258,17 @@ impl Particles {
     // Boee einer Windkugel ist keine Explosion im Sinne der Anpassung, sie hat ihre eigene.
     pub fn on_explosion(&mut self, e: &pp::Explosion, ctx: &SpawnContext) {
         let center = DVec3::new(e.center.0, e.center.1, e.center.2);
+        // Erst die schon fliegenden Partikel wegstossen (kein Vanilla), dann die neuen der
+        // Explosion.
+        let mut stoss = ExplosionPush::new(center, e.radius, ctx.world, ctx.shapes);
+        self.push_and_step(&mut stoss, 0, true, ctx);
+        // Emitter aus demselben Tick (Totem-Pop durch diese Explosion): auch ihre spaeteren
+        // Partikel bekommen den Stoss (s. Emitter::explosion).
+        for em in self.emitters.iter_mut().filter(|em| em.fresh) {
+            em.explosion = Some((center, e.radius));
+        }
         self.add_client(&e.particle, false, false, center, DVec3::new(1.0, 0.0, 0.0), ctx);
-        let own = own_at(ctx, center);
+        let own = own_at(ctx, KIND_EXPLOSION, center);
         if self.tuning_of(own, KIND_EXPLOSION).enabled && !e.block_particles.is_empty() {
             self.bursts.push(ExplosionBurst {
                 own,
@@ -252,9 +290,11 @@ impl Particles {
         body: &dyn Fn(i32) -> Option<EmitterBody>,
         ctx: &SpawnContext,
     ) {
-        let mut em = Emitter { entity, effect: ParticleEffect { type_id, options: ParticleOptions::None }, age: 0, max_age };
+        // Die eigene Figur liefert `body` mit genau der Lage von ctx.player (s. App::with_particles),
+        // jede andere Entity hat ihre eigene.
+        let own = body(entity).is_some_and(|b| ctx.player.is_some_and(|me| me.pos == b.pos));
+        let mut em = Emitter { entity, effect: ParticleEffect { type_id, options: ParticleOptions::None }, age: 0, max_age, fresh: true, explosion: None, own };
         // "Alle auf einmal": alle Ticks des Emitters jetzt (das Totem etwa sonst 30 Ticks lang).
-        let own = body(entity).is_some_and(|b| own_at(ctx, b.pos));
         let sofort = kind_of(type_id).is_some_and(|k| self.tuning_of(own, k).all_at_once && KINDS[k].spawn.has_all_at_once());
         if sofort {
             for _ in 0..max_age.max(1) {
@@ -269,19 +309,49 @@ impl Particles {
         }
     }
 
+    // Explosions-Rueckstoss auf die Partikel ab `pending[ab..]` (mit `bestand` auch auf alle
+    // schon fliegenden). Wer gestossen wird, macht sofort seinen ersten Schritt -- unabhaengig
+    // vom Tempo, ein ganzer Tick (Nutzer 2026-11-11): sonst stand er bis zum naechsten bzw.
+    // uebernaechsten Spieltick still (neue Partikel kommen erst am Ende eines Ticks in den
+    // Bestand), und die Wolke flog spuerbar nach dem Knall los. Er ist damit einen Tick voraus.
+    pub(super) fn push_and_step(&mut self, stoss: &mut ExplosionPush, ab: usize, bestand: bool, ctx: &SpawnContext) {
+        let (mut spawns, mut boeen) = (Vec::new(), Vec::new());
+        let sprites = &self.sprites;
+        let fliegende = self.particles.iter_mut().filter(|_| bestand);
+        for p in fliegende.chain(self.pending[ab..].iter_mut()) {
+            if p.explosion_knockback(stoss) {
+                Self::tick_one(p, sprites, ctx, &mut spawns, &mut boeen);
+            }
+        }
+        self.spawn_emitted(spawns, boeen, ctx);
+    }
+
     // EmitterParticle.tick. false = fertig.
     pub(super) fn tick_emitter(&mut self, em: &mut Emitter, body: &dyn Fn(i32) -> Option<EmitterBody>, ctx: &SpawnContext) -> bool {
         let Some(b) = body(em.entity) else { return false };
-        for _ in 0..16 {
+        let vorher = self.pending.len();
+        // Mehr Menge als Vanilla: der Emitter wuerfelt entsprechend oefter, jedes Partikel mit
+        // eigener Richtung -- Kopien in push laegen als Haeufchen beieinander (Nutzer 2026-11-11).
+        let faktor = kind_of(em.effect.type_id).map_or(1.0, |k| self.tuning_of(em.own, k).spawn_factor(KINDS[k].spawn));
+        let versuche = if faktor > 1.0 { (16.0 * faktor).round() as usize } else { 16 };
+        self.emit_own = Some(em.own);
+        self.emit_scaled = faktor > 1.0;
+        for _ in 0..versuche {
             let d = f64::from(self.rng.next_float() * 2.0 - 1.0);
             let e = f64::from(self.rng.next_float() * 2.0 - 1.0);
             let f = f64::from(self.rng.next_float() * 2.0 - 1.0);
             if d * d + e * e + f * f > 1.0 {
                 continue;
             }
-            let pos = DVec3::new(b.pos.x + b.width * (d / 4.0), b.pos.y + b.height * (0.5 + e / 4.0), b.pos.z + b.width * (f / 4.0));
+            let v = DVec3::new(d, e + 0.2, f);
             let effect = em.effect.clone();
-            self.add_client(&effect, false, false, pos, DVec3::new(d, e + 0.2, f), ctx);
+            self.add_client(&effect, false, false, body_edge(b, v), v, ctx);
+        }
+        self.emit_own = None;
+        self.emit_scaled = false;
+        if let Some((mitte, radius)) = em.explosion {
+            let mut stoss = ExplosionPush::new(mitte, radius, ctx.world, ctx.shapes);
+            self.push_and_step(&mut stoss, vorher, false, ctx);
         }
         em.age += 1;
         em.age < em.max_age

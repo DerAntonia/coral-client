@@ -249,6 +249,10 @@ pub(super) async fn handle_play_packet(
     } else if id == packets::CB_PLAY_KEEP_ALIVE {
         let ka = packets::read_keep_alive_id(payload).map_err(|_| NetError::Protocol("KeepAlive".into()))?;
         conn.send(&packets::keep_alive_play_payload(ka)).await?;
+        if conn.replay.is_none() {
+            let micros = conn.last_read.elapsed().as_micros().min(u128::from(u32::MAX)) as u32;
+            let _ = events.send(ClientEvent::KeepAliveAnswered { micros });
+        }
     } else if id == packets::CB_PLAY_COOKIE_REQUEST {
         answer_cookie_request(conn, payload, packets::SB_PLAY_COOKIE_RESPONSE).await?;
     } else if id == packets::CB_PLAY_STORE_COOKIE {
@@ -435,6 +439,10 @@ pub(super) async fn handle_play_packet(
         if let Ok((pos, typ, daten)) = packets::read_block_event(payload) {
             let _ = events.send(ClientEvent::BlockEvent(pos, typ, daten));
         }
+    } else if id == packets::CB_PLAY_BLOCK_DESTRUCTION {
+        if let Ok((breaker, pos, progress)) = packets::read_block_destruction(payload) {
+            let _ = events.send(ClientEvent::BlockDestruction { breaker, pos, progress });
+        }
     } else if id == packets::CB_PLAY_BLOCK_CHANGED_ACK {
         if let Ok(sequence) = packets::read_block_changed_ack(payload) {
             let _ = events.send(ClientEvent::BlockChangedAck(sequence));
@@ -598,6 +606,9 @@ pub(super) async fn handle_play_packet(
         // nicht im Paket steht, hat sich nicht geaendert: der Server schickt nur geaenderte
         // Felder.
         if let Ok(update) = packets::read_set_entity_data(payload) {
+            if let Some(fehler) = &update.item_error {
+                eprintln!("[entity-item] Entity {}: Item nicht lesbar, {fehler}", update.entity_id);
+            }
             if let Some(pose) = update.pose {
                 let _ = events.send(ClientEvent::EntityPose { id: update.entity_id, pose });
             }
@@ -681,6 +692,9 @@ pub(super) async fn handle_play_packet(
         }
         if let Ok(tags) = protocol::recipe::read_block_tags(payload) {
             let _ = events.send(ClientEvent::BlockTags(tags));
+        }
+        if let Ok(Some(ids)) = protocol::recipe::read_pause_screen_dialogs(payload) {
+            let _ = events.send(ClientEvent::PauseScreenDialogs(ids));
         }
     } else if id == protocol::recipe::CB_PLAY_RECIPE_BOOK_SETTINGS || id == protocol::recipe::CB_PLAY_PLACE_GHOST_RECIPE {
         // Buch-Einstellungen des Servers und Geister-Rezepte: das Buch hier hat eigene.

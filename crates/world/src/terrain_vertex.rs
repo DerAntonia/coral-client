@@ -20,6 +20,7 @@
 // dieser Dimension) -- "spalten-lokal" heisst hier also auch in y relativ zu min_y.
 
 use crate::mesher::BlockVertex;
+use bytemuck::Zeroable;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -46,6 +47,8 @@ impl TerrainVertex {
     // BlockVertex::with_cutout_mark) -- ohne Licht steht dort sonst immer NO_LIGHT. Eine
     // Lichtberechnung (Shader-Pfad) ueberschreibt es; dort gibt es das Abschneiden nicht.
     pub const CUTOUT_MARK: u8 = 255;
+    // Ebenso fuer "Wasser" (s. BlockVertex::with_water_mark).
+    pub const WATER_MARK: u8 = 254;
 
     #[must_use] 
     pub const fn with_light(mut self, light: u32) -> Self {
@@ -72,6 +75,8 @@ impl TerrainVertex {
             .with_light(Self::NO_LIGHT);
         if v.color[0] < -0.5 {
             out.color[3] = Self::CUTOUT_MARK;
+        } else if v.is_water_marked() {
+            out.color[3] = Self::WATER_MARK;
         }
         out
     }
@@ -306,6 +311,127 @@ pub fn group_by_direction(packed: &[TerrainVertex], starts: &mut [u32]) -> (Vec<
     (out, groups, runs)
 }
 
+// ---- Flicken: einzelne Flaechen austauschen, statt die ganze Spalte neu zu bauen ----
+//
+// Eine "flickbare" Spalte merkt sich zu jeder Flaeche im Puffer, welcher Block sie erzeugt hat
+// (quad_block), und haelt in jedem Lauf (Richtung x Section) ein paar leere Plaetze frei. Aendert
+// sich ein Block, werden nur die Flaechen der Bloecke ringsum (s. mesher::MeshRegion) neu
+// gebaut und im Puffer an ihre Stelle geschrieben (s. render::BlockRenderer::patch_column).
+
+// Kein Block: freier Platz im Puffer (entartete Flaeche aus Null-Vertices, zeichnet nichts).
+pub const FREE_QUAD: u32 = u32::MAX;
+
+// Freie Plaetze je Lauf einer flickbaren Spalte.
+pub const PATCH_SLACK: u32 = 12;
+
+// Eine gepackte Flaeche samt Einordnung: Richtungsgruppe, Section, Ebene auf ihrer Achse (s.
+// FaceGroup) und der Block, der sie erzeugt hat (s. mesher::block_id).
+#[derive(Clone, Copy, Debug)]
+pub struct PlacedQuad {
+    pub group: u8,
+    pub section: u8,
+    pub plane: f32,
+    pub block: u32,
+    pub verts: [TerrainVertex; 4],
+}
+
+// Gepackte Flaechen (pack_terrain) ihren Bloecken zuordnen. `block_starts`: je Block (Anfang
+// im gepackten Puffer in Vertices oder u32::MAX, Kennung) in Pufferreihenfolge -- die Anfaenge
+// aus mesher::mesh_column_blocks, von pack_terrain umgerechnet.
+#[must_use]
+pub fn place_quads(packed: &[TerrainVertex], block_starts: &[(u32, u32)]) -> Vec<PlacedQuad> {
+    let mut out = Vec::with_capacity(packed.len() / 4);
+    let mut naechster = 0;
+    let mut block = FREE_QUAD;
+    for (i, q) in packed.chunks_exact(4).enumerate() {
+        let anfang = (i * 4) as u32;
+        // Der letzte Block, dessen Anfang nicht hinter dieser Flaeche liegt. u32::MAX (nichts
+        // erzeugt bzw. hinter dem Ende) uebersteigt jeden Anfang.
+        while naechster < block_starts.len() && block_starts[naechster].0 <= anfang {
+            block = block_starts[naechster].1;
+            naechster += 1;
+        }
+        let (group, plane) = face_group(&[q[0].position(), q[1].position(), q[2].position(), q[3].position()]);
+        out.push(PlacedQuad { group: group as u8, section: q[0].section(), plane, block, verts: [q[0], q[1], q[2], q[3]] });
+    }
+    out
+}
+
+// Eine flickbare Spalte auslegen: Flaechen nach (Richtung, Section) geordnet wie
+// group_by_direction, hinter jedem Lauf PATCH_SLACK freie Plaetze. `slack_sections` (Bit n =
+// Section n): dort bekommt JEDE Richtung einen Lauf, auch ohne Flaechen -- wo gerade gebaut
+// wird, kommen Flaechen in Richtungen dazu, die es dort noch nicht gab.
+// Gibt Vertices, Gruppen, Laeufe und je Platz den Block (FREE_QUAD = frei) zurueck.
+#[must_use]
+pub fn layout_patchable(quads: &[PlacedQuad], slack_sections: u64) -> (Vec<TerrainVertex>, [FaceGroup; FACE_GROUPS], Vec<SectionRun>, Vec<u32>) {
+    use std::collections::BTreeMap;
+    let mut laeufe: BTreeMap<(u8, u8), Vec<usize>> = BTreeMap::new();
+    for (i, q) in quads.iter().enumerate() {
+        laeufe.entry((q.group, q.section)).or_default().push(i);
+    }
+    for section in 0..64u8 {
+        if slack_sections & (1u64 << section) != 0 {
+            for group in 0..FACE_GROUPS as u8 {
+                laeufe.entry((group, section)).or_default();
+            }
+        }
+    }
+    let mut groups = [FaceGroup { first_quad: 0, quads: 0, plane_min: f32::INFINITY, plane_max: f32::NEG_INFINITY }; FACE_GROUPS];
+    let mut runs = Vec::with_capacity(laeufe.len());
+    let mut vertices = Vec::with_capacity((quads.len() + laeufe.len() * PATCH_SLACK as usize) * 4);
+    let mut quad_block = Vec::with_capacity(quads.len() + laeufe.len() * PATCH_SLACK as usize);
+    for (&(group, section), inhalt) in &laeufe {
+        let first_quad = quad_block.len() as u32;
+        let g = &mut groups[group as usize];
+        if g.quads == 0 {
+            g.first_quad = first_quad;
+        }
+        for &i in inhalt {
+            let q = &quads[i];
+            vertices.extend_from_slice(&q.verts);
+            quad_block.push(q.block);
+            g.plane_min = g.plane_min.min(q.plane);
+            g.plane_max = g.plane_max.max(q.plane);
+        }
+        for _ in 0..PATCH_SLACK {
+            vertices.extend_from_slice(&[TerrainVertex::zeroed(); 4]);
+        }
+        quad_block.resize(quad_block.len() + PATCH_SLACK as usize, FREE_QUAD);
+        let quads_im_lauf = inhalt.len() as u32 + PATCH_SLACK;
+        g.quads += quads_im_lauf;
+        runs.push(SectionRun { group, section, first_quad, quads: quads_im_lauf });
+    }
+    (vertices, groups, runs, quad_block)
+}
+
+// Plaetze fuer neue Flaechen einer flickbaren Spalte suchen: alle Flaechen der Bloecke `removed`
+// (aufsteigend sortierte Kennungen) werden frei, jede Flaeche aus `added` braucht einen freien
+// Platz in IHREM Lauf (Richtung x Section) -- nur so stimmen Rueckseiten- und Hoehlen-Culling
+// weiter. Gibt je neuer Flaeche ihren Platz zurueck; None, wenn ein Lauf fehlt oder voll ist
+// (dann muss die Spalte neu gebaut werden).
+#[must_use]
+pub fn plan_patch(runs: &[SectionRun], quad_block: &[u32], removed: &[u32], added: &[PlacedQuad]) -> Option<Vec<u32>> {
+    let frei_oder_weg = |block: u32| block == FREE_QUAD || removed.binary_search(&block).is_ok();
+    // Je benoetigtem Lauf einmal seine freien Plaetze sammeln (rueckwaerts, damit pop() die
+    // vorderen zuerst vergibt).
+    let mut frei: Vec<(usize, Vec<u32>)> = Vec::new();
+    let mut ziel = Vec::with_capacity(added.len());
+    for q in added {
+        let lauf = runs.iter().position(|r| r.group == q.group && r.section == q.section)?;
+        let i = match frei.iter().position(|(l, _)| *l == lauf) {
+            Some(i) => i,
+            None => {
+                let r = runs[lauf];
+                let plaetze = (r.first_quad..r.first_quad + r.quads).rev().filter(|&p| quad_block.get(p as usize).is_some_and(|&b| frei_oder_weg(b))).collect();
+                frei.push((lauf, plaetze));
+                frei.len() - 1
+            }
+        };
+        ziel.push(frei[i].1.pop()?);
+    }
+    Some(ziel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +456,11 @@ mod tests {
     fn abschneide_kennzeichen_ueberlebt_das_packen() {
         let feuer = BlockVertex { position: [0.0; 3], color: [0.75, 0.5, 0.25], uv: [0.0; 2] }.with_cutout_mark();
         assert_eq!(feuer.plain_color(), [0.75, 0.5, 0.25]);
+        let wasser = BlockVertex { position: [0.0; 3], color: [0.25, 0.5, 0.75], uv: [0.0; 2] }.with_water_mark();
+        assert_eq!(wasser.plain_color(), [0.25, 0.5, 0.75]);
+        let gepackt = TerrainVertex::from_block(&wasser, 0, 0);
+        assert_eq!(gepackt.color[3], TerrainVertex::WATER_MARK);
+        assert_eq!(gepackt.color[..3], TerrainVertex::from_block(&BlockVertex { color: [0.25, 0.5, 0.75], ..wasser }, 0, 0).color[..3]);
         let t = TerrainVertex::from_block(&feuer, 0, 0);
         assert_eq!(t.color, [191, 128, 64, TerrainVertex::CUTOUT_MARK]);
     }

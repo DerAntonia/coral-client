@@ -39,6 +39,8 @@ mod ticking;
 mod motion_state;
 mod entity_core;
 mod projectiles;
+mod anim_debug;
+pub use anim_debug::{anim_debug_an, anim_log};
 pub use entity_core::*;
 pub use projectiles::*;
 
@@ -114,6 +116,10 @@ pub struct DisplayInfo {
     // Ueber wie viele Ticks das Display einer neuen Position folgt (teleport_duration,
     // Display.interpolation). 0 = springt sofort -- Vanillas Vorgabe fuer Displays.
     pub teleport_duration: i32,
+    // Der Fortschritt (0..1), mit dem das Display zuletzt GEZEICHNET wurde -- Vanillas
+    // Display.lastProgress. Eine neue Transformation startet von der Lage bei genau diesem
+    // Fortschritt, also von dem, was gerade zu sehen war.
+    pub last_progress: std::cell::Cell<f32>,
 }
 
 // Die vier Teile der AffineTransformation eines Displays.
@@ -155,11 +161,22 @@ impl DisplayInfo {
     // Die Transformation zum Entity-Alter `age` (Ticks samt Zwischenbild-Anteil):
     // DisplayEntity.getLerpProgress + AbstractInterpolator -- Verschiebung und Skalierung
     // linear, Drehungen per slerp.
+    // Merkt sich den Fortschritt wie Vanillas calculateInterpolationProgress (s. last_progress).
     #[must_use] 
     pub fn transform_at(&self, age: f32) -> DisplayTransform {
+        if self.interp_duration <= 0 {
+            return self.target();
+        }
+        let t = ((age - self.interp_start) / self.interp_duration as f32).clamp(0.0, 1.0);
+        self.last_progress.set(t);
+        self.transform_with(t)
+    }
+
+    // Die Transformation beim Fortschritt `t` (0..1) zwischen interp_from und Ziel.
+    #[must_use] 
+    pub fn transform_with(&self, t: f32) -> DisplayTransform {
         let ziel = self.target();
         let Some(von) = self.interp_from.filter(|_| self.interp_duration > 0) else { return ziel };
-        let t = ((age - self.interp_start) / self.interp_duration as f32).clamp(0.0, 1.0);
         let lerp3 = |a: [f32; 3], b: [f32; 3]| [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t);
         DisplayTransform {
             translation: lerp3(von.translation, ziel.translation),
@@ -186,6 +203,7 @@ impl DisplayInfo {
             interp_start: 0.0,
             interp_duration: 0,
             teleport_duration: 0,
+            last_progress: std::cell::Cell::new(0.0),
         }
     }
 }
@@ -492,9 +510,14 @@ impl Entity {
     // Ein fliegender Krit-Pfeil: (Position, Geschwindigkeit) fuer die Partikelspur, die
     // AbstractArrow.tick im Client jeden Tick streut. None, wenn er nicht kritisch ist oder
     // schon steckt.
+    // Auch None im ersten Tick: die Spur liegt eine bis zwei Tick-Strecken HINTER dem Pfeil
+    // (s. App::tick_crit_trails), nach einem Tick also hinter dem Abschusspunkt, wo er nie
+    // war -- beim eigenen Schuss hinter dem Schuetzen (Nutzer 2026-11-12). Ab dem zweiten
+    // Tick beginnt sie genau am Abschusspunkt.
     #[must_use] 
     pub fn crit_trail(&self) -> Option<((f64, f64, f64), (f64, f64, f64))> {
-        (self.crit_arrow && !self.in_ground && self.projectile == Some(ProjectileKind::Arrow)).then_some((self.pos, self.vel))
+        (self.crit_arrow && !self.in_ground && self.age_ticks >= 2.0 && self.projectile == Some(ProjectileKind::Arrow))
+            .then_some((self.pos, self.vel))
     }
 
     #[must_use] 
@@ -641,6 +664,9 @@ impl Entities {
         if !self.by_id.contains_key(&vehicle) && self.own_body.map(|o| o.0) != Some(vehicle) {
             return;
         }
+        if anim_debug::anim_debug_an() {
+            anim_log(format_args!("mitfahrer fahrzeug={vehicle} typ={} passagiere={passengers:?}", self.by_id.get(&vehicle).and_then(|e| entity_type_name(e.entity_type)).unwrap_or("eigener/unbekannt")));
+        }
         self.vehicle_of.retain(|_, (v, _)| *v != vehicle);
         // Der Sitz zaehlt in der Liste des SERVERS, auch wenn wir einen Mitfahrer davor nicht
         // kennen (etwa den eigenen Spieler, der hier nicht steht) -- so steht es auch in
@@ -755,6 +781,12 @@ impl Entities {
             .collect();
         for (passagier, pos) in ziele {
             let Some(e) = self.by_id.get_mut(&passagier) else { continue };
+            if anim_debug::anim_debug_an() {
+                let d = ((pos.0 - e.pos.0).powi(2) + (pos.1 - e.pos.1).powi(2) + (pos.2 - e.pos.2).powi(2)).sqrt();
+                if d > 0.5 {
+                    anim_log(format_args!("passagier_sprung id={passagier} fahrzeug={} weite={d:.3} von={} nach={}", self.vehicle_of[&passagier].0, anim_debug::fmt_pos(e.pos), anim_debug::fmt_pos(pos)));
+                }
+            }
             // Hart setzen, nicht interpolieren: der Passagier HAT keine eigene Bewegung, er
             // ist da, wo sein Fahrzeug ist. last_pos bleibt der Stand des vorigen Ticks,
             // damit die Frame-Interpolation weiterhin glatt laeuft.

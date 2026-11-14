@@ -65,6 +65,12 @@ pub fn ui_language() -> Language {
     Language::from_index(UI_LANGUAGE.load(Ordering::Relaxed))
 }
 
+// Alles, wovon tr() ausser dem Text abhaengt: Sprache, Laengezeichen, Lehnwoerter. Fuer Caches
+// uebersetzter Messungen (s. LabelLinesEnv).
+pub fn tr_state() -> (u8, bool, bool) {
+    (UI_LANGUAGE.load(Ordering::Relaxed), LATIN_MACRONS.load(Ordering::Relaxed), GERMAN_LOANWORDS.load(Ordering::Relaxed))
+}
+
 // Latein mit Laengezeichen? Die Tabelle traegt sie; AUS nimmt sie beim Uebersetzen weg.
 static LATIN_MACRONS: AtomicBool = AtomicBool::new(true);
 
@@ -356,6 +362,13 @@ mod tests {
         assert_eq!(tr_in(Language::English, "  Deckkraft"), "  Opacity");
         assert_eq!(tr_in(Language::English, "irgendwas Unbekanntes"), "irgendwas Unbekanntes");
         assert_eq!(tr_in(Language::English, "Skin geladen: CPVP + Anderes"), "Skin loaded: CPVP + Anderes");
+        // Zusammengesetzte Texte aus HUD, Modul-Menue und Wiedergabe.
+        assert_eq!(tr_in(Language::English, "\u{266a} Flüstern"), "\u{266a} Whisper");
+        assert_eq!(tr_in(Language::English, "\u{2264} 12 Punkte"), "\u{2264} 12 points");
+        assert_eq!(tr_in(Language::English, "-30 dB (jetzt -42)"), "-30 dB (now -42)");
+        assert_eq!(tr_in(Language::English, "Wiedergabe  0:05 / 1:20  ·  2×"), "Playback  0:05 / 1:20  ·  2×");
+        assert_eq!(tr_in(Language::English, "256 Frames · 5,3 ms (Callback füllte 512 Frames)"), "256 frames · 5,3 ms (callback filled 512 frames)");
+        assert_eq!(tr_in(Language::English, "Leertaste"), "Space");
     }
 
     #[test]

@@ -176,6 +176,10 @@ impl App {
                     rects.push(UiRect { rect: groesse_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
                     texts.push(gpu.centered_text(groesse_rect, format!("{} px", self.settings.crosshair_size()), theme::text(), UI_SCALE_SMALL));
                 }
+                texts.push(UiText { text: "Ring-Radius".to_string(), x: HUD_CONFIG_LABEL_X, y: zeile_y(zeile + 2), color: theme::text(), scale: UI_SCALE_SMALL });
+                let radius_rect = stepper_value_rect(zeile + 2);
+                rects.push(UiRect { rect: radius_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
+                texts.push(gpu.centered_text(radius_rect, format!("{} px", self.settings.crosshair_ring_radius), theme::text(), UI_SCALE_SMALL));
                 texts.push(UiText { text: "Ring hat Kontur".to_string(), x: HUD_CONFIG_LABEL_X, y: zeile_y(2), color: theme::text(), scale: UI_SCALE_SMALL });
                 // Aufhellung nur beim Komplementaer-Modus (Zeile 3).
                 if self.settings.crosshair_color_mode == CROSSHAIR_MODE_COMPLEMENTARY {
@@ -296,12 +300,20 @@ impl App {
                     texts.push(UiText { text: text.to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
                 }
             }
-            HudElement::Scoreboard | HudElement::HeldName => {
+            HudElement::Scoreboard | HudElement::HeldName | HudElement::Clock => {
                 texts.push(UiText { text: "Größe".to_string(), x: HUD_CONFIG_LABEL_X, y: row0_y, color: theme::text(), scale: UI_SCALE_SMALL });
                 let value_rect = stepper_value_rect(0);
                 rects.push(UiRect { rect: value_rect, color: theme::get(theme::Slot::SurfaceSunken), ..UiRect::FLAT });
-                let pct = if element == HudElement::Scoreboard { self.settings.hud_scoreboard_scale } else { self.settings.hud_held_name_scale };
+                let pct = match element {
+                    HudElement::Scoreboard => self.settings.hud_scoreboard_scale,
+                    HudElement::Clock => self.settings.hud_clock_scale,
+                    _ => self.settings.hud_held_name_scale,
+                };
                 texts.push(gpu.centered_text(value_rect, format!("{pct} %"), theme::text(), UI_SCALE_SMALL));
+                if element == HudElement::Scoreboard {
+                    let y = (settings_row_y(SCOREBOARD_ALIGN_ROW) + (SETTINGS_CTRL_H - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
+                    texts.push(UiText { text: "Ausrichtung".to_string(), x: HUD_CONFIG_LABEL_X, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                }
             }
             HudElement::ShieldCooldown | HudElement::Arrows => {
                 let zeilen: &[&str] = if element == HudElement::Arrows {
@@ -503,6 +515,14 @@ impl App {
             let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
             rects.push(UiRect { rect: frame, color: if dragging == Some(HudElement::Session) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE }, ..UiRect::FLAT });
             self.push_session_info(gpu, rects, texts);
+        }
+
+        // Uhr: Griff-Rahmen und die Uhr selbst, wie im Spiel.
+        if self.hud_element_shown(HudElement::Clock) {
+            let rect = self.hud_clock_rect(gpu);
+            let frame = Rect { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2.0 * pad, h: rect.h + 2.0 * pad };
+            rects.push(UiRect { rect: frame, color: if dragging == Some(HudElement::Clock) { COLOR_HUD_HANDLE_ACTIVE } else { COLOR_HUD_HANDLE }, ..UiRect::FLAT });
+            self.push_clock(gpu, texts);
         }
 
         // Actionbar: Griff-Rahmen + Text-Vorschau (echter Text nur bei Verbindung).
@@ -750,10 +770,15 @@ impl App {
             let inhalt_x = karte.x;
             // Icon des Servers (aus dem Status-Ping), ohne eins das Vanilla-Bild fuer
             // unbekannte Server (s. server_list_icon).
-            let feld = Rect { x: inhalt_x + 16.0, y: karte.y + 12.0, w: icon, h: icon };
+            let feld = crate::image_field(Rect { x: inhalt_x + 16.0, y: karte.y + 12.0, w: icon, h: icon });
             let status = self.server_status.get(&entry.address);
-            rects.push(UiRect::rounded(feld, g(Slot::SurfaceSunken), 6.0));
-            if let Some(slot) = self.server_list_icon(&entry.address) {
+            // Das dunkle Feld nur ohne Bild (Ladepunkte): unter einem Icon schiene es durch dessen
+            // durchsichtige Stellen, dort soll die Karte selbst zu sehen sein (Nutzer 2026-11-12).
+            let bild = self.server_list_icon(&entry.address);
+            if bild.is_none() {
+                rects.push(UiRect::rounded(feld, g(Slot::SurfaceSunken), 6.0));
+            }
+            if let Some(slot) = bild {
                 sprites.push(UiSprite::quad(feld.x, feld.y, feld.w, feld.h, server_icon_uv(slot), [1.0; 4], SpriteAtlas::ServerIcons));
             } else if let Some(e) = status.filter(|e| matches!(e.state, server_status::State::Pending)) {
                 rects.extend(loading_dots(feld, e.since.elapsed().as_secs_f32(), g(Slot::Accent)));

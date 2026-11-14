@@ -42,12 +42,6 @@ impl App {
         None
     }
 
-    // Traegt gerade irgendein Spieler eine Hitbox-Markierung des Schild-Moduls? Dann wird die
-    // Hitbox-Anzeige auch ohne ihr eigenes Modul gezeichnet (s. build_hitbox_vertices).
-    pub(crate) fn any_shield_hitbox_mark(&self) -> bool {
-        self.entities.iter().any(|(id, e)| self.shield_mark_color(*id, e, ShieldMark::Hitbox).is_some())
-    }
-
     // Farbe des Namensschilds eines Spielers (0xRRGGBB) und woher sie stammt. Der Reihe nach:
     //   1. die Farbe seines Scoreboard-Teams (so faerbt Vanilla den Namen),
     //   2. der Name in der Tab-Liste (Anzeigename aus dem Spielerlisten-Paket): die Farbe
@@ -271,19 +265,21 @@ impl App {
         let set = &self.settings;
         let stil = |art: HitboxKind| set.module_hitbox_styles[art.index()];
         let farbe = |st: hitbox_kinds::HitboxStyle| hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0);
-        let modul_an = set.module_hitbox_enabled && (set.module_hitbox_show_smoothed || set.module_hitbox_show_raw);
+        let modul_an = set.module_hitbox_enabled;
         // Die Bloecke haben keine geglaettete oder rohe Lage, sie haengen nur am Modul.
         let netz = set.module_hitbox_enabled && stil(HitboxKind::Cobweb).on;
         let wasser = set.module_hitbox_enabled && stil(HitboxKind::Water).on;
-        // Ohne Hitbox-Modul nur die markierten Spieler, und nur ihre geglaettete Box.
-        let (show_smoothed, show_raw) = if modul_an { (set.module_hitbox_show_smoothed, set.module_hitbox_show_raw) } else { (true, false) };
-        let schild = !modul_an && !self.entities.is_empty() && self.any_shield_hitbox_mark();
-        let team = set.module_teams && set.team_hitboxes.iter().any(|t| t.on);
-        if !(modul_an || schild || netz || wasser || team) {
+        // Ohne Hitbox-Modul zeichnet nur der Block-Teil (Netz, Wasser) -- Schild- und Teams-
+        // Markierungen faerben nur Boxen, die das Modul ohnehin zeigt.
+        let spieler_roh = set.module_hitbox_player_raw;
+        if !(modul_an || netz || wasser) {
             return Vec::new();
         }
         let eye = self.camera.position;
-        let rel = |p: DVec3| -> Vec3 { (p - eye).as_vec3() };
+        // Wie OUTLINE_PULL: Boxen ein Stueck zum Auge gezogen, damit die Unterkante auf dem
+        // Boden nicht im Tiefentest gegen die Blockflaeche verliert.
+        let nah = |p: DVec3| -> Vec3 { ((p - eye) * (1.0 - OUTLINE_PULL)).as_vec3() };
+        // Hauptfarbe: die Farbe jeder Art ohne "Farbe ueberschreiben".
         let smoothed_color =
             hsv_to_rgb(set.module_hitbox_smoothed_hue as f32, set.module_hitbox_smoothed_saturation as f32 / 100.0, set.module_hitbox_smoothed_value as f32 / 100.0);
         let raw_color = hsv_to_rgb(set.module_hitbox_raw_hue as f32, set.module_hitbox_raw_saturation as f32 / 100.0, set.module_hitbox_raw_value as f32 / 100.0);
@@ -293,8 +289,10 @@ impl App {
         let progress = self.tick_progress();
         // Nur Schild-Markierungen: voll deckend, sie sollen auffallen.
         let alpha = if set.module_hitbox_enabled { set.module_hitbox_opacity as f32 / 100.0 } else { 1.0 };
+        // Farbe und Deckkraft einer Art: die eigene mit Ueberschreiben, sonst Hauptfarbe.
+        let art_farbe = |st: hitbox_kinds::HitboxStyle| if st.custom { (farbe(st), alpha * st.alpha as f32 / 100.0) } else { (smoothed_color, alpha) };
         let mut out = Vec::new();
-        let nur_sichtbar = set.module_hitbox_enabled && set.module_hitbox_visible_edges;
+        let linien = if set.module_hitbox_enabled { set.module_hitbox_lines } else { 0 };
         // Eine Box aus ihren Ecken (augenrelativ) als zwoelf Kanten, mit Dichte in Pixeln und
         // ob gepunktet (das Teams-Modul hat dafuer eigene Werte).
         let mut push_box = |min: Vec3, max: Vec3, color: [f32; 4], density_px: u32, dotted: bool| {
@@ -318,13 +316,16 @@ impl App {
             // an denen sie liegt, vom Auge weg zeigen. Das Auge ist der Ursprung, eine Flaeche
             // zeigt zu ihm, wenn es auf ihrer Aussenseite liegt. Steckt das Auge in der Box,
             // zeigt keine Flaeche zu ihm -- dann alle Kanten, man sieht sie von innen.
+            // Nur Umriss: genau eine der beiden Flaechen zeigt zum Auge -- die Kante trennt
+            // Vorder- von Rueckseite, liegt also auf dem Rand der Box im Bild.
             let zum_auge = |achse: usize, oben: bool| if oben { max[achse] < 0.0 } else { min[achse] > 0.0 };
             let innen = (0..3).all(|i| !zum_auge(i, false) && !zum_auge(i, true));
             for (a_sel, b_sel) in EDGES {
-                if nur_sichtbar && !innen {
+                if linien != 0 && !innen {
                     // Die zwei Achsen, auf denen die Kante fest an einer Seite liegt.
-                    let sichtbar = (0..3).filter(|&i| a_sel[i] == b_sel[i]).any(|i| zum_auge(i, a_sel[i]));
-                    if !sichtbar {
+                    let vorne = (0..3).filter(|&i| a_sel[i] == b_sel[i]).filter(|&i| zum_auge(i, a_sel[i])).count();
+                    let zeigen = if linien == HITBOX_LINES_OUTLINE { vorne == 1 } else { vorne >= 1 };
+                    if !zeigen {
                         continue;
                     }
                 }
@@ -374,43 +375,43 @@ impl App {
             // Angreifbare (Boote, Loren, Ruestungsstaender) in der Farbe von "Geglättet".
             let art = HitboxKind::of_entity(e.entity_type);
             // Teams-Modul: eigene Farbe, Deckkraft, Dichte und Strichelung fuer Verbuendete
-            // bzw. Gegner. Es zeichnet auch ohne Hitbox-Modul (dann nur die geglaettete Box).
+            // bzw. Gegner. Es zeichnet selbst keine Box, sondern faerbt nur eine, die schon da
+            // ist (s. unten) -- Dichte und Strichelung gelten dann fuer diese Box.
             let team_stil = self.team_hitbox_style(e);
             let (dichte, gepunktet) = team_stil.map_or((dichte, gepunktet), |(_, _, d, p)| (d, p));
-            let (smoothed_color, raw_color, a) = match (self.shield_mark_color(*id, e, ShieldMark::Hitbox), art) {
-                (Some([r, g, b, _]), _) => ([r, g, b], [r, g, b], alpha),
-                (None, _) if team_stil.is_some() => {
-                    let (farbe, deckkraft, _, _) = team_stil.expect("eben geprueft");
-                    (farbe, farbe, deckkraft)
-                }
-                (None, _) if !modul_an => continue,
-                (None, Some(art)) if stil(art).custom => {
-                    if !stil(art).on {
-                        continue;
-                    }
-                    (farbe(stil(art)), raw_color, alpha * stil(art).alpha as f32 / 100.0)
-                }
-                (None, Some(art)) if art.shown_by_default(set.module_hitbox_items) => (smoothed_color, raw_color, alpha),
-                (None, Some(_)) => continue,
-                (None, None) if world::is_attackable(e.entity_type) => (smoothed_color, raw_color, alpha),
-                (None, None) => continue,
+            let schild_farbe = self.shield_mark_color(*id, e, ShieldMark::Hitbox);
+            let art = match art {
+                Some(art) => art,
+                None if world::is_attackable(e.entity_type) => HitboxKind::Other,
+                None => continue,
             };
+            if !modul_an || !stil(art).on {
+                continue;
+            }
+            let (smoothed_color, a) = art_farbe(stil(art));
+            // Schild-Markierung und Teams-Modul faerben nur die Box, die schon gezeichnet wird.
+            // Die Schild-Farbe hat Vorrang vor der Teams-Farbe.
+            let (smoothed_color, raw_color, a) = match (schild_farbe, team_stil) {
+                (Some([r, g, b, _]), _) => ([r, g, b], [r, g, b], alpha),
+                (None, Some((farbe, deckkraft, _, _))) => (farbe, farbe, deckkraft),
+                _ => (smoothed_color, raw_color, a),
+            };
+            let roh = art == HitboxKind::Player && spieler_roh;
             let (width, height) = e.hit_size();
             let half_w = width as f32 / 2.0;
             let height = height as f32;
             // Unterkante der Box, wie hit_pos (Windkugeln haengen tiefer).
             let unten = e.box_y_offset();
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
-                let feet = rel(pos);
+                let feet = nah(pos);
                 push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], dichte, gepunktet);
             };
-            if show_smoothed {
-                let (x, y, z) = e.render_pos(progress);
-                fuesse(DVec3::new(x, y + unten, z), smoothed_color);
-            }
-            if show_raw {
+            if roh {
                 let (x, y, z) = e.target_pos();
                 fuesse(DVec3::new(x, y + unten, z), raw_color);
+            } else {
+                let (x, y, z) = e.render_pos(progress);
+                fuesse(DVec3::new(x, y + unten, z), smoothed_color);
             }
         }
         // Der eigene Spieler, nur in der 3. Person (wie Vanillas F3+B): in der Ich-Sicht sitzt
@@ -419,8 +420,7 @@ impl App {
         let team_eigen = self.team_style_of(teams::Side::Friendly, self.own_uuid.and_then(|u| self.team_facts.get(&u)).and_then(super::super::super::teams::Facts::display_color));
         let eigene = match (team_eigen, stil(HitboxKind::Player)) {
             (Some((f, a, _, _)), _) => Some((f, a)),
-            (None, st) if st.custom => st.on.then(|| (farbe(st), alpha * st.alpha as f32 / 100.0)),
-            _ => HitboxKind::Player.shown_by_default(set.module_hitbox_items).then_some((smoothed_color, alpha)),
+            (None, st) => st.on.then(|| art_farbe(st)),
         };
         let (eigen_dichte, eigen_gepunktet) = team_eigen.map_or((dichte, gepunktet), |(_, _, d, p)| (d, p));
         let eigen_roh = team_eigen.map_or(raw_color, |(f, ..)| f);
@@ -429,14 +429,13 @@ impl App {
             let half_w = self.physics.width() as f32 / 2.0;
             let height = self.physics.current_height() as f32;
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
-                let feet = rel(pos);
+                let feet = nah(pos);
                 push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], eigen_dichte, eigen_gepunktet);
             };
-            if show_smoothed {
-                fuesse(self.physics_render_prev.lerp(self.physics.pos, f64::from(progress)), farbe_geglaettet);
-            }
-            if show_raw {
+            if spieler_roh {
                 fuesse(self.physics.pos, eigen_roh);
+            } else {
+                fuesse(self.physics_render_prev.lerp(self.physics.pos, f64::from(progress)), farbe_geglaettet);
             }
         }
         // Spinnennetze im Umkreis als ganzer Block (so gross ist ihre Trefferflaeche, auch
@@ -445,7 +444,6 @@ impl App {
         // und dem Rahmen, den PvP-Packs ins Netz-Modell malen. Wie der Blockumriss ein kleines
         // Stueck zum Auge gezogen (s. OUTLINE_PULL), sonst gewinnt dort die Flaeche den
         // Tiefentest.
-        let nah = |p: DVec3| -> Vec3 { ((p - eye) * (1.0 - OUTLINE_PULL)).as_vec3() };
         if netz || wasser {
             let auge = self.physics.eye_pos();
             let reichweite = self.attr_block_range;
@@ -453,8 +451,8 @@ impl App {
             let (cx, cy, cz) = (auge.x.floor() as i32, auge.y.floor() as i32, auge.z.floor() as i32);
             let (st_netz, st_wasser) = (stil(HitboxKind::Cobweb), stil(HitboxKind::Water));
             let mit_alpha = |st: hitbox_kinds::HitboxStyle| {
-                let [r, g, b] = farbe(st);
-                [r, g, b, alpha * st.alpha as f32 / 100.0]
+                let ([r, g, b], a) = art_farbe(st);
+                [r, g, b, a]
             };
             for x in cx - r..=cx + r {
                 for y in cy - r..=cy + r {

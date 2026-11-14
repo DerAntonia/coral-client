@@ -4,6 +4,7 @@
 mod addon_host;
 mod anims;
 mod chat;
+mod clip;
 mod combat;
 mod connection;
 mod controls;
@@ -28,6 +29,7 @@ mod sound;
 mod tabs;
 mod window_events;
 
+pub(crate) use clip::ClipBuffers;
 pub(crate) use recording::AppRecorder;
 pub(crate) use replay::{RecordingEntry, Replay};
 pub(crate) use tabs::ServerTab;

@@ -292,7 +292,7 @@ impl App {
     // aktive mit Akzentlinie (s. styled_button).
     pub(crate) fn section_tabs(&self) -> Vec<Button> {
         let page = match self.screen.settings_page() {
-            Some(p) if self.mode == AppMode::Menu && p.sections.len() >= 2 => p,
+            Some(p) if self.mode == AppMode::Menu && p.tabs && p.sections.len() >= 2 => p,
             _ => return Vec::new(),
         };
         let aktiv = self.active_section(page);

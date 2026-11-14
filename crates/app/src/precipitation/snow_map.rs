@@ -41,107 +41,76 @@ const TOPS_LIMIT: usize = 200_000;
 // In jeder wievielten Hoehenlage der Schnee einen Block zur Seite darf (1 / tan 15 Grad = 3,7).
 const SIDE_EVERY: i32 = 4;
 
-// Die Linien vom Auge zu jeder Zelle der Karte, einmal je Kartenradius vorgerechnet: das Auge
-// sitzt immer in der Mitte seines Blocks, also geht die Linie zu einer Zelle (relativ zum Auge)
-// immer durch dieselben Zellen mit denselben Stuecken. Je Zelle der Karte (Index wie `cells`)
-// ihre Strecke in `zelle`/`stueck` ab `start[i]` bis `start[i + 1]`, dazu die Laenge der Linie.
-// Belegt RAM (bei Kartenradius 32 etwa 85 MB), spart dafuer das Ablaufen bei jedem Schritt.
-//
-// Dazu umgekehrt ("Schatten"): je Zelle c die Zellen, deren Weg durch c geht (`rueck_ziel` ab
-// `rueck_start[c]`; ohne die Zelle des Auges und ohne die Zielzelle selbst).
-struct Wege {
-    radius: i32,
-    start: Vec<u32>,
-    laenge: Vec<f64>,
-    zelle: Vec<u32>,
-    stueck: Vec<f64>,
-    rueck_start: Vec<u32>,
-    rueck_ziel: Vec<u32>,
+// Fuer die Bereichsrechnung (s. SnowMap::update_region): die Zellen der Kugel nach Entfernung vom
+// Auge geordnet, je Zelle die bis zu vier Zellen, zwischen denen ihre Linie zum Auge einen Block
+// weiter innen liegt (einen Block zurueck entlang der groessten Achse), mit Gewichten nach Naehe.
+// Einmal je Kartenradius (bei 32 etwa 6 MB).
+struct MischZelle {
+    zelle: u32,
+    vor: [u32; 4],
+    gewicht: [f32; 4],
+    // Laenge der Linie vom Auge bis zur Zelle, und ihr Stueck seit den Zellen `vor`.
+    laenge: f32,
+    zuwachs: f32,
 }
 
-impl Wege {
+struct Misch {
+    radius: i32,
+    zellen: Vec<MischZelle>,
+}
+
+impl Misch {
     const fn leer() -> Self {
-        Self { radius: -1, start: Vec::new(), laenge: Vec::new(), zelle: Vec::new(), stueck: Vec::new(), rueck_start: Vec::new(), rueck_ziel: Vec::new() }
+        Self { radius: -1, zellen: Vec::new() }
     }
 
-    // Wie das Ablaufen in `open_length` (gleiche Rechenschritte, also bitgleiche Stuecke), nur
-    // relativ zum Auge (Mitte des Blocks 0, 0, 0). Zellen innerhalb r brauchen keinen Weg, die
-    // bekommen trotzdem einen (r kann sich ohne den Kartenradius aendern).
     fn neu(radius: i32) -> Self {
         let n = 2 * radius + 1;
         let index = |b: [i32; 3]| (((b[1] + radius) * n + b[2] + radius) * n + b[0] + radius) as u32;
-        let anzahl = (n as usize).pow(3);
-        let mut w = Self { radius, start: Vec::with_capacity(anzahl + 1), laenge: Vec::with_capacity(anzahl), zelle: Vec::new(), stueck: Vec::new(), rueck_start: Vec::new(), rueck_ziel: Vec::new() };
-        let r2 = radius * radius;
+        let mitte = index([0, 0, 0]);
+        let mut ordnung: Vec<(i32, [i32; 3])> = Vec::new();
         for dy in -radius..=radius {
             for dz in -radius..=radius {
                 for dx in -radius..=radius {
-                    w.start.push(w.zelle.len() as u32);
-                    let dd = [f64::from(dx), f64::from(dy), f64::from(dz)];
-                    let laenge = DVec3::from_array(dd).length();
-                    w.laenge.push(laenge);
-                    if dx * dx + dy * dy + dz * dz > r2 || laenge < 1e-9 {
-                        continue;
-                    }
-                    let mut block = [0i32; 3];
-                    let mut schritt = [0i32; 3];
-                    let mut t_max = [f64::INFINITY; 3];
-                    let mut t_delta = [f64::INFINITY; 3];
-                    for a in 0..3 {
-                        if dd[a] > 0.0 {
-                            schritt[a] = 1;
-                            t_max[a] = 0.5 / dd[a];
-                            t_delta[a] = 1.0 / dd[a];
-                        } else if dd[a] < 0.0 {
-                            schritt[a] = -1;
-                            t_max[a] = -0.5 / dd[a];
-                            t_delta[a] = -1.0 / dd[a];
-                        }
-                    }
-                    let mut t = 0.0;
-                    loop {
-                        let a = if t_max[0] <= t_max[1] && t_max[0] <= t_max[2] { 0 } else if t_max[1] <= t_max[2] { 1 } else { 2 };
-                        let weiter = t_max[a].min(1.0);
-                        w.zelle.push(index(block));
-                        w.stueck.push((weiter - t) * laenge);
-                        if weiter >= 1.0 {
-                            break;
-                        }
-                        t = weiter;
-                        block[a] += schritt[a];
-                        t_max[a] += t_delta[a];
+                    let d2 = dx * dx + dy * dy + dz * dz;
+                    if d2 <= radius * radius && d2 != 0 {
+                        ordnung.push((d2, [dx, dy, dz]));
                     }
                 }
             }
         }
-        w.start.push(w.zelle.len() as u32);
-        // Umkehren: erst zaehlen, dann einsortieren.
-        let mitte = index([0, 0, 0]);
-        let mut ab = vec![0u32; anzahl + 1];
-        for i in 0..anzahl {
-            for k in w.start[i] as usize..w.start[i + 1] as usize {
-                let c = w.zelle[k];
-                if c != mitte && c as usize != i {
-                    ab[c as usize + 1] += 1;
+        // Die Zellen `vor` liegen immer naeher am Auge als die Zelle selbst: nach Entfernung
+        // geordnet sind sie also schon berechnet.
+        ordnung.sort_unstable_by_key(|&(d2, v)| (d2, index(v)));
+        let zellen = ordnung
+            .iter()
+            .map(|&(d2, v)| {
+                let a = (0..3).max_by_key(|&k| v[k].abs()).unwrap_or(0);
+                let (b, c) = ((a + 1) % 3, (a + 2) % 3);
+                let f = 1.0 - 1.0 / f64::from(v[a].abs());
+                let (qb, qc) = (f64::from(v[b]) * f, f64::from(v[c]) * f);
+                let (b0, c0) = (qb.floor(), qc.floor());
+                let (fb, fc) = (qb - b0, qc - c0);
+                let mut vor = [mitte; 4];
+                let mut gewicht = [0f32; 4];
+                for k in 0..4 {
+                    let (ob, oc) = (k & 1 == 1, k >> 1 == 1);
+                    let w = (if ob { fb } else { 1.0 - fb }) * (if oc { fc } else { 1.0 - fc });
+                    // Gewicht 0: die Zelle zaehlt nicht (und kann ausserhalb der Karte liegen).
+                    if w > 0.0 {
+                        let mut q = [0i32; 3];
+                        q[a] = v[a] - v[a].signum();
+                        q[b] = b0 as i32 + i32::from(ob);
+                        q[c] = c0 as i32 + i32::from(oc);
+                        vor[k] = index(q);
+                        gewicht[k] = w as f32;
+                    }
                 }
-            }
-        }
-        for c in 0..anzahl {
-            ab[c + 1] += ab[c];
-        }
-        let mut frei = ab.clone();
-        w.rueck_ziel = vec![0; ab[anzahl] as usize];
-        for i in 0..anzahl {
-            for k in w.start[i] as usize..w.start[i + 1] as usize {
-                let c = w.zelle[k];
-                if c != mitte && c as usize != i {
-                    w.rueck_ziel[frei[c as usize] as usize] = i as u32;
-                    frei[c as usize] += 1;
-                }
-            }
-        }
-        w.rueck_start = ab;
-        w
+                let laenge = f64::from(d2).sqrt();
+                MischZelle { zelle: index(v), vor, gewicht, laenge: laenge as f32, zuwachs: (laenge / f64::from(v[a].abs())) as f32 }
+            })
+            .collect();
+        Self { radius, zellen }
     }
 }
 
@@ -189,13 +158,9 @@ pub(super) struct SnowMap {
     unberechnet: bool,
     // Zellen (Index wie `cells`), die in diesem update durch einen Blockwechsel anders wurden.
     geaendert: Vec<usize>,
-    wege: Wege,
-    // Je Block wie `cells`: auf seinem Weg zum Auge liegt etwas nicht Freies (s. update_region).
-    schatten: Vec<bool>,
-    // DIAG Zahl: freie Zellen weiter als r, davon im Schatten, Markierungen, gelesene Wegstuecke.
-    pub(super) diag_zahl: [u64; 4],
-    // DIAG: Schatten abschalten (alles lesen), zum Vergleich.
-    pub(super) diag_ohne_schatten: bool,
+    misch: Misch,
+    // Je Block wie `cells`: die verdeckte Strecke auf seiner Linie zum Auge (s. update_region).
+    verdeckt: Vec<f32>,
     // Zaehlt jede Neuberechnung des Bereichs.
     region_version: u64,
     // DIAG Schnee: Gruende der letzten Neuberechnung des Bereichs.
@@ -206,7 +171,7 @@ pub(super) struct SnowMap {
 
 impl SnowMap {
     pub(super) fn new() -> Self {
-        Self { center: (0, 0, 0), radius: -1, cells: Vec::new(), tops: HashMap::new(), filled: HashMap::new(), memo_min_y: i32::MAX, low: HashMap::new(), seen: HashMap::new(), r: 0, region: Vec::new(), region_dirty: true, unberechnet: true, geaendert: Vec::new(), wege: Wege::leer(), schatten: Vec::new(), diag_zahl: [0; 4], diag_ohne_schatten: false, region_version: 0, diag: Vec::new(), diag_zeit: [std::time::Duration::ZERO; 3] }
+        Self { center: (0, 0, 0), radius: -1, cells: Vec::new(), tops: HashMap::new(), filled: HashMap::new(), memo_min_y: i32::MAX, low: HashMap::new(), seen: HashMap::new(), r: 0, region: Vec::new(), region_dirty: true, unberechnet: true, geaendert: Vec::new(), misch: Misch::leer(), verdeckt: Vec::new(), region_version: 0, diag: Vec::new(), diag_zeit: [std::time::Duration::ZERO; 3] }
     }
 
     const fn size(&self) -> i32 {
@@ -366,7 +331,7 @@ impl SnowMap {
         let mut neu_berechnet = 0;
         let zeit_fill = std::time::Instant::now();
         // Im Stehen ohne neue Chunks ist alles berechnet: nicht den ganzen Wuerfel durchsehen.
-        let dy_bereich = if self.unberechnet { -radius..=radius } else { 1..=0 };
+        let dy_bereich = if self.unberechnet { -radius..=radius } else { radius + 1..=radius };
         self.unberechnet = false;
         for dy in dy_bereich {
             for dz in -radius..=radius {
@@ -393,16 +358,10 @@ impl SnowMap {
             self.diag.push(format!("{neu_berechnet} zellen neu berechnet"));
         }
         self.diag_zeit[0] += zeit_fill.elapsed();
-        // Nur einzelne Zellen anders (Blockwechsel im Stehen): den Bereich nur dort nachfuehren.
-        if !self.region_dirty && !self.geaendert.is_empty() {
-            let zeit = std::time::Instant::now();
-            let geaendert = std::mem::take(&mut self.geaendert);
-            if !self.update_region_cells(&geaendert) {
-                self.region_dirty = true;
-            }
-            self.diag.push(format!("{} zellen durch blockwechsel anders", geaendert.len()));
-            self.geaendert = geaendert;
-            self.diag_zeit[1] += zeit.elapsed();
+        // Zellen durch einen Blockwechsel anders: den Bereich ganz neu.
+        if !self.geaendert.is_empty() {
+            self.diag.push(format!("{} zellen durch blockwechsel anders", self.geaendert.len()));
+            self.region_dirty = true;
         }
         if self.region_dirty {
             self.region_dirty = false;
@@ -412,139 +371,42 @@ impl SnowMap {
         }
     }
 
-    // Den Bereich neu berechnen (s. oben). Ueber die vorgerechneten Wege; jede Linie nur so weit,
-    // bis feststeht, ob ihre freie Strecke r uebersteigt (ergibt dasselbe wie `open_length`).
+    // Den Bereich neu berechnen (s. oben), angenaehert: von innen nach aussen bekommt jede Zelle
+    // die verdeckte (nicht freie) Strecke ihrer Linie zum Auge aus den Zellen, zwischen denen die
+    // Linie einen Block weiter innen liegt (nach Naehe gemischt, s. Misch), plus ihr eigenes
+    // Stueck -- das zaehlt je zur Haelfte nach ihr selbst und nach jenen Zellen als verdeckt. Die
+    // freie Strecke ist die Laenge der Linie minus das Verdeckte. Im Freien ist nichts verdeckt,
+    // dort stimmt es genau; sonst weicht der Rand um bis zu etwa einen Block von der genauen
+    // Linie ab (s. Test bereich_weicht_nur_am_rand_ab).
     fn update_region(&mut self) {
-        if self.wege.radius != self.radius {
-            let t = std::time::Instant::now();
-            self.wege = Wege::neu(self.radius);
-            // Messausgabe nur in den Tests (im Spiel kein Log).
-            if cfg!(test) {
-                eprintln!("[schnee-diag] wege radius {}: {} eintraege, {:.1} MB, {:?}", self.radius, self.wege.zelle.len(), (self.wege.zelle.len() * 12 + self.wege.start.len() * 16 + self.wege.rueck_ziel.len() * 4) as f64 / 1e6, t.elapsed());
-            }
+        if self.misch.radius != self.radius {
+            self.misch = Misch::neu(self.radius);
         }
-        let (radius, r) = (self.radius, f64::from(self.r));
-        let n = self.size();
+        let (radius, n) = (self.radius, self.size());
+        let r = self.r as f32 + 1e-4;
         self.region.clear();
         self.region.resize(self.cells.len(), false);
+        self.verdeckt.clear();
+        self.verdeckt.resize(self.cells.len(), 0.0);
         self.region_version += 1;
-        let r2 = radius * radius;
-        let (wege, cells) = (&self.wege, &self.cells);
-        // Schatten zuerst: eine Zelle weiter als r gehoert nur dazu, wenn auf ihrem Weg etwas nicht
-        // Freies liegt (sonst ist der ganze Weg frei und damit laenger als r). Der Weg beginnt am
-        // Auge und geht von Zelle zu Zelle ueber eine Seitenflaeche: das erste nicht Freie auf ihm
-        // grenzt also mit einer Seite an eine freie Zelle (oder ist die Zelle des Auges). Von
-        // allen solchen Zellen aus die Zellen dahinter markieren; nur fuer die wird der Weg gelesen.
-        let (nu, mitte) = (n as usize, (((radius * n) + radius) * n + radius) as usize);
-        self.schatten.clear();
-        if cells[mitte] == FREI && !self.diag_ohne_schatten {
-            self.schatten.resize(cells.len(), false);
-            let frei = |i: usize| cells[i] == FREI;
-            for y in 0..nu {
-                for z in 0..nu {
-                    for x in 0..nu {
-                        let c = (y * nu + z) * nu + x;
-                        if cells[c] == FREI {
-                            continue;
-                        }
-                        let rand = (x > 0 && frei(c - 1))
-                            || (x + 1 < nu && frei(c + 1))
-                            || (z > 0 && frei(c - nu))
-                            || (z + 1 < nu && frei(c + nu))
-                            || (y > 0 && frei(c - nu * nu))
-                            || (y + 1 < nu && frei(c + nu * nu));
-                        if rand {
-                            let (von, bis) = (wege.rueck_start[c] as usize, wege.rueck_start[c + 1] as usize);
-                            self.diag_zahl[2] += (bis - von) as u64;
-                            for &ziel in &wege.rueck_ziel[von..bis] {
-                                self.schatten[ziel as usize] = true;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Das Auge selbst steht in nicht Freiem: jeder Weg beginnt darin.
-            self.schatten.resize(cells.len(), true);
-        }
-        for dy in -radius..=radius {
-            for dz in -radius..=radius {
-                for dx in -radius..=radius {
-                    let d2 = dx * dx + dy * dy + dz * dz;
-                    let i = (((dy + radius) * n + dz + radius) * n + dx + radius) as usize;
-                    if d2 > r2 || cells[i] != FREI {
-                        continue;
-                    }
-                    // Nicht weiter als r entfernt: die freie Strecke kann nicht mehr sein.
-                    if f64::from(d2) <= r * r {
-                        self.region[i] = true;
-                        continue;
-                    }
-                    self.diag_zahl[0] += 1;
-                    if self.schatten[i] {
-                        self.diag_zahl[1] += 1;
-                        self.region[i] = Self::open_within(wege, cells, i, r, &mut self.diag_zahl[3]);
-                    }
-                }
-            }
-        }
-    }
-
-    // Ob die freie Strecke auf dem Weg zur Zelle `i` hoechstens r ist. Frueh fertig: mehr als r
-    // gezaehlt -> nein (es kommt nur noch dazu); passt auch der ganze Rest noch unter r -> ja (mit
-    // Abstand 1e-9 gegen Rundung, sonst bis zum Ende weiterzaehlen wie `open_length`).
-    fn open_within(wege: &Wege, cells: &[u8], i: usize, r: f64, gelesen: &mut u64) -> bool {
-        let (von, bis) = (wege.start[i] as usize, wege.start[i + 1] as usize);
-        let laenge = wege.laenge[i];
-        let (mut offen, mut gegangen) = (0.0, 0.0);
-        for k in von..bis {
-            *gelesen += 1;
-            let stueck = wege.stueck[k];
-            if cells[wege.zelle[k] as usize] == FREI {
-                offen += stueck;
-                if offen > r {
-                    return false;
-                }
-            }
-            gegangen += stueck;
-            if offen + (laenge - gegangen) + 1e-9 <= r {
-                return true;
-            }
-        }
-        offen <= r
-    }
-
-    // Den Bereich nachfuehren, wenn nur die Zellen `geaendert` anders frei/blockiert sind als
-    // zuvor: ob eine Zelle dazugehoert, haengt nur von ihr selbst und den Zellen auf ihrem Weg
-    // zum Auge ab -- neu bestimmt werden also die geaenderten und die, deren Weg durch eine von
-    // ihnen geht (s. Wege::rueck_ziel). false: so nicht moeglich (der Aufrufer rechnet alles neu).
-    fn update_region_cells(&mut self, geaendert: &[usize]) -> bool {
-        // Mehr Wege als das: gleich alles neu.
-        const GRENZE: usize = 200_000;
-        let (radius, n) = (self.radius, self.size());
         let mitte = (((radius * n) + radius) * n + radius) as usize;
-        if self.wege.radius != radius || self.region.len() != self.cells.len() || geaendert.contains(&mitte) {
-            return false;
-        }
-        let wege = &self.wege;
-        let dahinter = |c: usize| &wege.rueck_ziel[wege.rueck_start[c] as usize..wege.rueck_start[c + 1] as usize];
-        if geaendert.iter().map(|&c| dahinter(c).len()).sum::<usize>() > GRENZE {
-            return false;
-        }
-        let (r, r2) = (f64::from(self.r), radius * radius);
-        let cells = &self.cells;
-        let mut gelesen = 0;
-        for &c in geaendert {
-            for i in std::iter::once(c).chain(dahinter(c).iter().map(|&i| i as usize)) {
-                let j = i as i32;
-                let (dx, dy, dz) = (j % n - radius, j / (n * n) - radius, (j / n) % n - radius);
-                let d2 = dx * dx + dy * dy + dz * dz;
-                self.region[i] = cells[i] == FREI && d2 <= r2 && (f64::from(d2) <= r * r || Self::open_within(wege, cells, i, r, &mut gelesen));
+        let (cells, verdeckt, region) = (&self.cells, &mut self.verdeckt, &mut self.region);
+        region[mitte] = cells[mitte] == FREI;
+        for m in &self.misch.zellen {
+            let i = m.zelle as usize;
+            let frei = cells[i] == FREI;
+            let (mut v, mut vor_frei) = (0.0, 0.0);
+            for k in 0..4 {
+                let z = m.vor[k] as usize;
+                v += m.gewicht[k] * verdeckt[z];
+                if cells[z] == FREI {
+                    vor_frei += m.gewicht[k];
+                }
             }
+            v += m.zuwachs * (1.0 - 0.5 * vor_frei - if frei { 0.5 } else { 0.0 });
+            verdeckt[i] = v;
+            region[i] = frei && m.laenge - v <= r;
         }
-        self.diag_zahl[3] += gelesen;
-        self.region_version += 1;
-        true
     }
 
     // Der Block (x, y, z) haelt jetzt Schnee auf oder nicht mehr (oder anders hoch): nachrechnen,
@@ -738,17 +600,17 @@ impl SnowMap {
         if let Some(&frei) = self.filled.get(&(x, y, z)) {
             return frei;
         }
-        let frei = self.from_above(x, y, z, top, solid, revision)
+        let frei = self.ist_frei_ueber(x, y, z, top, solid, revision)
             || (solid(x, y, z).is_none()
                 && y.rem_euclid(SIDE_EVERY) == 0
-                && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dz)| self.from_above(x + dx, y, z + dz, top, solid, revision)));
+                && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dz)| self.ist_frei_ueber(x + dx, y, z + dz, top, solid, revision)));
         self.memo_min_y = self.memo_min_y.min(y);
         self.filled.insert((x, y, z), frei);
         frei
     }
 
     // Ob dieser Block kein Hindernis ist und der direkt darueber frei.
-    fn from_above(
+    fn ist_frei_ueber(
         &mut self,
         x: i32,
         y: i32,
@@ -837,11 +699,11 @@ pub(super) mod tests {
         welt.dach(um.0 - weite, um.0 + weite, um.1 - weite, um.1 + weite, 60);
     }
 
-    // Der Bereich ueber die vorgerechneten Wege (mit fruehem Aufhoeren) ist Zelle fuer Zelle
-    // derselbe wie mit dem Ablaufen jeder Linie bis zum Ende, in einer zufaelligen Welt mit
+    // Der Bereich (angenaehert, s. update_region) weicht nur am Rand von dem ab, den das
+    // Ablaufen der genauen Linie vom Auge zu jeder Zelle ergibt -- in einer zufaelligen Welt mit
     // Daechern, Platten und Saeulen, an mehreren Augen und Radien, auch nach dem Laufen.
     #[test]
-    fn wege_wie_ablaufen() {
+    fn bereich_weicht_nur_am_rand_ab() {
         let mut zufall = 0x5eed_u64;
         let mut wuerfel = |n: i32| {
             zufall = zufall.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
@@ -872,6 +734,8 @@ pub(super) mod tests {
                 let solid = |x: i32, y: i32, z: i32| welt.bloecke.contains(&(x, y, z)).then_some(1.0);
                 let revision = |cx: i32, cz: i32| welt.staende.get(&(cx, cz)).copied().unwrap_or(0);
                 karte.update(eye, r, max, &top, &solid, &revision);
+                let genaehert = &karte.region;
+                let mut genau = vec![false; genaehert.len()];
                 let c = karte.center;
                 let auge = DVec3::new(f64::from(c.0) + 0.5, f64::from(c.1) + 0.5, f64::from(c.2) + 0.5);
                 let (mut drin, mut weit_drin) = (0, 0);
@@ -883,13 +747,39 @@ pub(super) mod tests {
                             let erwartet = d2 <= max * max
                                 && karte.blocked(x, y, z) == Some(false)
                                 && (d2 <= r * r || karte.open_length(auge, auge + DVec3::new(f64::from(dx), f64::from(dy), f64::from(dz))) <= f64::from(r));
-                            assert_eq!(karte.in_region(x, y, z), erwartet, "r {r} max {max} schritt {schritt} ({dx}, {dy}, {dz})");
+                            if let Some(i) = karte.index(x, y, z) {
+                                genau[i] = erwartet;
+                            }
                             drin += usize::from(erwartet);
                             weit_drin += usize::from(erwartet && d2 > r * r);
                         }
                     }
                 }
                 assert!(drin > 100 && weit_drin > 0, "r {r} max {max}: {drin} im Bereich, {weit_drin} weiter als r");
+                // "tief" = keine
+                // der 26 Nachbarzellen hat im genauen Bereich den Zustand, den die Zelle hier hat.
+                let n = karte.size();
+                let (mut anders, mut tief) = (0, 0);
+                for i in 0..genaehert.len() {
+                    if genaehert[i] == genau[i] {
+                        continue;
+                    }
+                    anders += 1;
+                    let j = i as i32;
+                    let (x, y, z) = (j % n, j / (n * n), (j / n) % n);
+                    let mut nah = false;
+                    for (dx, dy, dz) in (-1..=1).flat_map(|a| (-1..=1).flat_map(move |b| (-1..=1).map(move |c| (a, b, c)))) {
+                        let (a, b, c) = (x + dx, y + dy, z + dz);
+                        if a >= 0 && b >= 0 && c >= 0 && a < n && b < n && c < n && genau[((b * n + c) * n + a) as usize] == genaehert[i] {
+                            nah = true;
+                        }
+                    }
+                    tief += usize::from(!nah);
+                }
+                // Gemessen: hier bis 15 % der Zellen anders und keine tief, in der nachgebauten
+                // echten Welt etwa 6 % anders und davon unter 1 % tief (Messung 2026-11-10).
+                assert!(anders * 5 <= drin, "r {r} max {max} schritt {schritt}: {anders} von {drin} Zellen anders als genau");
+                assert!(tief * 20 <= anders, "r {r} max {max} schritt {schritt}: {tief} von {anders} abweichenden Zellen nicht am Rand");
             }
         }
     }

@@ -34,6 +34,17 @@ fn umbruch_trennt_an_wortgrenzen() {
     assert_eq!(zeilen[1][0].text, "ccc");
 }
 
+// Leerzeichen am Zeilenanfang bleiben wie die am Ende (Vanillas StringSplitter): eine vorn
+// und hinten gepolsterte Zeile steht sonst nicht mehr mittig (Tab-Liste auf mcpvp.club).
+#[test]
+fn polsterung_vorn_und_hinten_bleibt() {
+    let breite = |t: &str| t.chars().count() as f32;
+    let zeilen = wrap_label_lines(&[vec![span("  Join: ", None), span("/discord", Some(1)), span("  ", None)]], 100.0, breite);
+    assert_eq!(zeilen.len(), 1);
+    let text: String = zeilen[0].iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(text, "  Join: /discord  ");
+}
+
 // Ein einzelnes Wort, das allein schon zu breit ist, wird nicht zerschnitten (Vanillas
 // TextRenderer.wrapLines tut das auch nicht) -- es darf aber die naechsten Woerter nicht
 // mit in seine Zeile ziehen.

@@ -397,6 +397,9 @@ pub const CB_PLAY_SECTION_BLOCKS_UPDATE: i32 = 0x52;
 // bereits verifiziert, damit stimmt auch die 4.
 pub const CB_PLAY_BLOCK_CHANGED_ACK: i32 = 0x04;
 
+// Block Destruction, Index 5 (s. read_block_destruction).
+pub const CB_PLAY_BLOCK_DESTRUCTION: i32 = 0x05;
+
 // Block Event (BlockEventS2CPacket, Index 7 derselben Kette wie oben): Position, Typ (u8),
 // Daten (u8), Block (Registry-VarInt). Gebraucht fuer Truhen-/Shulkerdeckel: Typ 1 traegt
 // die Zahl der Betrachter (ShulkerBoxBlockEntity.onSyncedBlockEvent).
@@ -409,6 +412,18 @@ pub fn read_block_event(payload: &[u8]) -> Result<((i32, i32, i32), u8, u8), Rea
     let typ = r.read_u8()?;
     let daten = r.read_u8()?;
     Ok((pos, typ, daten))
+}
+
+// Block Destruction (BlockDestructionS2CPacket, Index 5 derselben Kette): Entity-ID des
+// Abbauenden (VarInt), Position, Fortschritt als Byte. 0..=9 = Riss-Stufe; -1 oder >= 10 =
+// der Riss verschwindet (LevelRenderer.destroyBlockProgress).
+pub fn read_block_destruction(payload: &[u8]) -> Result<(i32, (i32, i32, i32), i8), ReadError> {
+    let mut r = PacketReader::new(payload);
+    let _id = r.read_varint()?;
+    let breaker = r.read_varint()?;
+    let pos = decode_block_pos(r.read_i64()?);
+    let progress = r.read_i8()?;
+    Ok((breaker, pos, progress))
 }
 
 // Nutzlast ist genau eine VarInt-Sequenznummer.

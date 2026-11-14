@@ -413,6 +413,11 @@ impl App {
     pub(crate) fn server_pack_offered(&mut self, push: protocol::packets::ResourcePackPush) {
         use protocol::packets::ResourcePackStatus as S;
         let id = push.id;
+        // Wiedergabe: es gelten nur die selbst gewaehlten Packs, nichts aus der Aufnahme
+        // (auch nicht aus dem Anfangszustand eines Clips, s. snapshot_note_config).
+        if self.replay_active() {
+            return;
+        }
         self.push_log(format!("Server-Resourcepack angeboten: {}{}", push.url, if push.required { " (Pflicht)" } else { "" }));
         if !server_packs::valid_url(&push.url) {
             self.send_pack_status(id, S::InvalidUrl);
@@ -429,6 +434,7 @@ impl App {
         let name = self.credentials.as_ref().map_or_else(|| "Player".to_string(), |c| c.username.clone());
         let uuid = self.own_uuid.map(|u| u.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap_or_default();
         let (url, erwartet) = (push.url, push.hash.to_ascii_lowercase());
+        let adresse = self.server_packs.address().to_string();
         self.tokio_rt.spawn(async move {
             let result = async {
                 let (bytes, hash) = auth::fetch_resource_pack(&url, &name, &uuid, MC_VERSION, protocol::packets::PROTOCOL_VERSION, assets::RESOURCE_PACK_FORMAT)
@@ -438,7 +444,7 @@ impl App {
                     return Err((S::FailedDownload, format!("Server-Resourcepack: SHA-1 passt nicht ({hash} statt {erwartet})")));
                 }
                 let dir = server_packs::cache_dir().ok_or((S::FailedDownload, "kein Home-Ordner".to_string()))?;
-                let pfad = dir.join(format!("{hash}.zip"));
+                let pfad = dir.join(server_packs::cache_name(&adresse, &hash));
                 std::fs::create_dir_all(&dir)
                     .and_then(|()| std::fs::write(&pfad, &bytes))
                     .map_err(|e| (S::FailedDownload, format!("Server-Resourcepack nicht gespeichert: {e}")))?;

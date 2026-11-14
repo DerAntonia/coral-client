@@ -27,6 +27,8 @@ pub(crate) enum ModuleId {
     ArmorHud,
     Keystrokes,
     SessionInfo,
+    // Echte Uhrzeit als HUD-Element (HudElement::Clock).
+    Clock,
     DynamicFire,
     Zoom,
     Freelook,
@@ -41,6 +43,7 @@ pub(crate) enum ModuleId {
     DiscordStatus,
     InputLog,
     CoralRecord,
+    CoralClip,
     Autoclicker,
     SaturationHud,
     // Die Statuseffekte oben rechts (HudElement::Effects), an/aus = Settings::show_effects_hud.
@@ -86,7 +89,7 @@ pub(crate) fn addon_module_info<T>(i: u16, f: impl FnOnce(&AddonModuleInfo) -> T
     ADDON_MODULES.read().ok()?.get(i as usize).map(f)
 }
 
-pub(crate) const MODULE_IDS: [ModuleId; 41] = [
+pub(crate) const MODULE_IDS: [ModuleId; 43] = [
     ModuleId::Totem,
     ModuleId::TotemWarning,
     ModuleId::TotemSlots,
@@ -107,6 +110,7 @@ pub(crate) const MODULE_IDS: [ModuleId; 41] = [
     ModuleId::ArmorHud,
     ModuleId::Keystrokes,
     ModuleId::SessionInfo,
+    ModuleId::Clock,
     ModuleId::DynamicFire,
     ModuleId::Zoom,
     ModuleId::Freelook,
@@ -125,6 +129,7 @@ pub(crate) const MODULE_IDS: [ModuleId; 41] = [
     ModuleId::DiscordStatus,
     ModuleId::InputLog,
     ModuleId::CoralRecord,
+    ModuleId::CoralClip,
     ModuleId::Color,
     ModuleId::Sustainability,
     ModuleId::ChunkSaver,
@@ -139,7 +144,7 @@ impl ModuleId {
             Self::TotemSlots => "Totem-Vorschau",
             Self::PopSounds => "Pop-Klänge",
             Self::PopVisuals => "Pop-Optik",
-            Self::Hitbox => "Hitbox-Anzeige",
+            Self::Hitbox => "Hitbox",
             Self::Teams => "Teams",
             Self::SkyColor => "Himmel",
             Self::Weather => "Wetter",
@@ -154,6 +159,7 @@ impl ModuleId {
             Self::ArmorHud => "Rüstung",
             Self::Keystrokes => "Keystrokes",
             Self::SessionInfo => "Session-Info",
+            Self::Clock => "Uhr",
             Self::DynamicFire => "Dynamisches Feuer",
             Self::Zoom => "Zoom",
             Self::Freelook => "Freelook",
@@ -168,6 +174,7 @@ impl ModuleId {
             Self::DiscordStatus => "Discord-Status",
             Self::InputLog => "Input-Log",
             Self::CoralRecord => "Coral-Record",
+            Self::CoralClip => "Coral-Clip",
             Self::Autoclicker => "Autoklicker",
             Self::SaturationHud => "Sättigung",
             Self::Effects => "Effekte",
@@ -203,6 +210,7 @@ impl ModuleId {
             Self::ArmorHud => settings.module_armor_hud,
             Self::Keystrokes => settings.module_keystrokes,
             Self::SessionInfo => settings.module_session_info,
+            Self::Clock => settings.module_clock,
             Self::DynamicFire => settings.module_dynamic_fire,
             Self::Zoom => settings.module_zoom,
             Self::Freelook => settings.module_freelook,
@@ -217,6 +225,7 @@ impl ModuleId {
             Self::DiscordStatus => settings.module_discord_status,
             Self::InputLog => settings.module_input_log_enabled,
             Self::CoralRecord => settings.module_coral_record,
+            Self::CoralClip => settings.module_coral_clip,
             Self::Autoclicker => settings.module_autoclicker,
             Self::SaturationHud => settings.module_saturation_hud,
             Self::Effects => settings.show_effects_hud,
@@ -250,6 +259,7 @@ impl ModuleId {
             Self::ArmorHud => ButtonAction::ToggleModuleArmorHud,
             Self::Keystrokes => ButtonAction::ToggleModuleKeystrokes,
             Self::SessionInfo => ButtonAction::ToggleModuleSessionInfo,
+            Self::Clock => ButtonAction::ToggleModuleClock,
             Self::DynamicFire => ButtonAction::ToggleModuleDynamicFire,
             Self::Zoom => ButtonAction::ToggleModuleZoom,
             Self::Freelook => ButtonAction::ToggleModuleFreelook,
@@ -264,6 +274,7 @@ impl ModuleId {
             Self::DiscordStatus => ButtonAction::ToggleModuleDiscordStatus,
             Self::InputLog => ButtonAction::ToggleModuleInputLog,
             Self::CoralRecord => ButtonAction::ToggleModuleCoralRecord,
+            Self::CoralClip => ButtonAction::ToggleModuleCoralClip,
             Self::Autoclicker => ButtonAction::ToggleModuleAutoclicker,
             Self::SaturationHud => ButtonAction::ToggleModuleSaturationHud,
             Self::Effects => ButtonAction::ToggleEffectsHud,
@@ -283,7 +294,7 @@ impl ModuleId {
             Self::TotemSlots => "Zeigt schon vor dem Öffnen, wo im Inventar die Totems liegen",
             Self::PopSounds => "Klänge für Pops, Explosion und Anker -- ersetzt den Signalton",
             Self::PopVisuals => "Flug-Totem und Partikelwolken beim Pop abschalten",
-            Self::Hitbox => "Trefferbox anderer Entities: geglättet und/oder roh",
+            Self::Hitbox => "Trefferbox anderer Entities, je Art einstellbar; beim Spieler wahlweise roh",
             Self::Teams => "Eigene Hitboxen für Verbündete und Gegner -- gleiche Namensfarbe wie deine = gleiches Team",
             Self::SkyColor => "Einfarbig, Verlauf mit Sonne und Mond oder der Himmel aus dem Skin, dazu eine feste Uhrzeit -- aus: Tag/Nacht wie gehabt",
             Self::Weather => "Regen oder Schnee fest einstellen (oder klar) und in welcher Kugel um dich er fällt (von/bis) -- nur fürs Bild, auch wenn der Pack Wetter ausblendet",
@@ -298,11 +309,12 @@ impl ModuleId {
             Self::ArmorHud => "Getragene Rüstung mit Haltbarkeit -- verschieben im HUD-Editor",
             Self::Keystrokes => "Bewegungstasten, Springen und Maustasten -- verschieben im HUD-Editor",
             Self::SessionInfo => "Spielzeit seit dem Start, dazu Kills (aus der Todesmeldung im Chat), Tode und Siege -- verschieben im HUD-Editor",
+            Self::Clock => "Die echte Uhrzeit (Stunden, Minuten, Sekunden) -- verschieben im HUD-Editor",
             Self::DynamicFire => "Mit Feuerresistenz blenden Feuerblöcke in einer Sekunde aus, danach wieder ein",
             Self::Zoom => "Verengt das Sichtfeld, solange die Zoom-Taste (Steuerung) aktiv ist",
             Self::Freelook => "Solange die Freelook-Taste (Steuerung) aktiv ist, dreht die Maus nur die Kamera, der Spieler schaut weiter geradeaus",
             Self::VoiceChat => "Sprachchat wie Simple Voice Chat: Spieler in der Nähe hören, sprechen mit der Sprechtaste (Steuerung)",
-            Self::BlockOutline => "Farbe, Deckkraft und Breite des Rahmens um den anvisierten Block",
+            Self::BlockOutline => "Farbe, Deckkraft und Breite des Rahmens um den anvisierten Block -- aus: kein Rahmen",
             Self::ShowMarkers => "Barrieren, Lichtblöcke und Strukturleere sichtbar machen",
             Self::SoundDebug => "Zwei Balken: wie laut gerade der linke und der rechte Kanal ist",
             Self::HandDebug => "Verkleinert das Bild nach links oben, Hand und Items ragen ungeschnitten über den schwarzen Rand",
@@ -316,6 +328,7 @@ impl ModuleId {
             Self::Autoclicker => "Klickt beim Halten von Angreifen oder Benutzen von selbst -- nur auf anticheat-test.com und lokalen Servern",
             Self::InputLog => "Schreibt Tasten, Maustasten und Rad (nur im Spiel, nicht Chat) mit Zeitstempel in input_log.txt",
             Self::CoralRecord => "Zeichnet Pakete, Kamera und Maus auf, um später ein Video daraus zu rendern (recordings/*.crec). Auch der Chat landet in der Aufnahme. Mitten im Spiel eingeschaltet, speichert es zuerst den aktuellen Zustand",
+            Self::CoralClip => "Hält die letzten Sekunden im Speicher. Die Taste „Clip speichern“ schreibt sie als Aufnahme (recordings/clip_*.crec), abspielbar unter Aufnahmen. Der Clip beginnt an einem Haltepunkt (regelmäßig und vor jeder Teleportation): er ist mindestens so lang wie eingestellt, höchstens um einen Haltepunkt-Abstand länger. Überlappt ein Clip mit dem vorigen, wird dieser verlängert, statt dasselbe doppelt zu speichern. Auch der Chat landet darin",
             Self::Color => "Sättigung des ganzen Bildes -- 0 % ist schwarzweiß",
             Self::Sustainability => "Spart Strom: keine Bilder, solange das Fenster im Hintergrund ist, und eine stehende Welt hinter dem Pausemenü",
             Self::ChunkSaver => "Speichert jeden geladenen Chunk -- daraus zeichnet die LOD-Render-Distance (Einstellungen > Video) Fernsicht weit über die Render-Distance hinaus (wie Voxy)",
@@ -414,6 +427,7 @@ impl ModuleId {
             | Self::ArmorHud
             | Self::Keystrokes
             | Self::SessionInfo
+            | Self::Clock
             | Self::SaturationHud
             | Self::Effects => ModuleCategory::Display,
             Self::PopSounds | Self::VoiceChat => ModuleCategory::Akustik,
@@ -425,6 +439,7 @@ impl ModuleId {
             | Self::DiscordStatus
             | Self::InputLog
             | Self::CoralRecord
+            | Self::CoralClip
             | Self::Sustainability => ModuleCategory::Utility,
             Self::GhostTolerance
             | Self::BotcheckPass
@@ -457,10 +472,10 @@ pub(crate) enum ModuleRow {
     // Optional rechts daneben ein Farbfeld (Aktion, Farbe), das nur mit dem letzten Wert wirkt
     // (Einfarbig).
     Pick { label: String, options: Vec<(&'static str, ButtonAction, bool)>, swatch: Option<(ButtonAction, [f32; 3])> },
-    // Schalter mit seinem Farbfeld rechts daneben in derselben Zeile.
-    ToggleSwatch { label: String, action: ButtonAction, on: bool, swatch: ButtonAction, rgb: [f32; 3] },
     // Zwei Schalter nebeneinander, dahinter ein Farbfeld (s. Heading::columns fuer die Koepfe).
-    TwoTogglesSwatch { label: String, first: (ButtonAction, bool), second: (ButtonAction, bool), swatch: ButtonAction, rgb: [f32; 3] },
+    // Das Farbfeld wirkt nur mit dem zweiten Schalter. `roh`: Zeile mit zusaetzlicher Wahl
+    // Geglaettet/Roh (Wert: roh gewaehlt?) und dem Farbfeld fuer Roh dahinter.
+    TwoTogglesSwatch { label: String, first: (ButtonAction, bool), second: (ButtonAction, bool), swatch: ButtonAction, rgb: [f32; 3], roh: Option<(bool, [f32; 3])> },
     // Ein Knopf (z.B. "Automatisch") und dahinter Farbfelder zur Wahl -- je Farbe (Aktion,
     // Farbe, gewaehlt?). Der gewaehlte Eintrag ist hervorgehoben.
     ColorPicks { label: String, first: (&'static str, ButtonAction, bool), colors: Vec<(ButtonAction, [f32; 3], bool)> },
@@ -477,7 +492,6 @@ impl ModuleRow {
             | Self::Swatch { label, .. }
             | Self::Choice { label, .. }
             | Self::Pick { label, .. }
-            | Self::ToggleSwatch { label, .. }
             | Self::TwoTogglesSwatch { label, .. }
             | Self::ColorPicks { label, .. }
             | Self::Heading { label, .. } => label,
@@ -540,11 +554,6 @@ impl ModuleDetailLayout {
         Rect { x, w: COLOR_PICK_W, ..self.control_rect(n) }
     }
 
-    // Farbfeld rechts neben einem Schalter (ModuleRow::ToggleSwatch).
-    pub(crate) fn swatch_after_toggle_rect(&self, n: f32) -> Rect {
-        Rect { x: self.ctrl_x() + TOGGLE_W + STEPPER_GAP, ..self.swatch_rect(n) }
-    }
-
     // Der zweite Schalter einer Zeile und das Farbfeld dahinter (ModuleRow::TwoTogglesSwatch).
     pub(crate) fn second_toggle_rect(&self, n: f32) -> Rect {
         Rect { x: self.ctrl_x() + TOGGLE_W + STEPPER_GAP, ..self.control_rect(n) }
@@ -552,6 +561,18 @@ impl ModuleDetailLayout {
 
     pub(crate) fn swatch_after_two_toggles_rect(&self, n: f32) -> Rect {
         Rect { x: self.ctrl_x() + 2.0 * (TOGGLE_W + STEPPER_GAP), ..self.swatch_rect(n) }
+    }
+
+    // Wahl Geglaettet/Roh hinter dem Farbfeld und das Farbfeld fuer Roh dahinter
+    // (ModuleRow::TwoTogglesSwatch mit `roh`).
+    pub(crate) fn raw_pick_rect(&self, n: f32) -> Rect {
+        let farbe = self.swatch_after_two_toggles_rect(n);
+        Rect { x: farbe.x + farbe.w + STEPPER_GAP, w: HITBOX_PICK_W, ..self.control_rect(n) }
+    }
+
+    pub(crate) fn raw_swatch_rect(&self, n: f32) -> Rect {
+        let wahl = self.raw_pick_rect(n);
+        Rect { x: wahl.x + wahl.w + STEPPER_GAP, ..self.swatch_rect(n) }
     }
 
     // Senkrechte Lage einer Beschriftung in Zeile `n`, mittig zum Bedienelement.
@@ -601,5 +622,10 @@ pub(crate) const COLOR_PICK_MAX: usize = 6;
 pub(crate) const MODULE_DETAIL_PX_W: f32 = SETTINGS_CTRL_X - SETTINGS_LABEL_X + SLIDER_SPAN_W + 72.0;
 // Rand der Detailansicht links/rechts, Kopf (Zurueck, Name, Beschreibung) und Rand unten.
 pub(crate) const MODULE_DETAIL_PX_PAD: f32 = 28.0;
+// Breite der Wahl Geglaettet/Roh in der Hitbox-Tabelle und die Spaltenbreite der Hitbox-
+// Detailansicht (die Tabelle ist breiter als die Regler der anderen Module).
+pub(crate) const HITBOX_PICK_W: f32 = 190.0;
+pub(crate) const HITBOX_DETAIL_PX_W: f32 =
+    SETTINGS_CTRL_X - SETTINGS_LABEL_X + 2.0 * (TOGGLE_W + STEPPER_GAP) + SWATCH_W + STEPPER_GAP + HITBOX_PICK_W + STEPPER_GAP + SWATCH_W + 24.0;
 pub(crate) const MODULE_DETAIL_PX_HEAD: f32 = 112.0;
 pub(crate) const MODULE_DETAIL_PX_FOOT: f32 = 16.0;

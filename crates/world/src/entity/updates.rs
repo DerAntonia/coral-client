@@ -1,6 +1,7 @@
 // Entities ticken, Schaden, Ausruestung, Bewegung, Teleport und Anvisieren.
 
 use super::*;
+use super::anim_debug as anim;
 
 impl Entities {
     // Einmal pro CLIENT-Tick aufrufen, nicht pro Frame: Position, Rotation, Schrittanimation
@@ -75,6 +76,10 @@ impl Entities {
 
     pub fn remove(&mut self, ids: &[i32]) {
         for id in ids {
+            if anim::anim_debug_an() && self.by_id.get(id).is_some_and(anim::anim_relevant) {
+                let e = &self.by_id[id];
+                anim::anim_log(format_args!("entfernt id={id} typ={} pos={}", entity_type_name(e.entity_type).unwrap_or("?"), anim::fmt_pos(e.pos)));
+            }
             self.by_id.remove(id);
             // Mit dem Entity auch seine Mitfahr-Beziehungen aufloesen -- in beide
             // Richtungen, sonst haengt ein Passagier an einem Fahrzeug, das es nicht mehr
@@ -94,10 +99,12 @@ impl Entities {
     // gerade interpolierte -- sonst zoege sich der Interpolationsrueckstand durch jedes
     // weitere Paket und das Entity bliebe dauerhaft hinter seiner echten Position zurueck.
     pub fn move_relative(&mut self, id: i32, dx: f64, dy: f64, dz: f64) {
+        let vorher = self.by_id.get(&id).map(|e| e.pos);
         if let Some(e) = self.by_id.get_mut(&id) {
             e.tracked_pos = (e.tracked_pos.0 + dx, e.tracked_pos.1 + dy, e.tracked_pos.2 + dz);
             e.refresh(Some(e.tracked_pos), None, None, Instant::now());
         }
+        self.anim_log_pos(id, "bewegung_relativ", vorher);
     }
 
     // Set Entity Motion (0x63) fuer ein fremdes Entity -- Vanillas Entity.setVelocityClient.
@@ -143,10 +150,12 @@ impl Entities {
 
     // Absolute Position (Entity Position Sync / Teleport Entity).
     pub fn set_position(&mut self, id: i32, x: f64, y: f64, z: f64) {
+        let vorher = self.by_id.get(&id).map(|e| e.pos);
         if let Some(e) = self.by_id.get_mut(&id) {
             e.tracked_pos = (x, y, z);
             e.refresh(Some((x, y, z)), None, None, Instant::now());
         }
+        self.anim_log_pos(id, "position_absolut", vorher);
     }
 
     // Teleport Entity: anders als Position Sync greift er auch bei einem selbst gelenkten
@@ -169,6 +178,7 @@ impl Entities {
         if let Some(e) = self.by_id.get_mut(&id) {
             e.refresh(None, Some(yaw_deg), Some(pitch_deg), Instant::now());
         }
+        self.anim_log_pos(id, "rotation", None);
     }
 
     // Raycast gegen die Entity-Trefferboxen: fusszentrierte AABB an der TICK-quantisierten

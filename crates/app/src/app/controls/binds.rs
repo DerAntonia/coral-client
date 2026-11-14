@@ -87,6 +87,7 @@ impl App {
                 self.settings.module_hand_debug = !self.settings.module_hand_debug;
                 self.persist_settings();
             }
+            KeyBindAction::SaveClip if self.chat_input.is_none() => self.save_clip(),
             KeyBindAction::OpenModuleMenu => self.toggle_module_menu(),
             KeyBindAction::VoiceConfig if self.chat_input.is_none() && !self.inventory.screen_open => self.open_voice_config(),
             KeyBindAction::VoiceMute if self.settings.module_voice_chat && self.chat_input.is_none() => self.voice_flag(VoiceFlag::Muted),
@@ -162,11 +163,34 @@ impl App {
     // nichts tauschen -- der Roh-Pfad warf ausser Links/Rechts jede Maustaste weg.
     pub(crate) fn apply_inventory_mouse_bind(&mut self, bind: Bind, pressed: bool) {
         let kb = self.settings.keybinds;
+        let unten = self.binds_down.clone();
         for action in KeyBindAction::ALL {
             let zaehlt = matches!(action, KeyBindAction::SwapOffhand | KeyBindAction::Hotbar(_) | KeyBindAction::PickBlock);
-            if zaehlt && kb.binds(action).any(|b| b == bind) {
+            if zaehlt && Self::bind_hits(&kb, action, bind, pressed, &unten) {
                 self.apply_key_action(action, pressed);
             }
+        }
+    }
+
+    // Wiedergabe: nur die Aktionen fuers Zuschauen (s. App::replay_view_action).
+    pub(crate) fn apply_replay_bind(&mut self, bind: Bind, pressed: bool) {
+        let kb = self.settings.keybinds;
+        let unten = self.binds_down.clone();
+        for action in [KeyBindAction::TogglePerspective, KeyBindAction::Freelook, KeyBindAction::OpenInventory] {
+            if Self::bind_hits(&kb, action, bind, pressed, &unten) {
+                self.replay_view_action(action, pressed);
+            }
+        }
+    }
+
+    // Trifft dieser Druck bzw. dieses Loslassen die Aktion? Ein Druck nur mit dem Modifier der
+    // Belegung (s. Keybinds::matches), ein Loslassen der Haupttaste immer -- sonst bliebe eine
+    // Aktion haengen, deren Modifier vor ihr losgelassen wurde.
+    fn bind_hits(kb: &Keybinds, action: KeyBindAction, bind: Bind, pressed: bool, unten: &[Bind]) -> bool {
+        if pressed {
+            kb.matches(action, bind, |b| unten.contains(&b))
+        } else {
+            kb.binds(action).any(|b| b == bind)
         }
     }
 
@@ -192,9 +216,14 @@ impl App {
             return;
         }
         let kb = self.settings.keybinds;
+        // Beim Druck ist `bind` schon dabei, beim Loslassen schon weg (s. track_bind).
+        let unten = self.binds_down.clone();
         for action in KeyBindAction::ALL {
-            if kb.binds(action).any(|b| b == bind) {
+            if Self::bind_hits(&kb, action, bind, pressed, &unten) {
                 self.apply_key_action(action, pressed);
+            } else if !pressed && kb.modifier_released(action, bind, |b| unten.contains(&b)) {
+                // Der Modifier ging vor der Haupttaste hoch: die Belegung gilt nur mit beiden.
+                self.apply_key_action(action, false);
             }
         }
         // Inventar-Aktionen ohne eigene Taste erben die ihres Welt-Gegenstuecks (s.
@@ -205,10 +234,39 @@ impl App {
                 continue;
             }
             let Some(fallback) = action.inventory_fallback() else { continue };
-            if kb.binds(fallback).any(|b| b == bind) {
+            if Self::bind_hits(&kb, fallback, bind, pressed, &unten) {
                 self.apply_key_action(action, pressed);
+            } else if !pressed && kb.modifier_released(fallback, bind, |b| unten.contains(&b)) {
+                self.apply_key_action(action, false);
             }
         }
+    }
+
+    // Welches Modifier-Feld im Fenster "Erweitert" unter (px,py, Inhaltskoordinaten) liegt, wenn
+    // es einen Modifier traegt -- fuer den Rechtsklick zum Loeschen.
+    pub(crate) fn keybind_modifier_at(&self, px: f32, py: f32) -> Option<(KeyBindAction, usize)> {
+        let aktion = self.keybind_advanced.filter(|_| self.screen == MenuScreen::SettingsControls)?;
+        let (dx, dy) = self.content_offset();
+        let slot = self.keybind_advanced_layout(aktion).modifiers.iter().position(|r| r.contains(px + dx, py + dy))?;
+        self.settings.keybinds.modifier_at(aktion, slot).map(|_| (aktion, slot))
+    }
+
+    // Die Eingabe, auf die das Warten (s. awaiting_keybind) gewartet hat: als Taste oder als
+    // Modifier des Slots. Das Mausrad kennt kein Halten und taugt nicht als Modifier.
+    pub(crate) fn assign_awaited_bind(&mut self, target: KeyBindAction, slot: usize, bind: Bind) {
+        let modifier = std::mem::take(&mut self.awaiting_modifier);
+        if modifier {
+            if matches!(bind, Bind::Mouse(BindMouse::WheelUp | BindMouse::WheelDown)) {
+                self.push_log("Tastenbelegung: das Mausrad geht nicht als Modifier");
+                return;
+            }
+            self.settings.keybinds.set_modifier_at(target, slot, Some(bind));
+            self.push_log(format!("Tastenbelegung: {} → Modifier {}", target.label(), bind_name(bind)));
+        } else {
+            self.settings.keybinds.set_at(target, slot, bind);
+            self.push_log(format!("Tastenbelegung: {} → {}", target.label(), bind_name(bind)));
+        }
+        self.persist_settings();
     }
 
     // Welche Belegung (Aktion + Slot) unter (px,py, Inhaltskoordinaten) liegt -- nur auf dem
@@ -221,7 +279,7 @@ impl App {
         }
         if let Some(aktion) = self.keybind_advanced {
             let (dx, dy) = self.content_offset();
-            let (_, felder, _, _) = self.keybind_advanced_layout(aktion);
+            let felder = self.keybind_advanced_layout(aktion).binds;
             return felder.iter().position(|r| r.contains(px + dx, py + dy)).map(|slot| (aktion, slot));
         }
         controls_rows().iter().enumerate().find_map(|(row, &zeile)| match zeile {

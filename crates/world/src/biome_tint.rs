@@ -11,8 +11,8 @@
 // hier komplett (alle Seiten) statt nur eine Fläche getoent.
 //
 // Bewusst NICHT abgebildet: die Handvoll Bloecke mit einer FESTEN statt biomeabhaengigen
-// Farbe (z.B. Sumpf-spezifische Ranken-Sonderfaerbung, Redstone-Wire-Faerbung nach
-// Staerke) -- kein Colormap-Fall, andere Mechanik.
+// Farbe (z.B. Sumpf-spezifische Ranken-Sonderfaerbung) -- kein Colormap-Fall, andere
+// Mechanik. Die Redstone-Leitung haengt am State (Signalstaerke), s. tint_kind_of_state.
 pub enum TintKind {
     None,
     // Nur die Oben-Flaeche (grass_block: Seiten bleiben braun/Erdfarben, wie ein
@@ -49,12 +49,48 @@ pub fn tint_kind(block_name: &str) -> TintKind {
     }
 }
 
+// Wie tint_kind, dazu die Faerbung, die am State haengt: die Redstone-Leitung nach ihrer
+// Signalstaerke (Property "power"). Ihre Overlay-Textur ist in Vanilla ganz durchsichtig, die
+// Faerbung darf also alle Flaechen treffen.
+#[must_use]
+pub fn tint_kind_of_state(state: u32, block_name: &str) -> TintKind {
+    if block_name == "redstone_wire" {
+        let power = crate::state_props::property(state, "power").and_then(|p| p.parse::<u8>().ok()).unwrap_or(0);
+        return TintKind::Fixed(redstone_wire_rgb(power));
+    }
+    tint_kind(block_name)
+}
+
+// Farbe der Redstone-Leitung je Signalstaerke 0..15 als 0xRRGGBB (RedStoneWireBlock): Rot
+// waechst von 0,3 (aus) bzw. 0,4 linear bis 1,0; Gruen und Blau kommen erst bei hoher Staerke
+// quadratisch dazu, darum wird sie zum Ende hin heller und gelblicher.
+#[must_use]
+pub fn redstone_wire_rgb(power: u8) -> u32 {
+    let f = f32::from(power.min(15)) / 15.0;
+    let rot = f * 0.6 + if f > 0.0 { 0.4 } else { 0.3 };
+    let gruen = (f * f * 0.7 - 0.5).clamp(0.0, 1.0);
+    let blau = (f * f * 0.6 - 0.7).clamp(0.0, 1.0);
+    let kanal = |c: f32| (c * 255.0).floor() as u32;
+    (kanal(rot) << 16) | (kanal(gruen) << 8) | kanal(blau)
+}
+
 // Wasser (kein Colormap-Fall, direkte Biom-Farbe) -- eigener Name statt einer weiteren
 // TintKind-Variante, damit der Mesher Wasser klar getrennt von der Colormap-Logik behandeln
 // kann (andere Datenquelle: BiomeColors::water statt grass/foliage).
 #[must_use] 
 pub fn is_water(block_name: &str) -> bool {
     block_name == "water" || block_name == "flowing_water"
+}
+
+#[cfg(test)]
+mod redstone_tests {
+    // Aus: dunkles Rot (0,3); volle Staerke: hell, mit etwas Gruen und Blau.
+    #[test]
+    fn redstone_farbe_nach_staerke() {
+        assert_eq!(super::redstone_wire_rgb(0), 0x4C_00_00);
+        assert_eq!(super::redstone_wire_rgb(15), 0xFF_32_00);
+        assert!(super::redstone_wire_rgb(8) >> 16 > 0x4C, "heller als aus");
+    }
 }
 
 #[cfg(test)]

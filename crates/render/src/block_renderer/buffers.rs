@@ -30,20 +30,15 @@ pub(super) fn sortiere_nach_abstand(ziel: &mut [(i32, i32)], center: (i32, i32))
 // Die Bits aus `mask`, deren Section (mit einem Block Rand) im Sichtkegel liegt.
 pub(super) fn sections_in_frustum((cx, cz): (i32, i32), min_y: i32, mask: u64, frustum: &Frustum, eye: DVec3) -> u64 {
     let (x0, z0) = (f64::from(cx * SECTION_SIZE - 1), f64::from(cz * SECTION_SIZE - 1));
-    let rand = f64::from(SECTION_SIZE + 2);
-    let mut rest = mask;
-    let mut drin = 0;
-    while rest != 0 {
-        let s = rest.trailing_zeros();
-        rest &= rest - 1;
-        let y0 = f64::from(min_y + s as i32 * SECTION_SIZE - 1);
-        let min = (DVec3::new(x0, y0, z0) - eye).as_vec3();
-        let max = (DVec3::new(x0 + rand, y0 + rand, z0 + rand) - eye).as_vec3();
-        if frustum.intersects_aabb(min, max) {
-            drin |= 1 << s;
-        }
+    if mask == 0 {
+        return 0;
     }
-    drin
+    let rand = f64::from(SECTION_SIZE + 2);
+    // Alle Sections einer Spalte als Stapel gleicher Boxen in einem Test (s. Frustum).
+    let y0 = f64::from(min_y - 1);
+    let min = (DVec3::new(x0, y0, z0) - eye).as_vec3();
+    let max = (DVec3::new(x0 + rand, y0 + rand, z0 + rand) - eye).as_vec3();
+    frustum.intersects_stacked_aabbs(min, max, SECTION_SIZE as f32) & mask
 }
 
 pub(super) fn column_visible((cx, cz): (i32, i32), frustum: &Frustum, eye: DVec3) -> bool {
@@ -391,7 +386,7 @@ impl OutlineComplement {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: if depth_later { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard } }),
-                stencil_ops: None,
+                stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: if depth_later { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard } }),
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -405,7 +400,8 @@ impl OutlineComplement {
     }
 }
 
-pub(super) fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+// Zwei Ansichten: die ganze Textur als Ziel (Tiefe und Stencil) und nur die Tiefe zum Lesen.
+pub(super) fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::TextureView, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth texture"),
         size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
@@ -417,7 +413,8 @@ pub(super) fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) 
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    let nur_tiefe = texture.create_view(&wgpu::TextureViewDescriptor { aspect: wgpu::TextureAspect::DepthOnly, ..Default::default() });
+    (texture.create_view(&wgpu::TextureViewDescriptor::default()), nur_tiefe)
 }
 
 // Instanz-Daten einer Spalte (s. update_column_offsets): Spaltenecke auf Hoehe min_y (der

@@ -40,11 +40,130 @@ mod ticking;
 // neuer Partikel den aeltesten.
 const MAX_PER_SHEET: usize = 16_384;
 // ClientWorld.addParticle: ohne `force` entstehen Partikel nur bis 32 Bloecke um die Kamera.
-const MAX_SPAWN_DISTANCE_SQ: f64 = 1024.0;
+// Hier einstellbar (Particles::spawn_distance), das ist der Vanilla-Wert.
+const VANILLA_SPAWN_DISTANCE: f64 = 32.0;
 // Particle.MAX_SQUARED_COLLISION_CHECK_DISTANCE -- schnellere Partikel pruefen keine Kollision.
 const MAX_COLLISION_MOVE_SQ: f64 = 100.0 * 100.0;
 // BlockParticleEffectsManager.field_62022: hoechstens so viele Explosions-Blockpartikel je Tick.
 const MAX_EXPLOSION_BLOCK_PARTICLES: i32 = 512;
+// Rueckstoss einer Explosion auf Partikel (kein Vanilla, s. ExplosionPush): so viel staerker
+// als bei einem Entity -- Partikel sind leicht.
+const EXPLOSION_PUSH_FACTOR: f64 = 2.0;
+
+// Der Stoss einer Explosion (Zentrum, Radius aus dem Paket) auf leichte Koerper (Partikel,
+// Schneeflocken), in Bloecken je Tick -- None, wenn einer ausser Reichweite oder abgeschirmt
+// ist. Gerechnet wie beim Entity (weg vom Zentrum, Staerke 1 - Abstand / doppelter Radius),
+// mal EXPLOSION_PUSH_FACTOR. Die Deckung ist bewusst sehr grob: EIN Strahl vom Zentrum zum
+// Koerper, und jeder Block mit Kollisionsform dazwischen schirmt ganz ab (Vanilla tastet das
+// Entity mit vielen Strahlen ab und stoesst anteilig).
+//
+// Einmal je Explosion fuer alle Koerper: die Strahlen laufen fast alle durch dieselben Bloecke,
+// deshalb merkt sie sich je Block, ob er abschirmt (die Kollisionsform zu bestimmen ist das
+// Teure -- ohne das kostete eine Explosion bei vollem Partikelbestand 1,9 ms).
+pub(crate) struct ExplosionPush<'a> {
+    center: DVec3,
+    radius: f32,
+    world: &'a world::World,
+    shapes: &'a world::BlockShapes,
+    // Wuerfel um das Zentrum mit Kantenlaenge 2 * halb + 1: 0 = noch nicht gefragt, 1 = frei,
+    // 2 = schirmt ab. Leer bei sehr grossen Explosionen (dann jedes Mal gefragt).
+    cells: Vec<u8>,
+    ecke: glam::IVec3,
+    kante: i32,
+}
+
+// Groesster Wuerfel fuer das Gedaechtnis (halbe Kante); groessere Explosionen fragen direkt.
+const EXPLOSION_CACHE_HALF_MAX: i32 = 24;
+
+impl<'a> ExplosionPush<'a> {
+    pub(crate) fn new(center: DVec3, radius: f32, world: &'a world::World, shapes: &'a world::BlockShapes) -> Self {
+        let halb = (f64::from(radius) * 2.0).ceil() as i32 + 1;
+        let (kante, cells) = if (0..=EXPLOSION_CACHE_HALF_MAX).contains(&halb) {
+            let kante = 2 * halb + 1;
+            (kante, vec![0u8; (kante * kante * kante) as usize])
+        } else {
+            (0, Vec::new())
+        };
+        Self { center, radius, world, shapes, cells, ecke: center.floor().as_ivec3() - glam::IVec3::splat(halb), kante }
+    }
+
+    pub(crate) fn at(&mut self, pos: DVec3) -> Option<DVec3> {
+        let weg = pos - self.center;
+        let laenge = weg.length();
+        let abstand = laenge / (f64::from(self.radius) * 2.0);
+        if abstand.is_nan() || abstand > 1.0 || laenge < 1e-9 || self.ray_blocked(pos) {
+            return None;
+        }
+        Some(weg / laenge * (1.0 - abstand) * EXPLOSION_PUSH_FACTOR)
+    }
+
+    fn solid(&mut self, z: glam::IVec3) -> bool {
+        let frage = |s: &Self| !world::collision_boxes(s.world.block_at(z.x, z.y, z.z), s.shapes).is_empty();
+        let r = z - self.ecke;
+        if self.cells.is_empty() || r.min_element() < 0 || r.max_element() >= self.kante {
+            return frage(self);
+        }
+        let i = ((r.z * self.kante + r.y) * self.kante + r.x) as usize;
+        if self.cells[i] == 0 {
+            self.cells[i] = if frage(self) { 2 } else { 1 };
+        }
+        self.cells[i] == 2
+    }
+
+    // Liegt zwischen Zentrum und `bis` ein Block mit Kollisionsform? Schritt fuer Schritt durch
+    // die Bloecke auf der Strecke; der Block des Zentrums und der des Ziels zaehlen nicht.
+    fn ray_blocked(&mut self, bis: DVec3) -> bool {
+        let von = self.center;
+        let d = bis - von;
+        let mut zelle = von.floor().as_ivec3();
+        let ziel = bis.floor().as_ivec3();
+        // Nicht signum: das ist bei 0.0 schon 1.
+        let richtung = |l: f64| i32::from(l > 0.0) - i32::from(l < 0.0);
+        let schritt = glam::IVec3::new(richtung(d.x), richtung(d.y), richtung(d.z));
+        // Strecke (in Anteilen von d) je Block und bis zur naechsten Blockgrenze je Achse; eine
+        // Achse ohne Bewegung erreicht nie eine.
+        let je_block = |l: f64| if l == 0.0 { f64::INFINITY } else { 1.0 / l.abs() };
+        let je_block = DVec3::new(je_block(d.x), je_block(d.y), je_block(d.z));
+        let grenze = |p: f64, z: i32, s: i32, j: f64| match s {
+            0 => f64::INFINITY,
+            1 => (f64::from(z + 1) - p) * j,
+            _ => (p - f64::from(z)) * j,
+        };
+        let mut naechste = DVec3::new(
+            grenze(von.x, zelle.x, schritt.x, je_block.x),
+            grenze(von.y, zelle.y, schritt.y, je_block.y),
+            grenze(von.z, zelle.z, schritt.z, je_block.z),
+        );
+        while zelle != ziel {
+            if naechste.x <= naechste.y && naechste.x <= naechste.z {
+                if naechste.x > 1.0 {
+                    break;
+                }
+                zelle.x += schritt.x;
+                naechste.x += je_block.x;
+            } else if naechste.y <= naechste.z {
+                if naechste.y > 1.0 {
+                    break;
+                }
+                zelle.y += schritt.y;
+                naechste.y += je_block.y;
+            } else {
+                if naechste.z > 1.0 {
+                    break;
+                }
+                zelle.z += schritt.z;
+                naechste.z += je_block.z;
+            }
+            if zelle == ziel {
+                break;
+            }
+            if self.solid(zelle) {
+                return true;
+            }
+        }
+        false
+    }
+}
 
 // --- java.util.Random ---------------------------------------------------------------------
 //
@@ -138,6 +257,11 @@ pub struct ParticleKind {
     pub label: &'static str,
     types: &'static [i32],
     pub spawn: SpawnKind,
+    // Kann an der eigenen Figur entstehen, weil man es selbst ausloest oder abbekommt (Treffer,
+    // Totem, Traenke, Windkugel, Rakete, Sprint-/Abbau-Staub, Essen). Alle anderen kommen aus der
+    // Umgebung (Bloecke, Explosionen, Mobs) und gelten auch an der eigenen Figur als andere --
+    // die Anpassung der eigenen zeigt sie gar nicht erst (s. particle_kinds_for_own).
+    pub can_be_own: bool,
 }
 
 // Wie eine Art entsteht -- daran haengt, welche Regler sie ausser Dauer/Deckkraft/Tempo hat.
@@ -177,36 +301,40 @@ pub const KINDS: [ParticleKind; 20] = [
         label: "Blasensäule",
         types: &[pp::PARTICLE_BUBBLE_COLUMN_UP, pp::PARTICLE_CURRENT_DOWN],
         spawn: SpawnKind::Lingering,
+        can_be_own: false,
     },
-    ParticleKind { key: "block", label: "Blockstaub", types: &[pp::PARTICLE_BLOCK], spawn: SpawnKind::Burst },
-    ParticleKind { key: "end_rod", label: "Endstab", types: &[pp::PARTICLE_END_ROD], spawn: SpawnKind::Lingering },
+    ParticleKind { key: "block", label: "Blockstaub", types: &[pp::PARTICLE_BLOCK], spawn: SpawnKind::Burst, can_be_own: true },
+    ParticleKind { key: "end_rod", label: "Endstab", types: &[pp::PARTICLE_END_ROD], spawn: SpawnKind::Lingering, can_be_own: false },
     ParticleKind {
         key: "explosion",
         label: "Explosion",
         types: &[pp::PARTICLE_EXPLOSION, pp::PARTICLE_EXPLOSION_EMITTER],
         spawn: SpawnKind::BurstEmitter,
+        can_be_own: false,
     },
-    ParticleKind { key: "flash", label: "Feuerwerks-Blitz", types: &[pp::PARTICLE_FLASH], spawn: SpawnKind::Single },
+    ParticleKind { key: "flash", label: "Feuerwerks-Blitz", types: &[pp::PARTICLE_FLASH], spawn: SpawnKind::Single, can_be_own: true },
     ParticleKind {
         key: "flame",
         label: "Flammen",
         types: &[pp::PARTICLE_FLAME, pp::PARTICLE_SOUL_FIRE_FLAME, pp::PARTICLE_SMALL_FLAME, pp::PARTICLE_COPPER_FIRE_FLAME],
         spawn: SpawnKind::Lingering,
+        can_be_own: false,
     },
     ParticleKind {
         key: "item_shards",
         label: "Item-Splitter",
         types: &[pp::PARTICLE_ITEM, pp::PARTICLE_ITEM_SLIME, pp::PARTICLE_ITEM_COBWEB, pp::PARTICLE_ITEM_SNOWBALL],
         spawn: SpawnKind::Burst,
+        can_be_own: true,
     },
-    ParticleKind { key: "crit", label: "Krit", types: &[pp::PARTICLE_CRIT], spawn: SpawnKind::BurstEmitter },
-    ParticleKind { key: "smoke", label: "Rauch", types: &[pp::PARTICLE_SMOKE, pp::PARTICLE_LARGE_SMOKE], spawn: SpawnKind::Burst },
-    ParticleKind { key: "poof", label: "Rauchwölkchen", types: &[pp::PARTICLE_POOF], spawn: SpawnKind::Burst },
-    ParticleKind { key: "dust", label: "Redstone-Staub", types: &[pp::PARTICLE_DUST], spawn: SpawnKind::Lingering },
-    ParticleKind { key: "damage_indicator", label: "Schadensherzen", types: &[pp::PARTICLE_DAMAGE_INDICATOR], spawn: SpawnKind::Burst },
-    ParticleKind { key: "sweep", label: "Schwungangriff", types: &[pp::PARTICLE_SWEEP_ATTACK], spawn: SpawnKind::Single },
-    ParticleKind { key: "sculk_soul", label: "Sculk-Seele", types: &[pp::PARTICLE_SCULK_SOUL], spawn: SpawnKind::Burst },
-    ParticleKind { key: "totem", label: "Totem", types: &[pp::PARTICLE_TOTEM_OF_UNDYING], spawn: SpawnKind::BurstEmitter },
+    ParticleKind { key: "crit", label: "Krit", types: &[pp::PARTICLE_CRIT], spawn: SpawnKind::BurstEmitter, can_be_own: true },
+    ParticleKind { key: "smoke", label: "Rauch", types: &[pp::PARTICLE_SMOKE, pp::PARTICLE_LARGE_SMOKE], spawn: SpawnKind::Burst, can_be_own: false },
+    ParticleKind { key: "poof", label: "Rauchwölkchen", types: &[pp::PARTICLE_POOF], spawn: SpawnKind::Burst, can_be_own: true },
+    ParticleKind { key: "dust", label: "Redstone-Staub", types: &[pp::PARTICLE_DUST], spawn: SpawnKind::Lingering, can_be_own: false },
+    ParticleKind { key: "damage_indicator", label: "Schadensherzen", types: &[pp::PARTICLE_DAMAGE_INDICATOR], spawn: SpawnKind::Burst, can_be_own: true },
+    ParticleKind { key: "sweep", label: "Schwungangriff", types: &[pp::PARTICLE_SWEEP_ATTACK], spawn: SpawnKind::Single, can_be_own: true },
+    ParticleKind { key: "sculk_soul", label: "Sculk-Seele", types: &[pp::PARTICLE_SCULK_SOUL], spawn: SpawnKind::Burst, can_be_own: false },
+    ParticleKind { key: "totem", label: "Totem", types: &[pp::PARTICLE_TOTEM_OF_UNDYING], spawn: SpawnKind::BurstEmitter, can_be_own: true },
     // Die Wolke eines zerplatzenden Wurf- oder Verweiltranks (effect/instant_effect) -- ein
     // Schwall auf ein Ereignis, anders als die Wirbel darunter.
     ParticleKind {
@@ -214,19 +342,27 @@ pub const KINDS: [ParticleKind; 20] = [
         label: "Trank-Spritzer",
         types: &[pp::PARTICLE_EFFECT, pp::PARTICLE_INSTANT_EFFECT],
         spawn: SpawnKind::Burst,
+        can_be_own: true,
     },
     // Die Wirbel um Wesen mit Effekten und ueber Trankwolken am Boden: laufend, solange der
     // Effekt haelt. Der Schluessel stammt aus der Zeit, als die Spritzer noch dazugehoerten.
-    ParticleKind { key: "potion", label: "Trankeffekte", types: &[pp::PARTICLE_ENTITY_EFFECT], spawn: SpawnKind::Lingering },
-    ParticleKind { key: "enchanted_hit", label: "Verzauberungs-Treffer", types: &[pp::PARTICLE_ENCHANTED_HIT], spawn: SpawnKind::BurstEmitter },
+    ParticleKind { key: "potion", label: "Trankeffekte", types: &[pp::PARTICLE_ENTITY_EFFECT], spawn: SpawnKind::Lingering, can_be_own: true },
+    ParticleKind { key: "enchanted_hit", label: "Verzauberungs-Treffer", types: &[pp::PARTICLE_ENCHANTED_HIT], spawn: SpawnKind::BurstEmitter, can_be_own: true },
     ParticleKind {
         key: "gust",
         label: "Windböe",
         types: &[pp::PARTICLE_GUST, pp::PARTICLE_SMALL_GUST, pp::PARTICLE_GUST_EMITTER_LARGE, pp::PARTICLE_GUST_EMITTER_SMALL],
         spawn: SpawnKind::BurstEmitter,
+        can_be_own: true,
     },
-    ParticleKind { key: "cloud", label: "Wolke", types: &[pp::PARTICLE_CLOUD, pp::PARTICLE_SNEEZE], spawn: SpawnKind::Burst },
+    ParticleKind { key: "cloud", label: "Wolke", types: &[pp::PARTICLE_CLOUD, pp::PARTICLE_SNEEZE], spawn: SpawnKind::Burst, can_be_own: false },
 ];
+
+// Die Arten einer Anpassung mit ihrem Index in KINDS: fuer die eigenen nur die, die an der
+// eigenen Figur entstehen koennen.
+pub fn particle_kinds_for_own(own: bool) -> Vec<(usize, &'static ParticleKind)> {
+    KINDS.iter().enumerate().filter(|(_, k)| !own || k.can_be_own).collect()
+}
 
 fn kind_of(type_id: i32) -> Option<usize> {
     KINDS.iter().position(|k| k.types.contains(&type_id))
@@ -244,16 +380,36 @@ pub struct ParticleTuning {
     pub speed_pct: u32,
     pub amount_pct: u32,
     pub interval_pct: u32,
+    pub size_pct: u32,
+    pub spread_pct: u32,
     pub all_at_once: bool,
 }
 
 impl Default for ParticleTuning {
     fn default() -> Self {
-        Self { enabled: true, lifetime_pct: 100, opacity_pct: 100, speed_pct: 100, amount_pct: 100, interval_pct: 100, all_at_once: false }
+        Self {
+            enabled: true,
+            lifetime_pct: 100,
+            opacity_pct: 100,
+            speed_pct: 100,
+            amount_pct: 100,
+            interval_pct: 100,
+            size_pct: 100,
+            spread_pct: 100,
+            all_at_once: false,
+        }
     }
 }
 
 impl ParticleTuning {
+    pub fn size(&self) -> f32 {
+        self.size_pct.max(1) as f32 / 100.0
+    }
+
+    pub fn spread(&self) -> f32 {
+        self.spread_pct.max(1) as f32 / 100.0
+    }
+
     fn speed(&self) -> f32 {
         self.speed_pct.max(1) as f32 / 100.0
     }
@@ -370,6 +526,11 @@ struct Particle {
     // Angebrochener Tick bei Tempo != 100 % (s. Particles::tick): wie weit der Partikel seit
     // seinem letzten eigenen Tick schon ist, in seinen Ticks.
     phase: f32,
+    // Erst gezeichnet, wenn er sich einmal bewegt hat (age >= 1): Totem-Partikel (Nutzer
+    // 2026-11-11). Neue Partikel stehen bis zu ihrem ersten eigenen Tick am Startpunkt -- das
+    // ist ein, bei Tempo unter 100 % zwei Spielticks --, und die ganze Wolke stand dort als
+    // Klumpen am Spieler.
+    hide_until_moved: bool,
 }
 
 impl Particle {
@@ -411,6 +572,7 @@ impl Particle {
             own: false,
             type_id: -1,
             phase: 0.0,
+            hide_until_moved: false,
         }
     }
 
@@ -519,6 +681,23 @@ impl Particle {
         }
     }
 
+    // Rueckstoss einer Explosion (s. ExplosionPush). Nur Partikel mit gewoehnlicher Physik --
+    // die uebrigen ziehen ihre eigene Bahn. Ein gelandeter liegt nur und fliegt wieder los.
+    // true = gestossen; der Aufrufer laesst ihn dann gleich seinen ersten Schritt machen (s.
+    // Particles::push_and_step).
+    fn explosion_knockback(&mut self, push: &mut ExplosionPush) -> bool {
+        if self.behavior != Behavior::Physics {
+            return false;
+        }
+        let Some(stoss) = push.at(self.pos) else { return false };
+        self.vel += stoss;
+        if self.landed {
+            self.stopped = false;
+            self.landed = false;
+        }
+        true
+    }
+
     // Particle.tick.
     fn tick_physics(&mut self, world: &world::World, shapes: &world::BlockShapes) {
         self.last = self.pos;
@@ -559,6 +738,50 @@ fn in_water(world: &world::World, pos: DVec3) -> bool {
     world::fluid_kind(state) == Some(world::FluidKind::Water)
 }
 
+// Wie viele Bilder einer Reihe vor den durchsichtigen am Ende liegen. Manche Packs (etwa
+// "cpvp aesthetic" fuers Totem) leeren die letzten Bilder, damit die Animation kuerzer wirkt;
+// dort endet der Partikel fuers Auge schon beim ersten leeren Bild (s. Particles::visible_end).
+// Durchsichtig heisst: kein Pixel kommt ueber die Schwelle des Shaders (Alpha 0,1).
+fn visible_frames(list: &[[f32; 4]], rgba: &[u8], size: u32) -> usize {
+    let leer = |&[u0, v0, u1, v1]: &[f32; 4]| {
+        let px = |t: f32| ((t * size as f32).round() as usize).min(size as usize);
+        let (x0, x1, y0, y1) = (px(u0.min(u1)), px(u0.max(u1)), px(v0.min(v1)), px(v0.max(v1)));
+        (y0..y1).all(|y| (x0..x1).all(|x| rgba.get((y * size as usize + x) * 4 + 3).is_none_or(|&a| a < 26)))
+    };
+    list.len() - list.iter().rev().take_while(|uv| leer(uv)).count()
+}
+
+// Das Rechteck der bemalten Pixel (Alpha ueber der Schwelle des Shaders) eines Bildes als
+// Anteil (links, oben, rechts, unten) in Richtung u0->u1 und v0->v1. None ohne bemalte Pixel.
+fn painted_bounds([u0, v0, u1, v1]: [f32; 4], rgba: &[u8], size: u32) -> Option<[f32; 4]> {
+    let px = |t: f32| ((t * size as f32).round() as usize).min(size as usize);
+    let (x0, x1, y0, y1) = (px(u0.min(u1)), px(u0.max(u1)), px(v0.min(v1)), px(v0.max(v1)));
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let mut bereich: Option<[usize; 4]> = None;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if rgba.get((y * size as usize + x) * 4 + 3).is_some_and(|&a| a >= 26) {
+                let b = bereich.get_or_insert([x, y, x, y]);
+                *b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+            }
+        }
+    }
+    let [bx0, by0, bx1, by1] = bereich?;
+    let (w, h) = ((x1 - x0) as f32, (y1 - y0) as f32);
+    // Pixelkanten als Anteil; bei gespiegeltem UV von der anderen Seite gezaehlt.
+    let (mut l, mut r) = ((bx0 - x0) as f32 / w, (bx1 + 1 - x0) as f32 / w);
+    let (mut o, mut un) = ((by0 - y0) as f32 / h, (by1 + 1 - y0) as f32 / h);
+    if u1 < u0 {
+        (l, r) = (1.0 - r, 1.0 - l);
+    }
+    if v1 < v0 {
+        (o, un) = (1.0 - un, 1.0 - o);
+    }
+    Some([l, o, r, un])
+}
+
 // SpriteProvider.getSprite(age, maxAge).
 fn sprite_by_age(list: &[[f32; 4]], age: i32, max_age: i32) -> [f32; 4] {
     if list.is_empty() {
@@ -573,6 +796,18 @@ struct Emitter {
     effect: ParticleEffect,
     age: i32,
     max_age: i32,
+    // Seit dem letzten Partikel-Tick entstanden? Ein Totem-Pop durch eine Explosion kommt im
+    // selben Server-Tick an wie sie, aber VOR ihr (ServerLevel.explode verletzt erst und
+    // schickt dann das Explosionspaket).
+    fresh: bool,
+    // Die Explosion (Zentrum, Radius), die diesen Emitter ausgeloest hat: jeder seiner
+    // Partikel bekommt ihren Stoss mit, auch die, die erst Ticks spaeter entstehen (Nutzer
+    // 2026-11-11 -- sonst sammelte sich die Totem-Wolke 1,5 s lang ungestossen am Spieler).
+    explosion: Option<(DVec3, f32)>,
+    // Gehoert der Emitter zur eigenen Figur? Dann sind seine Partikel eigene, sonst nicht --
+    // unabhaengig davon, wo sie entstehen (ein Krit am Gegner direkt neben einem war frueher
+    // ein eigener).
+    own: bool,
 }
 
 // BlockParticleEffectsManager.Entry.
@@ -614,8 +849,9 @@ const OWN_MARGIN: f64 = 0.5;
 
 // "Eigene" Partikel: die an der eigenen Figur entstehen. Der Server sagt nicht, wem ein
 // Partikel gilt -- es zaehlt der Ort, an dem es entsteht.
-fn own_at(ctx: &SpawnContext, pos: DVec3) -> bool {
-    ctx.player.is_some_and(|me| {
+fn own_at(ctx: &SpawnContext, kind: usize, pos: DVec3) -> bool {
+    KINDS[kind].can_be_own
+        && ctx.player.is_some_and(|me| {
         let d = pos - me.pos;
         d.x.abs() <= 0.3 + OWN_MARGIN && d.z.abs() <= 0.3 + OWN_MARGIN && d.y >= -OWN_MARGIN && d.y <= 1.8 + OWN_MARGIN
     })
@@ -632,6 +868,14 @@ pub struct Particles {
     // Sprites je Partikeltyp (Index = Registry-ID), in JSON-Reihenfolge (s.
     // assets::ParticleAtlas).
     sprites: Vec<Vec<[f32; 4]>>,
+    // Je Partikeltyp: wie viele Bilder vor den durchsichtigen am Ende der Reihe liegen (s.
+    // visible_frames). Leer oder >= Anzahl: keine leeren am Ende.
+    visible_frames: Vec<usize>,
+    // Je Bild im Partikel-Atlas (Schluessel: die UV-Bits): das Rechteck der bemalten Pixel als
+    // Anteil des Bildes (links, oben, rechts, unten; 0..1 in Richtung u0->u1 bzw. v0->v1). Daraus
+    // Kollisionsbox und Bildlage (s. fit_painted_box, build_vertices) -- als Anteil, damit es
+    // mit hochaufgeloesten Packs genauso stimmt.
+    painted: HashMap<[u32; 4], [f32; 4]>,
     // Partikeltextur je Blockname im BLOCK-Atlas (assets::BlockAtlas::particle_uvs).
     block_uvs: HashMap<String, [f32; 4]>,
     // Splitterbild je Itemname im Partikel-Atlas (s. assets::ParticleAtlas::item_sprites).
@@ -655,6 +899,16 @@ pub struct Particles {
     // es entstehen so viele, wie ganze Einheiten zusammenkommen. So ergeben 50 % genau jedes
     // zweite, auch wenn je Ereignis nur eins kommt. Wie `tuning` je andere/eigene.
     credit: [[f32; KINDS.len()]; 2],
+    // Waehrend ein Emitter ausstoesst (s. tick_emitter): ob seine Partikel eigene sind, und ob
+    // er die Menge schon selbst vervielfacht hat (dann keine Kopien in push).
+    emit_own: Option<bool>,
+    emit_scaled: bool,
+    // Partikel ausblenden (Video): so viele ms vor ihrem Ende werden sie durchsichtig, 0 = aus
+    // (s. fade_out).
+    pub fade_out_ms: u32,
+    // Bis zu dieser Entfernung (Bloecke) um die Kamera entstehen Partikel ohne `force`
+    // (Settings::particle_distance, Vanilla 32).
+    pub spawn_distance: f64,
 }
 
 impl Particles {
@@ -663,6 +917,8 @@ impl Particles {
         let mut me = Self {
             rng: JavaRandom::new(seed),
             sprites: Vec::new(),
+            visible_frames: Vec::new(),
+            painted: HashMap::default(),
             block_uvs: HashMap::default(),
             item_uvs: HashMap::default(),
             particles: VecDeque::new(),
@@ -673,6 +929,10 @@ impl Particles {
             new_unsupported: Vec::new(),
             tuning: [[ParticleTuning::default(); KINDS.len()]; 2],
             credit: [[0.0; KINDS.len()]; 2],
+            emit_own: None,
+            emit_scaled: false,
+            fade_out_ms: 0,
+            spawn_distance: VANILLA_SPAWN_DISTANCE,
         };
         me.set_textures(atlas, block_uvs);
         me
@@ -682,6 +942,8 @@ impl Particles {
     // altes UV bis zum naechsten Bildwechsel -- das sind hoechstens ein paar Ticks.
     pub fn set_textures(&mut self, atlas: &assets::ParticleAtlas, block_uvs: HashMap<String, [f32; 4]>) {
         self.sprites = pp::PARTICLE_NAMES.iter().map(|n| atlas.sprites(n).to_vec()).collect();
+        self.visible_frames = self.sprites.iter().map(|list| visible_frames(list, &atlas.rgba, atlas.size)).collect();
+        self.painted = self.sprites.iter().flatten().filter_map(|&uv| painted_bounds(uv, &atlas.rgba, atlas.size).map(|b| (uv.map(f32::to_bits), b))).collect();
         self.block_uvs = block_uvs;
         self.item_uvs = atlas.item_sprites().map(|(item, uv)| (item.to_string(), uv)).collect();
     }
@@ -779,13 +1041,13 @@ impl Particles {
     // Explosion sind Rauch und Woelkchen, gehoeren aber zur Explosion).
     #[allow(clippy::too_many_arguments)]
     fn add_client_as(&mut self, kind: usize, effect: &ParticleEffect, force: bool, important: bool, pos: DVec3, vel: DVec3, ctx: &SpawnContext) {
-        let own = own_at(ctx, pos);
+        let own = self.emit_own.unwrap_or_else(|| own_at(ctx, kind, pos));
         if !self.tuning_of(own, kind).enabled {
             return;
         }
         let force = force || pp::particle_always_spawns(effect.type_id);
         let mode = self.effective_mode(ctx.mode_for(own), important);
-        if !force && (ctx.camera.distance_squared(pos) > MAX_SPAWN_DISTANCE_SQ || mode == ParticleMode::Minimal) {
+        if !force && (ctx.camera.distance_squared(pos) > self.spawn_distance * self.spawn_distance || mode == ParticleMode::Minimal) {
             return;
         }
         if let Some(mut p) = self.create(effect, pos, vel, ctx) {
@@ -830,18 +1092,24 @@ impl Particles {
     // ihre Dauer bliebe sonst nicht die Dauer eines Partikels, sondern die Menge, die sie
     // ausstossen.
     fn push(&mut self, mut p: Particle, kind: usize, ctx: &SpawnContext) {
-        p.own = own_at(ctx, p.pos);
+        p.own = self.emit_own.unwrap_or_else(|| own_at(ctx, kind, p.pos));
         let t = self.tuning_of(p.own, kind);
         if !t.enabled {
             return;
+        }
+        // Spread: der Anfangsschwung -- bei mehr fliegen die Partikel weiter auseinander.
+        if t.spread_pct != 100 && p.behavior.renders() {
+            p.vel *= f64::from(t.spread());
         }
         if t.lifetime_pct != 100 && p.behavior.renders() {
             p.max_age = ((p.max_age as f32 * t.lifetime_pct as f32 / 100.0).round() as i32).max(1);
         }
         p.kind = kind as u8;
+        p.hide_until_moved = kind_of(pp::PARTICLE_TOTEM_OF_UNDYING) == Some(kind);
         // Menge/Intervall nur fuer sichtbare Partikel -- ein Emitter, der wegfiele, nahme
-        // seinen ganzen Ausstoss mit.
-        let n = if p.behavior.renders() { self.spawn_count(p.own, kind) } else { 1 };
+        // seinen ganzen Ausstoss mit. Hat ein Emitter die Menge schon selbst vervielfacht
+        // (jedes mit eigener Richtung), keine Kopien mehr.
+        let n = if !p.behavior.renders() || self.emit_scaled { 1 } else { self.spawn_count(p.own, kind) };
         for _ in 1..n {
             // Mehr als Vanilla: leicht gestreute Kopien, sonst laegen sie genau aufeinander.
             let mut kopie = p.clone();

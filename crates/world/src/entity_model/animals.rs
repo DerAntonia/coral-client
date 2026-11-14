@@ -397,6 +397,16 @@ impl CapeState {
         self.last_movement + (self.movement - self.last_movement) * tick_progress
     }
 
+    #[must_use]
+    pub const fn distance_moved(&self) -> f32 {
+        self.distance_moved
+    }
+
+    #[must_use]
+    pub const fn last_distance_moved(&self) -> f32 {
+        self.last_distance_moved
+    }
+
     #[must_use] 
     pub fn lerp_distance_moved(&self, tick_progress: f32) -> f32 {
         self.last_distance_moved + (self.distance_moved - self.last_distance_moved) * tick_progress

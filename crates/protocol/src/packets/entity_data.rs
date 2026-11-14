@@ -388,6 +388,8 @@ pub struct EntityDataUpdate {
     pub minecart_block: Option<Option<u32>>,
     pub minecart_offset: Option<i32>,
     pub minecart_fuel: Option<bool>,
+    // Diagnose: Index und Fehler, wenn ein Item-Stack nicht lesbar war (Strom bricht dort ab).
+    pub item_error: Option<String>,
 }
 
 // Sicherheitsdeckel gegen einen Strom ohne Endmarke.
@@ -638,7 +640,13 @@ pub fn read_set_entity_data(payload: &[u8]) -> Result<EntityDataUpdate, ReadErro
                 // Ein Component, den dieser Client nicht kennt, macht die Leseposition
                 // unbrauchbar -- dann bricht der Strom hier ab wie bei einem unbekannten
                 // Serializer, statt danach Muell zu lesen.
-                let Ok(stack) = crate::item::read_optional_slot(&mut r) else { break };
+                let stack = match crate::item::read_optional_slot(&mut r) {
+                    Ok(stack) => stack,
+                    Err(e) => {
+                        out.item_error = Some(format!("Index {index}: {e:?}"));
+                        break;
+                    }
+                };
                 if index == DISPLAY_INDEX_CONTENT {
                     out.display_item = Some(stack);
                 } else if index == ENTITY_INDEX_ITEM {

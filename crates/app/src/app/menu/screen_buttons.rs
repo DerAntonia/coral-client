@@ -223,6 +223,7 @@ impl App {
                 "Einstellungen",
                 UI_SCALE_NORMAL,
             ));
+            out.push(Self::nav_button(ButtonAction::Quit, pause_button(2, screen_w), "Beenden", UI_SCALE_NORMAL));
         } else {
             // Esc-Pausemenue (verbunden/verbindend): HUD-Editor, Disconnect,
             // Einstellungen. Reconnect steckt weiterhin im Connect-Pfad, ist hier
@@ -237,9 +238,17 @@ impl App {
             out.push(Self::nav_button(ButtonAction::Disconnect, zeile(2), "Disconnect", UI_SCALE_NORMAL));
             out.push(Self::nav_button(ButtonAction::Reconnect, zeile(3), "Reconnect", UI_SCALE_NORMAL));
             // Links des Servers (Vanillas "Server-Links..."), nur wenn er welche schickt.
-            if !self.server_links.is_empty() {
-                out.push(Self::nav_button(ButtonAction::ServerLinks, zeile(4), "Server-Links", UI_SCALE_NORMAL));
+            let mut naechste = 4;
+            // Wie Vanilla (PauseScreen.getCustomAdditions): ein Dialog des Servers im Tag
+            // pause_screen_additions ersetzt den Links-Knopf, beschriftet mit seinem Titel.
+            if let Some((_, titel)) = self.pause_dialog() {
+                out.push(Self::nav_button(ButtonAction::PauseDialog, zeile(naechste), &titel, UI_SCALE_NORMAL));
+                naechste += 1;
+            } else if !self.server_links.is_empty() {
+                out.push(Self::nav_button(ButtonAction::ServerLinks, zeile(naechste), "Server-Links", UI_SCALE_NORMAL));
+                naechste += 1;
             }
+            out.push(Self::nav_button(ButtonAction::Quit, zeile(naechste), "Beenden", UI_SCALE_NORMAL));
         }
     }
 
@@ -247,6 +256,13 @@ impl App {
         out.push(Self::nav_button(ButtonAction::Back, BACK_BUTTON, "← Zurück", UI_SCALE_SMALL));
         let set = &self.settings;
         out.push(Self::toggle(ButtonAction::ToggleTearing, TEARING_TEST_ROW, set.show_tearing_test));
+        // Render-Order: ein Schalter je Zelle der Tabelle (s. render_order).
+        for zeile in 0..crate::render_order::ROWS {
+            for spalte in (0..crate::render_order::COLS).filter(|&s| crate::render_order::RenderOrderTable::has_cell(zeile, s)) {
+                let rect = crate::render_order_cell_rect(zeile, spalte);
+                out.push(Button { rect, ..Self::toggle(ButtonAction::ToggleRenderOrder(zeile as u8, spalte as u8), crate::RENDER_ORDER_FIRST_ROW + zeile, set.render_order.get(zeile, spalte)) });
+            }
+        }
         // Die FPS-Anzeige schaltet man im HUD-Editor (Rechtsklick auf sie).
         // Render-Ahead: feste Grenzen, s. FRAME_LATENCY_MIN/MAX.
         out.extend(Self::stepper(
@@ -291,6 +307,7 @@ impl App {
         let modi: Vec<_> = ENTITY_CULLING_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::SetEntityCulling(i as u8), stufe == i)).collect();
         out.extend(pick_buttons(settings_wide_rect(ENTITY_CULLING_ROW), &modi, true));
         out.push(Self::toggle(ButtonAction::ToggleMipmapping, MIPMAPPING_ROW, set.mipmapping));
+        out.push(Self::step_slider(ButtonAction::MipSharpnessDown, ButtonAction::MipSharpnessUp, mip_sharpness_value_rect(), f64::from(set.mip_sharpness_pct), 0.0, f64::from(MIP_SHARPNESS_MAX), true));
         // Motion Blur: Welt, Entities und Hand auf der Unterseite (hervorgehoben, sobald eins an ist).
         out.push(Button {
             action: ButtonAction::OpenMotionBlurSettings,
@@ -426,6 +443,7 @@ impl App {
         out.push(Self::toggle(ButtonAction::ToggleBlockRngRotation, BLOCK_ROTATION_ROW, set.block_rng_rotation));
         out.push(Self::toggle(ButtonAction::ToggleArmorTrims, ARMOR_TRIMS_ROW, set.armor_trims));
         out.push(Self::toggle(ButtonAction::ToggleViewModel, VIEW_MODEL_ROW, set.modified_view_model));
+        out.push(Self::toggle(ButtonAction::ToggleViewModelBobbing, VIEW_MODEL_BOB_ROW, set.view_model_bobbing));
         // Animationen: Hauptschalter, daneben die Auswahl (hervorgehoben, sobald sie vom
         // Standard abweicht, wie "Anpassen" bei den Partikeln).
         out.push(Self::toggle(ButtonAction::ToggleAnims, ANIM_ROW, set.anims_enabled));
@@ -445,7 +463,18 @@ impl App {
             set.max_render_distance > MAX_RENDER_DISTANCE_MIN,
             set.max_render_distance < MAX_RENDER_DISTANCE_MAX,
         ));
-        out.push(Self::step_slider(ButtonAction::ChunkSaverThresholdPrev, ButtonAction::ChunkSaverThresholdNext, stepper_value_rect(LOD_DETAIL_ROW), f64::from(set.chunk_saver_threshold), f64::from(lod::THRESHOLD_MIN), f64::from(lod::THRESHOLD_MAX), true));
+        out.push(Self::step_slider(
+            ButtonAction::ParticleDistanceDown,
+            ButtonAction::ParticleDistanceUp,
+            stepper_value_rect(PARTICLE_DISTANCE_ROW),
+            f64::from(set.particle_distance),
+            f64::from(PARTICLE_DISTANCE_MIN),
+            f64::from(PARTICLE_DISTANCE_MAX),
+            true,
+        ));
+        out.push(Self::step_slider(ButtonAction::ParticleFadeDown, ButtonAction::ParticleFadeUp, stepper_value_rect(PARTICLE_FADE_ROW), f64::from(set.particle_fade_out_ms), 0.0, f64::from(PARTICLE_FADE_MAX_MS), true));
+        out.push(Self::step_slider(ButtonAction::EntityNearDown, ButtonAction::EntityNearUp, stepper_value_rect(ENTITY_NEAR_ROW), f64::from(set.entity_near_dither_cm), 0.0, f64::from(ENTITY_NEAR_MAX_CM), true));
+        out.push(Self::step_slider(ButtonAction::ChunkFadeDown, ButtonAction::ChunkFadeUp, stepper_value_rect(CHUNK_FADE_ROW), f64::from(set.chunk_fade_ms), 0.0, f64::from(CHUNK_FADE_MAX_MS), true));
         // Crit-Farbe: Schalter, rechts daneben das Farbfeld (dieselben vier Achsen wie
         // die Schadens-Faerbung).
         out.push(Self::toggle(ButtonAction::ToggleHurtCam, HURT_CAM_ROW, set.hurt_cam));
@@ -507,6 +536,25 @@ impl App {
             modus.label(),
             UI_SCALE_SMALL,
         ));
+        if modus == wallpaper::WallpaperMode::Panorama {
+            if let Some(name) = crate::panorama::chosen_skin(&self.settings.panorama_skin) {
+                out.push(Self::nav_button(
+                    ButtonAction::OpenChoice(Choice::PanoramaSkin),
+                    Rect { x: WALLPAPER_PICK_X, y: settings_row_y(WALLPAPER_ROW), w: 320.0, h: SETTINGS_CTRL_H },
+                    &name,
+                    UI_SCALE_SMALL,
+                ));
+            }
+        }
+        out.push(Self::step_slider(
+            ButtonAction::PanoramaSpeedPrev,
+            ButtonAction::PanoramaSpeedNext,
+            stepper_value_rect(PANORAMA_SPEED_ROW),
+            f64::from(self.settings.panorama_speed),
+            f64::from(crate::panorama::SPEED_MIN),
+            f64::from(crate::panorama::SPEED_MAX),
+            modus == wallpaper::WallpaperMode::Panorama,
+        ));
         if modus == wallpaper::WallpaperMode::File {
             let text = if self.wallpaper_loader.picking() { "Dialog offen..." } else { "Bild wählen..." };
             out.push(Self::nav_button(
@@ -554,34 +602,28 @@ impl App {
             slider: None,
         };
         let own = self.particle_screen_own;
-        for (i, y) in header_list_rows_smooth(particles::KINDS.len(), self.particle_scroll.stand, self.particle_visible_rows()) {
-            let t = self.settings.particle_tuning_of(own)[i];
-            let art = particles::KINDS[i].spawn;
-            out.push(schalter(ButtonAction::ParticleToggle(own, i), PARTICLE_TOGGLE_X, y, t.enabled));
-            let mut regler = vec![
-                (t.lifetime_pct, PARTICLE_LIFETIME_STEPS[0], *PARTICLE_LIFETIME_STEPS.last().unwrap()),
-                (t.opacity_pct, PARTICLE_OPACITY_STEP, 100),
-                (t.speed_pct, PARTICLE_SPEED_STEPS[0], *PARTICLE_SPEED_STEPS.last().unwrap()),
-            ];
-            if art.has_amount() {
-                regler.push((t.amount_pct, PARTICLE_AMOUNT_STEPS[0], *PARTICLE_AMOUNT_STEPS.last().unwrap()));
-            } else if art.has_interval() {
-                regler.push((t.interval_pct, PARTICLE_INTERVAL_STEPS[0], *PARTICLE_INTERVAL_STEPS.last().unwrap()));
+        for (i, (orig_i, kind)) in self.particle_kinds().into_iter().enumerate() {
+            let t = self.settings.particle_tuning_of(own)[orig_i];
+            // Je Art zwei Zeilen (s. particle_slider_rows): oben Zeigen, unten Auf einmal.
+            let (y1, y2) = (settings_row_y(2 * i), settings_row_y(2 * i + 1));
+            out.push(schalter(ButtonAction::ParticleToggle(own, orig_i), PARTICLE_TOGGLE_X, y1, t.enabled));
+            if kind.spawn.has_all_at_once() {
+                out.push(schalter(ButtonAction::ParticleAllAtOnce(own, orig_i), PARTICLE_TOGGLE_X, y2, t.all_at_once));
             }
-            for (col, (wert, min, max)) in regler.into_iter().enumerate() {
-                let b = Self::step_slider(
-                    ButtonAction::ParticleStep(own, i, col as u8, false),
-                    ButtonAction::ParticleStep(own, i, col as u8, true),
-                    Rect { y, ..particle_value_rect(col, 0) },
-                    f64::from(wert),
-                    f64::from(min),
-                    f64::from(max),
-                    true,
-                );
-                out.push(Self::slider_with_track(b, PARTICLE_TRACK_W));
-            }
-            if art.has_all_at_once() {
-                out.push(schalter(ButtonAction::ParticleAllAtOnce(own, i), particle_column_x(PARTICLE_ALL_AT_ONCE_COL), y, t.all_at_once));
+            for (zeile, regler) in particle_slider_rows(&t, kind.spawn).into_iter().enumerate() {
+                for (col, r) in regler.into_iter().enumerate() {
+                    let Some(r) = r else { continue };
+                    let b = Self::step_slider(
+                        ButtonAction::ParticleStep(own, orig_i, r.action_col, false),
+                        ButtonAction::ParticleStep(own, orig_i, r.action_col, true),
+                        particle_value_rect(col, 2 * i + zeile),
+                        f64::from(r.value),
+                        f64::from(r.min),
+                        f64::from(r.max),
+                        true,
+                    );
+                    out.push(Self::slider_with_track(b, PARTICLE_TRACK_W));
+                }
             }
         }
     }
@@ -756,6 +798,24 @@ impl App {
                     f64::from(CURSOR_WIDTH_MAX),
                     true,
                 )),
+                ControlsRow::CursorOutline => out.push(Self::step_slider(
+                    ButtonAction::CursorOutlineDown,
+                    ButtonAction::CursorOutlineUp,
+                    stepper_value_rect(row),
+                    f64::from(set.cursor_outline),
+                    0.0,
+                    f64::from(CURSOR_OUTLINE_MAX),
+                    true,
+                )),
+                ControlsRow::CursorFill => out.push(Self::step_slider(
+                    ButtonAction::CursorFillDown,
+                    ButtonAction::CursorFillUp,
+                    stepper_value_rect(row),
+                    f64::from(set.cursor_fill_transparency),
+                    0.0,
+                    100.0,
+                    true,
+                )),
                 ControlsRow::CursorCircle => out.push(Self::toggle(ButtonAction::ToggleCursorCircle, row, set.cursor_circle)),
                 ControlsRow::SneakProtection => out.push(Self::toggle(ButtonAction::ToggleSneakEdgeProtection, row, set.sneak_edge_protection_enabled)),
                 ControlsRow::SnapTap => out.push(Self::toggle(ButtonAction::ToggleSnapTap, row, set.snap_tap_enabled)),
@@ -772,12 +832,12 @@ impl App {
                 // neu, Rechtsklick entfernt sie (s. window_event). Daneben H/T, beim
                 // Warten stattdessen "Erweitert" fuer weitere Belegungen.
                 ControlsRow::Bind(aktion) => {
-                    let wartet = self.awaiting_keybind == Some((aktion, 0));
+                    let wartet = self.awaiting_keybind == Some((aktion, 0)) && !self.awaiting_modifier;
                     let kb = &set.keybinds;
-                    let text = match kb.bind_at(aktion, 0) {
+                    let text = match slot_display(kb, aktion, 0) {
                         _ if wartet => "> Taste/Maus <".to_string(),
-                        Some(b) if kb.count(aktion) > 1 => format!("{}  +{}", bind_display(b), kb.count(aktion) - 1),
-                        Some(b) => bind_display(b),
+                        Some(b) if kb.count(aktion) > 1 => format!("{b}  +{}", kb.count(aktion) - 1),
+                        Some(b) => b,
                         None => String::new(),
                     };
                     let mut knopf = Self::nav_button(ButtonAction::Rebind(aktion, 0), keybind_rect(row), &text, UI_SCALE_SMALL);
@@ -882,6 +942,15 @@ impl App {
                                 true,
                             ));
                         }
+                        out.push(Self::step_slider(
+                            ButtonAction::CrosshairRingRadiusPrev,
+                            ButtonAction::CrosshairRingRadiusNext,
+                            stepper_value_rect(zeile + 2),
+                            f64::from(self.settings.crosshair_ring_radius),
+                            f64::from(SHIELD_RING_RADIUS_MIN_PX),
+                            f64::from(SHIELD_RING_RADIUS_MAX_PX),
+                            true,
+                        ));
                     }
                     HudElement::Hotbar => {
                         let scale = self.settings.hud_hotbar_scale;
@@ -1055,6 +1124,17 @@ impl App {
                             true,
                         ));
                     }
+                    HudElement::Clock => {
+                        out.push(Self::step_slider(
+                            ButtonAction::HudScaleStep(element, false),
+                            ButtonAction::HudScaleStep(element, true),
+                            stepper_value_rect(0),
+                            f64::from(self.settings.hud_clock_scale),
+                            f64::from(HUD_SCALE_PCT_MIN),
+                            f64::from(HUD_SCALE_PCT_MAX),
+                            true,
+                        ));
+                    }
                     HudElement::Armor => {
                         let set = &self.settings;
                         out.push(Self::soft_end(Self::step_slider(
@@ -1133,6 +1213,9 @@ impl App {
                             pct > HUD_SCALE_PCT_MIN,
                             pct < HUD_SCALE_PCT_MAX,
                         ));
+                        let ecke = self.settings.scoreboard_align;
+                        let wahl: Vec<_> = SCOREBOARD_ALIGNS.iter().enumerate().map(|(i, &name)| (name, ButtonAction::ScoreboardAlign(i as u8), ecke == i as u8)).collect();
+                        out.extend(pick_buttons(hud_config_pick_rect(SCOREBOARD_ALIGN_ROW), &wahl, true));
                     }
                     HudElement::ShieldCooldown => {
                         let stil = self.settings.shield_cd_text_style;

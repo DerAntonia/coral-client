@@ -1,6 +1,6 @@
 // Das Modul-Menue: Zeilen, Kacheln, Layout und Modul-Aktionen.
 
-use crate::{ego_name, toteming, App, ModuleRow, ShieldColor, ButtonAction, ModuleId, HitboxVariant, hsv_to_rgb, hitbox_kinds, ColorTarget, HITBOX_DENSITY_MIN, HITBOX_DENSITY_MAX, teams, ARROW_EMPTY_FEEDBACK_NAMES, TRAIL_HOLD_MAX_TENTHS, TRAIL_FADE_MAX_TENTHS, HudElement, session_info, pick_two, SHIELD_SELF_MODE_NAMES, ShieldMark, sky_time_label, SKY_TIME_DAY, SKY_TIME_STEP, SkyMode, precipitation, WeatherMode, COLOR_SATURATION_MAX, discord_rpc, BLOCK_OUTLINE_WIDTH_MIN, BLOCK_OUTLINE_WIDTH_MAX, VoiceKnob, VoiceFlag, voicechat, FREELOOK_VIEW_NAMES, ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX, ZOOM_SENS_MIN, ZOOM_SENS_MAX, EAT_HOLD_THROUGH_MAX, NO_TOOL_BREAK_MIN_RESERVE, NO_TOOL_BREAK_MAX_RESERVE, SATURATION_BAR_HEIGHT_MIN, SATURATION_BAR_HEIGHT_MAX, EGO_SPEED_MIN, EGO_SPEED_MAX, volume_text, AUTOCLICKER_CPS_MIN, AUTOCLICKER_CPS_MAX, LAG_DELAY_MAX_MS, GHOST_TOLERANCE_MIN_MS, GHOST_TOLERANCE_MAX_MS, GpuState, MODULE_DETAIL_PX_HEAD, MODULE_DETAIL_PX_FOOT, SETTINGS_ROW_H, MODULE_TILE_NAME_PX, SETTINGS_SCROLL_ROWS_PER_NOTCH, Rect, MODULE_DETAIL_PX_W, MODULE_DETAIL_PX_PAD, SETTINGS_FIRST_Y, SETTINGS_LABEL_X, AppMode, MenuScreen, ModuleDetailLayout, STEPPER_BTN_W, SETTINGS_CTRL_H, Button, UI_SCALE_SMALL, ModuleCategory, theme, pick_buttons, i18n, UiRect, UiText, TOGGLE_W, STEPPER_GAP, push_slider_unit, SliderKey, COLOR_GRID_LINE, styled_button, mix_color, HITBOX_DENSITY_STEP, ConnStatus, FREELOOK_VIEW_FRONT, ZOOM_FACTOR_STEP, ZOOM_SENS_STEP, EAT_HOLD_THROUGH_STEP, Instant, ARROW_OPACITY_STEP, ARROW_OPACITY_MIN, TRAIL_TENTHS_STEP, lod, COLOR_SATURATION_STEP, adjust_shield_color, ThemeNameDialog, text_field, EGO_ALIAS_MAX, NameDialogPurpose, GHOST_TOLERANCE_STEP_MS, LAG_DELAY_STEP_MS, adjust_sky_time, ui_sound};
+use crate::{ego_name, toteming, App, ModuleRow, ShieldColor, ButtonAction, ModuleId, HitboxVariant, hsv_to_rgb, hitbox_kinds, ColorTarget, HITBOX_DENSITY_MIN, HITBOX_DENSITY_MAX, teams, ARROW_EMPTY_FEEDBACK_NAMES, TRAIL_HOLD_MAX_TENTHS, TRAIL_FADE_MAX_TENTHS, HudElement, session_info, pick_two, SHIELD_SELF_MODE_NAMES, ShieldMark, sky_time_label, SKY_TIME_DAY, SKY_TIME_STEP, SkyMode, precipitation, WeatherMode, COLOR_SATURATION_MAX, discord_rpc, BLOCK_OUTLINE_WIDTH_MIN, BLOCK_OUTLINE_WIDTH_MAX, VoiceKnob, VoiceFlag, voicechat, FREELOOK_VIEW_NAMES, HITBOX_LINE_NAMES, HITBOX_LINES_OUTLINE, ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX, ZOOM_SENS_MIN, ZOOM_SENS_MAX, EAT_HOLD_THROUGH_MAX, NO_TOOL_BREAK_MIN_RESERVE, NO_TOOL_BREAK_MAX_RESERVE, SATURATION_BAR_HEIGHT_MIN, SATURATION_BAR_HEIGHT_MAX, EGO_SPEED_MIN, EGO_SPEED_MAX, volume_text, AUTOCLICKER_CPS_MIN, AUTOCLICKER_CPS_MAX, LAG_DELAY_MAX_MS, GHOST_TOLERANCE_MIN_MS, GHOST_TOLERANCE_MAX_MS, GpuState, MODULE_DETAIL_PX_HEAD, MODULE_DETAIL_PX_FOOT, SETTINGS_ROW_H, MODULE_TILE_NAME_PX, SETTINGS_SCROLL_ROWS_PER_NOTCH, Rect, MODULE_DETAIL_PX_W, MODULE_DETAIL_PX_PAD, SETTINGS_FIRST_Y, SETTINGS_LABEL_X, AppMode, MenuScreen, ModuleDetailLayout, STEPPER_BTN_W, SETTINGS_CTRL_H, Button, UI_SCALE_SMALL, ModuleCategory, theme, pick_buttons, i18n, UiRect, UiText, TOGGLE_W, STEPPER_GAP, push_slider_unit, SliderKey, COLOR_GRID_LINE, styled_button, mix_color, HITBOX_DENSITY_STEP, ConnStatus, FREELOOK_VIEW_FRONT, ZOOM_FACTOR_STEP, ZOOM_SENS_STEP, EAT_HOLD_THROUGH_STEP, Instant, ARROW_OPACITY_STEP, ARROW_OPACITY_MIN, TRAIL_TENTHS_STEP, lod, COLOR_SATURATION_STEP, adjust_shield_color, ThemeNameDialog, text_field, EGO_ALIAS_MAX, NameDialogPurpose, GHOST_TOLERANCE_STEP_MS, LAG_DELAY_STEP_MS, adjust_sky_time, ui_sound};
 
 impl App {
     // Der Hauptschalter des gerade gezeigten Moduls. Er steht ZWEIMAL im Menue: klein am
@@ -80,6 +80,9 @@ impl App {
             }
             ModuleId::Keystrokes => {
                 rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Keystrokes), text: "Im HUD-Editor".to_string() });
+            }
+            ModuleId::Clock => {
+                rows.push(ModuleRow::Choice { label: "Aussehen".to_string(), action: ButtonAction::OpenHudConfig(HudElement::Clock), text: "Im HUD-Editor".to_string() });
             }
             ModuleId::SessionInfo => {
                 for (bit, label) in session_info::LINES {
@@ -206,6 +209,32 @@ impl App {
                 rows.extend(self.toteming_rows(self.module_menu_selected));
             }
             ModuleId::CrystalOptimizer | ModuleId::UseTimer | ModuleId::BotcheckPass | ModuleId::DynamicFire | ModuleId::ShowMarkers | ModuleId::SoundDebug | ModuleId::HandDebug | ModuleId::ConnectionDebug | ModuleId::FpsDisplay | ModuleId::Effects | ModuleId::InputLog | ModuleId::CoralRecord => {}
+            ModuleId::CoralClip => {
+                // Dieselbe Belegung wie in der Steuerung (Ansicht): Klick wartet auf Taste oder Maus.
+                let wartet = self.awaiting_keybind == Some((crate::KeyBindAction::SaveClip, 0)) && !self.awaiting_modifier;
+                let taste = if wartet { "> Taste/Maus <".to_string() } else { crate::slot_display(&set.keybinds, crate::KeyBindAction::SaveClip, 0).unwrap_or_else(|| "nicht belegt".to_string()) };
+                rows.push(ModuleRow::Choice { label: "Taste".to_string(), action: ButtonAction::Rebind(crate::KeyBindAction::SaveClip, 0), text: taste });
+                rows.push(ModuleRow::Stepper {
+                    label: "Clipdauer Minimum".to_string(),
+                    prev: ButtonAction::ClipSecondsPrev,
+                    next: ButtonAction::ClipSecondsNext,
+                    text: format!("{} s", set.clip_seconds),
+                    can_prev: set.clip_seconds > crate::CLIP_SECONDS_MIN,
+                    can_next: set.clip_seconds < crate::CLIP_SECONDS_MAX,
+                    slider: Some((f64::from(set.clip_seconds), f64::from(crate::CLIP_SECONDS_MIN), f64::from(crate::CLIP_SECONDS_MAX))),
+                });
+                // Je Dauer so viele Haltepunkte: der Clip wird hoechstens um einen Abstand laenger.
+                let abstand = f64::from(set.clip_seconds) / f64::from(set.clip_checkpoints.max(1));
+                rows.push(ModuleRow::Stepper {
+                    label: "Haltepunkte je Dauer".to_string(),
+                    prev: ButtonAction::ClipCheckpointsPrev,
+                    next: ButtonAction::ClipCheckpointsNext,
+                    text: format!("{} (alle {:.1} s)", set.clip_checkpoints, abstand.max(1.0)),
+                    can_prev: set.clip_checkpoints > crate::CLIP_CHECKPOINTS_MIN,
+                    can_next: set.clip_checkpoints < crate::CLIP_CHECKPOINTS_MAX,
+                    slider: Some((f64::from(set.clip_checkpoints), f64::from(crate::CLIP_CHECKPOINTS_MIN), f64::from(crate::CLIP_CHECKPOINTS_MAX))),
+                });
+            }
             ModuleId::Sustainability => {
                 rows.push(ModuleRow::Toggle {
                     label: "Im Hintergrund pausieren".to_string(),
@@ -279,9 +308,9 @@ impl App {
                     on: set.eat_slot_lock,
                 });
                 rows.push(ModuleRow::Toggle {
-                    label: "Aggressive Prediction".to_string(),
-                    action: ButtonAction::ToggleEatAggressivePrediction,
-                    on: set.eat_aggressive_prediction,
+                    label: "No Shield Lock".to_string(),
+                    action: ButtonAction::ToggleNoShieldLock,
+                    on: set.no_shield_lock,
                 });
             }
             ModuleId::NoToolBreak => rows.push(ModuleRow::Stepper {
@@ -334,42 +363,15 @@ impl App {
 
     fn rows_hitbox(&self, rows: &mut Vec<ModuleRow>) {
         let set = &self.settings;
-        // Je Zeile der Schalter und rechts daneben sein Farbfeld; die Regler stecken im
-        // Farbfenster (s. ColorPopup).
-        for (variant, label, on, action) in [
-            (HitboxVariant::Smoothed, "Geglättet", set.module_hitbox_show_smoothed, ButtonAction::ToggleModuleHitboxSmoothed),
-            (HitboxVariant::Raw, "Roh (Server)", set.module_hitbox_show_raw, ButtonAction::ToggleModuleHitboxRaw),
-        ] {
-            let (hue, saturation, value) = self.hitbox_color_of(variant);
-            let rgb = hsv_to_rgb(hue as f32, saturation as f32 / 100.0, value as f32 / 100.0);
-            rows.push(ModuleRow::ToggleSwatch { label: label.to_string(), action, on, swatch: ButtonAction::HitboxColorEditor(variant), rgb });
-        }
-        let art_zeile = |art: hitbox_kinds::HitboxKind, label: &str| {
-            let st = set.module_hitbox_styles[art.index()];
-            ModuleRow::ToggleSwatch {
-                label: label.to_string(),
-                action: ButtonAction::ToggleHitboxKind(art),
-                on: st.on,
-                swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
-                rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
-            }
-        };
-        // Die Farbe der Items ist die von "Geglättet", eine eigene gibt es unten mit
-        // Ueberschreiben.
-        rows.push(ModuleRow::Toggle { label: "Item-Hitbox".to_string(), action: ButtonAction::ToggleModuleHitboxItems, on: set.module_hitbox_items });
+        // Ist das Modul an, zeigt es die geglaettete Box; nur beim Spieler waehlbar: roh.
         rows.push(ModuleRow::Toggle { label: "Eigene Hitbox".to_string(), action: ButtonAction::ToggleModuleHitboxSelf, on: set.module_hitbox_self });
-        rows.push(art_zeile(hitbox_kinds::HitboxKind::Cobweb, "Spinnennetz-Hitbox"));
-        rows.push(art_zeile(hitbox_kinds::HitboxKind::Water, "Wasser-Hitbox"));
         rows.push(ModuleRow::Toggle {
             label: "Gepunktet".to_string(),
             action: ButtonAction::ToggleModuleHitboxDotted,
             on: set.module_hitbox_dotted,
         });
-        rows.push(ModuleRow::Toggle {
-            label: "Nur sichtbare Kanten".to_string(),
-            action: ButtonAction::ToggleModuleHitboxVisibleEdges,
-            on: set.module_hitbox_visible_edges,
-        });
+        let linien = HITBOX_LINE_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::HitboxLines(i as u8), set.module_hitbox_lines == i as u8)).collect();
+        rows.push(ModuleRow::Pick { label: "Linien".to_string(), options: linien, swatch: None });
         rows.push(ModuleRow::Stepper {
             label: "Dichte".to_string(),
             prev: ButtonAction::HitboxDensityPrev,
@@ -388,19 +390,29 @@ impl App {
             can_next: set.module_hitbox_opacity < 100,
             slider: Some((f64::from(set.module_hitbox_opacity), 0.0, 100.0)),
         });
-        // Je PvP-Entity: ob es die Vorgaben von oben ueberschreibt, und wenn ja, ob es
-        // sichtbar ist und in welcher Farbe und Deckkraft (im Farbfenster). Ohne
-        // Ueberschreiben sind Sichtbar und Farbe ausgegraut. Was hier fehlt (Boote, Loren), hat
-        // immer die Vorgaben.
-        rows.push(ModuleRow::Heading { label: "Individuelle Farben".to_string(), columns: &["Überschreiben", "Sichtbar"] });
-        for art in hitbox_kinds::HitboxKind::entities() {
+        // Die Tabelle: oben die Hauptfarbe (Farbe jeder Art ohne "Farbe ueberschreiben"), dann je
+        // Art Sichtbar, Farbe ueberschreiben (Farbfeld und Deckkraft im Farbfenster) und beim
+        // Spieler zusaetzlich die Wahl Geglaettet/Roh mit eigener Farbe fuer Roh.
+        let (h, sa, v) = self.hitbox_color_of(HitboxVariant::Smoothed);
+        rows.push(ModuleRow::Swatch {
+            label: "Hauptfarbe".to_string(),
+            action: ButtonAction::HitboxColorEditor(HitboxVariant::Smoothed),
+            rgb: hsv_to_rgb(h as f32, sa as f32 / 100.0, v as f32 / 100.0),
+        });
+        rows.push(ModuleRow::Heading { label: "Hitbox-Arten".to_string(), columns: &["Sichtbar", "Farbe überschr.", "", "Geglättet / Roh"] });
+        for art in hitbox_kinds::HitboxKind::ALL {
             let st = set.module_hitbox_styles[art.index()];
+            let roh = (art == hitbox_kinds::HitboxKind::Player).then(|| {
+                let (h, sa, v) = self.hitbox_color_of(HitboxVariant::Raw);
+                (set.module_hitbox_player_raw, hsv_to_rgb(h as f32, sa as f32 / 100.0, v as f32 / 100.0))
+            });
             rows.push(ModuleRow::TwoTogglesSwatch {
                 label: art.label().to_string(),
-                first: (ButtonAction::ToggleHitboxKindOverride(art), st.custom),
-                second: (ButtonAction::ToggleHitboxKind(art), st.on),
+                first: (ButtonAction::ToggleHitboxKind(art), st.on),
+                second: (ButtonAction::ToggleHitboxKindOverride(art), st.custom),
                 swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
                 rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
+                roh,
             });
         }
     }
@@ -476,6 +488,7 @@ impl App {
         });
         rows.push(ModuleRow::Toggle { label: "  Löschen-Sound".to_string(), action: ButtonAction::ToggleArrowEmptySound, on: set.arrow_empty_sound });
         rows.push(ModuleRow::Toggle { label: "Weißer Pfeil".to_string(), action: ButtonAction::ToggleArrowWhite, on: set.arrow_white });
+        rows.push(ModuleRow::Toggle { label: "Crit-Trail".to_string(), action: ButtonAction::ToggleArrowCritTrail, on: set.arrow_crit_trail });
         rows.push(ModuleRow::Toggle { label: "Trail".to_string(), action: ButtonAction::ToggleArrowTrail, on: set.arrow_trail });
         rows.push(ModuleRow::Stepper {
             label: "  Zeit bis Fade".to_string(),
@@ -817,6 +830,17 @@ impl App {
     // die Ansicht (Farbeditor zugeklappt), federt der Stand in tick_ui_anim zurueck.
     pub(crate) fn module_rows_shown(&self, gpu: &GpuState) -> Vec<(usize, f32)> {
         let stand = self.module_menu_scroll.stand;
+        if self.module_detail_cut() {
+            // Wie auf den Einstellungsseiten: angeschnittene Zeilen bleiben, das Zeilenband
+            // schneidet sie ab (s. module_detail_band, push_clip_marker).
+            let inner = self.module_detail_band(gpu).h / SETTINGS_ROW_H;
+            let von = self.module_menu_scroll.first();
+            return (von..self.module_total_rows(gpu))
+                .map(|i| (i, i as f32 - stand))
+                .take_while(|&(_, n)| n < inner)
+                .filter(|&(_, n)| n > -1.0)
+                .collect();
+        }
         let visible = self.module_visible_rows(gpu);
         let von = self.module_menu_scroll.first();
         (von..(von + visible + 1).min(self.module_total_rows(gpu)))
@@ -844,7 +868,7 @@ impl App {
         // Die Detailansicht rechnet in den festen Massen der Einstellungsseiten (s.
         // ModuleDetailLayout) und braucht dafuer mindestens so viel Platz.
         if self.module_menu_detail {
-            w = w.max(MODULE_DETAIL_PX_W + 2.0 * MODULE_DETAIL_PX_PAD);
+            w = w.max(self.module_detail_px_w() + 2.0 * MODULE_DETAIL_PX_PAD);
             h = h.max(MODULE_DETAIL_PX_HEAD + 9.0 * SETTINGS_ROW_H + MODULE_DETAIL_PX_FOOT);
         }
         let w = w.min(sw - 2.0 * Self::MODULE_SCREEN_MARGIN);
@@ -891,11 +915,59 @@ impl App {
         scale.min(passt).max(1.0)
     }
 
+    // Detailansicht als Einstellungsseite: Zeilen werden am Zeilenband angeschnitten und
+    // verlaufen dort (wie die Render-Einstellungen). Im Spiel bleibt es beim ganzen Ausblenden.
+    pub(crate) fn module_detail_cut(&self) -> bool {
+        self.module_menu_detail && self.module_menu_shown()
+    }
+
+    // Verlauf am Rand des Zeilenbands (s. page_fade der Einstellungsseiten).
+    pub(crate) fn module_cut_fade(&self, gpu: &GpuState) -> crate::ScrollFade {
+        let band = self.module_detail_band(gpu);
+        let max = self.module_max_scroll(gpu) as f32;
+        crate::ScrollFade::new(band.y, band.y + band.h, SETTINGS_ROW_H, self.module_menu_scroll.stand, max)
+    }
+
+    // push_fade_marker im Inhaltsraum der Einstellungen: dort addiert die Verschiebung des Inhalts
+    // (content_offset) dx auch auf die in x kodierte Hoehe der Marker-Flaeche -- vorher abziehen.
+    pub(crate) fn push_module_fade(&self, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>, fade: Option<crate::ScrollFade>) {
+        crate::push_fade_marker(rects, texts, fade);
+        if fade.is_some() {
+            if let Some(r) = rects.last_mut() {
+                r.rect.x -= self.content_offset().0;
+            }
+        }
+    }
+
+    // Trifft der Zeiger den Knopf? In der angeschnittenen Detailansicht zaehlen Zeilenknoepfe nur
+    // dort, wo sie auch zu sehen sind (im Zeilenband); Zurueck und Schliessen liegen darueber.
+    pub(crate) fn module_hit(&self, b: &Button, x: f32, y: f32) -> bool {
+        if !b.hits(x, y) {
+            return false;
+        }
+        if !self.module_detail_cut() || matches!(b.action, ButtonAction::CloseModuleMenu | ButtonAction::ModuleBack) {
+            return true;
+        }
+        self.gpu.as_ref().is_none_or(|g| self.module_detail_band(g).contains(x, y))
+    }
+
+    // Das Zeilenband der Detailansicht: vom Ende des Kopfs bis zur Fuss-Zone, volle Breite der Tafel.
+    pub(crate) fn module_detail_band(&self, gpu: &GpuState) -> Rect {
+        let panel = self.module_menu_rect(gpu);
+        let top = panel.y + MODULE_DETAIL_PX_HEAD;
+        Rect { x: panel.x, y: top, w: panel.w, h: (panel.h - MODULE_DETAIL_PX_HEAD - MODULE_DETAIL_PX_FOOT).max(0.0) }
+    }
+
+    // Breite der Detailspalte: die Hitbox-Tabelle ist breiter als die Regler der anderen Module.
+    pub(crate) fn module_detail_px_w(&self) -> f32 {
+        if self.module_menu_selected == ModuleId::Hitbox { crate::HITBOX_DETAIL_PX_W.max(MODULE_DETAIL_PX_W) } else { MODULE_DETAIL_PX_W }
+    }
+
     // Geometrie der Detailansicht: eine Einstellungsspalte mittig im ganzen Fenster.
     pub(crate) fn module_detail_layout(&self, gpu: &GpuState) -> ModuleDetailLayout {
         let panel = self.module_menu_rect(gpu);
         ModuleDetailLayout {
-            x: (panel.x + ((panel.w - MODULE_DETAIL_PX_W) / 2.0).max(MODULE_DETAIL_PX_PAD)).round(),
+            x: (panel.x + ((panel.w - self.module_detail_px_w()) / 2.0).max(MODULE_DETAIL_PX_PAD)).round(),
             top: panel.y + MODULE_DETAIL_PX_HEAD,
         }
     }
@@ -1080,23 +1152,11 @@ impl App {
                         });
                     }
                 }
-                ModuleRow::ToggleSwatch { action, on, swatch, .. } => {
-                    out.push(Button { rect: layout.control_rect(n), enabled, ..Self::toggle(action, 0, on) });
-                    out.push(Button {
-                        action: swatch,
-                        rect: layout.swatch_after_toggle_rect(n),
-                        label: String::new(),
-                        enabled,
-                        color: theme::get(theme::Slot::Surface2),
-                        scale: UI_SCALE_SMALL,
-                        slider: None,
-                    });
-                }
-                ModuleRow::TwoTogglesSwatch { first, second, swatch, .. } => {
-                    // Der zweite Schalter und die Farbe wirken nur mit dem ersten.
-                    let dahinter = enabled && first.1;
+                ModuleRow::TwoTogglesSwatch { first, second, swatch, roh, .. } => {
+                    // Die Farbe wirkt nur mit "Farbe ueberschreiben".
+                    let dahinter = enabled && second.1;
                     out.push(Button { rect: layout.control_rect(n), enabled, ..Self::toggle(first.0, 0, first.1) });
-                    out.push(Button { rect: layout.second_toggle_rect(n), enabled: dahinter, ..Self::toggle(second.0, 0, second.1) });
+                    out.push(Button { rect: layout.second_toggle_rect(n), enabled, ..Self::toggle(second.0, 0, second.1) });
                     out.push(Button {
                         action: swatch,
                         rect: layout.swatch_after_two_toggles_rect(n),
@@ -1106,6 +1166,19 @@ impl App {
                         scale: UI_SCALE_SMALL,
                         slider: None,
                     });
+                    if let Some((ist_roh, _)) = roh {
+                        let wahl = [("Geglättet", ButtonAction::HitboxPlayerRaw(false), !ist_roh), ("Roh", ButtonAction::HitboxPlayerRaw(true), ist_roh)];
+                        out.extend(pick_buttons(layout.raw_pick_rect(n), &wahl, enabled));
+                        out.push(Button {
+                            action: ButtonAction::HitboxColorEditor(HitboxVariant::Raw),
+                            rect: layout.raw_swatch_rect(n),
+                            label: String::new(),
+                            enabled: enabled && ist_roh,
+                            color: theme::get(theme::Slot::Surface2),
+                            scale: UI_SCALE_SMALL,
+                            slider: None,
+                        });
+                    }
                 }
                 ModuleRow::Heading { .. } => {}
             }
@@ -1119,8 +1192,7 @@ impl App {
         let aktion = match row {
             ModuleRow::Toggle { action, .. }
             | ModuleRow::Choice { action, .. }
-            | ModuleRow::Swatch { action, .. }
-            | ModuleRow::ToggleSwatch { action, .. } => *action,
+            | ModuleRow::Swatch { action, .. } => *action,
             ModuleRow::Pick { options, .. } => options.first().map_or(ButtonAction::Nothing, |o| o.1),
             ModuleRow::ColorPicks { first, .. } => first.1,
             ModuleRow::TwoTogglesSwatch { first, .. } => first.0,
@@ -1174,6 +1246,10 @@ impl App {
                 zoom = z.map_or(1.0, |(_, _, s)| s);
                 continue;
             }
+            if let Some(an) = crate::keep_capitals_marker(t) {
+                gpu.keep_capitals.set(an);
+                continue;
+            }
             let rects = if band { &im_band } else { &frei };
             let w = gpu.measure_text(&t.text, t.scale);
             let h = gpu.text_height(t.scale);
@@ -1216,6 +1292,7 @@ impl App {
                 t.x = (r.x + (r.w - gpu.measure_text(&t.text, scale)) / 2.0).round();
             }
         }
+        gpu.keep_capitals.set(false);
     }
 
     // Tafel des Modul-Menues zeichnen: Uebersicht (Kategorien + Kacheln) oder Detailansicht.
@@ -1264,6 +1341,13 @@ impl App {
             let enabled = self.module_menu_selected.enabled(&self.settings);
             let (px, py) = self.pointer();
             let rows = self.module_detail_rows();
+            // Zeilen am Band angeschnitten und zum Rand hin verlaufend, wie auf den Einstellungs-
+            // seiten (s. page_fade); Kopf und Scrollbalken liegen ausserhalb.
+            let cut = self.module_detail_cut();
+            if cut {
+                crate::push_clip_marker(rects, texts, true);
+                self.push_module_fade(rects, texts, Some(self.module_cut_fade(gpu)));
+            }
             for (k, n) in self.module_rows_shown(gpu) {
                 let Some(row) = rows.get(k) else { continue };
                 // Unterkategorie wie ein Abschnitt der Einstellungen: Linie ueber die ganze
@@ -1277,7 +1361,13 @@ impl App {
                     let name_x = rechts - gpu.measure_text(label, UI_SCALE_SMALL);
                     texts.push(UiText { text: label.clone(), x: name_x.round(), y: (linie_y - 4.0 - th).round(), color: theme::text(), scale: UI_SCALE_SMALL });
                     for (i, kopf) in columns.iter().enumerate() {
-                        let spalte = Rect { x: layout.ctrl_x() + i as f32 * (TOGGLE_W + STEPPER_GAP), y: linie_y + 8.0, w: TOGGLE_W, h: th };
+                        // Die Wahl Geglaettet/Roh (4. Kopf) steht ueber ihren Knoepfen hinter dem Farbfeld.
+                        let spalte = if i == 3 {
+                            let r = layout.raw_pick_rect(0.0);
+                            Rect { y: linie_y + 8.0, h: th, ..r }
+                        } else {
+                            Rect { x: layout.ctrl_x() + i as f32 * (TOGGLE_W + STEPPER_GAP), y: linie_y + 8.0, w: TOGGLE_W, h: th }
+                        };
                         texts.push(gpu.centered_text(spalte, kopf.to_string(), theme::text(), UI_SCALE_SMALL));
                     }
                     continue;
@@ -1314,17 +1404,22 @@ impl App {
                     }
                     // Farbfeld wie ueberall: die Farbe mit schwarzem Rand; ein Klick oeffnet den
                     // Farbeditor (s. color_target_of).
-                    ModuleRow::Swatch { rgb, .. } | ModuleRow::ToggleSwatch { rgb, .. } | ModuleRow::TwoTogglesSwatch { rgb, .. } => {
+                    ModuleRow::Swatch { rgb, .. } | ModuleRow::TwoTogglesSwatch { rgb, .. } => {
                         let rect = match row {
                             ModuleRow::Swatch { .. } => layout.swatch_rect(n),
-                            ModuleRow::ToggleSwatch { .. } => layout.swatch_after_toggle_rect(n),
                             _ => layout.swatch_after_two_toggles_rect(n),
                         };
-                        // Ohne den ersten Schalter wirkt die Farbe nicht: abgeblendet, kein Hover.
-                        let wirkt = !matches!(row, ModuleRow::TwoTogglesSwatch { first: (_, false), .. });
+                        // Ohne "Farbe ueberschreiben" wirkt die Farbe nicht: abgeblendet, kein Hover.
+                        let wirkt = !matches!(row, ModuleRow::TwoTogglesSwatch { second: (_, false), .. });
                         let rand = if wirkt && rect.contains(px, py) { theme::text_2() } else { [0.0, 0.0, 0.0, 1.0] };
                         let deckung = if wirkt { 1.0 } else { 0.3 };
                         rects.push(UiRect::framed(rect, [rgb[0], rgb[1], rgb[2], deckung], 6.0, 2.0, rand));
+                        // Farbfeld fuer Roh: wirkt nur, wenn Roh gewaehlt ist.
+                        if let ModuleRow::TwoTogglesSwatch { roh: Some((ist_roh, rgb)), .. } = row {
+                            let rect = layout.raw_swatch_rect(n);
+                            let rand = if *ist_roh && rect.contains(px, py) { theme::text_2() } else { [0.0, 0.0, 0.0, 1.0] };
+                            rects.push(UiRect::framed(rect, [rgb[0], rgb[1], rgb[2], if *ist_roh { 1.0 } else { 0.3 }], 6.0, 2.0, rand));
+                        }
                     }
                     // Farbfeld neben der Auswahl: voll nur mit dem letzten Wert (Einfarbig).
                     ModuleRow::Pick { options, swatch: Some((_, rgb)), .. } => {
@@ -1351,6 +1446,10 @@ impl App {
                     ModuleRow::Toggle { .. } | ModuleRow::Choice { .. } | ModuleRow::Pick { .. } | ModuleRow::Heading { .. } => {}
                 }
             }
+            if cut {
+                self.push_module_fade(rects, texts, None);
+                crate::push_clip_marker(rects, texts, false);
+            }
             self.draw_module_scrollbar(gpu, panel, layout.top, self.module_visible_rows(gpu) as f32 * SETTINGS_ROW_H, rects);
         } else {
             texts.push(UiText { text: "Module".to_string(), x: panel.x + 8.0 * scale, y: panel.y + 6.0 * scale, color: theme::text(), scale: UI_SCALE_SMALL });
@@ -1364,6 +1463,11 @@ impl App {
                     let flaeche = Rect { h: button.rect.h - 2.0 * scale, ..button.rect };
                     let (px, py) = self.pointer();
                     let (stil, schrift) = styled_button(button, self.hover_level(button.rect, button.enabled && button.hits(px, py)));
+                    let zoom = self.press_zoom(button.action, flaeche);
+                    let r0 = rects.len();
+                    if zoom.is_some() {
+                        crate::push_zoom_marker(texts, zoom);
+                    }
                     rects.push(UiRect { rect: flaeche, ..stil });
                     texts.push(UiText {
                         text: Self::fit_text(gpu, kategorie.label(), button.rect.w - 6.0 * scale, UI_SCALE_SMALL),
@@ -1372,6 +1476,7 @@ impl App {
                         color: schrift,
                         scale: UI_SCALE_SMALL,
                     });
+                    crate::zoom_pressed(zoom, &mut rects[r0..], texts);
                 }
             }
             let (px, py) = self.pointer();
@@ -1384,6 +1489,12 @@ impl App {
                 let g = theme::get;
                 let flaeche = mix_color(g(theme::Slot::Surface2), g(theme::Slot::Surface3), k);
                 let rand = if on { g(theme::Slot::Accent) } else { mix_color(g(theme::Slot::Border2), g(theme::Slot::BorderStrong), k.min(1.0)) };
+                // Gedrueckt zieht sich die Kachel samt Name ein (s. module_press_begin).
+                let zoom = self.press_zoom(ButtonAction::SelectModule(id), tile);
+                let r0 = rects.len();
+                if zoom.is_some() {
+                    crate::push_zoom_marker(texts, zoom);
+                }
                 rects.push(UiRect::framed(tile, flaeche, 6.0, 1.0, rand));
                 let text_x = tile.x + 6.0 * scale;
                 let schalter = Self::module_tile_toggle_rect(tile, scale);
@@ -1392,6 +1503,7 @@ impl App {
                 let name = Self::fit_text(gpu, id.label(), schalter.x - text_x - 2.0 * scale, UI_SCALE_SMALL);
                 let y = (tile.y + (tile.h - gpu.text_height(UI_SCALE_SMALL)) / 2.0).round();
                 texts.push(UiText { text: name, x: text_x, y, color: theme::text(), scale: UI_SCALE_SMALL });
+                crate::zoom_pressed(zoom, &mut rects[r0..], texts);
             }
             if self.module_menu_category.modules().is_empty() {
                 texts.push(UiText {
@@ -1415,14 +1527,31 @@ impl App {
             }
             let (px, py) = self.pointer();
             let (flaeche, color) = styled_button(&button, self.hover_level(button.rect, button.enabled && button.hits(px, py)));
+            // Schalter und Pfeile der Zeilen schneiden am Zeilenband wie die Zeilen selbst.
+            let zeile = self.module_detail_cut() && !matches!(button.action, ButtonAction::CloseModuleMenu | ButtonAction::ModuleBack);
+            if zeile {
+                crate::push_clip_marker(rects, texts, true);
+                self.push_module_fade(rects, texts, Some(self.module_cut_fade(gpu)));
+            }
+            // Gedrueckt zieht er sich samt Text ein (s. module_press_begin).
+            let zoom = self.press_zoom(button.action, button.rect);
+            let r0 = rects.len();
+            if zoom.is_some() {
+                crate::push_zoom_marker(texts, zoom);
+            }
             rects.push(flaeche);
             if let Some(c) = Self::choice_of(button.action) {
                 let offen = self.dropdown_active().is_some_and(|d| d.choice == c);
                 self.push_dropdown_face(gpu, button.rect, &button.label, color, button.scale, offen, rects, texts);
-                continue;
+            } else {
+                let label = Self::fit_text(gpu, &button.label, button.rect.w - 12.0, button.scale);
+                texts.push(gpu.centered_text(button.rect, label, color, button.scale));
             }
-            let label = Self::fit_text(gpu, &button.label, button.rect.w - 12.0, button.scale);
-            texts.push(gpu.centered_text(button.rect, label, color, button.scale));
+            crate::zoom_pressed(zoom, &mut rects[r0..], texts);
+            if zeile {
+                self.push_module_fade(rects, texts, None);
+                crate::push_clip_marker(rects, texts, false);
+            }
         }
     }
 
@@ -1499,15 +1628,9 @@ impl App {
                 }
             }
             ButtonAction::ToggleModuleHitbox => self.settings.module_hitbox_enabled = !self.settings.module_hitbox_enabled,
-            ButtonAction::ToggleModuleHitboxSmoothed => {
-                self.settings.module_hitbox_show_smoothed = !self.settings.module_hitbox_show_smoothed;
-            }
-            ButtonAction::ToggleModuleHitboxRaw => self.settings.module_hitbox_show_raw = !self.settings.module_hitbox_show_raw,
+            ButtonAction::HitboxPlayerRaw(roh) => self.settings.module_hitbox_player_raw = roh,
             ButtonAction::ToggleModuleHitboxDotted => self.settings.module_hitbox_dotted = !self.settings.module_hitbox_dotted,
-            ButtonAction::ToggleModuleHitboxVisibleEdges => {
-                self.settings.module_hitbox_visible_edges = !self.settings.module_hitbox_visible_edges;
-            }
-            ButtonAction::ToggleModuleHitboxItems => self.settings.module_hitbox_items = !self.settings.module_hitbox_items,
+            ButtonAction::HitboxLines(m) => self.settings.module_hitbox_lines = m.min(HITBOX_LINES_OUTLINE),
             ButtonAction::ToggleModuleHitboxSelf => self.settings.module_hitbox_self = !self.settings.module_hitbox_self,
             ButtonAction::ToggleHitboxKind(art) => {
                 let st = &mut self.settings.module_hitbox_styles[art.index()];
@@ -1565,7 +1688,7 @@ impl App {
             ButtonAction::ToggleModuleUseTimer => self.settings.module_use_timer = !self.settings.module_use_timer,
             ButtonAction::EatHoldThroughPrev => self.settings.eat_hold_through_ms = self.settings.eat_hold_through_ms.saturating_sub(EAT_HOLD_THROUGH_STEP),
             ButtonAction::ToggleEatSlotLock => self.settings.eat_slot_lock = !self.settings.eat_slot_lock,
-            ButtonAction::ToggleEatAggressivePrediction => self.settings.eat_aggressive_prediction = !self.settings.eat_aggressive_prediction,
+            ButtonAction::ToggleNoShieldLock => self.settings.no_shield_lock = !self.settings.no_shield_lock,
             ButtonAction::EatHoldThroughNext => {
                 self.settings.eat_hold_through_ms = (self.settings.eat_hold_through_ms + EAT_HOLD_THROUGH_STEP).min(EAT_HOLD_THROUGH_MAX);
             }
@@ -1606,11 +1729,13 @@ impl App {
             }
             ButtonAction::ToggleModuleKeystrokes => self.settings.module_keystrokes = !self.settings.module_keystrokes,
             ButtonAction::ToggleModuleSessionInfo => self.settings.module_session_info = !self.settings.module_session_info,
+            ButtonAction::ToggleModuleClock => self.settings.module_clock = !self.settings.module_clock,
             ButtonAction::ToggleSessionLine(bit) => self.settings.session_lines ^= bit,
             ButtonAction::ResetSession => self.session.reset(Instant::now()),
             ButtonAction::ToggleArrowIndicator => self.settings.arrow_indicator = !self.settings.arrow_indicator,
             ButtonAction::ToggleArrowNumberOnly => self.settings.arrow_number_only = !self.settings.arrow_number_only,
             ButtonAction::ToggleArrowWhite => self.settings.arrow_white = !self.settings.arrow_white,
+            ButtonAction::ToggleArrowCritTrail => self.settings.arrow_crit_trail = !self.settings.arrow_crit_trail,
             ButtonAction::ToggleArrowEmptySound => self.settings.arrow_empty_sound = !self.settings.arrow_empty_sound,
             ButtonAction::ArrowOpacityPrev => {
                 self.settings.arrow_opacity = self.settings.arrow_opacity.saturating_sub(ARROW_OPACITY_STEP).max(ARROW_OPACITY_MIN);
@@ -1675,6 +1800,19 @@ impl App {
                 record::set_enabled(self.settings.module_coral_record);
                 self.push_log(format!("coral-record: Modul {}", if record::enabled() { "an" } else { "aus" }));
             }
+            ButtonAction::ToggleModuleCoralClip => {
+                self.settings.module_coral_clip = !self.settings.module_coral_clip;
+                record::set_clip_enabled(self.settings.module_coral_clip);
+            }
+            // Wartet auf den naechsten Tastendruck (s. window_events, wie in der Steuerung).
+            ButtonAction::Rebind(ziel, slot) => {
+                self.awaiting_keybind = Some((ziel, slot));
+                self.awaiting_modifier = false;
+            }
+            ButtonAction::ClipCheckpointsPrev => self.settings.clip_checkpoints = self.settings.clip_checkpoints.saturating_sub(1).max(crate::CLIP_CHECKPOINTS_MIN),
+            ButtonAction::ClipCheckpointsNext => self.settings.clip_checkpoints = (self.settings.clip_checkpoints + 1).min(crate::CLIP_CHECKPOINTS_MAX),
+            ButtonAction::ClipSecondsPrev => self.settings.clip_seconds = self.settings.clip_seconds.saturating_sub(crate::CLIP_SECONDS_STEP).max(crate::CLIP_SECONDS_MIN),
+            ButtonAction::ClipSecondsNext => self.settings.clip_seconds = (self.settings.clip_seconds + crate::CLIP_SECONDS_STEP).min(crate::CLIP_SECONDS_MAX),
             ButtonAction::ToggleModuleColor => self.settings.module_color = !self.settings.module_color,
             ButtonAction::ToggleModuleSustainability => self.settings.module_sustainability = !self.settings.module_sustainability,
             ButtonAction::ToggleSustainBackground => self.settings.sustain_background = !self.settings.sustain_background,

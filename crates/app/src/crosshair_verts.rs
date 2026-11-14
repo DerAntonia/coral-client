@@ -125,8 +125,9 @@ pub(crate) struct CrosshairExtras {
     pub(crate) texts: Vec<CrosshairText>,
     // Schild-Cooldown als Kreis: Mitte (normiert) und verbleibender Anteil 0..1.
     pub(crate) ring: Option<((f32, f32), f32)>,
-    // Kontur um den Ring (Settings::crosshair_ring_outline).
+    // Kontur um den Ring (Settings::crosshair_ring_outline) und sein Radius in Pixeln.
     pub(crate) ring_outline: bool,
+    pub(crate) ring_radius: f32,
     // Feuer-Modus "Fadenkreuz" beim Brennen: diese Farbe nur fuer Kreuz und Ring -- die
     // Zahlen (Pfeile, Countdown) behalten die normale Fadenkreuz-Farbe.
     pub(crate) fire_rgb: Option<[f32; 3]>,
@@ -134,7 +135,7 @@ pub(crate) struct CrosshairExtras {
 
 // Ring um `center_px`, ab 12 Uhr im Uhrzeigersinn bis `fraction` des Umfangs (verbleibende
 // Zeit) -- als Segment-Vierecke. Mit Kontur zuerst ein breiterer schwarzer Ring.
-pub(crate) fn crosshair_ring_vertices(center_px: (f32, f32), fraction: f32, screen_px: (f32, f32), outline: bool) -> Vec<CrosshairVertex> {
+pub(crate) fn crosshair_ring_vertices(center_px: (f32, f32), radius: f32, fraction: f32, screen_px: (f32, f32), outline: bool) -> Vec<CrosshairVertex> {
     let fraction = fraction.clamp(0.0, 1.0);
     let n = ((SHIELD_RING_SEGMENTS as f32 * fraction).ceil() as usize).max(1);
     let mut out = Vec::new();
@@ -156,7 +157,7 @@ pub(crate) fn crosshair_ring_vertices(center_px: (f32, f32), fraction: f32, scre
             out.extend_from_slice(&[v(i0), v(o0), v(o1), v(i0), v(o1), v(i1)]);
         }
     };
-    let (r, t) = (SHIELD_RING_RADIUS_PX, SHIELD_RING_THICKNESS_PX / 2.0);
+    let (r, t) = (radius, SHIELD_RING_THICKNESS_PX / 2.0);
     if outline {
         ring(r - t - CROSSHAIR_OUTLINE_PX, r + t + CROSSHAIR_OUTLINE_PX, 1.0);
     }
@@ -220,126 +221,90 @@ pub(crate) fn crosshair_vertices(shape: usize, size: u32, center_px: (f32, f32),
     out
 }
 
-pub(crate) fn rotate_point(p: (f32, f32), center: (f32, f32), degrees: f32) -> (f32, f32) {
-    let (sin, cos) = degrees.to_radians().sin_cos();
-    let (dx, dy) = (p.0 - center.0, p.1 - center.1);
-    (center.0 + dx * cos - dy * sin, center.1 + dx * sin + dy * cos)
+// Die vier Punkte des Pfeils in den Einheiten der Vorlage: CURSOR_SHAPE, die beiden Fluegel
+// um `breite` von der Achse Spitze-Kerbe weg gestreckt. Spitze und Kerbe bleiben stehen.
+pub(crate) fn cursor_shape(breite: f32) -> [(f32, f32); 4] {
+    let [spitze, rechts, kerbe, unten] = CURSOR_SHAPE;
+    let (ax, ay) = (kerbe.0 - spitze.0, kerbe.1 - spitze.1);
+    let len = (ax * ax + ay * ay).sqrt();
+    let (ax, ay) = (ax / len, ay / len);
+    let strecken = |p: (f32, f32)| {
+        let (dx, dy) = (p.0 - spitze.0, p.1 - spitze.1);
+        let (laengs, quer) = (dx * ax + dy * ay, -dx * ay + dy * ax);
+        let quer = quer * breite;
+        (spitze.0 + laengs * ax - quer * ay, spitze.1 + laengs * ay + quer * ax)
+    };
+    [spitze, strecken(rechts), kerbe, strecken(unten)]
 }
 
-// Die Punkte des Zeigers in Bildschirm-Pixeln: erst die Kite-Form, dann der Griff. `tip_pos` ist die Position, an der die
-// Pfeilspitze sitzt -- das ist die uebliche Hotspot-Konvention: der Klickpunkt ist die
-// Spitze der Form, nicht die Mitte ihrer Bounding-Box.
-// `fx_scale` staucht den Zeiger beim Druecken, `fx_rotation_deg` dreht ihn beim Ziehen und
-// `fx_additive` faerbt den Kern beim Druecken in der Akzentfarbe -- alle drei kommen aus cursor_fx und sind 1.0 / 0.0 /
-// 0.0, solange nichts passiert.
-//
-// Gedreht und skaliert wird um die SPITZE, nicht um die Mitte: die Spitze ist der Punkt, auf
-// den man zeigt, und der darf sich beim Klicken nicht verschieben.
-// Ersetzt die Ecke `corner` (zwischen `prev` und `next`) durch einen Kreisbogen mit Radius
-// `r`, der beide Kanten tangential beruehrt -- als `n` Punkte von der prev- zur next-Seite.
-pub(crate) fn round_corner(prev: (f32, f32), corner: (f32, f32), next: (f32, f32), r: f32, n: usize) -> Vec<(f32, f32)> {
+// Der Klickpunkt in den Einheiten der Vorlage: die aeusserste Stelle der runden Spitze, also
+// CURSOR_ROUNDING von der Spitze der vier Punkte weg, mitten zwischen ihren beiden Kanten.
+pub(crate) fn cursor_hotspot(form: &[(f32, f32); 4]) -> (f32, f32) {
+    let spitze = form[0];
     let unit = |p: (f32, f32)| {
-        let (dx, dy) = (p.0 - corner.0, p.1 - corner.1);
+        let (dx, dy) = (p.0 - spitze.0, p.1 - spitze.1);
         let len = (dx * dx + dy * dy).sqrt();
         (dx / len, dy / len)
     };
-    let (u1, u2) = (unit(prev), unit(next));
-    let halb = (u1.0 * u2.0 + u1.1 * u2.1).clamp(-1.0, 1.0).acos() / 2.0;
-    let tangente = r / halb.tan();
-    let bis = {
-        let (bx, by) = (u1.0 + u2.0, u1.1 + u2.1);
-        let len = (bx * bx + by * by).sqrt();
-        (bx / len, by / len)
-    };
-    let mitte = (corner.0 + bis.0 * r / halb.sin(), corner.1 + bis.1 * r / halb.sin());
-    let winkel = |p: (f32, f32)| (p.1 - mitte.1).atan2(p.0 - mitte.0);
-    let a0 = winkel((corner.0 + u1.0 * tangente, corner.1 + u1.1 * tangente));
-    let a1 = winkel((corner.0 + u2.0 * tangente, corner.1 + u2.1 * tangente));
-    // Den kurzen Weg um die Aussenseite der Ecke nehmen.
-    let mut spanne = a1 - a0;
-    if spanne > std::f32::consts::PI {
-        spanne -= std::f32::consts::TAU;
-    } else if spanne < -std::f32::consts::PI {
-        spanne += std::f32::consts::TAU;
-    }
-    (0..n)
-        .map(|i| {
-            let a = a0 + spanne * i as f32 / (n - 1) as f32;
-            (mitte.0 + r * a.cos(), mitte.1 + r * a.sin())
-        })
-        .collect()
+    let (u1, u2) = (unit(form[1]), unit(form[3]));
+    let (bx, by) = (u1.0 + u2.0, u1.1 + u2.1);
+    let len = (bx * bx + by * by).sqrt();
+    (spitze.0 - bx / len * CURSOR_ROUNDING, spitze.1 - by / len * CURSOR_ROUNDING)
 }
 
-// Der Pfeil-Umriss im 100x130-Raum (noch ungedreht): CURSOR_KITE mit abgerundeten Fluegeln,
-// die Fluegel um `breite` von der Mittelachse (x = 50) weg gestreckt.
-pub(crate) fn cursor_kite_outline(breite: f32) -> Vec<(f32, f32)> {
-    let [spitze, rechts, kerbe, links] = CURSOR_KITE;
-    let strecken = |(x, y): (f32, f32)| (50.0 + (x - 50.0) * breite, y);
-    let (rechts, links) = (strecken(rechts), strecken(links));
-    let mut out = vec![spitze];
-    out.extend(round_corner(spitze, rechts, kerbe, CURSOR_WING_RADIUS, CURSOR_WING_ARC_POINTS));
-    out.push(kerbe);
-    out.extend(round_corner(kerbe, links, spitze, CURSOR_WING_RADIUS, CURSOR_WING_ARC_POINTS));
-    out
-}
-
+// Der Zeiger fuer cursor.wgsl in Bildschirm-Pixeln. `tip_pos` ist die Stelle, an der die
+// Spitze sitzt -- die uebliche Hotspot-Konvention: der Klickpunkt ist die Spitze der Form,
+// nicht die Mitte ihrer Bounding-Box.
+// `fx.scale` ist die Groesse, `fx.rotation_deg` dreht ihn beim Ziehen und `fx.additive` faerbt
+// das Innere beim Druecken in der Akzentfarbe (s. cursor_fx).
+//
+// Gedreht und skaliert wird um die SPITZE, nicht um die Mitte: die Spitze ist der Punkt, auf
+// den man zeigt, und der darf sich beim Klicken nicht verschieben.
 pub(crate) fn cursor_polygons(tip_pos: (f32, f32), screen_px: (f32, f32), fx: CursorFxFrame) -> CursorUniform {
-    let (fx_scale, fx_rotation_deg, fx_additive) = (fx.scale, fx.rotation_deg, fx.additive);
-    let local_center = (50.0, 50.0);
-    let rotate = |p: (f32, f32)| rotate_point(p, local_center, CURSOR_ROTATION_DEG);
-
-    let kite: Vec<(f32, f32)> = cursor_kite_outline(fx.width).into_iter().map(rotate).collect();
-    let tip = rotate(CURSOR_KITE[0]);
-
-    let scale = CURSOR_HEIGHT_PX / 130.0 * fx_scale;
-    // lokal (rotiert, unskaliert) -> Bildschirm-Pixel: skalieren, um die Spitze drehen, dann
-    // so verschieben, dass die Spitze exakt auf tip_pos landet.
-    let (sin_fx, cos_fx) = fx_rotation_deg.to_radians().sin_cos();
+    let form = cursor_shape(fx.width);
+    let tip = cursor_hotspot(&form);
+    let scale = CURSOR_HEIGHT_PX / CURSOR_HEIGHT_UNITS * fx.scale;
+    let (sin_fx, cos_fx) = fx.rotation_deg.to_radians().sin_cos();
+    // Richtung in Einheiten -> Bildschirm (skaliert und gedreht), und dasselbe fuer Punkte.
+    let dreh = |(dx, dy): (f32, f32)| ((dx * cos_fx - dy * sin_fx) * scale, (dx * sin_fx + dy * cos_fx) * scale);
     let to_screen = |p: (f32, f32)| {
-        let (dx, dy) = ((p.0 - tip.0) * scale, (p.1 - tip.1) * scale);
-        (tip_pos.0 + dx * cos_fx - dy * sin_fx, tip_pos.1 + dx * sin_fx + dy * cos_fx)
+        let (dx, dy) = dreh((p.0 - tip.0, p.1 - tip.1));
+        (tip_pos.0 + dx, tip_pos.1 + dy)
     };
 
-    let mitte = to_screen(rotate(CURSOR_CIRCLE_CENTER));
-    let tail = [mitte, mitte];
-    // Ohne Kreis: ein stark negativer Radius -- der Abstand zur "Kapsel" ist dann ueberall
-    // riesig, sie deckt nichts ab. Die Zeichenflaeche richtet sich nur nach dem Pfeil.
-    let tail_radius = if fx.circle { CURSOR_CIRCLE_RADIUS * scale } else { -1.0e6 };
-    let flat: Vec<(f32, f32)> = kite.iter().map(|&p| to_screen(p)).chain(tail).collect();
-    debug_assert_eq!(flat.len(), CURSOR_POINTS);
-    let colors = [COLOR_CURSOR_OUTLINE, COLOR_CURSOR_FILL];
+    let pfeil = form.map(to_screen);
+    let mitte = to_screen(CURSOR_CIRCLE_CENTER);
+    // Der Schatten faellt immer in dieselbe Richtung: das Licht dreht sich nicht mit dem Zeiger.
+    let schatten = (CURSOR_SHADOW_OFFSET.0 * scale, CURSOR_SHADOW_OFFSET.1 * scale);
+    let rundung = CURSOR_ROUNDING * scale;
+    // Ohne Ring: ein stark negativer Radius -- der Abstand zu ihm ist dann ueberall riesig,
+    // er deckt nichts ab. Die Zeichenflaeche richtet sich nur nach dem Pfeil.
+    let ring_radius = if fx.circle { CURSOR_CIRCLE_RADIUS * scale } else { -1.0e6 };
 
-    // Je zwei Punkte teilen sich ein vec4 (s. cursor.wgsl: Uniform-Arrays brauchen
-    // 16-Byte-Schrittweite, ein Array aus vec2 waere sonst mit Fuellbytes durchsetzt).
-    let mut points = [[0.0; 4]; CURSOR_POINTS / 2];
-    for (i, &(x, y)) in flat.iter().enumerate() {
-        points[i / 2][(i % 2) * 2] = x;
-        points[i / 2][(i % 2) * 2 + 1] = y;
-    }
-
-    // Zeichenflaeche = Bounding-Box aller Punkte plus Rand, damit die Kantenglaettung
-    // (greift bis ~0.5 px ausserhalb der Form) nicht am Quadrand abgeschnitten wird.
+    // Zeichenflaeche = alles, was die Form und ihr Schatten erreichen, plus Rand, damit die
+    // Kantenglaettung (greift bis ~0.5 px ausserhalb der Form) nicht abgeschnitten wird.
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    let r = tail_radius.max(0.0);
-    let kapselrand = tail.iter().flat_map(|&(x, y)| [(x - r, y - r), (x + r, y + r)]);
-    let pfeil = if fx.circle { &flat[..] } else { &flat[..CURSOR_KITE_POINTS] };
-    for (x, y) in pfeil.iter().copied().chain(kapselrand) {
-        x0 = x0.min(x);
-        y0 = y0.min(y);
-        x1 = x1.max(x);
-        y1 = y1.max(y);
+    let kreise = pfeil.iter().map(|&p| (p, rundung)).chain(fx.circle.then_some((mitte, ring_radius)));
+    for ((x, y), r) in kreise {
+        for (sx, sy) in [(0.0, 0.0), schatten] {
+            x0 = x0.min(x + sx - r);
+            y0 = y0.min(y + sy - r);
+            x1 = x1.max(x + sx + r);
+            y1 = y1.max(y + sy + r);
+        }
     }
     let pad = CURSOR_AA_PADDING_PX;
     // Die Akzentfarbe des Themes (schon linear, wie die Oberflaeche rechnet): Akzent, Akzent 2
     // oder ihre Mischung, je nach Taste (s. CursorFx::tint).
     let (a1, a2) = (theme::get(theme::Slot::Accent), theme::get(theme::Slot::Accent2));
     let [ar, ag, ab] = std::array::from_fn(|i| a1[i] + (a2[i] - a1[i]) * fx.right);
-    let kontur = CURSOR_OUTLINE_PX;
     CursorUniform {
-        points,
-        colors,
-        additive: [ar, ag, ab, fx_additive * CURSOR_PRESS_TINT],
+        points: [[pfeil[0].0, pfeil[0].1, pfeil[1].0, pfeil[1].1], [pfeil[2].0, pfeil[2].1, pfeil[3].0, pfeil[3].1]],
+        ring: [mitte.0, mitte.1, schatten.0, schatten.1],
+        colors: [COLOR_CURSOR_OUTLINE, [COLOR_CURSOR_FILL[0], COLOR_CURSOR_FILL[1], COLOR_CURSOR_FILL[2], fx.fill_alpha.clamp(0.0, 1.0)]],
+        additive: [ar, ag, ab, fx.additive * CURSOR_PRESS_TINT],
         bounds: [x0 - pad, y0 - pad, x1 + pad, y1 + pad],
-        screen: [screen_px.0, screen_px.1, kontur, tail_radius],
+        screen: [screen_px.0, screen_px.1, CURSOR_OUTLINE * fx.outline * scale, ring_radius],
+        form: [rundung, CURSOR_SHADOW_ALPHA, 0.0, 0.0],
     }
 }

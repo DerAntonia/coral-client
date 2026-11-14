@@ -192,6 +192,8 @@ pub(crate) struct GpuState {
     pub(crate) color_bind_group: wgpu::BindGroup,
     pub(crate) text_pipeline: wgpu::RenderPipeline,
     pub(crate) text_vertex_buffer: wgpu::Buffer,
+    // Gemeinsam fuer text_vertex_buffer und label_text_buffer (s. TEXT_QUAD_INDICES).
+    pub(crate) text_index_buffer: wgpu::Buffer,
     // Schildtext im Welt-Durchgang, mit Tiefentest (s. App::build_sign_texts): im VRAM
     // gesetzte Seiten samt Pipelines (s. SignGpu) und ihre Schrift (Bereich Schilder).
     pub(crate) sign_gpu: std::cell::RefCell<SignGpu>,
@@ -213,6 +215,9 @@ pub(crate) struct GpuState {
     pub(crate) layout_font: std::cell::Cell<Option<FontKind>>,
     // Gerade ruhiger Text (s. push_plain_numbers_marker): Messen ohne reservierten Platz.
     pub(crate) plain_numbers: std::cell::Cell<bool>,
+    // Gerade Text mit Grossbuchstaben trotz "keine Grossbuchstaben" (s.
+    // push_keep_capitals_marker): Messen und Zeichnen lassen sie stehen.
+    pub(crate) keep_capitals: std::cell::Cell<bool>,
     // Wie viele Sprites am Anfang der HUD-Liste UNTER allen Flaechen liegen (das Feuer vor
     // den Augen, s. App::build_fire_overlay) -- sonst verdeckte es Chat-Hintergrund und
     // Keystrokes. Von build_hud gesetzt, von render_world verbraucht.
@@ -225,6 +230,15 @@ pub(crate) struct GpuState {
     pub(crate) text_shadow_half: bool,
     // Wo die Zeichen des zuletzt gezeichneten Textes stehen (s. shape_text, TextRun).
     pub(crate) text_runs: std::cell::RefCell<Vec<TextRun>>,
+    // Massstab der Menues (s. App::sync_ui_scale): Fensterhoehe durch MENU_REF_H, im Spiel 1.
+    // Menues rechnen in den Pixeln der Bezugshoehe -- size() und die Textmasse liefern sie
+    // so --, render_menu rechnet beim Zeichnen in echte Pixel um.
+    pub(crate) ui_scale: std::cell::Cell<f32>,
+    // Nur waehrend render_menu ungleich 1: shape_text_in setzt Text um diesen Faktor groesser.
+    pub(crate) draw_scale: std::cell::Cell<f32>,
+    // In welchem Massstab App::cursor_pos steht: der von sync_ui_scale gesetzte, auch waehrend
+    // ein Welt-Bild ui_scale auf 1 haelt.
+    pub(crate) cursor_scale: std::cell::Cell<f32>,
     // Aus dem letzten shape_text: ab welchem Vertex auf content_clip beschnitten wird (s.
     // push_clip_marker).
     pub(crate) text_clips: std::cell::RefCell<Vec<(u32, bool)>>,
@@ -275,6 +289,14 @@ pub(crate) struct GpuState {
     // dort Treppchen.
     pub(crate) wallpaper: Option<(wgpu::BindGroup, (u32, u32))>,
     pub(crate) wallpaper_sampler: wgpu::Sampler,
+    // Panorama als Hintergrundbild (s. panorama.rs): die sechs Seiten nebeneinander, ein
+    // eigener Vertex-Puffer fuer den Wuerfel (die Sprite-Kapazitaet bleibt den Menues), die
+    // Drehung in Grad samt Zeitpunkt des letzten Bildes und die Geschwindigkeit in Prozent
+    // (setzt die App vor jedem Menuebild).
+    pub(crate) panorama: Option<(wgpu::BindGroup, (u32, u32))>,
+    pub(crate) panorama_vertex_buffer: wgpu::Buffer,
+    pub(crate) panorama_spin: std::cell::Cell<(f32, Option<std::time::Instant>)>,
+    pub(crate) panorama_speed: std::cell::Cell<i32>,
     // Letzter Weltblick (s. last_view.rs): Hintergrund des HUD-Editors ohne Verbindung.
     pub(crate) last_view: Option<(wgpu::BindGroup, (u32, u32))>,
     // Letzter Blick des Servereintrags, mit dem gerade verbunden wird (s. App::connect_view_shown).

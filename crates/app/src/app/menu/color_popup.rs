@@ -23,7 +23,7 @@ impl App {
     pub(crate) fn color_title(t: ColorTarget) -> String {
         match t {
             ColorTarget::Theme(slot) => slot.label().to_string(),
-            ColorTarget::Hitbox(HitboxVariant::Smoothed) => "Hitbox geglättet".to_string(),
+            ColorTarget::Hitbox(HitboxVariant::Smoothed) => "Hitbox Hauptfarbe".to_string(),
             ColorTarget::Hitbox(HitboxVariant::Raw) => "Hitbox roh".to_string(),
             ColorTarget::HitboxKind(art) => format!("Hitbox {}", art.label()),
             ColorTarget::Team(seite) => format!("Hitbox {}", seite.label()),
@@ -302,31 +302,35 @@ impl App {
     }
 
     // Das Fenster in der Overlay-Ebene (ueber allem Menuetext).
-    // Fenster "Erweitert" in Bildschirmkoordinaten, mittig: (Fenster, je Belegung ein Feld,
-    // "+" fuer eine weitere (None, wenn alle Plaetze voll sind), "Fertig").
-    pub(crate) fn keybind_advanced_layout(&self, aktion: KeyBindAction) -> (Rect, Vec<Rect>, Option<Rect>, Rect) {
+    // Fenster "Erweitert" in Bildschirmkoordinaten, mittig: (Fenster, je Belegung ein Feld und
+    // rechts daneben das ihres Modifiers, "+" fuer eine weitere (None, wenn alle Plaetze voll
+    // sind), "Fertig").
+    pub(crate) fn keybind_advanced_layout(&self, aktion: KeyBindAction) -> KeybindAdvancedLayout {
         let (sw, sh) = ui_screen();
-        let (w, pad, kopf, zeile) = (400.0, 20.0, 44.0, SETTINGS_CTRL_H + 8.0);
+        let (w, pad, kopf, zeile, mod_w, luecke) = (520.0, 20.0, 44.0, SETTINGS_CTRL_H + 8.0, 150.0, 10.0);
         let belegt = self.settings.keybinds.count(aktion);
         let plus = belegt < MAX_BINDS_PER_ACTION;
         let h = pad + kopf + (belegt + usize::from(plus)) as f32 * zeile + 12.0 + SETTINGS_CTRL_H + pad;
         let fenster = Rect { x: ((sw - w) / 2.0).round(), y: ((sh - h) / 2.0).round(), w, h };
-        let feld = |i: usize| Rect { x: fenster.x + pad, y: fenster.y + pad + kopf + i as f32 * zeile, w: w - 2.0 * pad, h: SETTINGS_CTRL_H };
+        let haupt_w = w - 2.0 * pad - mod_w - luecke;
+        let feld = |i: usize| Rect { x: fenster.x + pad, y: fenster.y + pad + kopf + i as f32 * zeile, w: haupt_w, h: SETTINGS_CTRL_H };
         let felder = (0..belegt).map(feld).collect();
+        let modifier = (0..belegt).map(|i| Rect { x: fenster.x + w - pad - mod_w, w: mod_w, ..feld(i) }).collect();
         let fertig = Rect { x: fenster.x + w - pad - 140.0, y: fenster.y + h - pad - SETTINGS_CTRL_H, w: 140.0, h: SETTINGS_CTRL_H };
-        (fenster, felder, plus.then(|| feld(belegt)), fertig)
+        KeybindAdvancedLayout { window: fenster, binds: felder, modifiers: modifier, plus: plus.then(|| feld(belegt)), done: fertig }
     }
 
     // Seine Knoepfe als unsichtbare Trefferflaechen -- gezeichnet wird das Fenster in der
     // Overlay-Ebene (s. build_keybind_advanced), sonst laege die Seite darueber.
     pub(crate) fn keybind_advanced_buttons(&self, aktion: KeyBindAction) -> Vec<Button> {
-        let (_, felder, plus, fertig) = self.keybind_advanced_layout(aktion);
+        let l = self.keybind_advanced_layout(aktion);
         let flaeche = |action, rect| Button { action, rect, label: String::new(), enabled: true, color: SERVER_CARD_MARKER, scale: UI_SCALE_SMALL, slider: None };
-        let mut out: Vec<Button> = felder.into_iter().enumerate().map(|(i, r)| flaeche(ButtonAction::Rebind(aktion, i), r)).collect();
-        if let Some(r) = plus {
+        let mut out: Vec<Button> = l.binds.into_iter().enumerate().map(|(i, r)| flaeche(ButtonAction::Rebind(aktion, i), r)).collect();
+        out.extend(l.modifiers.into_iter().enumerate().map(|(i, r)| flaeche(ButtonAction::RebindModifier(aktion, i), r)));
+        if let Some(r) = l.plus {
             out.push(flaeche(ButtonAction::Rebind(aktion, self.settings.keybinds.count(aktion)), r));
         }
-        out.push(flaeche(ButtonAction::CloseKeybindAdvanced, fertig));
+        out.push(flaeche(ButtonAction::CloseKeybindAdvanced, l.done));
         out
     }
 
@@ -336,7 +340,8 @@ impl App {
         use theme::Slot;
         let g = theme::get;
         let (sw, sh) = gpu.size();
-        let (fenster, felder, plus, fertig) = self.keybind_advanced_layout(aktion);
+        let l = self.keybind_advanced_layout(aktion);
+        let fenster = l.window;
         let (cx, cy) = self.cursor_pos;
         let mut rects = vec![
             UiRect { rect: Rect { x: 0.0, y: 0.0, w: sw, h: sh }, color: [0.0, 0.0, 0.0, 0.45], ..UiRect::FLAT },
@@ -344,23 +349,42 @@ impl App {
             UiRect::framed(fenster, g(Slot::BgPanel), 8.0, 1.0, g(Slot::Border1)),
         ];
         let mut texts = vec![UiText { text: format!("Tasten: {}", aktion.short_label()), x: fenster.x + 20.0, y: fenster.y + 22.0, color: theme::text(), scale: UI_SCALE_SMALL }];
-        let knopf = |r: Rect, text: String, wartet: bool, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>| {
+        let knopf = |r: Rect, text: String, farbe: [f32; 4], wartet: bool, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>| {
             let rand = if r.contains(cx, cy) { g(Slot::Border2) } else { g(Slot::Border1) };
             let flaeche = if wartet { g(Slot::AccentSurface) } else { g(Slot::Surface2) };
             rects.push(UiRect::framed(r, flaeche, 6.0, 1.0, rand));
-            texts.push(gpu.centered_text(r, text, theme::text(), UI_SCALE_SMALL));
+            texts.push(gpu.centered_text(r, text, farbe, UI_SCALE_SMALL));
+        };
+        // Tastennamen behalten ihre Grossbuchstaben (s. push_keep_capitals_marker).
+        let tastenknopf = |r: Rect, text: String, farbe: [f32; 4], wartet: bool, rects: &mut Vec<UiRect>, texts: &mut Vec<UiText>| {
+            gpu.keep_capitals.set(true);
+            push_keep_capitals_marker(texts, true);
+            knopf(r, text, farbe, wartet, rects, texts);
+            gpu.keep_capitals.set(false);
+            push_keep_capitals_marker(texts, false);
         };
         let kb = &self.settings.keybinds;
-        for (i, r) in felder.into_iter().enumerate() {
-            let wartet = self.awaiting_keybind == Some((aktion, i));
+        let wartet_auf = |i: usize, modifier: bool| self.awaiting_keybind == Some((aktion, i)) && self.awaiting_modifier == modifier;
+        for (i, r) in l.binds.into_iter().enumerate() {
+            let wartet = wartet_auf(i, false);
             let text = if wartet { "> Taste/Maus <".to_string() } else { kb.bind_at(aktion, i).map(bind_display).unwrap_or_default() };
-            knopf(r, text, wartet, &mut rects, &mut texts);
+            tastenknopf(r, text, theme::text(), wartet, &mut rects, &mut texts);
         }
-        if let Some(r) = plus {
-            let wartet = self.awaiting_keybind == Some((aktion, kb.count(aktion)));
-            knopf(r, if wartet { "> Taste/Maus <" } else { "+" }.to_string(), wartet, &mut rects, &mut texts);
+        // Leer steht dort nur, wofuer das Feld da ist.
+        for (i, r) in l.modifiers.into_iter().enumerate() {
+            let wartet = wartet_auf(i, true);
+            let (text, farbe) = match kb.modifier_at(aktion, i) {
+                _ if wartet => ("> Taste/Maus <".to_string(), theme::text()),
+                Some(m) => (bind_display(m), theme::text()),
+                None => ("Modifier".to_string(), theme::text_2()),
+            };
+            tastenknopf(r, text, farbe, wartet, &mut rects, &mut texts);
         }
-        knopf(fertig, "Fertig".to_string(), false, &mut rects, &mut texts);
+        if let Some(r) = l.plus {
+            let wartet = wartet_auf(kb.count(aktion), false);
+            knopf(r, if wartet { "> Taste/Maus <" } else { "+" }.to_string(), theme::text(), wartet, &mut rects, &mut texts);
+        }
+        knopf(l.done, "Fertig".to_string(), theme::text(), false, &mut rects, &mut texts);
         overlay.groups.push(UiOverlayGroup { rects, texts, sprites: Vec::new(), pivot: (0.0, 0.0), angle: 0.0, clip: None });
     }
 

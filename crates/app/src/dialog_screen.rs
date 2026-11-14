@@ -235,6 +235,18 @@ fn save_conduct(liste: &[(String, i32)]) {
 impl App {
     // --- Oeffnen und Schliessen ----------------------------------------------------------
 
+    // Der Dialog fuers Pausemenue (Vanilla PauseScreen.getCustomAdditions): genau einer im Tag
+    // pause_screen_additions, bei mehreren minecraft:custom_options. Dazu sein externer Titel.
+    pub(crate) fn pause_dialog(&self) -> Option<(usize, String)> {
+        let id = match self.pause_dialogs.as_slice() {
+            [] => return None,
+            [id] => *id as usize,
+            _ => self.dialog_registry.iter().position(|(n, _)| n == "minecraft:custom_options")?,
+        };
+        let d = self.dialog_registry.get(id)?.1.as_ref().and_then(dialog::parse)?;
+        Some((id, d.external_title().iter().map(|s| s.text.as_str()).collect()))
+    }
+
     // Show Dialog vom Server.
     pub(crate) fn show_dialog_ref(&mut self, r: protocol::packets::DialogRef) {
         let daten = match r {
@@ -316,7 +328,7 @@ impl App {
         self.dialog.is_some() || self.dialog_waiting.is_some()
     }
 
-    fn close_dialog_windows(&mut self) {
+    pub(crate) fn close_dialog_windows(&mut self) {
         let war_offen = self.dialog_shown();
         self.dialog = None;
         self.dialog_waiting = None;
@@ -325,9 +337,22 @@ impl App {
         }
     }
 
-    // Clear Dialog vom Server: der offene Dialog (auch das Warten auf ihn) verschwindet.
+    // Clear Dialog vom Server: der offene Dialog (auch das Warten auf ihn) verschwindet -- aber
+    // nur als Antwort auf eine eigene Aktion im Dialog (Nutzerwunsch: der Server darf nichts
+    // einfach so schliessen). Abweichung von Vanilla.
     pub(crate) fn clear_dialog(&mut self) {
-        self.close_dialog_windows();
+        if self.take_dialog_answer() {
+            self.close_dialog_windows();
+        }
+    }
+
+    // So lange nach einem eigenen Klick im Dialog gilt ein Server-Paket als Antwort darauf.
+    const DIALOG_ANSWER_WINDOW: std::time::Duration = std::time::Duration::from_millis(600);
+
+    // Hat man gerade selbst eine Aktion im Dialog ausgeloest? Dann darf der Server darauf mit
+    // Schliessen oder einem Menue antworten. Verbraucht den Klick.
+    pub(crate) fn take_dialog_answer(&mut self) -> bool {
+        self.dialog_user_action.take().is_some_and(|t| t.elapsed() < Self::DIALOG_ANSWER_WINDOW)
     }
 
     // Alles, was zur Verbindung gehoert, beim Trennen bzw. beim Wechsel in die Welt.
@@ -358,6 +383,7 @@ impl App {
     }
 
     fn dialog_event(&mut self, e: Event) {
+        self.dialog_user_action = Some(Instant::now());
         match e {
             Event::RunCommand(befehl) => {
                 let befehl = befehl.strip_prefix('/').unwrap_or(&befehl).to_string();
@@ -932,6 +958,37 @@ impl App {
     }
 
     // --- Maus ----------------------------------------------------------------------------
+
+    // Mittelklick auf ein Textfeld des Dialogs (s. App::paste_at_pointer): das Feld bekommt
+    // den Fokus, der Text kommt einzeilig an die Zeichengrenze unter dem Zeiger, mehrzeilig an
+    // den Cursor. true = eingefuegt.
+    pub(crate) fn dialog_paste_at(&mut self, pos: (f32, f32), text: &str) -> bool {
+        let Some(gpu) = self.gpu.as_ref() else { return false };
+        if self.dialog.as_ref().is_none_or(|o| o.info) {
+            return false;
+        }
+        let Some(l) = self.dialog_layout(gpu) else { return false };
+        if !l.body.contains(pos.0, pos.1) {
+            return false;
+        }
+        let treffer = l.parts.iter().find_map(|(r, teil)| match teil {
+            Part::Field(i) if r.contains(pos.0, pos.1) && r.y >= l.body.y - 1.0 && r.y + r.h <= l.body.y + l.body.h + 1.0 => Some((*r, *i)),
+            _ => None,
+        });
+        let Some((r, i)) = treffer else { return false };
+        let Some(offen) = self.dialog.as_mut() else { return false };
+        offen.focus = Some(i);
+        let Some(Some(feld)) = offen.fields.get_mut(i) else { return false };
+        if r.h <= CONTROL_H {
+            let idx = crate::text_field::index_at(feld.text(), pos.0 - r.x - 12.0, |t| gpu.measure_raw(t, UI_SCALE_NORMAL));
+            feld.press(idx, false);
+        } else {
+            feld.deselect();
+        }
+        feld.insert(text);
+        self.play_ui_sound(ui_sound::UiSound::Type);
+        true
+    }
 
     // Linke (oder rechte) Taste bei offenem Dialogfenster. Schluckt jeden Druck.
     pub(crate) fn dialog_press(&mut self, rechts: bool) {

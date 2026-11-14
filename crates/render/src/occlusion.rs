@@ -16,7 +16,7 @@
 // Bis dahin gilt das alte -- und Spalten, deren Daten sich seitdem geaendert haben, werden
 // samt ihren Nachbarn vorsichtshalber ganz gezeichnet.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
@@ -58,7 +58,7 @@ impl OcclusionCulling {
             .name("hoehlen-culling".into())
             .spawn(move || worker(worker_rx, worker_tx))
             .expect("Thread fuer das Hoehlen-Culling");
-        Self { tx, rx, result: None, generation: 0, fresh: HashMap::new(), sent: None, in_flight: false, min_y: world::MIN_Y }
+        Self { tx, rx, result: None, generation: 0, fresh: HashMap::default(), sent: None, in_flight: false, min_y: world::MIN_Y }
     }
 
     pub fn set_column(&mut self, key: Key, vis: Vec<SectionVis>, min_y: i32) {
@@ -127,7 +127,7 @@ impl Default for OcclusionCulling {
 }
 
 fn worker(rx: Receiver<Msg>, tx: Sender<Result>) {
-    let mut columns: HashMap<Key, Arc<[SectionVis]>> = HashMap::new();
+    let mut columns: HashMap<Key, Arc<[SectionVis]>> = HashMap::default();
     while let Ok(first) = rx.recv() {
         // Alles Angestaute auf einmal einarbeiten; von mehreren Rechenauftraegen zaehlt nur der
         // letzte.
@@ -163,7 +163,7 @@ const FROM_CAMERA: u8 = 1 << 6;
 fn reachable(columns: &HashMap<Key, Arc<[SectionVis]>>, camera: (i32, i32, i32), radius: i32) -> HashMap<Key, u64> {
     let sections = columns.values().map(|v| v.len()).max().unwrap_or(0);
     if sections == 0 || sections > 64 || radius < 0 {
-        return HashMap::new();
+        return HashMap::default();
     }
     let (cx, cy, cz) = camera;
     let cy = cy.clamp(0, sections as i32 - 1);
@@ -211,7 +211,7 @@ fn reachable(columns: &HashMap<Key, Arc<[SectionVis]>>, camera: (i32, i32, i32),
             entries[i] |= 1 << (d ^ 1);
         }
     }
-    let mut masks = HashMap::new();
+    let mut masks = HashMap::default();
     for dx in -radius..=radius {
         for dz in -radius..=radius {
             if grid[((dx + radius) as usize) * side + (dz + radius) as usize].is_none() {
@@ -243,7 +243,7 @@ mod tests {
     fn fels_verdeckt_die_hoehle_darunter() {
         // Section 0: Hoehle (alles verbunden), 1: massiv, 2: Oberflaeche, 3: Luft.
         let col = spalte(&[VIS_ALL, 0, VIS_ALL, VIS_ALL]);
-        let mut columns = HashMap::new();
+        let mut columns = HashMap::default();
         for x in -2..=2 {
             for z in -2..=2 {
                 columns.insert((x, z), col.clone());
@@ -260,7 +260,7 @@ mod tests {
     // Steht man in der Hoehle, ist die Oberflaeche ueber dem Fels unsichtbar.
     fn aus_der_hoehle_keine_oberflaeche() {
         let col = spalte(&[VIS_ALL, 0, VIS_ALL, VIS_ALL]);
-        let mut columns = HashMap::new();
+        let mut columns = HashMap::default();
         for x in -2..=2 {
             for z in -2..=2 {
                 columns.insert((x, z), col.clone());
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     // Ein senkrechter Schacht in einer Spalte oeffnet die Hoehle darunter.
     fn schacht_oeffnet_die_hoehle() {
-        let mut columns = HashMap::new();
+        let mut columns = HashMap::default();
         for x in -2..=2 {
             for z in -2..=2 {
                 let fels = if (x, z) == (1, 0) { VIS_ALL } else { 0 };
@@ -301,7 +301,7 @@ mod tests {
         // von Westen herein, Weg 2 ueber (1, 0) von Norden. Dahinter liegt U (2, 1); alles
         // andere ist Fels, U ist also nur durch T zu sehen.
         let nord_ost = 1 << (2 * 6 + 5);
-        let mut columns = HashMap::new();
+        let mut columns = HashMap::default();
         for x in -1..=3 {
             for z in -1..=3 {
                 let vis = match (x, z) {
@@ -333,7 +333,7 @@ mod zeit {
     // cargo test --release -p render bfs_dauer -- --ignored --nocapture
     fn bfs_dauer() {
         let col: Arc<[SectionVis]> = vec![VIS_ALL; 24].into();
-        let mut columns = HashMap::new();
+        let mut columns = HashMap::default();
         for x in -33..=33 {
             for z in -33..=33 {
                 columns.insert((x, z), col.clone());

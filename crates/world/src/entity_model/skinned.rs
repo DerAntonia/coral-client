@@ -99,6 +99,54 @@ pub fn part_matrices_into(model: &Model, pose: &Pose, base: Affine, out: &mut Ve
     }
 }
 
+// Die Teile eines Modells ohne Geometrie, flach in der Reihenfolge von part_matrices, je Teil
+// mit dem Index seines Elternteils. Haengt an keinem Modell und laesst sich deshalb auf einen
+// anderen Thread mitnehmen: die Matrizen einer Instanz entstehen dort aus Skelett und Pose
+// (s. app::skin_frame).
+#[derive(Clone, Debug)]
+pub struct Skeleton {
+    parts: Vec<(Part, Option<u32>)>,
+}
+
+impl Skeleton {
+    #[must_use]
+    pub fn of(model: &Model) -> Self {
+        fn teil(part: &Part, parent: Option<u32>, out: &mut Vec<(Part, Option<u32>)>) {
+            let index = out.len() as u32;
+            out.push((part.clone_shallow(), parent));
+            for child in &part.children {
+                teil(child, Some(index), out);
+            }
+        }
+        let mut parts = Vec::new();
+        for part in &model.parts {
+            teil(part, None, &mut parts);
+        }
+        Self { parts }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.parts.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    // Wie part_matrices_into, nach `out` (genau len() lang).
+    pub fn matrices_into(&self, pose: &Pose, base: Affine, out: &mut [Option<Affine>]) {
+        for (i, (part, parent)) in self.parts.iter().enumerate() {
+            let eltern = match parent {
+                None => Some(base),
+                Some(j) => out[*j as usize],
+            };
+            out[i] = eltern.filter(|_| !pose.get(part.name).hidden).map(|p| part_world_transform(part, pose, p));
+        }
+    }
+}
+
 // Das Netz in dieser Pose als fertige Vertices, wie es der Vertex-Shader rechnet: Ecke mal
 // Matrix ihres Teils, Licht aus der gedrehten Achse, UV ins Atlas-Rechteck. `color` ist schon
 // mit der Helligkeit verrechnet (wie bei emit_into). Versteckte Teile fallen weg.
@@ -167,6 +215,10 @@ mod tests {
             let netz = skin_mesh(model, two_sided);
             let matrizen = part_matrices(model, pose, base);
             assert_eq!(matrizen.len(), netz.parts, "{wo}: Teilezahl");
+            let skelett = Skeleton::of(model);
+            let mut flach = vec![None; skelett.len()];
+            skelett.matrices_into(pose, base, &mut flach);
+            assert!(flach.len() == matrizen.len() && flach.iter().zip(&matrizen).all(|(a, b)| format!("{a:?}") == format!("{b:?}")), "{wo}: Skelett wie part_matrices");
             let bekommen = skinned_vertices(&netz, &matrizen, tex, farbe);
             assert_eq!(bekommen.len(), erwartet.len(), "{wo}, zweiseitig={two_sided}: Anzahl");
             for (i, (a, b)) in bekommen.iter().zip(&erwartet).enumerate() {

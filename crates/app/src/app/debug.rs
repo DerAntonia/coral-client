@@ -20,6 +20,22 @@ impl App {
     // AB Paketankunft; die Laufzeit davor kommt additiv obendrauf.
     // Bruchteil des laufenden Physik-Ticks (0..1) -- der Wert, mit dem alles Tick-Gebundene
     // zwischen zwei Ticks gleitet (eigene Position, Entities, Animationen).
+    // Ping-Zeile: links der Wert, den der Server fuer uns in die Tab-Liste schreibt (sein
+    // KeepAlive-Roundtrip, alle 15 s gemessen und gleitend gemittelt), rechts der Anteil des
+    // Clients daran -- wie lange die letzte KeepAlive-Anfrage bei uns lag, bis die Antwort
+    // geschrieben war, und das Maximum dieser Verbindung.
+    pub(crate) fn ping_debug_line(&self) -> String {
+        let server = match self.own_uuid.and_then(|u| self.tab_entries.get(&u)) {
+            Some(e) => format!("{} ms", e.latency),
+            None => "unbekannt".to_string(),
+        };
+        let client = match self.keepalive_reply_us {
+            Some((letzte, max)) => format!("{:.2} ms (max {:.2} ms)", f64::from(letzte) / 1000.0, f64::from(max) / 1000.0),
+            None => "noch kein KeepAlive".to_string(),
+        };
+        format!("Ping: {server} (Server)  |  Antwort im Client: {client}")
+    }
+
     pub(crate) fn tick_progress(&self) -> f32 {
         (self.physics_accum / physics::TICK_DT).clamp(0.0, 1.0)
     }
@@ -238,6 +254,7 @@ impl App {
                 self.entity_update_stats.per_second(),
                 self.server_address
             ),
+            self.ping_debug_line(),
             // Weltton: die Aufnahmen kommen erst beim ersten Vorkommen vom Datentraeger
             // (s. vanilla_sounds), die Zahl waechst also im Spiel. Bleibt sie bei 0, obwohl
             // etwas passiert, hakt es zwischen Paket und Datei -- und genau das sieht man
@@ -367,6 +384,7 @@ impl App {
     // schon weg ist und nur die Ansicht noch auf den ersten Chunk wartet.
     pub(crate) fn cancel_connect(&mut self) {
         self.play_ui_sound(ui_sound::UiSound::Close);
+        self.connect_after_login = false;
         if self.conn_task.is_some() {
             self.disconnect();
             return;
@@ -401,7 +419,7 @@ impl App {
         const MARGIN_NS: f64 = 150_000.0;
         // Mit den echten Zeilen des Bildmodus, sonst geschaetzt.
         let visible = if let Some((sichtbar, gesamt)) = self.vblank.as_ref().and_then(|v| v.lines) { period_ns * f64::from(sichtbar) / f64::from(gesamt) } else {
-            let height = f64::from(self.gpu.as_ref()?.size().1);
+            let height = f64::from(self.gpu.as_ref()?.real_size().1);
             period_ns * height / (height + BLANK_LINES)
         };
         let sichtbar_ziel = match self.settings.tear_position {
