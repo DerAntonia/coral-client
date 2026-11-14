@@ -395,7 +395,6 @@ pub fn acts_on_block(name: &str) -> bool {
         "painting",
         "armor_stand",
         "end_crystal",
-        "lead",
         "firework_rocket",
         "glass_bottle",
         // PowderSnowBucketItem ist als EINZIGER Eimer ein `extends BlockItem` und hat damit
@@ -404,7 +403,10 @@ pub fn acts_on_block(name: &str) -> bool {
         // nach block_hit_use_swings, s. dort.
         "powder_snow_bucket",
     ];
-    const ENDUNGEN: &[&str] = &["_hoe", "_shovel", "_axe", "_spawn_egg", "_minecart", "_boat", "_raft", "_dye"];
+    // Nicht hier: Boote und Floesse (BoatItem hat nur `use`, keinen useOn-Zweig) und die Leine
+    // (LeadItem.useOn gibt auf dem Client immer PASS, das Anbinden macht der Server). Beide gehen
+    // ueber das durchgereichte zweite Paket.
+    const ENDUNGEN: &[&str] = &["_hoe", "_shovel", "_axe", "_spawn_egg", "_minecart", "_dye"];
     // "_axe" trifft auch die Spitzhacke ("pickaxe") -- die STREIFT aber keinen Stamm ab,
     // sondern tut auf einem Block nichts. Ohne diese Ausnahme schwaenge der Arm bei jedem
     // Rechtsklick mit der Spitzhacke, und mit der klickt man beim Bauen dauernd herum.
@@ -412,6 +414,98 @@ pub fn acts_on_block(name: &str) -> bool {
         return false;
     }
     EINZELN.contains(&name) || ENDUNGEN.iter().any(|e| name.ends_with(e))
+}
+
+// Alle Bloecke, deren Klasse BonemealableBlock umsetzt (in 1.21.11 aus den Klassen abgeleitet,
+// samt Unterklassen).
+fn is_bonemealable(name: &str) -> bool {
+    const NAMEN: &[&str] = &[
+        "azalea", "flowering_azalea", "bamboo", "bamboo_sapling", "beetroots", "carrots", "potatoes", "wheat",
+        "torchflower_crop", "pitcher_crop", "big_dripleaf", "big_dripleaf_stem", "small_dripleaf", "brown_mushroom",
+        "red_mushroom", "bush", "cave_vines", "cave_vines_plant", "cocoa", "crimson_fungus", "warped_fungus",
+        "crimson_nylium", "warped_nylium", "netherrack", "fern", "short_grass", "grass_block", "firefly_bush",
+        "glow_lichen", "kelp", "kelp_plant", "lilac", "peony", "rose_bush", "sunflower", "mangrove_leaves",
+        "mangrove_propagule", "moss_block", "pale_moss_block", "pale_moss_carpet", "pale_hanging_moss", "pink_petals",
+        "wildflowers", "rooted_dirt", "sea_pickle", "seagrass", "short_dry_grass", "tall_dry_grass", "sweet_berry_bush",
+        "twisting_vines", "twisting_vines_plant", "weeping_vines", "weeping_vines_plant", "pumpkin_stem", "melon_stem",
+    ];
+    NAMEN.contains(&name) || name.ends_with("_sapling")
+}
+
+// Ergebnis von Item.useOn auf einen bestimmten Block (nur die drei, auf die es hier ankommt):
+// Success schwingt, Pass reicht an `use` durch (zweites Paket), Fail beendet ohne Schwung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnBlock {
+    Success,
+    Pass,
+    Fail,
+}
+
+// Was Item.useOn fuer dieses Item auf DIESEM Block liefert -- wie Vanillas Client, der die Antwort
+// lokal ausrechnet (MultiPlayerGameMode.performUseItemOn): ein Rechtsklick mit dem Enderkristall
+// auf Holz schwingt nicht, ebenso Hacke auf Stein. None = nicht entscheidbar (die Bedingung haengt
+// an Zustand, den dieser Client nicht kennt, z. B. Knochenmehl, Schere, Feuerzeug): der Aufrufer
+// nimmt dann an, wie bisher.
+//
+// `ueber_luft`: der Block ueber dem angeklickten ist Luft; `face_unten`: Seite UNTEN getroffen;
+// `lagerfeuer_brennt`: der Block ist ein brennendes (Seelen-)Lagerfeuer; `sperrt_nebenhand`:
+// Nebenhand mit blocks_attacks (Schild) und nicht geschlichen (AxeItem.playerHasBlockingItemUseIntent,
+// gilt nur fuer die Haupthand -- der Aufrufer reicht es entsprechend durch); `wasser_daneben`: der
+// Block auf der getroffenen Seite ist eine Wasserquelle (Knochenmehl streut dort Seegras).
+#[must_use]
+pub fn use_on_block_result(item: &str, ziel: &str, ueber_luft: bool, face_unten: bool, lagerfeuer_brennt: bool, sperrt_nebenhand: bool, wasser_daneben: bool) -> Option<OnBlock> {
+    use crate::block_registry::is_block;
+    let ja_nein = |b: bool| Some(if b { OnBlock::Success } else { OnBlock::Pass });
+    if item == "end_crystal" {
+        // EndCrystalItem: Obsidian/Grundgestein mit freiem Platz darueber, sonst FAIL. Entitaeten
+        // im Weg kennt der Aufrufer nicht -- dann nimmt der Server es nicht an und korrigiert.
+        return Some(if matches!(ziel, "obsidian" | "bedrock") && ueber_luft { OnBlock::Success } else { OnBlock::Fail });
+    }
+    if item == "minecart" || item.ends_with("_minecart") {
+        // MinecartItem: nur auf Schienen, sonst FAIL.
+        return Some(if matches!(ziel, "rail" | "powered_rail" | "detector_rail" | "activator_rail") { OnBlock::Success } else { OnBlock::Fail });
+    }
+    if item == "ink_sac" || item == "glow_ink_sac" || item.ends_with("_dye") {
+        // Schilder nehmen sie selbst an (Block-Seite, vorher); sonst wirken sie nur auf Entitaeten.
+        return Some(OnBlock::Pass);
+    }
+    if item.ends_with("_hoe") {
+        return match ziel {
+            "grass_block" | "dirt_path" | "dirt" | "coarse_dirt" => ja_nein(ueber_luft),
+            "rooted_dirt" => Some(OnBlock::Success),
+            _ => Some(OnBlock::Pass),
+        };
+    }
+    if item.ends_with("_shovel") {
+        if face_unten {
+            return Some(OnBlock::Pass);
+        }
+        let flach = matches!(ziel, "grass_block" | "dirt" | "podzol" | "coarse_dirt" | "mycelium" | "rooted_dirt") && ueber_luft;
+        return ja_nein(flach || lagerfeuer_brennt);
+    }
+    if item.ends_with("_axe") && !item.ends_with("pickaxe") {
+        if sperrt_nebenhand {
+            return Some(OnBlock::Pass);
+        }
+        // Abschaelen (stripped_*), Kupfer abschaben (Stufe zurueck), Wachs entfernen.
+        let schaelbar = is_block(&format!("stripped_{ziel}"));
+        let kupfer_zurueck = ziel.contains("copper") && ["exposed_", "weathered_", "oxidized_"].iter().any(|p| ziel.starts_with(p));
+        let wachs = ziel.starts_with("waxed_") && is_block(ziel);
+        return ja_nein(schaelbar || kupfer_zurueck || wachs);
+    }
+    if item == "bone_meal" {
+        // BoneMealItem.useOn: erst growCrop (Block ist BonemealableBlock UND gerade duengbar), dann
+        // growWaterPlant (Wasserquelle an der getroffenen Seite). Ob ein duengbarer Block gerade
+        // wirklich wachsen kann (Weizen ausgewachsen, Gras ohne Platz), haengt an Zustand und
+        // Nachbarn: dort bleibt es bei None (angenommen). Sicher PASS ist alles, was gar nicht
+        // duengbar ist -- Stein, Planken ...
+        return if is_bonemealable(ziel) || wasser_daneben { None } else { Some(OnBlock::Pass) };
+    }
+    if item == "honeycomb" {
+        // HoneycombItem: alles mit gewachster Entsprechung (WAXABLES).
+        return ja_nein(!ziel.starts_with("waxed_") && is_block(&format!("waxed_{ziel}")));
+    }
+    None
 }
 
 // Schwingt der Arm, wenn `Item.use` NACH einem Blocktreffer laeuft? Das ist der Fall, den
@@ -542,6 +636,42 @@ mod schwung_tests {
         // Ein Schneeball dagegen fliegt in beiden Faellen.
         assert!(item_use_accepted("snowball", true));
         assert!(item_use_accepted("snowball", false));
+    }
+
+    // Nur auf bestimmte Bloecke wirkende Items (Vanillas useOn): auf anderen kein Schwung.
+    #[test]
+    fn items_wirken_nur_auf_passende_bloecke() {
+        use OnBlock::{Fail, Pass, Success};
+        let r = |item, ziel, luft| use_on_block_result(item, ziel, luft, false, false, false, false);
+        assert_eq!(r("end_crystal", "obsidian", true), Some(Success));
+        assert_eq!(r("end_crystal", "obsidian", false), Some(Fail));
+        assert_eq!(r("end_crystal", "oak_planks", true), Some(Fail));
+        assert_eq!(r("diamond_hoe", "grass_block", true), Some(Success));
+        assert_eq!(r("diamond_hoe", "grass_block", false), Some(Pass));
+        assert_eq!(r("diamond_hoe", "stone", true), Some(Pass));
+        assert_eq!(r("iron_axe", "oak_log", true), Some(Success));
+        assert_eq!(r("iron_axe", "stripped_oak_log", true), Some(Pass));
+        assert_eq!(r("iron_axe", "stone", true), Some(Pass));
+        assert_eq!(r("iron_axe", "waxed_copper_block", true), Some(Success));
+        assert_eq!(r("iron_axe", "weathered_cut_copper", true), Some(Success));
+        assert_eq!(r("honeycomb", "copper_block", true), Some(Success));
+        assert_eq!(r("honeycomb", "waxed_copper_block", true), Some(Pass));
+        assert_eq!(r("honeycomb", "stone", true), Some(Pass));
+        assert_eq!(r("iron_shovel", "dirt", true), Some(Success));
+        assert_eq!(use_on_block_result("iron_shovel", "dirt", true, true, false, false, false), Some(Pass));
+        assert_eq!(use_on_block_result("iron_shovel", "campfire", false, false, true, false, false), Some(Success));
+        assert_eq!(use_on_block_result("iron_axe", "oak_log", true, false, false, true, false), Some(Pass));
+        assert_eq!(r("red_dye", "stone", true), Some(Pass));
+        assert_eq!(r("minecart", "rail", false), Some(Success));
+        assert_eq!(r("chest_minecart", "stone", false), Some(Fail));
+        // Nicht entscheidbar: wie bisher annehmen.
+        assert_eq!(r("bone_meal", "stone", true), Some(Pass));
+        assert_eq!(r("bone_meal", "oak_planks", true), Some(Pass));
+        assert_eq!(r("bone_meal", "wheat", true), None);
+        assert_eq!(r("bone_meal", "grass_block", true), None);
+        assert_eq!(r("bone_meal", "oak_sapling", true), None);
+        assert_eq!(use_on_block_result("bone_meal", "sand", false, false, false, false, true), None);
+        assert_eq!(r("flint_and_steel", "stone", true), None);
     }
 
     #[test]

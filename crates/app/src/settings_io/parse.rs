@@ -133,7 +133,9 @@ impl Settings {
                 }
                 _ if key.strip_prefix("hitbox_").and_then(hitbox_kinds::HitboxKind::from_key).is_some() => {
                     let art = key.strip_prefix("hitbox_").and_then(hitbox_kinds::HitboxKind::from_key).expect("eben geprueft");
-                    let mut stil = hitbox_kinds::HitboxStyle::decode(value, art.default_style());
+                    // Aeltere Dateien hatten EINE Kantenwahl fuer alle (oben schon auf alle Arten gelegt).
+                    let vorgabe = hitbox_kinds::HitboxStyle { lines: settings.module_hitbox_styles[art.index()].lines, ..art.default_style() };
+                    let mut stil = hitbox_kinds::HitboxStyle::decode(value, vorgabe);
                     // Netz und Wasser hatten immer ihre eigene Farbe, auch ohne gespeichertes Ueberschreiben.
                     stil.custom |= art.default_style().custom;
                     settings.module_hitbox_styles[art.index()] = stil;
@@ -1032,12 +1034,12 @@ impl Settings {
             // Aeltere Dateien: ein Schalter "nur sichtbare Kanten".
             "module_hitbox_visible_edges" => {
                 if value == "true" {
-                    settings.module_hitbox_lines = HITBOX_LINES_VISIBLE;
+                    settings.module_hitbox_styles.iter_mut().for_each(|s| s.lines = HITBOX_LINES_VISIBLE);
                 }
             }
             "module_hitbox_lines" => {
                 if let Ok(v) = value.parse::<u8>() {
-                    settings.module_hitbox_lines = v.min(HITBOX_LINES_OUTLINE);
+                    settings.module_hitbox_styles.iter_mut().for_each(|s| s.lines = v.min(HITBOX_LINES_OUTLINE));
                 }
             }
             "module_hitbox_self" => settings.module_hitbox_self = value == "true",

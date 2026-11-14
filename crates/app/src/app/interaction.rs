@@ -686,6 +686,9 @@ impl App {
     //   2. Sonst feuert eine GEHALTENE Taste, sobald der Cooldown abgelaufen ist. Das ist
     //      Vanillas zweiter Zweig (useKey.isPressed() && itemUseCooldown == 0).
     pub(crate) fn tick_item_use(&mut self) {
+        // Gilt nur, solange ein Klick darauf wartet (s. unten vor den Benutzungen); jeder Tick,
+        // der vorher aussteigt, laeuft mit dem echten Schleichen.
+        self.sneak_override = None;
         // Vanillas handleInputEvents ist an dieser Stelle ein ENTWEDER-ODER, kein Nacheinander:
         // benutzt der Spieler gerade ein Item, wird beim Loslassen der Benutzen-Taste die
         // Benutzung beendet, und alle gepufferten Angriffs-, Benutzen- und Pick-Klicks werden
@@ -932,6 +935,17 @@ impl App {
         // der gerade gesetzte Block das Ziel wechselt) flaggt also. Dann warten die Klicks wie
         // oben auf den naechsten Tick -- verworfen wird keiner.
         if self.dig_packet_this_tick {
+            self.use_cooldown = self.use_cooldown.saturating_sub(1);
+            return;
+        }
+        // Force-Place: der Server ueberspringt die Blockbenutzung allein nach SEINEM
+        // Schleich-Stand (ServerPlayerGameMode.useItemOn: isSecondaryUseActive() &&
+        // Hand voll), und den kennt er aus dem letzten PlayerInput. Weicht der vom Gewuenschten
+        // ab, geht in DIESEM Tick das passende PlayerInput raus und die Klicks warten bis zum
+        // naechsten Tick -- genau ein PlayerInput pro Tick (Grim BadPacketsZ), und in
+        // Vanillas Reihenfolge (USE_ITEM_ON vor dem PlayerInput des Ticks).
+        self.sneak_override = self.secondary_use_override(treffer);
+        if self.sneak_override.is_some_and(|s| s != self.server_sneaking()) {
             self.use_cooldown = self.use_cooldown.saturating_sub(1);
             return;
         }
@@ -1478,7 +1492,9 @@ impl App {
         hand: i32,
     ) -> BlockUse {
         let (haupt, zweit) = self.own_hand_items();
-        let ueberspringen = self.sneak_held && (haupt.is_some() || zweit.is_some());
+        // Der Server entscheidet nach dem Schleichen, das er zuletzt bekommen hat (s.
+        // secondary_use_override), nicht nach der Taste.
+        let ueberspringen = self.server_sneaking() && (haupt.is_some() || zweit.is_some());
         let haupthand = hand == protocol::packets::HAND_MAIN;
 
         // --- Schritt 2: der Block selbst -------------------------------------------------
@@ -1562,6 +1578,31 @@ impl App {
             return BlockUse::Durchgereicht;
         }
         if world::item_registry::acts_on_block(item) {
+            // Manche Items wirken nur auf bestimmte Bloecke (Enderkristall auf Obsidian, Hacke
+            // auf Erde, Axt auf Staemme ...): Vanillas Client rechnet useOn lokal aus, ein
+            // Rechtsklick auf Holz schwingt nicht. Pass geht weiter zu `use`, Fail beendet.
+            let state = self.world.block_at(block.0, block.1, block.2);
+            let ziel = world::block_name(state).unwrap_or("");
+            let ueber_luft = world::block_name(self.world.block_at(block.0, block.1 + 1, block.2)).is_some_and(|n| matches!(n, "air" | "cave_air" | "void_air"));
+            let brennt = ziel.ends_with("campfire") && world::state_props::property(state, "lit") == Some("true");
+            let zweit_schild = self.own_hand_stack(protocol::packets::HAND_OFF).and_then(|s| world::item_registry::item_name(s.item_id)) == Some("shield");
+            let sperrt = hand == protocol::packets::HAND_MAIN && zweit_schild && !self.server_sneaking();
+            // Knochenmehl streut Seegras, wenn an der getroffenen Seite eine Wasserquelle liegt.
+            let (fx, fy, fz) = match face {
+                protocol::packets::FACE_DOWN => (0, -1, 0),
+                protocol::packets::FACE_UP => (0, 1, 0),
+                protocol::packets::FACE_NORTH => (0, 0, -1),
+                protocol::packets::FACE_SOUTH => (0, 0, 1),
+                protocol::packets::FACE_WEST => (-1, 0, 0),
+                _ => (1, 0, 0),
+            };
+            let daneben = self.world.block_at(block.0 + fx, block.1 + fy, block.2 + fz);
+            let wasser = world::block_name(daneben) == Some("water") && world::state_props::property(daneben, "level") == Some("0");
+            match world::item_registry::use_on_block_result(item, ziel, ueber_luft, face == protocol::packets::FACE_DOWN, brennt, sperrt, wasser) {
+                Some(world::item_registry::OnBlock::Pass) => return BlockUse::Durchgereicht,
+                Some(world::item_registry::OnBlock::Fail) => return BlockUse::Fehlgeschlagen,
+                Some(world::item_registry::OnBlock::Success) | None => {}
+            }
             // Pulverschnee loescht wie Wasser (PowderSnowBlock.entityInside: EXTINGUISH).
             if item == "powder_snow_bucket" {
                 self.use_emptied_bucket = Some(sequence);
@@ -1569,6 +1610,42 @@ impl App {
             return BlockUse::Angenommen { schwingt: true };
         }
         BlockUse::Durchgereicht
+    }
+
+    // Schleichen, wie der Server es gerade kennt: das Flag des zuletzt gesendeten PlayerInput.
+    pub(crate) fn server_sneaking(&self) -> bool {
+        self.last_sent_player_input.is_some_and(|f| f.5)
+    }
+
+    // Welches Schleichen ein wartender Rechtsklick auf einen Block braucht, wenn es nicht das
+    // der Taste ist (Nutzerwunsch 2026-11-14): Schleichen -- gehalten oder umgeschaltet --
+    // ueberspringt die Blockbenutzung NIE, die Werkbank geht auch schleichend auf. Uebersprungen
+    // wird nur mit Force-Place. Dafuer steht man fuer den Klick einen Tick auf bzw. duckt sich
+    // einen Tick (bewusst, sichtbar, ohne Kantenschutz, s. update_movement).
+    //
+    // Nur wo das Schleichen etwas aendert: ein Klick wartet (Schlange oder gehalten), er trifft
+    // einen Block, der auf Benutzung reagiert, und eine Hand ist voll -- sonst gilt Vanillas
+    // `bl2` ohnehin nicht. Beim Bruecken auf normale Bloecke bleibt man also durchgehend
+    // geduckt. Nicht beim Reiten (Schleichen = absteigen) und nicht als Zuschauer.
+    pub(crate) fn secondary_use_override(&self, treffer: Option<physics::BlockRayHit>) -> Option<bool> {
+        if self.use_queue == 0 && !self.use_held {
+            return None;
+        }
+        if self.own_ride.is_some() || self.game_mode == GAME_MODE_SPECTATOR {
+            return None;
+        }
+        let hit = treffer?;
+        let (haupt, zweit) = self.own_hand_items();
+        if haupt.is_none() && zweit.is_none() {
+            return None;
+        }
+        let name = world::block_name(self.world.block_at(hit.block.0, hit.block.1, hit.block.2))?;
+        let reagiert = block_place::is_hand_interactive(name) || name == "respawn_anchor" || world::copper_golem_statue_texture(name).is_some();
+        if !reagiert {
+            return None;
+        }
+        let taste = self.key_input_flags().5;
+        (self.force_place_held != taste).then_some(self.force_place_held)
     }
 
     // Den Arm schwingen -- lokal UND fuer die anderen Spieler. Beides gehoert zusammen:
@@ -1622,7 +1699,7 @@ impl App {
         // platziert. Mit leeren Haenden oeffnet auch ein schleichender Klick.
         let haende_voll =
             self.main_hand_item_name().is_some() || self.inventory.player.get(inventory::PLAYER_OFFHAND).is_some_and(std::option::Option::is_some);
-        if self.sneak_held && haende_voll {
+        if self.server_sneaking() && haende_voll {
             return false;
         }
         let Some(neu) = block_place::toggled_open_state(state) else { return false };

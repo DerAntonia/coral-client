@@ -718,7 +718,7 @@ pub(crate) const CONTROLS_SECTIONS: &[(&str, &[ControlsRow])] = {
                 SprintOnStart,
             ],
         ),
-        ("Benutzen", &[Bind(K::Attack), Bind(K::Use), HoldUseRepeat, RocketRepeat, ExtinguishDcGhost, UseWhileMining, Bind(K::PickBlock)]),
+        ("Benutzen", &[Bind(K::Attack), Bind(K::Use), Bind(K::ForcePlace), HoldUseRepeat, RocketRepeat, ExtinguishDcGhost, UseWhileMining, Bind(K::PickBlock)]),
         (
             "Inventar",
             &[

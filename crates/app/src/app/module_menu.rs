@@ -370,8 +370,6 @@ impl App {
             action: ButtonAction::ToggleModuleHitboxDotted,
             on: set.module_hitbox_dotted,
         });
-        let linien = HITBOX_LINE_NAMES.iter().enumerate().map(|(i, &name)| (name, ButtonAction::HitboxLines(i as u8), set.module_hitbox_lines == i as u8)).collect();
-        rows.push(ModuleRow::Pick { label: "Linien".to_string(), options: linien, swatch: None });
         rows.push(ModuleRow::Stepper {
             label: "Dichte".to_string(),
             prev: ButtonAction::HitboxDensityPrev,
@@ -399,7 +397,7 @@ impl App {
             action: ButtonAction::HitboxColorEditor(HitboxVariant::Smoothed),
             rgb: hsv_to_rgb(h as f32, sa as f32 / 100.0, v as f32 / 100.0),
         });
-        rows.push(ModuleRow::Heading { label: "Hitbox-Arten".to_string(), columns: &["Sichtbar", "Farbe überschr.", "", "Geglättet / Roh"] });
+        rows.push(ModuleRow::Heading { label: "Hitbox-Arten".to_string(), columns: &["Sichtbar", "Farbe überschr.", "", "Linien", "Geglättet / Roh"] });
         for art in hitbox_kinds::HitboxKind::ALL {
             let st = set.module_hitbox_styles[art.index()];
             let roh = (art == hitbox_kinds::HitboxKind::Player).then(|| {
@@ -411,6 +409,8 @@ impl App {
                 first: (ButtonAction::ToggleHitboxKind(art), st.on),
                 second: (ButtonAction::ToggleHitboxKindOverride(art), st.custom),
                 swatch: ButtonAction::OpenColorPicker(ColorTarget::HitboxKind(art)),
+                // Ein Klick schaltet die Kantenwahl weiter: Alle, Sichtbare, Umriss.
+                lines: (HITBOX_LINE_NAMES[usize::from(st.lines.min(HITBOX_LINES_OUTLINE))], ButtonAction::HitboxLines(art, (st.lines + 1) % (HITBOX_LINES_OUTLINE + 1))),
                 rgb: hsv_to_rgb(st.hue as f32, st.saturation as f32 / 100.0, st.value as f32 / 100.0),
                 roh,
             });
@@ -1152,7 +1152,7 @@ impl App {
                         });
                     }
                 }
-                ModuleRow::TwoTogglesSwatch { first, second, swatch, roh, .. } => {
+                ModuleRow::TwoTogglesSwatch { first, second, swatch, roh, lines, .. } => {
                     // Die Farbe wirkt nur mit "Farbe ueberschreiben".
                     let dahinter = enabled && second.1;
                     out.push(Button { rect: layout.control_rect(n), enabled, ..Self::toggle(first.0, 0, first.1) });
@@ -1166,6 +1166,7 @@ impl App {
                         scale: UI_SCALE_SMALL,
                         slider: None,
                     });
+                    out.push(Button { action: lines.1, rect: layout.lines_rect(n), label: lines.0.to_string(), enabled, color: theme::get(theme::Slot::Surface2), scale: UI_SCALE_SMALL, slider: None });
                     if let Some((ist_roh, _)) = roh {
                         let wahl = [("Geglättet", ButtonAction::HitboxPlayerRaw(false), !ist_roh), ("Roh", ButtonAction::HitboxPlayerRaw(true), ist_roh)];
                         out.extend(pick_buttons(layout.raw_pick_rect(n), &wahl, enabled));
@@ -1362,8 +1363,8 @@ impl App {
                     texts.push(UiText { text: label.clone(), x: name_x.round(), y: (linie_y - 4.0 - th).round(), color: theme::text(), scale: UI_SCALE_SMALL });
                     for (i, kopf) in columns.iter().enumerate() {
                         // Die Wahl Geglaettet/Roh (4. Kopf) steht ueber ihren Knoepfen hinter dem Farbfeld.
-                        let spalte = if i == 3 {
-                            let r = layout.raw_pick_rect(0.0);
+                        let spalte = if i >= 3 {
+                            let r = if i == 3 { layout.lines_rect(0.0) } else { layout.raw_pick_rect(0.0) };
                             Rect { y: linie_y + 8.0, h: th, ..r }
                         } else {
                             Rect { x: layout.ctrl_x() + i as f32 * (TOGGLE_W + STEPPER_GAP), y: linie_y + 8.0, w: TOGGLE_W, h: th }
@@ -1630,7 +1631,7 @@ impl App {
             ButtonAction::ToggleModuleHitbox => self.settings.module_hitbox_enabled = !self.settings.module_hitbox_enabled,
             ButtonAction::HitboxPlayerRaw(roh) => self.settings.module_hitbox_player_raw = roh,
             ButtonAction::ToggleModuleHitboxDotted => self.settings.module_hitbox_dotted = !self.settings.module_hitbox_dotted,
-            ButtonAction::HitboxLines(m) => self.settings.module_hitbox_lines = m.min(HITBOX_LINES_OUTLINE),
+            ButtonAction::HitboxLines(art, m) => self.settings.module_hitbox_styles[art.index()].lines = m.min(HITBOX_LINES_OUTLINE),
             ButtonAction::ToggleModuleHitboxSelf => self.settings.module_hitbox_self = !self.settings.module_hitbox_self,
             ButtonAction::ToggleHitboxKind(art) => {
                 let st = &mut self.settings.module_hitbox_styles[art.index()];

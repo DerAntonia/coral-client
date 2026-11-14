@@ -110,14 +110,13 @@ pub fn set_english_loanwords(an: bool) {
 // Deutscher Begriff -> englisches Lehnwort, der Reihe nach ersetzt (Laengeres vor dem
 // Kuerzeren, das darin steckt). "Schild" allein fehlt mit Absicht: es heisst auch das Schild
 // zum Beschriften.
-const LOANWORDS: [(&str, &str); 20] = [
+const LOANWORDS: [(&str, &str); 19] = [
     ("Fadenkreuz", "Crosshair"),
     ("Zweithand", "Offhand"),
     ("Haupthand", "Mainhand"),
     ("Sichtfeld", "FOV"),
     ("Trefferbox", "Hitbox"),
     ("Abklingzeit", "Cooldown"),
-    ("Bildrate", "FPS"),
     ("Schleichen", "Sneaken"),
     ("Zuschauer", "Spectator"),
     ("Tastenbelegung", "Keybinds"),

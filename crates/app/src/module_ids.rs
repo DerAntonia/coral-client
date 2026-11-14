@@ -475,7 +475,7 @@ pub(crate) enum ModuleRow {
     // Zwei Schalter nebeneinander, dahinter ein Farbfeld (s. Heading::columns fuer die Koepfe).
     // Das Farbfeld wirkt nur mit dem zweiten Schalter. `roh`: Zeile mit zusaetzlicher Wahl
     // Geglaettet/Roh (Wert: roh gewaehlt?) und dem Farbfeld fuer Roh dahinter.
-    TwoTogglesSwatch { label: String, first: (ButtonAction, bool), second: (ButtonAction, bool), swatch: ButtonAction, rgb: [f32; 3], roh: Option<(bool, [f32; 3])> },
+    TwoTogglesSwatch { label: String, first: (ButtonAction, bool), second: (ButtonAction, bool), swatch: ButtonAction, lines: (&'static str, ButtonAction), rgb: [f32; 3], roh: Option<(bool, [f32; 3])> },
     // Ein Knopf (z.B. "Automatisch") und dahinter Farbfelder zur Wahl -- je Farbe (Aktion,
     // Farbe, gewaehlt?). Der gewaehlte Eintrag ist hervorgehoben.
     ColorPicks { label: String, first: (&'static str, ButtonAction, bool), colors: Vec<(ButtonAction, [f32; 3], bool)> },
@@ -565,9 +565,14 @@ impl ModuleDetailLayout {
 
     // Wahl Geglaettet/Roh hinter dem Farbfeld und das Farbfeld fuer Roh dahinter
     // (ModuleRow::TwoTogglesSwatch mit `roh`).
-    pub(crate) fn raw_pick_rect(&self, n: f32) -> Rect {
+    pub(crate) fn lines_rect(&self, n: f32) -> Rect {
         let farbe = self.swatch_after_two_toggles_rect(n);
-        Rect { x: farbe.x + farbe.w + STEPPER_GAP, w: HITBOX_PICK_W, ..self.control_rect(n) }
+        Rect { x: farbe.x + farbe.w + STEPPER_GAP, w: HITBOX_LINES_W, ..self.control_rect(n) }
+    }
+
+    pub(crate) fn raw_pick_rect(&self, n: f32) -> Rect {
+        let linien = self.lines_rect(n);
+        Rect { x: linien.x + linien.w + STEPPER_GAP, w: HITBOX_PICK_W, ..self.control_rect(n) }
     }
 
     pub(crate) fn raw_swatch_rect(&self, n: f32) -> Rect {
@@ -625,7 +630,8 @@ pub(crate) const MODULE_DETAIL_PX_PAD: f32 = 28.0;
 // Breite der Wahl Geglaettet/Roh in der Hitbox-Tabelle und die Spaltenbreite der Hitbox-
 // Detailansicht (die Tabelle ist breiter als die Regler der anderen Module).
 pub(crate) const HITBOX_PICK_W: f32 = 190.0;
+pub(crate) const HITBOX_LINES_W: f32 = 110.0;
 pub(crate) const HITBOX_DETAIL_PX_W: f32 =
-    SETTINGS_CTRL_X - SETTINGS_LABEL_X + 2.0 * (TOGGLE_W + STEPPER_GAP) + SWATCH_W + STEPPER_GAP + HITBOX_PICK_W + STEPPER_GAP + SWATCH_W + 24.0;
+    SETTINGS_CTRL_X - SETTINGS_LABEL_X + 2.0 * (TOGGLE_W + STEPPER_GAP) + SWATCH_W + STEPPER_GAP + HITBOX_LINES_W + STEPPER_GAP + HITBOX_PICK_W + STEPPER_GAP + SWATCH_W + 24.0;
 pub(crate) const MODULE_DETAIL_PX_HEAD: f32 = 112.0;
 pub(crate) const MODULE_DETAIL_PX_FOOT: f32 = 16.0;

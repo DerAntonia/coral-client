@@ -205,7 +205,6 @@ impl Settings {
             module_hitbox_enabled: false,
             module_hitbox_player_raw: false,
             module_hitbox_dotted: false,
-            module_hitbox_lines: 0,
             module_hitbox_self: true,
             module_hitbox_density_px: 2,
             module_hitbox_opacity: 80,

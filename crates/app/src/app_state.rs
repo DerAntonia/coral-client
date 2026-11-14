@@ -488,6 +488,8 @@ pub(crate) struct App {
     pub(crate) skin_tab_was_open: bool,
     // Zuletzt ans Fenster gegebene Sichtbarkeit des System-Cursors (s. refresh_cursor_visibility).
     pub(crate) system_cursor_visible: std::cell::Cell<Option<bool>>,
+    // Zuletzt ans Fenster gegebener Cursor-Einschluss (s. refresh_cursor_visibility).
+    pub(crate) system_cursor_confined: std::cell::Cell<Option<bool>>,
     pub(crate) modifiers: ModifiersState,
     pub(crate) tokio_rt: tokio::runtime::Runtime,
     pub(crate) mode: AppMode,
@@ -498,6 +500,8 @@ pub(crate) struct App {
     pub(crate) move_right: bool,
     pub(crate) jump_held: bool,
     pub(crate) sneak_held: bool,
+    // Force-Place aktiv (KeyBindAction::ForcePlace, gehalten oder umgeschaltet).
+    pub(crate) force_place_held: bool,
     // Rechtsklick gehalten (Vanillas useKey.isPressed()) -- Quelle fuers Dauerfeuer.
     pub(crate) use_held: bool,
     // Rechtsklick-WARTESCHLANGE: jeder einzelne Druck landet hier und wird mit EINEM Klick
@@ -748,6 +752,11 @@ pub(crate) struct App {
     // Zuletzt an den Server gesendete Player-Input-Flags (protocol::packets::
     // player_input_payload) -- nur bei Aenderung neu senden.
     pub(crate) last_sent_player_input: Option<(bool, bool, bool, bool, bool, bool, bool)>,
+    // Schleichen-Flag, das fuer diesen Tick statt der Taste in PlayerInput UND Physik geht (s.
+    // App::secondary_use_override): der Server entscheidet die Blockbenutzung allein an seinem
+    // Schleich-Stand (isSecondaryUseActive), Force-Place und "Schleichen oeffnet trotzdem"
+    // brauchen ihn also kurz anders, als die Taste steht.
+    pub(crate) sneak_override: Option<bool>,
     // Eingabe-Aktionen, die noch auf den naechsten Tick warten (s. PendingInputAction und
     // flush_input_actions): Vanilla verschickt sie NICHT im Moment des Tastendrucks, sondern
     // gesammelt im Tick davor -- was Grims Post-Check erzwingt.

@@ -72,6 +72,20 @@ impl App {
     // oder Pack-Kachel gezogen wird: dann haengt ihr Bild am Zeiger und ersetzt ihn. Nur bei
     // einer Aenderung ans Fenster weitergeben (laeuft jedes Bild).
     pub(crate) fn refresh_cursor_visibility(&self) {
+        // Windows: Zeichnen wir den Zeiger selbst, bleibt der echte trotzdem frei beweglich --
+        // mit zwei Bildschirmen wanderte er aus dem Fenster, und ein Klick auf den anderen
+        // Bildschirm nahm uns den Fokus. Darum im Fenster einsperren, solange uns die Maus
+        // gehoert.
+        #[cfg(windows)]
+        {
+            let einsperren = self.owns_mouse();
+            if self.system_cursor_confined.replace(Some(einsperren)) != Some(einsperren) {
+                if let Some(gpu) = &self.gpu {
+                    let modus = if einsperren { winit::window::CursorGrabMode::Confined } else { winit::window::CursorGrabMode::None };
+                    let _ = gpu.window.set_cursor_grab(modus);
+                }
+            }
+        }
         let sichtbar = !self.owns_mouse() && !self.drag_hides_cursor();
         if self.system_cursor_visible.replace(Some(sichtbar)) == Some(sichtbar) {
             return;

@@ -93,7 +93,6 @@ impl Settings {
         kv(&mut body, "module_hitbox_enabled", self.module_hitbox_enabled);
         kv(&mut body, "module_hitbox_player_raw", self.module_hitbox_player_raw);
         kv(&mut body, "module_hitbox_dotted", self.module_hitbox_dotted);
-        kv(&mut body, "module_hitbox_lines", self.module_hitbox_lines);
         kv(&mut body, "module_hitbox_self", self.module_hitbox_self);
         kv(&mut body, "module_hitbox_density_px", self.module_hitbox_density_px);
         kv(&mut body, "module_hitbox_opacity", self.module_hitbox_opacity);

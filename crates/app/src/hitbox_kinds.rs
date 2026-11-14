@@ -158,7 +158,7 @@ impl HitboxKind {
         };
         // Netz und Wasser behalten ihre eigene Farbe, alles andere folgt der Hauptfarbe.
         let custom = matches!(self, Self::Cobweb | Self::Water);
-        HitboxStyle { on, custom, hue, saturation, value, alpha: 100 }
+        HitboxStyle { on, custom, hue, saturation, value, alpha: 100, lines: 0 }
     }
 }
 
@@ -174,26 +174,29 @@ pub struct HitboxStyle {
     pub saturation: u32,
     pub value: u32,
     pub alpha: u32,
+    // Kanten: 0 alle, 1 nur sichtbare, 2 nur Umriss (s. HITBOX_LINE_NAMES).
+    pub lines: u8,
 }
 
 impl HitboxStyle {
     pub fn encode(&self) -> String {
-        format!("{},{},{},{},{},{}", self.on, self.hue, self.saturation, self.value, self.alpha, self.custom)
+        format!("{},{},{},{},{},{},{}", self.on, self.hue, self.saturation, self.value, self.alpha, self.custom, self.lines)
     }
 
     // Unlesbares laesst die Vorgabe stehen. Ohne sechstes Feld (aeltere Dateien) ist
     // Ueberschreiben aus (Netz und Wasser erzwingt der Parser an).
     pub fn decode(text: &str, default: Self) -> Self {
         let teile: Vec<&str> = text.split(',').collect();
-        let (on, h, s, v, a, custom) = match teile[..] {
-            [on, h, s, v, a] => (on, h, s, v, a, "false"),
-            [on, h, s, v, a, custom] => (on, h, s, v, a, custom),
+        let (on, h, s, v, a, custom, lines) = match teile[..] {
+            [on, h, s, v, a] => (on, h, s, v, a, "false", None),
+            [on, h, s, v, a, custom] => (on, h, s, v, a, custom, None),
+            [on, h, s, v, a, custom, lines] => (on, h, s, v, a, custom, lines.trim().parse::<u8>().ok()),
             _ => return default,
         };
         let zahl = |t: &str, max: u32| t.trim().parse::<u32>().ok().map(|n| n.min(max));
         match (zahl(h, 359), zahl(s, 100), zahl(v, 100), zahl(a, 100)) {
             (Some(hue), Some(saturation), Some(value), Some(alpha)) => {
-                Self { on: on.trim() == "true", custom: custom.trim() == "true", hue, saturation, value, alpha }
+                Self { on: on.trim() == "true", custom: custom.trim() == "true", hue, saturation, value, alpha, lines: lines.map_or(default.lines, |l| l.min(2)) }
             }
             _ => default,
         }
@@ -306,7 +309,7 @@ mod tests {
 
     #[test]
     fn stil_rundlauf_und_kaputte_zeilen() {
-        let s = HitboxStyle { on: true, custom: true, hue: 123, saturation: 45, value: 67, alpha: 89 };
+        let s = HitboxStyle { on: true, custom: true, hue: 123, saturation: 45, value: 67, alpha: 89, lines: 2 };
         assert_eq!(HitboxStyle::decode(&s.encode(), HitboxKind::Item.default_style()), s);
         let alt = HitboxStyle::decode("true,1,2,3,4", HitboxKind::Item.default_style());
         assert_eq!((alt.on, alt.custom, alt.alpha), (true, false, 4), "alte Zeile ohne Ueberschreiben");

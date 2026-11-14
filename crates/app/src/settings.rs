@@ -416,7 +416,6 @@ pub(crate) struct Settings {
     pub(crate) module_hitbox_dotted: bool,
     // Welche Kanten (HITBOX_LINE_NAMES): alle, nur die, die die Box selbst nicht verdeckt, oder
     // nur der Umriss (s. build_hitbox_vertices).
-    pub(crate) module_hitbox_lines: u8,
     // Die eigene Hitbox (nur in der 3. Person, s. build_hitbox_vertices).
     pub(crate) module_hitbox_self: bool,
     // Kantenbreite in Bildschirmpixeln -- IMMER wirksam (auch durchgezogen), im gepunkteten

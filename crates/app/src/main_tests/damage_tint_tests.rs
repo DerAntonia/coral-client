@@ -84,7 +84,7 @@ fn ring_kontur_und_umriss_komplementaer_ueberleben_speichern_und_laden() {
 fn hitbox_arten_ueberleben_speichern_und_laden() {
     use hitbox_kinds::{HitboxKind, HitboxStyle};
     let mut set = Settings::base();
-    set.module_hitbox_styles[HitboxKind::EnderPearl.index()] = HitboxStyle { on: false, custom: true, hue: 12, saturation: 34, value: 56, alpha: 78 };
+    set.module_hitbox_styles[HitboxKind::EnderPearl.index()] = HitboxStyle { on: false, custom: true, hue: 12, saturation: 34, value: 56, alpha: 78, lines: 1 };
     set.module_hitbox_styles[HitboxKind::Water.index()].on = true;
     set.module_hitbox_player_raw = true;
     let geladen = Settings::parse_onto(Settings::base(), &set.serialize());

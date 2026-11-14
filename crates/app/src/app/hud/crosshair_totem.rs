@@ -62,6 +62,20 @@ impl App {
                 extras.ring = Some(((0.5, 0.5), anteil));
             }
         }
+        // Force-Place aktiv (s. KeyBindAction::ForcePlace): Hinweis unter dem Fadenkreuz.
+        if self.force_place_held && ring_frei && self.mode == AppMode::World {
+            extras.texts.push(CrosshairText {
+                text: "forceplace on".to_string(),
+                center_px: (sw * 0.5, sh * 0.5 + sh * 0.04),
+                scale: UI_SCALE_SMALL,
+                white: false,
+                yellow: false,
+                font: set.effective_font(ShadowArea::ShieldCountdown),
+                alpha: 1.0,
+                fade_slot: 0,
+                stable_digits: false,
+            });
+        }
         if let Some((text, rect, scale)) = self.arrow_number(gpu) {
             extras.texts.push(CrosshairText {
                 text,

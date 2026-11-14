@@ -100,10 +100,14 @@ pub(crate) enum KeyBindAction {
     // Wie osus Neustart-Taste: so lange gehalten, wie Settings::reconnect_hold vorgibt, verbindet
     // neu (s. App::tick_reconnect_hold); waehrenddessen dunkelt das Bild ab.
     Reconnect,
+    // Force-Place: solange aktiv, ueberspringt ein Rechtsklick die Blockbenutzung und platziert
+    // (Vanillas Schleich-Rechtsklick). Schleichen selbst ueberspringt hier nie (s.
+    // App::secondary_use_override). Halten oder Umschalten.
+    ForcePlace,
 }
 
 impl KeyBindAction {
-    pub(crate) const ALL: [Self; 52] = [
+    pub(crate) const ALL: [Self; 53] = [
         Self::Forward,
         Self::Backward,
         Self::Left,
@@ -138,6 +142,7 @@ impl KeyBindAction {
         Self::InventoryMoveStack,
         Self::InventoryDropItem,
         Self::Use,
+        Self::ForcePlace,
         Self::PlayerList,
         Self::Zoom,
         Self::Freelook,
@@ -207,6 +212,7 @@ impl KeyBindAction {
                 // Rechtsklick haelt einen Zustand (Dauerfeuer beim Halten) und zaehlt
                 // zusaetzlich jeden Druck -- s. apply_key_action.
                 | Self::Use
+                | Self::ForcePlace
                 | Self::PlayerList
                 | Self::Zoom
                 | Self::Freelook
@@ -232,6 +238,7 @@ impl KeyBindAction {
             Self::OpenInventory => "Inventar",
             Self::Attack => "Angreifen/Abbauen",
             Self::Use => "Benutzen/Platzieren",
+            Self::ForcePlace => "Force-Place",
             Self::PlayerList => "Spielerliste (Tab)",
             Self::DropItem => "Item wegwerfen",
             Self::SwapOffhand => "Mit Zweithand tauschen",
@@ -345,6 +352,7 @@ impl KeyBindAction {
             Self::InspectHeld => 47,
             Self::ToggleHandDebug => 48,
             Self::SaveClip => 51,
+            Self::ForcePlace => 52,
             Self::Freelook => 49,
             Self::SwapShoulder => 50,
             Self::VoiceMute => 38,
@@ -378,6 +386,7 @@ impl KeyBindAction {
             Self::InventoryMoveStack => "inventory_move_stack",
             Self::InventoryDropItem => "inventory_drop_item",
             Self::Use => "use_item",
+            Self::ForcePlace => "force_place",
             Self::PlayerList => "player_list",
             Self::HotbarPrev => "hotbar_prev",
             Self::HotbarNext => "hotbar_next",
@@ -674,6 +683,7 @@ pub(crate) struct KeybindModes {
     // Umschalten ist hier keine Spielerei: gehaltener Rechtsklick platziert dauerhaft, und
     // wer das umschaltbar will, braucht die Taste nicht festzuhalten.
     pub(crate) use_item: KeybindMode,
+    pub(crate) force_place: KeybindMode,
     pub(crate) player_list: KeybindMode,
     pub(crate) zoom: KeybindMode,
     pub(crate) freelook: KeybindMode,
@@ -694,6 +704,7 @@ impl KeybindModes {
             KeyBindAction::Sneak => self.sneak,
             KeyBindAction::Sprint => self.sprint,
             KeyBindAction::Use => self.use_item,
+            KeyBindAction::ForcePlace => self.force_place,
             KeyBindAction::PlayerList => self.player_list,
             KeyBindAction::Zoom => self.zoom,
             KeyBindAction::Freelook => self.freelook,
@@ -718,6 +729,7 @@ impl KeybindModes {
             KeyBindAction::Sneak => self.sneak = mode,
             KeyBindAction::Sprint => self.sprint = mode,
             KeyBindAction::Use => self.use_item = mode,
+            KeyBindAction::ForcePlace => self.force_place = mode,
             KeyBindAction::PlayerList => self.player_list = mode,
             KeyBindAction::Zoom => self.zoom = mode,
             KeyBindAction::Freelook => self.freelook = mode,
@@ -742,6 +754,7 @@ impl Default for KeybindModes {
             sneak: KeybindMode::Hold,
             sprint: KeybindMode::Hold,
             use_item: KeybindMode::Hold,
+            force_place: KeybindMode::Hold,
             player_list: KeybindMode::Hold,
             zoom: KeybindMode::Hold,
             freelook: KeybindMode::Hold,

@@ -292,10 +292,9 @@ impl App {
         // Farbe und Deckkraft einer Art: die eigene mit Ueberschreiben, sonst Hauptfarbe.
         let art_farbe = |st: hitbox_kinds::HitboxStyle| if st.custom { (farbe(st), alpha * st.alpha as f32 / 100.0) } else { (smoothed_color, alpha) };
         let mut out = Vec::new();
-        let linien = if set.module_hitbox_enabled { set.module_hitbox_lines } else { 0 };
         // Eine Box aus ihren Ecken (augenrelativ) als zwoelf Kanten, mit Dichte in Pixeln und
         // ob gepunktet (das Teams-Modul hat dafuer eigene Werte).
-        let mut push_box = |min: Vec3, max: Vec3, color: [f32; 4], density_px: u32, dotted: bool| {
+        let mut push_box = |min: Vec3, max: Vec3, color: [f32; 4], density_px: u32, dotted: bool, linien: u8| {
             let half_width = density_px as f32 / 2.0;
             let corner = |sel: [bool; 3]| Vec3::new(if sel[0] { max.x } else { min.x }, if sel[1] { max.y } else { min.y }, if sel[2] { max.z } else { min.z });
             const EDGES: [([bool; 3], [bool; 3]); 12] = [
@@ -397,6 +396,7 @@ impl App {
                 _ => (smoothed_color, raw_color, a),
             };
             let roh = art == HitboxKind::Player && spieler_roh;
+            let linien = stil(art).lines;
             let (width, height) = e.hit_size();
             let half_w = width as f32 / 2.0;
             let height = height as f32;
@@ -404,7 +404,7 @@ impl App {
             let unten = e.box_y_offset();
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
                 let feet = nah(pos);
-                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], dichte, gepunktet);
+                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], dichte, gepunktet, linien);
             };
             if roh {
                 let (x, y, z) = e.target_pos();
@@ -422,6 +422,7 @@ impl App {
             (Some((f, a, _, _)), _) => Some((f, a)),
             (None, st) => st.on.then(|| art_farbe(st)),
         };
+        let eigen_linien = stil(HitboxKind::Player).lines;
         let (eigen_dichte, eigen_gepunktet) = team_eigen.map_or((dichte, gepunktet), |(_, _, d, p)| (d, p));
         let eigen_roh = team_eigen.map_or(raw_color, |(f, ..)| f);
         // Abschaltbar im Modul ("Eigene Hitbox").
@@ -430,7 +431,7 @@ impl App {
             let height = self.physics.current_height() as f32;
             let mut fuesse = |pos: DVec3, [r, g, b]: [f32; 3]| {
                 let feet = nah(pos);
-                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], eigen_dichte, eigen_gepunktet);
+                push_box(feet + Vec3::new(-half_w, 0.0, -half_w), feet + Vec3::new(half_w, height, half_w), [r, g, b, a], eigen_dichte, eigen_gepunktet, eigen_linien);
             };
             if spieler_roh {
                 fuesse(self.physics.pos, eigen_roh);
@@ -463,7 +464,7 @@ impl App {
                         }
                         let ecke = DVec3::new(f64::from(x), f64::from(y), f64::from(z));
                         if netz && world::block_name(state) == Some("cobweb") {
-                            push_box(nah(ecke), nah(ecke + DVec3::ONE), mit_alpha(st_netz), dichte, gepunktet);
+                            push_box(nah(ecke), nah(ecke + DVec3::ONE), mit_alpha(st_netz), dichte, gepunktet, st_netz.lines);
                         } else if wasser && hitbox_kinds::bucket_source(state) {
                             let Some(h) = world::fluid_height_at(&self.world, x, y, z) else { continue };
                             let max = ecke + DVec3::new(1.0, h, 1.0);
@@ -472,7 +473,7 @@ impl App {
                             if auge.clamp(ecke, max).distance(auge) > reichweite {
                                 continue;
                             }
-                            push_box(nah(ecke), nah(max), mit_alpha(st_wasser), dichte, gepunktet);
+                            push_box(nah(ecke), nah(max), mit_alpha(st_wasser), dichte, gepunktet, st_wasser.lines);
                         }
                     }
                 }

@@ -788,6 +788,7 @@ fn perspektivwechsel_ist_ein_umbelegbarer_keybind() {
         // Rechtsklick haelt ebenfalls einen Zustand: gehalten platziert er im
         // Vanilla-Takt weiter (s. App::tick_item_use).
         KeyBindAction::Use,
+        KeyBindAction::ForcePlace,
         KeyBindAction::PlayerList,
         KeyBindAction::Zoom,
         KeyBindAction::Freelook,

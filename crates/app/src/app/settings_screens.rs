@@ -442,8 +442,11 @@ impl App {
             if ohne_namen.contains(&name) {
                 return;
             }
-            let x = linie_bis - gpu.measure_text(name, UI_SCALE_SMALL);
-            texts.push(UiText { text: name.to_string(), x: x.round(), y: (linie_y + 4.0).round(), color: theme::text(), scale: UI_SCALE_SMALL });
+            // Gemessen und gezeichnet wird derselbe uebersetzte Name (sonst ragte "Bildrate"
+            // ueber den Rand, weil als "FPS" vermessen).
+            let name = i18n::tr(name).into_owned();
+            let x = linie_bis - gpu.measure_raw(&name, UI_SCALE_SMALL);
+            texts.push(UiText { text: name, x: x.round(), y: (linie_y + 4.0).round(), color: theme::text(), scale: UI_SCALE_SMALL });
         };
         // Gleitend gescrollt liegt die Linie eines Abschnitts irgendwo zwischen den Zeilen: ist
         // sie ueber die Linie oben gewandert, steht sein Name oben, sonst an seiner eigenen Linie

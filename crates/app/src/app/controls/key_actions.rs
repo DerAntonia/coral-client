@@ -207,6 +207,7 @@ impl App {
             KeyBindAction::Sprint => self.sprint_held,
             KeyBindAction::InventoryMoveStack => self.inventory_move_stack_held,
             KeyBindAction::Use => self.use_held,
+            KeyBindAction::ForcePlace => self.force_place_held,
             KeyBindAction::PlayerList => self.player_list_held,
             KeyBindAction::Zoom => self.zoom_held,
             KeyBindAction::Freelook => self.freelook_held,
@@ -262,6 +263,7 @@ impl App {
             KeyBindAction::Sprint => self.sprint_held = active,
             KeyBindAction::InventoryMoveStack => self.inventory_move_stack_held = active,
             KeyBindAction::Use => self.use_held = active,
+            KeyBindAction::ForcePlace => self.force_place_held = active,
             KeyBindAction::PlayerList => self.player_list_held = active,
             KeyBindAction::Zoom => self.zoom_held = active,
             KeyBindAction::Freelook => self.set_freelook(active),
@@ -390,6 +392,17 @@ impl App {
             if pressed {
                 k.next = Some(Instant::now());
             }
+            return;
+        }
+        // Bei offenem Bildschirm, Chat oder Menue schaltet ein Druck nichts um: Vanillas Screen
+        // verschluckt die Taste, sie erreicht die KeyBinding nie. Ohne das kippte etwa Shift beim
+        // Umsortieren im Inventar den Schleichen-Umschalter (und Strg im Menue den Sprint-Umschalter).
+        // Loslassen und Halten-Aktionen laufen weiter (s. restore_held_controls).
+        if pressed
+            && !action.is_press_action()
+            && self.settings.keybind_modes.get(action) == KeybindMode::Toggle
+            && (self.mode != AppMode::World || self.screen_overlay_open() || self.chat_input.is_some())
+        {
             return;
         }
         let idx = action.index();

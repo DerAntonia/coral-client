@@ -120,13 +120,29 @@ impl App {
     // fehlendes Gate hier ein Spieler, der im Pausemenue weiterlaeuft -- in Vanilla
     // unmoeglich, weil setScreen alle Tasten loest.
     pub(crate) fn movement_input_flags(&self) -> (bool, bool, bool, bool, bool, bool, bool) {
+        let (f, b, l, r, j, sneak, sp) = self.key_input_flags();
+        // Force-Place bzw. "Schleichen oeffnet trotzdem" (s. secondary_use_override): fuer
+        // den Klick-Tick gilt das ueberschriebene Flag, in Paket und Physik gleich.
+        (f, b, l, r, j, self.sneak_override.unwrap_or(sneak), sp)
+    }
+
+    // Wie movement_input_flags, aber ohne das Schleich-Override: so, wie die Tasten stehen.
+    pub(crate) fn key_input_flags(&self) -> (bool, bool, bool, bool, bool, bool, bool) {
         let (forward, backward) = self.snap_tap_pair(KeyBindAction::Forward, KeyBindAction::Backward);
         let (left, right) = self.snap_tap_pair(KeyBindAction::Left, KeyBindAction::Right);
         let open = self.screen_overlay_open() || self.mode != AppMode::World;
         // Verschluckt (s. spectator.rs, SWALLOW_KEYS): nach einem Wechsel in den Zuschauermodus
         // zaehlt eine schon gehaltene Taste nicht, bis sie einmal losgelassen wurde.
         let swallowed = self.spectator_swallowed;
-        let gate = |i: usize, pressed: bool| pressed && !open && !swallowed[i];
+        // Umschalt-Tasten wirken auch bei offenem Bildschirm weiter (Nutzerwunsch 2026-11-14):
+        // wer Springen/Schleichen/Sprint umgeschaltet hat, springt, schleicht und sprintet im
+        // Inventar, in der Truhe und im Pausemenue weiter. Vanilla haelt sie dort an
+        // (ToggleKeyMapping.release beim Oeffnen), hier bewusst nicht.
+        let modi = self.settings.keybind_modes;
+        let gate = |i: usize, pressed: bool| {
+            let umschalter = modi.get(crate::spectator::SWALLOW_KEYS[i]) == KeybindMode::Toggle;
+            pressed && (umschalter || !open) && !swallowed[i]
+        };
         // Was Addons dazu druecken (s. Call::SetInput) -- auch bei offenem Bildschirm.
         let a = self.addon_input();
         (

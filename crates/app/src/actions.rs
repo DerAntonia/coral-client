@@ -781,7 +781,8 @@ pub(crate) enum ButtonAction {
     HitboxPlayerRaw(bool),
     ToggleModuleHitboxDotted,
     // Welche Kanten einer Hitbox (HITBOX_LINE_NAMES): alle, nur sichtbare, nur der Umriss.
-    HitboxLines(u8),
+    // Kantenwahl einer Art (Index in HITBOX_LINE_NAMES).
+    HitboxLines(crate::hitbox_kinds::HitboxKind, u8),
     ToggleModuleHitboxSelf,
     HitboxDensityPrev,
     HitboxDensityNext,

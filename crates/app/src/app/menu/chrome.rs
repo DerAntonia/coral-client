@@ -116,7 +116,7 @@ impl App {
             self.scrolls_loaded = true;
         }
         let target = if target == MenuScreen::Settings {
-            MenuScreen::from_settings_key(&self.settings.settings_category).unwrap_or(MenuScreen::SettingsSetup)
+            MenuScreen::from_settings_key(&self.settings.settings_category).filter(|&c| c != MenuScreen::SettingsSearch).unwrap_or(MenuScreen::SettingsSetup)
         } else {
             target
         };
@@ -124,7 +124,8 @@ impl App {
             self.settings_return = self.screen;
         }
         self.screen = target;
-        if let Some(kategorie) = target.settings_category() {
+        // Die Suche wird nicht als letzte Seite gemerkt: die Einstellungen oeffnen nie dort.
+        if let Some(kategorie) = target.settings_category().filter(|&c| c != MenuScreen::SettingsSearch) {
             if self.settings.settings_category != kategorie.settings_key() {
                 self.settings.settings_category = kategorie.settings_key().to_string();
             }
@@ -299,11 +300,14 @@ impl App {
         let mut x = SETTINGS_LABEL_X;
         let mut out = Vec::new();
         for (i, &(label, _)) in page.sections.iter().enumerate() {
-            let w = self.gpu.as_ref().map_or(100.0, |g| g.measure_text(label, UI_SCALE_SMALL)) + 24.0;
+            // Der Reiter zeigt den uebersetzten Namen und ist so breit wie dieser (bei Lehnwoertern
+            // wurde "Bildrate" als "FPS" vermessen, aber ausgeschrieben gezeichnet).
+            let label = crate::i18n::tr(label).into_owned();
+            let w = self.gpu.as_ref().map_or(100.0, |g| g.measure_raw(&label, UI_SCALE_SMALL)) + 24.0;
             out.push(Button {
                 action: ButtonAction::SettingsSection(i as u8),
                 rect: Rect { x, y: SETTINGS_FIRST_Y - 44.0, w, h: 40.0 },
-                label: label.to_string(),
+                label,
                 enabled: true,
                 color: if i == aktiv { theme::get(theme::Slot::AccentSurface) } else { theme::get(theme::Slot::Surface2) },
                 scale: UI_SCALE_SMALL,

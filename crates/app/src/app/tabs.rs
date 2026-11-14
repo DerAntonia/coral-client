@@ -169,6 +169,7 @@ tab_state! {
     last_sent_horizontal_collision: bool = false,
     last_sent_sprinting: Option<bool> = Some(false),
     last_sent_player_input: Option<(bool, bool, bool, bool, bool, bool, bool)> = Some((false, false, false, false, false, false, false)),
+    sneak_override: Option<bool> = None,
     ticks_since_position_sent: u32 = 0,
     last_synced_slot: usize = 0,
     pending_input_actions: Vec<PendingInputAction> = Vec::new(),

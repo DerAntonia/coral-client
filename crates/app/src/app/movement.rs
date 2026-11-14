@@ -250,6 +250,10 @@ impl App {
             if !self.replay_active() {
                 self.flush_input_actions();
             }
+            // Force-Place kann das Schleichen fuer diesen Tick ueberschrieben haben (s.
+            // secondary_use_override, gesetzt in tick_item_use) -- die Physik muss laufen, was
+            // gleich im PlayerInput steht.
+            input.sneak = self.movement_input_flags().5 && self.spectated_entity().is_none();
             // Vanilla bemerkt den Itemwechsel erst im Spieler-Tick, NACH den Eingaben dieses
             // Ticks: Slottaste und Klick im selben Tick stechen also noch mit der Aufladung des
             // alten Items (Lunge-Swap auf den Speer). Unsere Slottasten wechseln schon beim
@@ -292,7 +296,9 @@ impl App {
             self.item_cooldowns.update();
             self.tick_bundle_hover();
             self.physics.jump_cooldown_enabled = self.settings.jump_cooldown_enabled;
-            self.physics.sneak_edge_protection_enabled = self.settings.sneak_edge_protection_enabled;
+            // Das Schleichen nur fuer den Force-Place-Klick (sneak_override == Some(true), die Taste
+            // steht nicht) bringt keinen Kantenschutz mit (Nutzerwunsch 2026-11-14).
+            self.physics.sneak_edge_protection_enabled = self.settings.sneak_edge_protection_enabled && self.sneak_override != Some(true);
             let before_tick = self.physics.pos;
             // Umhang, Teil 1 von 2. Vanillas Reihenfolge im Spieler-Tick, und sie ist hier
             // wichtig: AbstractClientPlayerEntity.tick() ruft state.tick(pos, velocity) VOR

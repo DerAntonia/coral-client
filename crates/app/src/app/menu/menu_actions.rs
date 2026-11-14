@@ -239,7 +239,7 @@ impl App {
             | ButtonAction::ToggleModuleHitbox
             | ButtonAction::HitboxPlayerRaw(_)
             | ButtonAction::ToggleModuleHitboxDotted
-            | ButtonAction::HitboxLines(_)
+            | ButtonAction::HitboxLines(..)
             | ButtonAction::ToggleModuleHitboxSelf
             | ButtonAction::HitboxDensityPrev
             | ButtonAction::HitboxDensityNext

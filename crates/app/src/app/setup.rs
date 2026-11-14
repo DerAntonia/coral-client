@@ -318,6 +318,7 @@ impl App {
             skin_files: None,
             skin_tab_was_open: false,
             system_cursor_visible: std::cell::Cell::new(None),
+            system_cursor_confined: std::cell::Cell::new(None),
             modifiers: ModifiersState::empty(),
             tokio_rt: tokio::runtime::Runtime::new().expect("tokio-Runtime konnte nicht erstellt werden"),
             mode: AppMode::Menu,
@@ -329,6 +330,7 @@ impl App {
             move_right: false,
             jump_held: false,
             sneak_held: false,
+            force_place_held: false,
             use_held: false,
             use_queue: 0,
             use_placed_block: false,
@@ -425,6 +427,7 @@ impl App {
             // beim Join ein leeres PlayerInput und ein ueberfluessiges STOP_SPRINTING raus,
             // die Vanilla NIE schickt -- beides im Proxy-Mitschnitt aufgefallen.
             last_sent_player_input: Some((false, false, false, false, false, false, false)),
+            sneak_override: None,
             pending_input_actions: Vec::new(),
             last_synced_slot: 0,
             own_entity_id: None,
