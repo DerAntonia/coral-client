@@ -256,7 +256,8 @@ impl Launcher {
         launcher.rescan();
         launcher.check_for_update(ctx);
         launcher.auto_extract(ctx);
-        // Das mitgelieferte Resourcepack still im Hintergrund aktuell halten (s. bundled_pack).
+        // Das mitgelieferte Resourcepack still im Hintergrund aktuell halten (s. bundled_pack, nur Linux).
+        #[cfg(target_os = "linux")]
         std::thread::spawn(|| match bundled_pack::update() {
             Ok(true) => eprintln!("[launcher] CPVP Aesthetic aktualisiert"),
             Ok(false) => {}
